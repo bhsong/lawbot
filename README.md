@@ -77,6 +77,10 @@ Lawbot은 대한민국 근로기준법 질문에 조문을 근거로 답하는 �
 | --- | --- | --- |
 | 무관한 조문만 제공 시 거절률 (100문항) | 0.11 | **0.91** |
 | 정답 조문이 있는데 거절한 비율 | 0.002 | 0.005 |
+| 범위 밖 질문 거절률 (82문항, 검색 조문 제공) | 0.098 | **0.707** |
+| 비슷한 조문만 제공 시 거절률 (100문항) | - | 0.20 |
+
+범위 밖 질문은 일상 질문 25개, 다른 노동법 질문 32개(근퇴법·최저임금법·남녀고용평등법 등), 다른 법 질문 25개입니다(`data/oos_eval.csv`). 맥 4비트에서는 범위 밖 0.671, 비슷한 조문 0.24로 bf16과 비슷합니다. 근로기준법에 비슷한 조문이 있는 다른 노동법 질문은 튜닝 후에도 거절률이 0.250에 그쳐, 가장 큰 약점입니다.
 
 **로컬 실행 (MacBook Air 8GB, MLX 4비트, dev 100문항)**
 
@@ -138,9 +142,12 @@ uv run lawbot-app
 ```bash
 uv run lawbot-eval --n 0      # 검색 성능만 (650문항)
 uv run lawbot-eval --n 100    # 검색 + 답변 생성·채점 (무작위 100문항)
+uv run python -m lawbot.summ_dev scored_sllm_mlx_4bit.csv   # 위 결과의 거짓 거절률·검색 실패 시 거절률
+uv run python -m lawbot.eval_oos       # 범위 밖 질문 82개 거절률
+uv run python -m lawbot.eval_refusal   # 무관한 조문 / 비슷한 조문만 줄 때 거절률 (각 100문항)
 ```
 
-문항별 결과는 `results/scored_<모델폴더>.csv`에 저장됩니다.
+문항별 결과는 `results/`에 저장됩니다(`scored_<모델폴더>.csv`, `oos_v1_4bit.csv`, `refusal_v1_4bit.csv`).
 
 ### 프로젝트 구조
 
@@ -152,6 +159,10 @@ src/lawbot/
 ├── app.py             # Gradio 웹앱
 ├── eval_dev.py        # 검색·답변 평가
 ├── score_answers.py   # 키워드 기반 채점기
+├── refusal.py         # 거절 판정 (【결론】에 '확인할 수 없')
+├── summ_dev.py        # eval_dev 결과의 거절 지표 요약
+├── eval_oos.py        # 범위 밖 질문 거절률
+├── eval_refusal.py    # 무관한 / 비슷한 조문 제공 시 거절률
 ├── diag_oracle.py     # 정답 조문 제공 조건 답변 평가
 ├── diag_fail.py       # 검색은 맞았지만 인용이 틀린 문항 분석
 └── diag_pos.py        # 정답 조문 위치별 인용 정확도 분석
@@ -166,14 +177,24 @@ src/lawbot/
   - 학습·검증: 나머지 1,952개
   - 모델 선택과 하이퍼파라미터 결정은 검증 셋으로만 했습니다.
 - **답변 채점**: 문항마다 필수 키워드 그룹, 금지 표현, 정답 조문 번호를 지정해 자동 채점합니다. 제43조와 제43조의2처럼 비슷한 번호는 구분합니다. 평가 파일의 모범 답변은 650문항 모두 1.0점입니다.
+- **범위 밖 질문**: 근로기준법으로 답할 수 없는 질문 82개로 거절률을 따로 잽니다(`data/oos_eval.csv`).
+- **평가 데이터 사용 제한**: `data/labor_eval_keywords.csv`와 `data/oos_eval.csv`는 평가 전용입니다. 모델 학습이나 설정 선택에 쓰지 마세요.
+- **`results/` 안내**: 채점 전 모델 원본 출력과 문항별 점수이며, 점수가 낮은 답변은 법적으로 틀린 내용을 포함합니다.
+
+### 실패한 실험
+
+| 실험 | 결과 | 판단 |
+| --- | --- | --- |
+| 리랭커 (Qwen3-Reranker-0.6B)를 튜닝 임베딩 뒤에 추가 | Recall이 튜닝 임베딩 단독보다 낮아짐 | 제외. 더 큰 리랭커는 로컬 메모리로 어려움 |
+| sLLM v2: 검색 상위 조문으로 참고 조문 구성 + 정답 위치 무작위 + 거절 샘플 90개 추가 | 정답 2·3번째 인용 정확도 0.68·0.50 → 0.79·0.73, 비슷한 조문 거절 0.20 → 0.50. 하지만 거짓 거절 0.2% → 4.3%, 검색 조문 종합 점수 0.854 → 0.818 | 폐기, v1 유지 |
+| 하이브리드 검색: 튜닝 임베딩 85% + BM25(문자 2~4그램) 15%, 가중치는 검증 셋으로 선택 | 검증 셋 MRR 0.836 → 0.856. 테스트 650은 Recall@3 0.940 → 0.943, MRR 0.868 → 0.880. 하지만 답변 종합 점수(100문항) 0.812 → 0.802, 범위 밖 거절률 0.671 → 0.683으로 차이 없음 | 제외. 답변 개선 근거 없이 의존성과 코드만 늘어남. BM25·TF-IDF 단독은 Recall@3 약 0.67 |
 
 ### 한계와 향후 계획
 
 - **검색 실패**: 상위 3개에 정답 조문이 없는 경우가 약 6%이고, 이 경우 답변 품질이 크게 떨어집니다.
 - **위치 편향**: 정답 조문이 두 번째·세 번째로 주어질 때 인용 정확도가 0.68·0.50으로 낮습니다. 첫 번째일 때는 0.975입니다.
-- **범위**: 근로기준법만 다루며, 범위 밖 질문에 대한 거절 성능은 아직 측정하지 않았습니다.
+- **범위**: 근로기준법만 다룹니다. 범위 밖 질문 거절률은 0.707(bf16)이고, 특히 근로기준법에 비슷한 조문이 있는 다른 노동법 질문(예: 퇴직금 계산, 산재 휴업급여)에 비슷한 조문으로 답하는 경우가 남아 있습니다.
 - **향후 계획**:
-  - BM25·하이브리드 검색 비교
   - LLM 기반 평가
   - FastAPI 백엔드 분리
   - 계산기 도구 호출
@@ -263,6 +284,10 @@ Total score = keyword-group coverage × correct article citation × (0.5 if a fo
 | --- | --- | --- |
 | Refusal rate given only unrelated articles (100 questions) | 0.11 | **0.91** |
 | False refusal rate when the gold article is present | 0.002 | 0.005 |
+| Refusal rate on out-of-scope questions (82, retrieved articles) | 0.098 | **0.707** |
+| Refusal rate given only similar but non-answering articles (100) | - | 0.20 |
+
+The out-of-scope set has 25 everyday questions, 32 questions governed by other labor laws (severance pay, minimum wage, equal employment, and so on), and 25 questions on other laws (`data/oos_eval.csv`). The 4-bit MLX model scores 0.671 and 0.24 on the last two rows, close to bf16. Questions under other labor laws that resemble a Labor Standards Act article are refused only 25% of the time even after fine-tuning, the largest remaining weakness.
 
 **Local inference (MacBook Air 8 GB, MLX 4-bit, 100 dev questions)**
 
@@ -324,9 +349,12 @@ Then open `http://localhost:7860`. Optional environment variables:
 ```bash
 uv run lawbot-eval --n 0      # retrieval only (650 questions)
 uv run lawbot-eval --n 100    # retrieval + generation + scoring (100 random questions)
+uv run python -m lawbot.summ_dev scored_sllm_mlx_4bit.csv   # false refusals and refusals on retrieval misses
+uv run python -m lawbot.eval_oos       # refusal on 82 out-of-scope questions
+uv run python -m lawbot.eval_refusal   # refusal given unrelated / similar articles only (100 each)
 ```
 
-Per-question results are written to `results/scored_<model-folder>.csv`.
+Per-question results are written to `results/` (`scored_<model-folder>.csv`, `oos_v1_4bit.csv`, `refusal_v1_4bit.csv`).
 
 ### Project layout
 
@@ -338,6 +366,10 @@ src/lawbot/
 ├── app.py             # Gradio web app
 ├── eval_dev.py        # retrieval and answer evaluation
 ├── score_answers.py   # keyword-based answer scorer
+├── refusal.py         # refusal detection ('확인할 수 없' in the conclusion)
+├── summ_dev.py        # refusal metrics from eval_dev results
+├── eval_oos.py        # refusal on out-of-scope questions
+├── eval_refusal.py    # refusal given unrelated / similar articles
 ├── diag_oracle.py     # answer evaluation with gold articles
 ├── diag_fail.py       # failures where retrieval hit but citation missed
 └── diag_pos.py        # citation accuracy by gold-article position
@@ -352,14 +384,24 @@ src/lawbot/
   - Training and validation: the remaining 1,952 questions
   - Model selection and hyperparameters were decided on validation data only.
 - **Answer scoring**: Each test question specifies required keyword groups, forbidden phrases, and the gold article. Scoring is automatic and distinguishes similar article numbers such as Article 43 and Article 43-2. The reference answers in the evaluation file score 1.0 on all 650 questions.
+- **Out-of-scope questions**: 82 questions the Labor Standards Act cannot answer measure refusal separately (`data/oos_eval.csv`).
+- **Evaluation-only data**: `data/labor_eval_keywords.csv` and `data/oos_eval.csv` are for evaluation only. Do not use them for training or model selection.
+- **About `results/`**: These are raw model outputs with per-question scores. Low-scoring answers contain legally incorrect statements.
+
+### Failed experiments
+
+| Experiment | Result | Decision |
+| --- | --- | --- |
+| Reranker (Qwen3-Reranker-0.6B) after the fine-tuned embedding | Recall dropped below the fine-tuned embedding alone | Dropped. Larger rerankers do not fit local memory |
+| SLM v2: retrieved articles as context, random gold position, 90 extra refusal samples | Citation accuracy with gold 2nd/3rd 0.68/0.50 → 0.79/0.73, refusal with similar articles 0.20 → 0.50, but false refusals 0.2% → 4.3% and total score with retrieved articles 0.854 → 0.818 | Discarded, kept v1 |
+| Hybrid retrieval: 85% fine-tuned embedding + 15% BM25 (char 2-4 grams), weight chosen on validation | Validation MRR 0.836 → 0.856. Test: Recall@3 0.940 → 0.943, MRR 0.868 → 0.880. Answer total score (100 questions) 0.812 → 0.802 and out-of-scope refusal 0.671 → 0.683, no real change | Dropped. No evidence of better answers for an extra dependency and code path. BM25 and TF-IDF alone reach only about 0.67 Recall@3 |
 
 ### Limitations and roadmap
 
 - **Retrieval misses**: For about 6% of questions, the gold article is not in the top 3, and answer quality drops sharply on those.
 - **Position bias**: When the gold article is given second or third, citation accuracy falls to 0.68 and 0.50 respectively, against 0.975 when it is first.
-- **Scope**: Only the Labor Standards Act is covered. Refusal on out-of-scope questions has not been measured yet.
+- **Scope**: Only the Labor Standards Act is covered. The out-of-scope refusal rate is 0.707 (bf16). Questions under other labor laws that resemble a Labor Standards Act article (e.g. severance pay calculation, industrial-accident leave benefits) are still often answered with the similar article.
 - **Planned work**:
-  - BM25 and hybrid retrieval comparison
   - LLM-as-judge evaluation
   - FastAPI backend
   - Calculator tool calling
