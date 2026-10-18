@@ -1,0 +1,27 @@
+[project]
+name = "lawbot"
+version = "0.1.0"
+description = "근로기준법 조문 근거 RAG 챗봇 (튜닝 임베딩 + Qwen3-4B LoRA, MLX 로컬 실행)"
+readme = "README.md"
+authors = [
+    { name = "bhsong", email = "sbh3003@gmail.com" }
+]
+requires-python = ">=3.14"
+dependencies = [
+    "gradio>=6.30.0",
+    "mlx-lm>=0.32.2",
+    "pandas>=3.0.6",
+    "sentence-transformers>=6.1.0",
+]
+
+[project.scripts]
+# uv run lawbot-app / uv run lawbot-eval 로 실행
+lawbot-app = "lawbot.app:main"
+lawbot-eval = "lawbot.eval_dev:main"
+
+[build-system]
+requires = ["uv_build>=0.12.19,<0.13.0"]
+build-backend = "uv_build"
+
+[tool.uv]
+environments = ["sys_platform == 'darwin'"]   # mlx는 macOS용: 잠금 파일을 macOS 기준으로만 풀이
