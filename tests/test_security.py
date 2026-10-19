@@ -1,23 +1,10 @@
 # tests/test_security.py  →  uv run pytest
-# 모델·네트워크 없이 보안 설정만 검사 (lawbot.app은 import 시 모델을 로딩하므로 import하지 않음)
-import socket
+# 모델·네트워크 없이 보안 설정만 검사 (env 픽스처·set_auth는 conftest.py)
+import subprocess
 import sys
 import pytest
+from conftest import set_auth
 from lawbot.security import get_local_launch_config
-
-@pytest.fixture(autouse=True)
-def env(monkeypatch):
-    for k in ('LAWBOT_USER', 'LAWBOT_PW', 'GRADIO_SERVER_NAME', 'GRADIO_SERVER_PORT', 'GRADIO_SHARE'):
-        monkeypatch.delenv(k, raising=False)
-    def no_network(*a, **kw):
-        raise AssertionError('테스트 중 외부 네트워크 접속 시도')
-    monkeypatch.setattr(socket.socket, 'connect', no_network)
-    monkeypatch.setattr(socket, 'create_connection', no_network)
-    return monkeypatch
-
-def set_auth(env, user='tester', pw='test-only-pw'):   # 테스트 전용 가짜 값
-    env.setenv('LAWBOT_USER', user)
-    env.setenv('LAWBOT_PW', pw)
 
 # 정상 설정
 def test_valid_config(env):
@@ -71,6 +58,10 @@ def test_gradio_env_cannot_expose_server(env):
 
 def test_no_model_libraries_loaded():
     # security 모듈은 모델·UI 라이브러리를 끌어오지 않아야 함
-    for mod in ('lawbot.app', 'lawbot.retriever', 'lawbot.llm',
-                'sentence_transformers', 'mlx_lm', 'torch', 'gradio'):
-        assert mod not in sys.modules, mod
+    # 다른 테스트가 같은 프로세스에서 이미 import했을 수 있으므로 새 인터프리터에서 확인
+    mods = ('lawbot.app', 'lawbot.retriever', 'lawbot.llm',
+            'sentence_transformers', 'mlx_lm', 'torch', 'gradio')
+    code = ('import sys, lawbot.security\n'
+            f'print(",".join(m for m in {mods!r} if m in sys.modules))')
+    out = subprocess.run([sys.executable, '-c', code], capture_output=True, text=True, check=True)
+    assert out.stdout.strip() == ''
