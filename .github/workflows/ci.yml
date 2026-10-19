@@ -1,0 +1,42 @@
+# 기본 테스트: 실제 모델·비밀정보·외부 API 없이 실행 (실제 모델 테스트 -m models는 제외)
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    # uv.lock은 macOS 전용으로 풀이되어 있으므로(tool.uv.environments) Apple Silicon 러너 사용
+    runs-on: macos-15
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+
+      - name: 의존성 설치 (uv.lock 그대로)
+        run: uv sync --locked
+
+      - name: 문법 검사 (테스트가 import하지 않는 평가 스크립트 포함)
+        run: uv run python -m compileall -q src tests
+
+      - name: 테스트
+        run: uv run pytest --junitxml=pytest-report.xml
+
+      - name: 테스트 결과 업로드
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pytest-report
+          path: pytest-report.xml

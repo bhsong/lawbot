@@ -30,3 +30,8 @@ environments = ["sys_platform == 'darwin'"]   # mlx는 macOS용: 잠금 파일�
 dev = [
     "pytest>=9.1.1",
 ]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra --strict-markers -m 'not models'"   # 실제 모델 테스트는 -m models로 따로 실행
+markers = ["models: 실제 모델 파일(models/)과 Apple Silicon이 필요한 테스트"]
