@@ -127,15 +127,45 @@ uv run mlx_lm.convert --hf-path models/sllm_merged --mlx-path models/sllm_mlx_4b
 **웹앱 실행**
 
 ```bash
+export LAWBOT_USER='원하는 사용자명'
+read -rs 'LAWBOT_PW?비밀번호: ' && export LAWBOT_PW   # zsh(맥 기본). bash는 read -rsp '비밀번호: ' LAWBOT_PW
 uv run lawbot-app
 ```
 
-브라우저에서 `http://localhost:7860`으로 접속합니다. 선택 환경 변수는 다음과 같습니다.
+fish 셸은 다음과 같습니다.
 
-| 변수 | 용도 |
-| --- | --- |
-| `LAWBOT_USER`, `LAWBOT_PW` | 접속 시 로그인 요구 |
-| `LLM_PATH` | 다른 sLLM 폴더 사용 (예: `models/sllm_mlx_8bit`) |
+```fish
+set -gx LAWBOT_USER '원하는 사용자명'
+read -gxs -P '비밀번호: ' LAWBOT_PW   # -g 전역, -x 내보내기, -s 입력 숨김
+uv run lawbot-app
+```
+
+비밀번호를 매번 입력하지 않으려면 macOS 키체인에 저장해 두고 꺼내 쓸 수 있습니다.
+
+```fish
+security add-generic-password -a lawbot -s lawbot -w   # 최초 1회, 비밀번호 입력
+set -gx LAWBOT_PW (security find-generic-password -a lawbot -s lawbot -w)
+```
+
+fish의 `set -Ux`(유니버설 변수)는 값을 `~/.config/fish/fish_variables`에 평문으로 저장하므로 비밀번호에 쓰지 마세요.
+
+웹앱은 이 맥에서만 쓰는 로컬 전용입니다. 서버는 `127.0.0.1:7860`에서만 열리고, 브라우저에서 `http://127.0.0.1:7860`으로 접속해 로그인합니다. 같은 네트워크의 다른 기기에서는 접속할 수 없으며, Gradio 공개 공유 링크(`share`)도 만들지 않습니다. 주소·포트·공유 설정은 `GRADIO_SERVER_NAME` 같은 환경 변수로 바꿀 수 없습니다(`src/lawbot/security.py`).
+
+| 변수 | 필수 | 용도 |
+| --- | --- | --- |
+| `LAWBOT_USER` | 예 | 로그인 사용자명 (앞뒤 공백 제거 후 비어 있으면 안 됨) |
+| `LAWBOT_PW` | 예 | 로그인 비밀번호 (빈 값·공백만 있는 값은 안 됨) |
+| `LLM_PATH` | 아니요 | 다른 sLLM 폴더 사용 (예: `models/sllm_mlx_8bit`) |
+
+`LAWBOT_USER`와 `LAWBOT_PW`가 하나라도 없거나 비어 있으면 모델을 불러오기 전에 `RuntimeError`로 실행을 거부합니다. 인증 없이 서버를 띄우는 방법은 없습니다.
+
+> 주의: 비밀번호를 소스 코드, 셸 설정 파일, 스크립트 등 Git에 올라가는 파일에 적지 마세요. 위처럼 실행할 때 입력하거나 macOS 키체인 같은 비밀 저장소를 쓰세요.
+
+**테스트 실행**
+
+```bash
+uv run pytest   # 보안 설정 테스트 (모델·네트워크 불필요)
+```
 
 **평가 실행**
 
@@ -157,6 +187,7 @@ src/lawbot/
 ├── retriever.py       # 임베딩 검색
 ├── llm.py             # 프롬프트 구성, MLX 생성
 ├── app.py             # Gradio 웹앱
+├── security.py        # 로컬 전용 실행 설정 (127.0.0.1, 로그인 필수, 공유 링크 없음)
 ├── eval_dev.py        # 검색·답변 평가
 ├── score_answers.py   # 키워드 기반 채점기
 ├── refusal.py         # 거절 판정 (【결론】에 '확인할 수 없')
@@ -334,15 +365,45 @@ uv run mlx_lm.convert --hf-path models/sllm_merged --mlx-path models/sllm_mlx_4b
 **Run the web app**
 
 ```bash
+export LAWBOT_USER='your-username'
+read -rs 'LAWBOT_PW?Password: ' && export LAWBOT_PW   # zsh (macOS default). bash: read -rsp 'Password: ' LAWBOT_PW
 uv run lawbot-app
 ```
 
-Then open `http://localhost:7860`. Optional environment variables:
+In the fish shell:
 
-| Variable | Purpose |
-| --- | --- |
-| `LAWBOT_USER`, `LAWBOT_PW` | Require a login |
-| `LLM_PATH` | Use a different SLM folder (e.g. `models/sllm_mlx_8bit`) |
+```fish
+set -gx LAWBOT_USER 'your-username'
+read -gxs -P 'Password: ' LAWBOT_PW   # -g global, -x export, -s hide input
+uv run lawbot-app
+```
+
+To avoid typing the password each time, store it in the macOS Keychain and read it from there:
+
+```fish
+security add-generic-password -a lawbot -s lawbot -w   # once; prompts for the password
+set -gx LAWBOT_PW (security find-generic-password -a lawbot -s lawbot -w)
+```
+
+Do not use fish's `set -Ux` (universal variables) for the password: it stores the value in plain text in `~/.config/fish/fish_variables`.
+
+The web app is local-only, for use on this Mac. The server listens only on `127.0.0.1:7860`; open `http://127.0.0.1:7860` in a browser and log in. Other devices on the network cannot connect, and no public Gradio share link is created. The address, port and share setting cannot be changed through environment variables such as `GRADIO_SERVER_NAME` (`src/lawbot/security.py`).
+
+| Variable | Required | Purpose |
+| --- | --- | --- |
+| `LAWBOT_USER` | Yes | Login username (must not be empty after trimming whitespace) |
+| `LAWBOT_PW` | Yes | Login password (must not be empty or whitespace only) |
+| `LLM_PATH` | No | Use a different SLM folder (e.g. `models/sllm_mlx_8bit`) |
+
+If either `LAWBOT_USER` or `LAWBOT_PW` is missing or empty, the app refuses to start with a `RuntimeError` before loading any model. There is no way to run the server without a login.
+
+> Warning: never put the password in source code, shell profiles, scripts or any other file that goes into Git. Type it at launch as above, or use a secret store such as the macOS Keychain.
+
+**Run the tests**
+
+```bash
+uv run pytest   # security settings tests (no models or network needed)
+```
 
 **Run the evaluation**
 
@@ -364,6 +425,7 @@ src/lawbot/
 ├── retriever.py       # embedding retrieval
 ├── llm.py             # prompt construction, MLX generation
 ├── app.py             # Gradio web app
+├── security.py        # local-only launch settings (127.0.0.1, login required, no share link)
 ├── eval_dev.py        # retrieval and answer evaluation
 ├── score_answers.py   # keyword-based answer scorer
 ├── refusal.py         # refusal detection ('확인할 수 없' in the conclusion)

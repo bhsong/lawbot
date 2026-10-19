@@ -4,7 +4,9 @@ import gradio as gr
 from lawbot.paths import LLM_4BIT
 from lawbot.retriever import Retriever
 from lawbot.llm import LLM
+from lawbot.security import get_local_launch_config
 
+LAUNCH_CONFIG = get_local_launch_config()   # 인증 정보가 없으면 모델 로딩 전에 실행 거부
 R = Retriever()
 L = LLM(os.environ.get('LLM_PATH', LLM_4BIT))
 
@@ -37,9 +39,7 @@ with gr.Blocks(title='근로기준법 챗봇') as demo:
             sources.render()
 
 def main():
-    user, pw = os.environ.get('LAWBOT_USER'), os.environ.get('LAWBOT_PW')
-    demo.launch(server_name='0.0.0.0', server_port=7860,
-                auth=(user, pw) if user and pw else None)
+    demo.launch(**LAUNCH_CONFIG)     # 127.0.0.1:7860, 로그인 필수, 공유 링크 없음
 
 if __name__ == '__main__':
     main()

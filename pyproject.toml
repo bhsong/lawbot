@@ -25,3 +25,8 @@ build-backend = "uv_build"
 
 [tool.uv]
 environments = ["sys_platform == 'darwin'"]   # mlx는 macOS용: 잠금 파일을 macOS 기준으로만 풀이
+
+[dependency-groups]
+dev = [
+    "pytest>=9.1.1",
+]
