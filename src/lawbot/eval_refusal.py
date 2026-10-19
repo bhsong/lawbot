@@ -3,9 +3,9 @@
 #   다른 장 조문: lawbot_2 셀 11과 같은 방식 / 비슷한 조문: lawbot_5 셀 2와 같은 방식
 #   --hard: data/refusal_hard_cases.csv에서 근거 없이 주장한 사례(억지적용·지어냄)를 기록된 참고 조문 그대로 다시 묻는다
 # 결과파일명 기본값 refusal_v2_4bit.csv / refusal_hard_4bit.csv (refusal_v1_4bit.csv는 기준선이므로 덮어쓰지 않음)
-import sys
+import os, sys
 import numpy as np, pandas as pd
-from lawbot.paths import ARTICLES, DATA, EVAL, RESULTS
+from lawbot.paths import ARTICLES, DATA, EVAL, LLM_4BIT, RESULTS
 from lawbot.llm import LLM
 from lawbot.refusal import is_refusal
 
@@ -50,7 +50,7 @@ else:
     cases = [(t, i, qq, ids) for t, contexts in [('다른 장 조문', other), ('비슷한 조문', similar)]
              for i, qq, ids in zip(ref['id'], ref['question'], contexts)]
 
-L = LLM()
+L = LLM(os.environ.get('LLM_PATH', LLM_4BIT))   # 웹앱과 같이 LLM_PATH로 다른 모델
 rows = []
 for test, rid, q, ids in cases:
     answer = ''.join(g.text for g in L.stream(q, [{'article_id': a} for a in ids]))

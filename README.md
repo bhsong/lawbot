@@ -176,6 +176,7 @@ uv run pytest -m models                         # 실제 모델 스모크 테스
 | --- | --- |
 | `tests/test_security.py` | 인증 정보 누락·빈 값 거부, 오류에 비밀번호 미노출, `127.0.0.1:7860` 고정, 공유 링크 없음 |
 | `tests/test_pipeline.py` | 검색 결과 형식·정렬, 프롬프트가 학습 형식(`oracle_prompt` 650개)과 같음, 생성 성공·실패, 인증 없으면 모델 로딩 전 실행 거부, 웹앱 답변 스트리밍·근거 조문 표시 |
+| `tests/test_report.py` | 통합 지표가 README 수치와 `metrics.csv` 기록을 재현, 부작용 경고 기준, 결과 파일 저장 |
 | `tests/test_eval_data.py` | 범위 밖 답변 판정(거절·안내·억지적용·미인용)과 기준선 재현, `oos_eval`·`scope_controls`·`refusal_hard_cases` 데이터 무결성 |
 | `tests/test_scoring.py` | 거절 판정·채점 규칙, 비슷한 조문 번호 경계 사례(제43조/제43조의2, 띄어쓰기·항 표기, 거절 답변의 제공 조문 목록), 모범 답변 650개 1.0점, `results/`의 기록된 거절 판정·점수 재현 |
 | `tests/test_models.py` | 실제 임베딩·sLLM으로 질문 하나를 네 부분 형식으로 답하는지 (`-m models`, 맥 전용) |
@@ -186,14 +187,52 @@ GitHub Actions(`.github/workflows/ci.yml`)가 `main` 푸시와 모든 pull reque
 
 ```bash
 uv run lawbot-eval --n 0      # 검색 성능만 (650문항)
-uv run lawbot-eval --n 100    # 검색 + 답변 생성·채점 (무작위 100문항)
+uv run lawbot-eval --n 100    # 검색 + 답변 생성·채점 (무작위 100문항), 검색 순위는 results/retrieval_<임베딩폴더>.csv
 uv run python -m lawbot.summ_dev scored_sllm_mlx_4bit.csv   # 위 결과의 거짓 거절률·검색 실패 시 거절률
 uv run python -m lawbot.eval_oos       # 범위 밖 질문 102개 거절률·억지 적용률 → results/oos_v2_4bit.csv
 uv run python -m lawbot.eval_refusal   # 무관한 조문 / 비슷한 조문만 줄 때 거절률 (각 100문항) → results/refusal_v2_4bit.csv
 uv run python -m lawbot.eval_refusal --hard   # 근거 없이 주장했던 81건을 같은 참고 조문으로 다시 → results/refusal_hard_4bit.csv
 ```
 
-문항별 결과는 `results/`에 저장됩니다. 마지막 인자로 파일 이름을 바꿀 수 있습니다(예: `uv run python -m lawbot.eval_oos oos_v3_4bit.csv`). `oos_v1_4bit.csv`(82문항)와 `refusal_v1_4bit.csv`는 README 수치와 테스트의 기준선이므로 기본 설정으로는 덮어쓰지 않습니다.
+문항별 결과는 `results/`에 저장됩니다. 마지막 인자로 파일 이름을 바꿀 수 있습니다(예: `uv run python -m lawbot.eval_oos oos_v3_4bit.csv`). `oos_v1_4bit.csv`(82문항)와 `refusal_v1_4bit.csv`는 README 수치와 테스트의 기준선이므로 기본 설정으로는 덮어쓰지 않습니다. `eval_oos`와 `eval_refusal`은 웹앱처럼 `LLM_PATH`의 모델을 씁니다.
+
+**개선 전후 비교**
+
+`lawbot.report`가 `results/`의 평가 결과를 한 행으로 모아 `results/metrics.csv`에 추가합니다. 모델 없이 바로 끝납니다. 검색 Recall@3, 답변 종합 점수, 거짓 거절률, 범위 안 대조군 거짓 거절률, 무관한·비슷한 조문 거절률, 범위 밖 거절률·억지 적용률을 함께 기록합니다. 범위 밖 지표는 기준선과 비교할 수 있도록 기존 82문항으로 재고, 추가 20문항은 따로 잽니다.
+
+`--baseline`을 주면 기준 실행과 나란히 보여 주고, 다음처럼 정상 질문에 대한 성능이 떨어지면 부작용 경고를 냅니다. 거절률만 올리고 정상 질문에 답하지 못하게 되는 개선을 걸러 내기 위해서입니다.
+
+| 지표 | 경고 기준 (기준 실행 대비) |
+| --- | --- |
+| 검색 Recall@3 | 0.005 넘게 하락 |
+| 답변 종합 점수 (전체 / 검색 적중) | 0.02 넘게 하락 |
+| 조문 인용 정확도 (일반 / 엄격) | 0.02 넘게 하락 |
+| 거짓 거절률 (검색 적중 문항) | 0.01 넘게 상승 |
+| 범위 안 대조군 거짓 거절률 / 종합 점수 | 0.05(20문항 중 1개) 넘게 나빠짐 |
+
+```bash
+# 기준선 보강: 현재 모델로 한 번 (기록된 v1_4bit 행에는 Recall@3·대조군·102문항·재평가가 없음)
+uv run lawbot-eval --n 0                                                        # results/retrieval_emb_final_v3_fp16.csv
+uv run lawbot-eval --ids data/scope_controls.csv --out scored_controls_v1_4bit.csv
+uv run python -m lawbot.eval_oos oos_v1_4bit_102.csv
+uv run python -m lawbot.eval_refusal --hard refusal_hard_v1_4bit.csv
+uv run python -m lawbot.report --tag v1_4bit_full --retrieval retrieval_emb_final_v3_fp16.csv \
+  --scored scored_sllm_mlx_4bit.csv --controls scored_controls_v1_4bit.csv --oos oos_v1_4bit_102.csv \
+  --refusal refusal_v1_4bit.csv --hard refusal_hard_v1_4bit.csv --baseline v1_4bit
+
+# 개선한 모델: 같은 평가를 다른 파일 이름으로 돌리고 기준선과 비교 (--strict면 경고 시 종료 코드 1)
+export LLM_PATH=models/sllm_v3_mlx_4bit
+uv run lawbot-eval --llm $LLM_PATH --n 100 --out scored_v3_4bit.csv
+uv run lawbot-eval --llm $LLM_PATH --ids data/scope_controls.csv --out scored_controls_v3_4bit.csv
+uv run python -m lawbot.eval_oos oos_v3_4bit.csv
+uv run python -m lawbot.eval_refusal refusal_v3_4bit.csv
+uv run python -m lawbot.eval_refusal --hard refusal_hard_v3_4bit.csv
+uv run python -m lawbot.report --tag v3_4bit --retrieval retrieval_emb_final_v3_fp16.csv \
+  --scored scored_v3_4bit.csv --controls scored_controls_v3_4bit.csv --oos oos_v3_4bit.csv \
+  --refusal refusal_v3_4bit.csv --hard refusal_hard_v3_4bit.csv --baseline v1_4bit_full --strict
+```
+
+`metrics.csv`에는 기존 결과로 만든 `v1_4bit`(기준선)과 `v1_4bit_hybrid`(실패한 하이브리드 검색 실험) 두 행이 들어 있습니다. 하이브리드 검색은 범위 밖 거절률이 0.671 → 0.683으로 올랐지만 억지 적용률도 0.256 → 0.268로 올라, 거절률만으로는 개선이라고 볼 수 없었습니다.
 
 ### 프로젝트 구조
 
@@ -208,6 +247,7 @@ src/lawbot/
 ├── score_answers.py   # 키워드 기반 채점기
 ├── refusal.py         # 거절 판정 (【결론】에 '확인할 수 없'), 범위 밖 답변 판정 (거절·안내·억지적용·미인용)
 ├── summ_dev.py        # eval_dev 결과의 거절 지표 요약
+├── report.py          # 평가 결과를 metrics.csv 한 행으로 모으고 기준 실행과 비교
 ├── eval_oos.py        # 범위 밖 질문 거절률
 ├── eval_refusal.py    # 무관한 / 비슷한 조문 제공 시 거절률, --hard: 근거 없이 주장했던 사례 재평가
 ├── diag_oracle.py     # 정답 조문 제공 조건 답변 평가
@@ -434,6 +474,7 @@ uv run pytest -m models                         # real-model smoke test (needs m
 | --- | --- |
 | `tests/test_security.py` | Missing or empty credentials rejected, password never in errors, fixed `127.0.0.1:7860`, no share link |
 | `tests/test_pipeline.py` | Retrieval result shape and order, prompt identical to the training format (650 `oracle_prompt`s), generation success and failure, no model loading without credentials, streamed answers and source panel in the web app |
+| `tests/test_report.py` | Combined metrics reproduce the README numbers and `metrics.csv` rows, side-effect warning thresholds, saving results |
 | `tests/test_eval_data.py` | Out-of-scope verdicts (refusal, referral, forced, uncited) and baseline reproduction, integrity of `oos_eval`, `scope_controls` and `refusal_hard_cases` |
 | `tests/test_scoring.py` | Refusal and scoring rules, similar-article edge cases (Article 43 vs 43-2, spacing and paragraph notation, provided-article lists in refusals), all 650 reference answers score 1.0, recorded refusals and scores in `results/` are reproduced |
 | `tests/test_models.py` | The real embedding and SLM answer one question in the four-part format (`-m models`, Mac only) |
@@ -444,7 +485,7 @@ GitHub Actions (`.github/workflows/ci.yml`) runs `uv sync --locked`, a syntax ch
 
 ```bash
 uv run lawbot-eval --n 0      # retrieval only (650 questions)
-uv run lawbot-eval --n 100    # retrieval + generation + scoring (100 random questions)
+uv run lawbot-eval --n 100    # retrieval + generation + scoring (100 random questions); retrieval ranks go to results/retrieval_<embedding-folder>.csv
 uv run python -m lawbot.summ_dev scored_sllm_mlx_4bit.csv   # false refusals and refusals on retrieval misses
 uv run python -m lawbot.eval_oos       # refusal and forced-answer rate on 102 out-of-scope questions → results/oos_v2_4bit.csv
 uv run python -m lawbot.eval_refusal   # refusal given unrelated / similar articles only (100 each) → results/refusal_v2_4bit.csv
@@ -452,6 +493,24 @@ uv run python -m lawbot.eval_refusal --hard   # re-ask the 81 unsupported-claim 
 ```
 
 Per-question results are written to `results/`. A final argument changes the file name (e.g. `uv run python -m lawbot.eval_oos oos_v3_4bit.csv`). `oos_v1_4bit.csv` (82 questions) and `refusal_v1_4bit.csv` are the baselines behind the README numbers and tests, so the defaults never overwrite them.
+
+**Comparing before and after a change**
+
+`lawbot.report` gathers the evaluation results in `results/` into one row and appends it to `results/metrics.csv`. It needs no model and finishes immediately. It records retrieval Recall@3, the total answer score, false refusals, false refusals on the in-scope controls, refusal given unrelated or similar articles, and out-of-scope refusal and forced-answer rates. Out-of-scope metrics use the original 82 questions so that they stay comparable with the baseline; the 20 added questions are reported separately.
+
+With `--baseline`, it shows the baseline run side by side and warns about side effects when performance on ordinary questions drops. This catches changes that raise refusal only by failing to answer questions the bot should answer.
+
+| Metric | Warn when, versus the baseline |
+| --- | --- |
+| Retrieval Recall@3 | drops by more than 0.005 |
+| Total answer score (all / retrieval hits) | drops by more than 0.02 |
+| Citation accuracy (normal / strict) | drops by more than 0.02 |
+| False refusal rate (retrieval hits) | rises by more than 0.01 |
+| In-scope control false refusals / total score | worsens by more than 0.05 (1 of 20) |
+
+See the Korean section above for the full command sequence: first complete the baseline with the current model (Recall@3, controls, 102 out-of-scope questions, hard-case re-evaluation), then run the same evaluations for a new model under different file names and compare with `--baseline v1_4bit_full --strict`. `eval_oos` and `eval_refusal` use the model in `LLM_PATH`, like the web app.
+
+`metrics.csv` already holds two rows built from existing results: `v1_4bit` (baseline) and `v1_4bit_hybrid` (the failed hybrid retrieval experiment). Hybrid retrieval raised out-of-scope refusal from 0.671 to 0.683, but its forced-answer rate also rose from 0.256 to 0.268, so higher refusal alone was not an improvement.
 
 ### Project layout
 
@@ -466,6 +525,7 @@ src/lawbot/
 ├── score_answers.py   # keyword-based answer scorer
 ├── refusal.py         # refusal detection ('확인할 수 없' in the conclusion), out-of-scope verdicts (refusal, referral, forced, uncited)
 ├── summ_dev.py        # refusal metrics from eval_dev results
+├── report.py          # combine evaluation results into a metrics.csv row and compare with a baseline
 ├── eval_oos.py        # refusal on out-of-scope questions
 ├── eval_refusal.py    # refusal given unrelated / similar articles, --hard: re-evaluate unsupported-claim cases
 ├── diag_oracle.py     # answer evaluation with gold articles

@@ -1,16 +1,16 @@
 # src/lawbot/eval_oos.py  →  uv run python -m lawbot.eval_oos [결과파일명]
 # 결과파일명 기본값 oos_v2_4bit.csv (oos_v1_4bit.csv는 82문항 기준선이므로 덮어쓰지 않음)
 # 범위 밖 질문(data/oos_eval.csv)을 웹앱과 같은 방식(검색 상위 3개 → sLLM)으로 답하게 하고 거절했는지 본다
-import sys
+import os, sys
 import pandas as pd
-from lawbot.paths import DATA, RESULTS
+from lawbot.paths import DATA, LLM_4BIT, RESULTS
 from lawbot.retriever import Retriever
 from lawbot.llm import LLM
 from lawbot.refusal import is_refusal, cited_articles, oos_verdict
 
 oos = pd.read_csv(DATA / 'oos_eval.csv', encoding='utf-8-sig')
 name = sys.argv[1] if len(sys.argv) > 1 else 'oos_v2_4bit.csv'
-R, L = Retriever(), LLM()
+R, L = Retriever(), LLM(os.environ.get('LLM_PATH', LLM_4BIT))   # 웹앱과 같이 LLM_PATH로 다른 모델
 
 rows = []
 for i, r in enumerate(oos.itertuples(), 1):
