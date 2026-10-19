@@ -5,7 +5,7 @@ import pandas as pd
 import pytest
 from lawbot.paths import EVAL, RESULTS
 from lawbot.refusal import conclusion, is_refusal, cited_articles
-from lawbot.score_answers import norm, term_in, cite_ok, score_one
+from lawbot.score_answers import norm, term_in, cite_ok, cite_strict, score_one
 
 ANSWER = ('【결론】\n수습 기간에도 해고 예고를 해야 합니다.\n\n'
           '【근거 조문】\n근로기준법 제26조(해고의 예고)\n\n'
@@ -65,9 +65,51 @@ def test_term_in_number_boundary():
     ('제43조의2', '제43조의2', True),
     ('제43조의2', '제43조의20', False),
     ('제43조의2', '제43조', False),
+    # 띄어쓰기·항·조사가 붙어도 같은 조문, '의'+숫자가 붙으면 다른 조문
+    ('제43조', '제 43 조 ② 임금은', True),
+    ('제43조', '제43조제2항', True),
+    ('제43조', '제43조의 규정에 따라', True),
+    ('제43조', '제43조 의2', False),
+    ('제43조', '제43조의2제1항', False),
+    ('제76조의2', '제76조의 2(직장 내 괴롭힘의 금지)', True),
+    ('제76조의2', '제76조의3', False),
+    ('제2조', '제12조, 제20조, 제2조의2', False),
+    ('제43조', '43조', False),                   # '제' 없는 번호는 인용으로 보지 않음
 ])
 def test_cite_ok_distinguishes_similar_numbers(article, text, ok):
     assert cite_ok(article, norm(text)) is ok
+
+def test_cite_ok_known_limit_other_law_same_number():
+    # 알려진 한계: 다른 법의 같은 번호도 정답으로 본다 (법 이름을 보지 않음)
+    assert cite_ok('제34조', norm('근로자퇴직급여 보장법 제34조'))
+
+def test_refusal_listing_gold_article_is_not_citation(ev):
+    # 거절 답변의 '해당 없음 (제공된 조문: …)'에 정답 번호가 있어도 인용이 아니다
+    r = ev.set_index('id').loc['Q0818'].copy()   # 정답 제43조
+    answer = ('【결론】\n제공된 조문만으로는 질문에 대한 근거를 확인할 수 없습니다.\n\n'
+              '【근거 조문】\n해당 없음 (제공된 조문: 제40조(취업 방해의 금지), 제43조(임금 지급))\n\n'
+              '【설명】\n- 임금 지급 관련 규정이 아닙니다.')
+    s = score_one(r, answer)
+    assert s['cite_ok'] == 0 and s['cite_strict'] == 0 and s['total'] == 0.0
+
+@pytest.mark.parametrize('gold,basis,conf,ok', [
+    ('제43조', '제43조(임금 지급)', None, True),
+    ('제43조', '제43조, 제17조', None, True),           # 관련 없는 조문을 함께 인용하는 것은 허용
+    ('제43조', '제43조, 제43조의2', None, False),       # 번호가 비슷한 조문을 함께 인용
+    ('제43조', '제43조의2', None, False),
+    ('제56조', '제55조, 제60조', '제55조;제60조', False),  # 정답 없이 헷갈리는 조문만
+    ('제56조', '제56조, 제55조', '제55조', False),      # 정답 + 헷갈리는 조문
+    ('제56조', '제56조', '제55조', True),
+])
+def test_cite_strict(gold, basis, conf, ok):
+    answer = f'【결론】\n결론\n\n【근거 조문】\n{basis}\n\n【설명】\n- 제43조의2와 제55조는 다른 조문입니다.'
+    assert cite_strict(gold, conf, answer) is ok
+
+def test_cite_strict_ignores_mentions_outside_basis():
+    # 【설명】에서만 정답을 언급하면 cite_ok는 맞지만 cite_strict는 아니다
+    answer = '【결론】\n결론\n\n【근거 조문】\n제43조의2\n\n【설명】\n- 제43조와 다릅니다.'
+    assert cite_ok('제43조', norm(answer))
+    assert not cite_strict('제43조', None, answer)
 
 def test_score_one_penalties(ev):
     r = ev.iloc[0].copy()                      # 제1조(목적)
@@ -89,7 +131,8 @@ def test_reference_answers_score_full_marks(ev):
     assert min(scores) == 1.0
     assert not ev['reference_answer'].map(is_refusal).any()
 
-@pytest.mark.parametrize('name', ['scored_sllm_mlx_4bit.csv', 'scored_oracle_4bit.csv'])
+@pytest.mark.parametrize('name', ['scored_sllm_mlx_4bit.csv', 'scored_oracle_4bit.csv',
+                                  'scored_sllm_mlx_4bit_hybrid.csv'])
 def test_scorer_reproduces_recorded_scores(ev, name):
     o = results(name).fillna({'answer': ''})
     gold = ev.set_index('id')
@@ -97,3 +140,15 @@ def test_scorer_reproduces_recorded_scores(ev, name):
         s = score_one(gold.loc[r['id']], r['answer'])
         assert s['total'] == pytest.approx(r['total']), r['id']
         assert s['cite_ok'] == r['cite_ok'], r['id']
+        assert s['cite_strict'] == r['cite_strict'], r['id']
+
+@pytest.mark.parametrize('name,qid,cite,strict,total', [
+    ('scored_sllm_mlx_4bit.csv', 'Q1730', 0, 0, 0.0),    # 정답 제76조의2, 제76조의3 인용
+    ('scored_oracle_4bit.csv', 'Q1730', 0, 0, 0.0),
+    ('scored_oracle_4bit.csv', 'Q0989', 0, 0, 0.0),      # 거절 + 제공 조문 목록에 정답 (수정 전 0.33)
+    ('scored_oracle_4bit.csv', 'Q0818', 0, 0, 0.0),      # 거절 + 제공 조문 목록에 정답 (수정 전 0.5)
+    ('scored_oracle_4bit.csv', 'Q2464', 1, 0, 1.0),      # 정답 제110조 + 헷갈리는 제53조 함께 인용
+])
+def test_recorded_citation_edge_cases(name, qid, cite, strict, total):
+    r = results(name).set_index('id').loc[qid]
+    assert (r['cite_ok'], r['cite_strict'], r['total']) == (cite, strict, total)

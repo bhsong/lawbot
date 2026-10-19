@@ -11,6 +11,10 @@ answers.csv: id, answer 두 열 (id는 평가 CSV의 id와 동일)
 채점 규칙
 - 비교 전 답변·키워드 모두 공백 제거(가운뎃점 ㆍ→·, 숫자 사이 쉼표 제거)
 - cite_ok: 정답 조문 번호 인용 여부 (제43조가 제43조의2에 잘못 매칭되지 않도록 처리)
+  거절 답변은 0 ('해당 없음 (제공된 조문: 제43조…)'의 제공 조문 목록은 인용이 아님)
+- cite_strict: 【근거 조문】에 정답 조문이 있고, 헷갈리는 조문(confusable_with)이나
+  번호가 비슷한 조문(제43조 ↔ 제43조의2)은 없음. 여러 조문을 함께 인용해 정답을 맞히는 경우를 따로 보는 지표
+  (total에는 반영하지 않음)
 - must_include: JSON [[그룹1 동의어...], [그룹2 동의어...]] → 그룹 간 AND, 그룹 내 OR
   group_score = 충족 그룹 수 / 전체 그룹 수, missing_groups에 빠진 그룹 기록
 - must_not_include: JSON [표현...] → 답변 전체에서 하나라도 나오면 hit (부정문 오답 표현)
@@ -25,6 +29,8 @@ import json
 import re
 
 import pandas as pd
+
+from lawbot.refusal import cited_articles, is_refusal
 
 
 def norm(s: str) -> str:
@@ -51,6 +57,18 @@ def cite_ok(article_id: str, text_n: str) -> bool:
     return re.search(r"(?<!\d)" + re.escape(a) + r"(?!의\d)", text_n) is not None
 
 
+def article_family(article_id: str) -> str:
+    """제43조의2 → 제43조 (번호가 비슷한 조문 묶음)"""
+    return re.sub(r"의\d+$", "", article_id)
+
+
+def cite_strict(article_id: str, confusable, answer: str) -> bool:
+    cited = set(cited_articles(str(answer)))
+    wrong = set(confusable.split(";")) if isinstance(confusable, str) and confusable else set()
+    wrong |= {c for c in cited if c != article_id and article_family(c) == article_family(article_id)}
+    return article_id in cited and not (cited & wrong)
+
+
 def conclusion_part(answer: str) -> str:
     a = str(answer)
     m = re.search(r"【결론】(.*?)(?=【|$)", a, re.S)
@@ -67,10 +85,11 @@ def score_one(row, answer: str) -> dict:
     banned_c = json.loads(row.get("must_not_in_conclusion", "[]") or "[]")
     bad = [b for b in banned if term_in(b, t)] + [b for b in banned_c if term_in(b, tc)]
     gscore = sum(hit) / len(groups) if groups else 1.0
-    c = cite_ok(row["article_id"], t)
+    c = cite_ok(row["article_id"], t) and not is_refusal(str(answer))
     total = gscore * (1.0 if c else 0.0) * (0.5 if bad else 1.0)
     return dict(
         cite_ok=int(c),
+        cite_strict=int(cite_strict(row["article_id"], row.get("confusable_with"), answer)),
         group_score=round(gscore, 4),
         groups_hit=sum(hit),
         groups_total=len(groups),
@@ -97,7 +116,7 @@ def main():
     out.to_csv(a.out, index=False, encoding="utf-8-sig")
 
     print(f"문항 수: {len(out)}")
-    print(f"조문 인용 정확도: {out.cite_ok.mean():.3f}")
+    print(f"조문 인용 정확도: {out.cite_ok.mean():.3f} (엄격: {out.cite_strict.mean():.3f})")
     print(f"키워드 그룹 충족률: {out.group_score.mean():.3f}")
     print(f"금지 표현 없음 비율: {out.must_not_ok.mean():.3f}")
     print(f"종합 점수(total): {out.total.mean():.3f}")

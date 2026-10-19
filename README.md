@@ -62,7 +62,7 @@ Lawbot은 대한민국 근로기준법 질문에 조문을 근거로 답하는 �
 
 **답변 생성 (Colab, bf16)**
 
-종합 점수 = 키워드 그룹 충족률 × 조문 인용 정확 여부 × (금지 표현 시 0.5)이고, 만점은 1.0입니다.
+종합 점수 = 키워드 그룹 충족률 × 조문 인용 정확 여부 × (금지 표현 시 0.5)이고, 만점은 1.0입니다. 거절 답변은 0점입니다. 아래 Colab 수치는 2026-10-19 채점기 수정(거절 답변의 제공 조문 목록을 인용으로 세던 문제) 전에 측정했습니다. 수정 영향은 거짓 거절 문항에 한정되므로 최대 0.005입니다.
 
 | 조건 | 조문 인용 정확도 | 키워드 그룹 충족률 | 종합 점수 |
 | --- | --- | --- | --- |
@@ -86,7 +86,7 @@ Lawbot은 대한민국 근로기준법 질문에 조문을 근거로 답하는 �
 
 | 지표 | 값 |
 | --- | --- |
-| 종합 점수 (검색 조문 / 정답 조문) | 0.812 / 0.945 |
+| 종합 점수 (검색 조문 / 정답 조문) | 0.812 / 0.937 |
 | 첫 토큰까지 시간 (중앙값) | 5.4초 |
 | 생성 속도 | 24.5 토큰/초 |
 | 질문당 소요 시간 | 20.4초 |
@@ -176,7 +176,7 @@ uv run pytest -m models                         # 실제 모델 스모크 테스
 | --- | --- |
 | `tests/test_security.py` | 인증 정보 누락·빈 값 거부, 오류에 비밀번호 미노출, `127.0.0.1:7860` 고정, 공유 링크 없음 |
 | `tests/test_pipeline.py` | 검색 결과 형식·정렬, 프롬프트가 학습 형식(`oracle_prompt` 650개)과 같음, 생성 성공·실패, 인증 없으면 모델 로딩 전 실행 거부, 웹앱 답변 스트리밍·근거 조문 표시 |
-| `tests/test_scoring.py` | 거절 판정·채점 규칙, 모범 답변 650개 1.0점, `results/`의 기록된 거절 판정·점수 재현 |
+| `tests/test_scoring.py` | 거절 판정·채점 규칙, 비슷한 조문 번호 경계 사례(제43조/제43조의2, 띄어쓰기·항 표기, 거절 답변의 제공 조문 목록), 모범 답변 650개 1.0점, `results/`의 기록된 거절 판정·점수 재현 |
 | `tests/test_models.py` | 실제 임베딩·sLLM으로 질문 하나를 네 부분 형식으로 답하는지 (`-m models`, 맥 전용) |
 
 GitHub Actions(`.github/workflows/ci.yml`)가 `main` 푸시와 모든 pull request에서 macOS(Apple Silicon) 러너로 `uv sync --locked`, 문법 검사(`compileall`), `uv run pytest`를 실행합니다. 비밀정보는 쓰지 않으며, `-m models` 테스트와 평가 스크립트는 CI에서 실행하지 않습니다. 결과는 PR의 체크와 Actions 로그, `pytest-report` 아티팩트에서 볼 수 있습니다.
@@ -221,7 +221,7 @@ src/lawbot/
   - 테스트: 650개(조문 × 유형마다 1개)
   - 학습·검증: 나머지 1,952개
   - 모델 선택과 하이퍼파라미터 결정은 검증 셋으로만 했습니다.
-- **답변 채점**: 문항마다 필수 키워드 그룹, 금지 표현, 정답 조문 번호를 지정해 자동 채점합니다. 제43조와 제43조의2처럼 비슷한 번호는 구분합니다. 평가 파일의 모범 답변은 650문항 모두 1.0점입니다.
+- **답변 채점**: 문항마다 필수 키워드 그룹, 금지 표현, 정답 조문 번호를 지정해 자동 채점합니다. 제43조와 제43조의2처럼 비슷한 번호는 구분합니다. 거절 답변은 `해당 없음 (제공된 조문: …)`에 정답 번호가 있어도 인용으로 보지 않습니다. `cite_strict`는 【근거 조문】에 정답이 있고 헷갈리는 조문이나 번호가 비슷한 조문을 함께 인용하지 않았는지를 따로 기록합니다(종합 점수에는 반영하지 않음). 다른 법의 같은 번호(예: 근로자퇴직급여 보장법 제34조)는 구분하지 못합니다. 평가 파일의 모범 답변은 650문항 모두 1.0점입니다.
 - **범위 밖 질문**: 근로기준법으로 답할 수 없는 질문 82개로 거절률을 따로 잽니다(`data/oos_eval.csv`).
 - **평가 데이터 사용 제한**: `data/labor_eval_keywords.csv`와 `data/oos_eval.csv`는 평가 전용입니다. 모델 학습이나 설정 선택에 쓰지 마세요.
 - **`results/` 안내**: 채점 전 모델 원본 출력과 문항별 점수이며, 점수가 낮은 답변은 법적으로 틀린 내용을 포함합니다.
@@ -314,7 +314,7 @@ Question classification over 130 classes (logistic regression):
 
 **Answer generation (Colab, bf16)**
 
-Total score = keyword-group coverage × correct article citation × (0.5 if a forbidden phrase appears). The maximum is 1.0.
+Total score = keyword-group coverage × correct article citation × (0.5 if a forbidden phrase appears). The maximum is 1.0, and refusals score 0. The Colab numbers below were measured before the 2026-10-19 scorer fix (refusals listing the provided articles were counted as citations). The fix only affects false refusals, so its effect is at most 0.005.
 
 | Setting | Citation accuracy | Keyword coverage | Total score |
 | --- | --- | --- | --- |
@@ -338,7 +338,7 @@ The out-of-scope set has 25 everyday questions, 32 questions governed by other l
 
 | Metric | Value |
 | --- | --- |
-| Total score (retrieved / gold articles) | 0.812 / 0.945 |
+| Total score (retrieved / gold articles) | 0.812 / 0.937 |
 | Time to first token (median) | 5.4 s |
 | Generation speed | 24.5 tokens/s |
 | Time per question | 20.4 s |
@@ -428,7 +428,7 @@ uv run pytest -m models                         # real-model smoke test (needs m
 | --- | --- |
 | `tests/test_security.py` | Missing or empty credentials rejected, password never in errors, fixed `127.0.0.1:7860`, no share link |
 | `tests/test_pipeline.py` | Retrieval result shape and order, prompt identical to the training format (650 `oracle_prompt`s), generation success and failure, no model loading without credentials, streamed answers and source panel in the web app |
-| `tests/test_scoring.py` | Refusal and scoring rules, all 650 reference answers score 1.0, recorded refusals and scores in `results/` are reproduced |
+| `tests/test_scoring.py` | Refusal and scoring rules, similar-article edge cases (Article 43 vs 43-2, spacing and paragraph notation, provided-article lists in refusals), all 650 reference answers score 1.0, recorded refusals and scores in `results/` are reproduced |
 | `tests/test_models.py` | The real embedding and SLM answer one question in the four-part format (`-m models`, Mac only) |
 
 GitHub Actions (`.github/workflows/ci.yml`) runs `uv sync --locked`, a syntax check (`compileall`) and `uv run pytest` on a macOS (Apple Silicon) runner for every push to `main` and every pull request. It uses no secrets; `-m models` tests and the evaluation scripts are not run in CI. Results appear as PR checks, in the Actions log and as the `pytest-report` artifact.
@@ -473,7 +473,7 @@ src/lawbot/
   - Test: 650 questions (one per article and type)
   - Training and validation: the remaining 1,952 questions
   - Model selection and hyperparameters were decided on validation data only.
-- **Answer scoring**: Each test question specifies required keyword groups, forbidden phrases, and the gold article. Scoring is automatic and distinguishes similar article numbers such as Article 43 and Article 43-2. The reference answers in the evaluation file score 1.0 on all 650 questions.
+- **Answer scoring**: Each test question specifies required keyword groups, forbidden phrases, and the gold article. Scoring is automatic and distinguishes similar article numbers such as Article 43 and Article 43-2. A refusal is never counted as a citation, even when its list of provided articles contains the gold article. `cite_strict` separately records whether the cited-articles section names the gold article without also citing a confusable or similarly numbered article (not part of the total score). The same number in another law (e.g. Article 34 of the Employee Retirement Benefit Security Act) is not distinguished. The reference answers in the evaluation file score 1.0 on all 650 questions.
 - **Out-of-scope questions**: 82 questions the Labor Standards Act cannot answer measure refusal separately (`data/oos_eval.csv`).
 - **Evaluation-only data**: `data/labor_eval_keywords.csv` and `data/oos_eval.csv` are for evaluation only. Do not use them for training or model selection.
 - **About `results/`**: These are raw model outputs with per-question scores. Low-scoring answers contain legally incorrect statements.
