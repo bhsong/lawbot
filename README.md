@@ -132,6 +132,23 @@ read -rs 'LAWBOT_PW?비밀번호: ' && export LAWBOT_PW   # zsh(맥 기본). bas
 uv run lawbot-app
 ```
 
+fish 셸은 다음과 같습니다.
+
+```fish
+set -gx LAWBOT_USER '원하는 사용자명'
+read -gxs -P '비밀번호: ' LAWBOT_PW   # -g 전역, -x 내보내기, -s 입력 숨김
+uv run lawbot-app
+```
+
+비밀번호를 매번 입력하지 않으려면 macOS 키체인에 저장해 두고 꺼내 쓸 수 있습니다.
+
+```fish
+security add-generic-password -a lawbot -s lawbot -w   # 최초 1회, 비밀번호 입력
+set -gx LAWBOT_PW (security find-generic-password -a lawbot -s lawbot -w)
+```
+
+fish의 `set -Ux`(유니버설 변수)는 값을 `~/.config/fish/fish_variables`에 평문으로 저장하므로 비밀번호에 쓰지 마세요.
+
 웹앱은 이 맥에서만 쓰는 로컬 전용입니다. 서버는 `127.0.0.1:7860`에서만 열리고, 브라우저에서 `http://127.0.0.1:7860`으로 접속해 로그인합니다. 같은 네트워크의 다른 기기에서는 접속할 수 없으며, Gradio 공개 공유 링크(`share`)도 만들지 않습니다. 주소·포트·공유 설정은 `GRADIO_SERVER_NAME` 같은 환경 변수로 바꿀 수 없습니다(`src/lawbot/security.py`).
 
 | 변수 | 필수 | 용도 |
@@ -352,6 +369,23 @@ export LAWBOT_USER='your-username'
 read -rs 'LAWBOT_PW?Password: ' && export LAWBOT_PW   # zsh (macOS default). bash: read -rsp 'Password: ' LAWBOT_PW
 uv run lawbot-app
 ```
+
+In the fish shell:
+
+```fish
+set -gx LAWBOT_USER 'your-username'
+read -gxs -P 'Password: ' LAWBOT_PW   # -g global, -x export, -s hide input
+uv run lawbot-app
+```
+
+To avoid typing the password each time, store it in the macOS Keychain and read it from there:
+
+```fish
+security add-generic-password -a lawbot -s lawbot -w   # once; prompts for the password
+set -gx LAWBOT_PW (security find-generic-password -a lawbot -s lawbot -w)
+```
+
+Do not use fish's `set -Ux` (universal variables) for the password: it stores the value in plain text in `~/.config/fish/fish_variables`.
 
 The web app is local-only, for use on this Mac. The server listens only on `127.0.0.1:7860`; open `http://127.0.0.1:7860` in a browser and log in. Other devices on the network cannot connect, and no public Gradio share link is created. The address, port and share setting cannot be changed through environment variables such as `GRADIO_SERVER_NAME` (`src/lawbot/security.py`).
 
