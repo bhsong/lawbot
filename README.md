@@ -230,6 +230,7 @@ src/lawbot/
 ├── paths.py           # 데이터·모델 경로
 ├── retriever.py       # 임베딩 검색
 ├── llm.py             # 프롬프트 구성, MLX 생성
+├── service.py         # UI와 무관한 질의응답 흐름 (모델 로딩, 검색 → 답변 스트리밍)
 ├── app.py             # Gradio 웹앱
 ├── security.py        # 로컬 전용 실행 설정 (127.0.0.1, 로그인 필수, 공유 링크 없음)
 ├── eval_dev.py        # 검색·답변 평가
@@ -497,6 +498,7 @@ src/lawbot/
 ├── paths.py           # data and model paths
 ├── retriever.py       # embedding retrieval
 ├── llm.py             # prompt construction, MLX generation
+├── service.py         # UI-independent Q&A flow (model loading, retrieval → streamed answer)
 ├── app.py             # Gradio web app
 ├── security.py        # local-only launch settings (127.0.0.1, login required, no share link)
 ├── eval_dev.py        # retrieval and answer evaluation
