@@ -34,4 +34,7 @@ dev = [
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-ra --strict-markers -m 'not models'"   # 실제 모델 테스트는 -m models로 따로 실행
-markers = ["models: 실제 모델 파일(models/)과 Apple Silicon이 필요한 테스트"]
+markers = [
+    "models: 실제 모델 파일(models/)과 Apple Silicon이 필요한 테스트",
+    "integration: 실제 Gradio 서버를 별도 프로세스로 띄우는 인증 테스트 (127.0.0.1만 접속)",
+]
