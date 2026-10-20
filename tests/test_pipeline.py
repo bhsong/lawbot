@@ -131,57 +131,85 @@ def test_llm_load_failure_propagates(env):
 
 # ---- 웹앱 ----
 @pytest.fixture
-def load_app(env):
-    """가짜 모델로 lawbot.app을 새로 import한다 (app은 import 시 설정 확인·모델 로딩을 함)"""
+def app(env):
+    """가짜 모델을 쓰는 lawbot.app. launch는 실제 서버 대신 설정만 기록한다"""
+    import lawbot.app as app
     FakeRetriever.created = FakeLLM.created = 0
     FakeLLM.chunks = ['【결론】', '예고해야', ' 합니다.']
+    env.setattr(app, 'Retriever', FakeRetriever)
+    env.setattr(app, 'LLM', FakeLLM)
+    app.launched = []
+    env.setattr(app.gr.Blocks, 'launch', lambda demo, **kw: app.launched.append((demo, kw)))
+    return app
+
+def test_import_does_not_check_auth_or_load_models(env):
+    # import만으로는 인증 검사·모델 로딩을 하지 않는다 (둘 다 main에서)
+    FakeRetriever.created = FakeLLM.created = 0
     env.setattr(retriever_mod, 'Retriever', FakeRetriever)
     env.setattr(llm_mod, 'LLM', FakeLLM)
-    def load():
-        sys.modules.pop('lawbot.app', None)
-        import lawbot.app
-        return lawbot.app
-    yield load
     sys.modules.pop('lawbot.app', None)
+    try:
+        import lawbot.app
+        assert not hasattr(lawbot.app, 'demo')
+        assert FakeRetriever.created == 0 and FakeLLM.created == 0
+    finally:
+        sys.modules.pop('lawbot.app', None)
 
-def test_app_refuses_to_start_without_auth_before_loading_models(load_app):
+def test_build_demo_with_fakes_needs_no_auth(app):
+    demo = app.build_demo(FakeRetriever(), FakeLLM('models/fake'))
+    assert isinstance(demo, app.gr.Blocks) and demo.title == '근로기준법 챗봇'
+    assert FakeRetriever.created == 1 and FakeLLM.created == 1   # 넘겨준 객체 외에 모델을 만들지 않음
+    assert app.launched == []
+
+def test_app_refuses_to_start_without_auth_before_loading_models(app):
     with pytest.raises(RuntimeError, match='LAWBOT_USER'):
-        load_app()
+        app.main()
     assert FakeRetriever.created == 0 and FakeLLM.created == 0
+    assert app.launched == []
 
-def test_app_launches_local_only(load_app, env):
+def test_app_launches_local_only(app, env):
     set_auth(env)
     env.setenv('GRADIO_SERVER_NAME', '0.0.0.0')
     env.setenv('GRADIO_SHARE', 'True')
-    app = load_app()
-    launched = {}
-    env.setattr(app.demo, 'launch', lambda **kw: launched.update(kw))
     app.main()
+    [(demo, launched)] = app.launched
+    assert demo.title == '근로기준법 챗봇'
     assert launched == {'server_name': '127.0.0.1', 'server_port': 7860,
                         'auth': ('tester', 'test-only-pw'), 'share': False}
+    assert FakeRetriever.created == 1 and FakeLLM.created == 1
 
-def test_app_llm_path_env(load_app, env):
+def test_app_llm_path_env(app, env):
     set_auth(env)
     env.setenv('LLM_PATH', 'models/sllm_mlx_8bit')
-    assert load_app().L.path == 'models/sllm_mlx_8bit'
+    paths = []
+    env.setattr(app, 'LLM', lambda path: paths.append(path) or FakeLLM(path))
+    app.main()
+    assert paths == ['models/sllm_mlx_8bit']
 
-def test_chat_streams_answer_with_sources(load_app, env):
+def test_app_llm_path_default(app, env):
     set_auth(env)
-    app = load_app()
-    steps = list(app.chat('수습 기간에도 해고 예고?', []))
+    paths = []
+    env.setattr(app, 'LLM', lambda path: paths.append(path) or FakeLLM(path))
+    app.main()
+    assert paths == [app.LLM_4BIT]
+
+def test_chat_streams_answer_with_sources(app):
+    r, m = FakeRetriever(), FakeLLM('models/fake')
+    chat = app.make_chat(r, m)
+    assert chat.__name__ == 'chat'                  # Gradio API 이름(/gradio_api/call/chat)
+    steps = list(chat('수습 기간에도 해고 예고?', []))
     assert [t for t, _ in steps] == ['【결론】', '【결론】예고해야', '【결론】예고해야 합니다.']
     src = steps[-1][1]
     assert all(s == src for _, s in steps)          # 근거 조문 칸은 답변 내내 같음
     assert '**제26조 해고의 예고** · 유사도 0.912' in src
     assert '30일 전에 예고' in src
     assert src.count('제26조 해고의 예고') == 1     # 조문 본문 첫 줄(제목 줄)은 중복 표시 안 함
-    assert app.R.query == '수습 기간에도 해고 예고?'
-    assert app.L.args == ('수습 기간에도 해고 예고?', HITS)
+    assert r.query == '수습 기간에도 해고 예고?'
+    assert m.args == ('수습 기간에도 해고 예고?', HITS)
 
-def test_chat_generation_failure_is_not_hidden(load_app, env):
+def test_chat_generation_failure_is_not_hidden(app):
     # 생성 실패를 빈 답변이나 부분 답변으로 끝내지 않고 예외로 올린다 (Gradio가 오류로 표시)
-    set_auth(env)
-    app = load_app()
     FakeLLM.chunks = ['【결론】', RuntimeError('generation failed')]
+    chat = app.make_chat(FakeRetriever(), FakeLLM('models/fake'))
     with pytest.raises(RuntimeError, match='generation failed'):
-        list(app.chat('질문', []))
+        list(chat('질문', []))

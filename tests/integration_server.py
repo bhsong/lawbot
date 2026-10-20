@@ -1,5 +1,5 @@
 # tests/integration_server.py  →  인증 통합 테스트용 서버 (test_auth_integration.py가 별도 프로세스로 실행)
-# 실제 lawbot.app을 가짜 모델로 띄운다. 인증·주소 설정은 app 그대로, 포트만 테스트용으로 바꾼다
+# 실제 lawbot.app.main()을 가짜 모델로 띄운다. 인증·주소 설정은 app 그대로, 포트만 테스트용으로 바꾼다
 # 사용법: python tests/integration_server.py <포트> <호출 기록 파일>
 import sys
 import types
@@ -24,6 +24,8 @@ def fake_module(name, **attrs):
 sys.modules['lawbot.retriever'] = fake_module('lawbot.retriever', Retriever=FakeRetriever)
 sys.modules['lawbot.llm'] = fake_module('lawbot.llm', LLM=RecordingLLM)
 
+import lawbot.security as security
 import lawbot.app as app   # 가짜 모듈을 넣은 뒤에 import해야 함
 
-app.demo.launch(**{**app.LAUNCH_CONFIG, 'server_port': port})
+security.SERVER_PORT = port
+app.main()
