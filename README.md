@@ -249,8 +249,8 @@ src/lawbot/
 ### 데이터와 평가 방법
 
 - **조문**: 근로기준법 130개 조문(기준일 2026-10-01). [Legalize KR](https://github.com/legalize-kr/legalize-kr)의 근로기준법 법률 제21373호(2026-02-19 공포, 2026-08-20 시행) 본문이며, 2026-10-20에 조문 단위로 대조했습니다. 삭제·실효 조문 2개(제35조·제16조)는 제외했습니다. 본문의 `<개정 …>` 날짜는 항별 개정 표시일 뿐 시행일이 아닙니다. `[실효: …]` 표시(제16조, 제53조 ③·⑥)는 가공 중 덧붙인 것입니다.
-  - **최신이 아님**: 기준일 이후 공포된 개정 법률(제21472·21533·21784호)로 18개 조문(제13조, 제54조, 제101조~제116조 등)의 본문이 바뀌었고, 일부는 이미 시행되었습니다. 이 조문이 검색되면 근거 패널에서 알립니다.
-  - 출처·기준일은 `data/labor_articles_20261001.meta.json`에 확인한 값만 적고(모르는 값은 `null`), 파일 해시로 데이터와 맞는지 확인합니다. 검색 결과에는 조문별 출처 메타데이터가 붙고, 근거 패널에 출처를 표시하며, 답변이 검색 결과에 없는 조문을 인용하거나 질문에 특정 연도가 있거나 실효 표시가 있는 조문이 검색되면 알립니다. 자세한 내용과 데이터 갱신 절차는 [docs/data-provenance.md](docs/data-provenance.md)에 있습니다.
+  - **최신이 아님**: 기준일 이후 공포된 개정 법률(제21472·21533·21784호)로 18개 조문(제13조, 제54조, 제101조~제116조 등)의 본문이 바뀌었고, 일부는 이미 시행되었습니다. 두 모델이 기준일 본문으로 튜닝되었으므로 데이터는 고정하고, 이 조문이 검색되면 근거 패널에서 알립니다.
+  - 출처·기준일은 `data/labor_articles_20261001.meta.json`에 확인한 값만 적고(모르는 값은 `null`), 파일 해시로 데이터와 맞는지 확인합니다. 검색 결과에는 조문별 출처 메타데이터가 붙고, 근거 패널에 출처를 표시하며, 답변이 검색 결과에 없는 조문을 인용하거나 질문에 특정 연도가 있거나 실효 표시가 있는 조문이 검색되면 알립니다. 자세한 내용과 이후 개정 기록 갱신 절차는 [docs/data-provenance.md](docs/data-provenance.md)에 있습니다.
   - 데이터 점검: `uv run python -m lawbot.lawdata` (검증, 파일 해시, 메타데이터 일치 여부)
 - **질문**: 총 2,602개(130조문 × 질문 유형 5종 × 약 4개)입니다.
   - 질문 유형: 구어체, 사용자(사업주) 관점, 간접 질문, 키워드, 상황 설명
@@ -286,7 +286,7 @@ src/lawbot/
   - Docker
   - vLLM 서빙
   - 클라우드 배포
-  - 법 개정 재인덱싱 (최신 Legalize KR 버전으로 데이터 갱신, 학습·평가 기준 재정리)
+  - 법 개정 반영 (새 기준일 본문으로 두 모델 재튜닝, 학습·평가 기준 재작성. 그 전까지 데이터는 2026-10-01 기준으로 고정)
 
 ### 고지
 
@@ -521,8 +521,8 @@ src/lawbot/
 ### Data and evaluation
 
 - **Articles**: 130 articles of the Labor Standards Act as of 2026-10-01, taken from [Legalize KR](https://github.com/legalize-kr/legalize-kr) (Act No. 21373, promulgated 2026-02-19, effective 2026-08-20) and checked article by article on 2026-10-20. Two articles (Article 35, repealed; Article 16, expired) are excluded. The `<개정 …>` dates in the text mark amendments, not effective dates. The `[실효: …]` expiry notes (Article 16; Article 53, paragraphs 3 and 6) were added during processing.
-  - **Not current**: Acts promulgated after the as-of date (Nos. 21472, 21533, 21784) changed 18 articles (Articles 13, 54, 101-116, and others), and some of those changes are already in force. The source panel flags these articles when they are retrieved.
-  - `data/labor_articles_20261001.meta.json` records only verified facts (unknown values are `null`) and is checked against the file hash. Search results carry per-article source metadata, and the source panel shows the data source and flags citations outside the retrieved articles, questions about a specific year, and articles with expiry notes. See [docs/data-provenance.md](docs/data-provenance.md) (Korean) for details and the data update procedure.
+  - **Not current**: Acts promulgated after the as-of date (Nos. 21472, 21533, 21784) changed 18 articles (Articles 13, 54, 101-116, and others), and some of those changes are already in force. Both models were tuned on the as-of text, so the data stays fixed and the source panel flags these articles when they are retrieved.
+  - `data/labor_articles_20261001.meta.json` records only verified facts (unknown values are `null`) and is checked against the file hash. Search results carry per-article source metadata, and the source panel shows the data source and flags citations outside the retrieved articles, questions about a specific year, and articles with expiry notes. See [docs/data-provenance.md](docs/data-provenance.md) (Korean) for details and how to refresh the later-amendment record.
   - Data check: `uv run python -m lawbot.lawdata` (validation, file hash, metadata match)
 - **Questions**: 2,602 in total (130 articles × 5 question types × about 4 each).
   - Question types: colloquial, employer perspective, indirect, keyword, situational
@@ -558,7 +558,7 @@ src/lawbot/
   - Docker
   - vLLM serving
   - Cloud deployment
-  - Re-indexing after law amendments (update to the latest Legalize KR version and rebuild the training and evaluation baselines)
+  - Incorporating law amendments (retune both models on a new as-of text and rebuild the training and evaluation data; until then the data stays fixed at 2026-10-01)
 
 ### Notices
 
