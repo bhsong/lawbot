@@ -138,7 +138,7 @@ def app(env):
     FakeLLM.chunks = ['【결론】', '예고해야', ' 합니다.']
     env.setattr(app, 'Retriever', FakeRetriever)
     env.setattr(app, 'LLM', FakeLLM)
-    app.launched = []
+    env.setattr(app, 'launched', [], raising=False)   # 테스트가 끝나면 지워짐
     env.setattr(app.gr.Blocks, 'launch', lambda demo, **kw: app.launched.append((demo, kw)))
     return app
 
