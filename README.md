@@ -62,7 +62,7 @@ Lawbot은 대한민국 근로기준법 질문에 조문을 근거로 답하는 �
 
 **답변 생성 (Colab, bf16)**
 
-종합 점수 = 키워드 그룹 충족률 × 조문 인용 정확 여부 × (금지 표현 시 0.5)이고, 만점은 1.0입니다.
+종합 점수 = 키워드 그룹 충족률 × 조문 인용 정확 여부 × (금지 표현 시 0.5)이고, 만점은 1.0입니다. 거절 답변은 0점입니다. 아래 Colab 수치는 2026-10-19 채점기 수정(거절 답변의 제공 조문 목록을 인용으로 세던 문제) 전에 측정했습니다. 수정 영향은 거짓 거절 문항에 한정되므로 최대 0.005입니다.
 
 | 조건 | 조문 인용 정확도 | 키워드 그룹 충족률 | 종합 점수 |
 | --- | --- | --- | --- |
@@ -80,13 +80,13 @@ Lawbot은 대한민국 근로기준법 질문에 조문을 근거로 답하는 �
 | 범위 밖 질문 거절률 (82문항, 검색 조문 제공) | 0.098 | **0.707** |
 | 비슷한 조문만 제공 시 거절률 (100문항) | - | 0.20 |
 
-범위 밖 질문은 일상 질문 25개, 다른 노동법 질문 32개(근퇴법·최저임금법·남녀고용평등법 등), 다른 법 질문 25개입니다(`data/oos_eval.csv`). 맥 4비트에서는 범위 밖 0.671, 비슷한 조문 0.24로 bf16과 비슷합니다. 근로기준법에 비슷한 조문이 있는 다른 노동법 질문은 튜닝 후에도 거절률이 0.250에 그쳐, 가장 큰 약점입니다.
+범위 밖 질문은 일상 질문 25개, 다른 노동법 질문 32개(근퇴법·최저임금법·남녀고용평등법 등), 다른 법 질문 25개입니다(`data/oos_eval.csv`). 맥 4비트에서는 범위 밖 0.671, 비슷한 조문 0.24로 bf16과 비슷합니다. 근로기준법에 비슷한 조문이 있는 다른 노동법 질문은 튜닝 후에도 거절률이 0.250에 그쳐, 가장 큰 약점입니다. 거절하지 않은 답변을 나누어 보면, 다른 노동법 32문항 중 5개는 퇴직급여(제34조)·안전보건(제76조)처럼 다른 법에 맡기는 조문만 들어 그 법으로 안내했고, 13개(0.406)는 휴업보상(제79조)으로 산재 휴업급여를 답하는 식으로 근로기준법 조문을 억지로 적용했습니다. 82문항 전체의 억지 적용률은 0.256입니다(`refusal.oos_verdict`).
 
 **로컬 실행 (MacBook Air 8GB, MLX 4비트, dev 100문항)**
 
 | 지표 | 값 |
 | --- | --- |
-| 종합 점수 (검색 조문 / 정답 조문) | 0.812 / 0.945 |
+| 종합 점수 (검색 조문 / 정답 조문) | 0.812 / 0.937 |
 | 첫 토큰까지 시간 (중앙값) | 5.4초 |
 | 생성 속도 | 24.5 토큰/초 |
 | 질문당 소요 시간 | 20.4초 |
@@ -176,13 +176,52 @@ GitHub Actions(`.github/workflows/ci.yml`)가 `main` 푸시와 모든 pull reque
 
 ```bash
 uv run lawbot-eval --n 0      # 검색 성능만 (650문항)
-uv run lawbot-eval --n 100    # 검색 + 답변 생성·채점 (무작위 100문항)
+uv run lawbot-eval --n 100    # 검색 + 답변 생성·채점 (무작위 100문항), 검색 순위는 results/retrieval_<임베딩폴더>.csv
 uv run python -m lawbot.summ_dev scored_sllm_mlx_4bit.csv   # 위 결과의 거짓 거절률·검색 실패 시 거절률
-uv run python -m lawbot.eval_oos       # 범위 밖 질문 82개 거절률
-uv run python -m lawbot.eval_refusal   # 무관한 조문 / 비슷한 조문만 줄 때 거절률 (각 100문항)
+uv run python -m lawbot.eval_oos       # 범위 밖 질문 102개 거절률·억지 적용률 → results/oos_v2_4bit.csv
+uv run python -m lawbot.eval_refusal   # 무관한 조문 / 비슷한 조문만 줄 때 거절률 (각 100문항) → results/refusal_v2_4bit.csv
+uv run python -m lawbot.eval_refusal --hard   # 근거 없이 주장했던 81건을 같은 참고 조문으로 다시 → results/refusal_hard_4bit.csv
 ```
 
-문항별 결과는 `results/`에 저장됩니다(`scored_<모델폴더>.csv`, `oos_v1_4bit.csv`, `refusal_v1_4bit.csv`).
+문항별 결과는 `results/`에 저장됩니다. 마지막 인자로 파일 이름을 바꿀 수 있습니다(예: `uv run python -m lawbot.eval_oos oos_v3_4bit.csv`). `oos_v1_4bit.csv`(82문항)와 `refusal_v1_4bit.csv`는 README 수치와 테스트의 기준선이므로 기본 설정으로는 덮어쓰지 않습니다. `eval_oos`와 `eval_refusal`은 웹앱처럼 `LLM_PATH`의 모델을 씁니다.
+
+**개선 전후 비교**
+
+`lawbot.report`가 `results/`의 평가 결과를 한 행으로 모아 `results/metrics.csv`에 추가합니다. 모델 없이 바로 끝납니다. 검색 Recall@3, 답변 종합 점수, 거짓 거절률, 범위 안 대조군 거짓 거절률, 무관한·비슷한 조문 거절률, 범위 밖 거절률·억지 적용률을 함께 기록합니다. 범위 밖 지표는 기준선과 비교할 수 있도록 기존 82문항으로 재고, 추가 20문항은 따로 잽니다.
+
+`--baseline`을 주면 기준 실행과 나란히 보여 주고, 다음처럼 정상 질문에 대한 성능이 떨어지면 부작용 경고를 냅니다. 거절률만 올리고 정상 질문에 답하지 못하게 되는 개선을 걸러 내기 위해서입니다.
+
+| 지표 | 경고 기준 (기준 실행 대비) |
+| --- | --- |
+| 검색 Recall@3 | 0.005 넘게 하락 |
+| 답변 종합 점수 (전체 / 검색 적중) | 0.02 넘게 하락 |
+| 조문 인용 정확도 (일반 / 엄격) | 0.02 넘게 하락 |
+| 거짓 거절률 (검색 적중 문항) | 0.01 넘게 상승 |
+| 범위 안 대조군 거짓 거절률 / 종합 점수 | 0.05(20문항 중 1개) 넘게 나빠짐 |
+
+```bash
+# 기준선 보강: 현재 모델로 한 번 (기록된 v1_4bit 행에는 Recall@3·대조군·102문항·재평가가 없음)
+uv run lawbot-eval --n 0                                                        # results/retrieval_emb_final_v3_fp16.csv
+uv run lawbot-eval --ids data/scope_controls.csv --out scored_controls_v1_4bit.csv
+uv run python -m lawbot.eval_oos oos_v1_4bit_102.csv
+uv run python -m lawbot.eval_refusal --hard refusal_hard_v1_4bit.csv
+uv run python -m lawbot.report --tag v1_4bit_full --retrieval retrieval_emb_final_v3_fp16.csv \
+  --scored scored_sllm_mlx_4bit.csv --controls scored_controls_v1_4bit.csv --oos oos_v1_4bit_102.csv \
+  --refusal refusal_v1_4bit.csv --hard refusal_hard_v1_4bit.csv --baseline v1_4bit
+
+# 개선한 모델: 같은 평가를 다른 파일 이름으로 돌리고 기준선과 비교 (--strict면 경고 시 종료 코드 1)
+export LLM_PATH=models/sllm_v3_mlx_4bit
+uv run lawbot-eval --llm $LLM_PATH --n 100 --out scored_v3_4bit.csv
+uv run lawbot-eval --llm $LLM_PATH --ids data/scope_controls.csv --out scored_controls_v3_4bit.csv
+uv run python -m lawbot.eval_oos oos_v3_4bit.csv
+uv run python -m lawbot.eval_refusal refusal_v3_4bit.csv
+uv run python -m lawbot.eval_refusal --hard refusal_hard_v3_4bit.csv
+uv run python -m lawbot.report --tag v3_4bit --retrieval retrieval_emb_final_v3_fp16.csv \
+  --scored scored_v3_4bit.csv --controls scored_controls_v3_4bit.csv --oos oos_v3_4bit.csv \
+  --refusal refusal_v3_4bit.csv --hard refusal_hard_v3_4bit.csv --baseline v1_4bit_full --strict
+```
+
+`metrics.csv`에는 기존 결과로 만든 `v1_4bit`(기준선)과 `v1_4bit_hybrid`(실패한 하이브리드 검색 실험) 두 행이 들어 있습니다. 하이브리드 검색은 범위 밖 거절률이 0.671 → 0.683으로 올랐지만 억지 적용률도 0.256 → 0.268로 올라, 거절률만으로는 개선이라고 볼 수 없었습니다.
 
 ### 프로젝트 구조
 
@@ -195,10 +234,11 @@ src/lawbot/
 ├── security.py        # 로컬 전용 실행 설정 (127.0.0.1, 로그인 필수, 공유 링크 없음)
 ├── eval_dev.py        # 검색·답변 평가
 ├── score_answers.py   # 키워드 기반 채점기
-├── refusal.py         # 거절 판정 (【결론】에 '확인할 수 없')
+├── refusal.py         # 거절 판정 (【결론】에 '확인할 수 없'), 범위 밖 답변 판정 (거절·안내·억지적용·미인용)
 ├── summ_dev.py        # eval_dev 결과의 거절 지표 요약
+├── report.py          # 평가 결과를 metrics.csv 한 행으로 모으고 기준 실행과 비교
 ├── eval_oos.py        # 범위 밖 질문 거절률
-├── eval_refusal.py    # 무관한 / 비슷한 조문 제공 시 거절률
+├── eval_refusal.py    # 무관한 / 비슷한 조문 제공 시 거절률, --hard: 근거 없이 주장했던 사례 재평가
 ├── diag_oracle.py     # 정답 조문 제공 조건 답변 평가
 ├── diag_fail.py       # 검색은 맞았지만 인용이 틀린 문항 분석
 └── diag_pos.py        # 정답 조문 위치별 인용 정확도 분석
@@ -212,9 +252,13 @@ src/lawbot/
   - 테스트: 650개(조문 × 유형마다 1개)
   - 학습·검증: 나머지 1,952개
   - 모델 선택과 하이퍼파라미터 결정은 검증 셋으로만 했습니다.
-- **답변 채점**: 문항마다 필수 키워드 그룹, 금지 표현, 정답 조문 번호를 지정해 자동 채점합니다. 제43조와 제43조의2처럼 비슷한 번호는 구분합니다. 평가 파일의 모범 답변은 650문항 모두 1.0점입니다.
-- **범위 밖 질문**: 근로기준법으로 답할 수 없는 질문 82개로 거절률을 따로 잽니다(`data/oos_eval.csv`).
-- **평가 데이터 사용 제한**: `data/labor_eval_keywords.csv`와 `data/oos_eval.csv`는 평가 전용입니다. 모델 학습이나 설정 선택에 쓰지 마세요.
+- **답변 채점**: 문항마다 필수 키워드 그룹, 금지 표현, 정답 조문 번호를 지정해 자동 채점합니다. 제43조와 제43조의2처럼 비슷한 번호는 구분합니다. 거절 답변은 `해당 없음 (제공된 조문: …)`에 정답 번호가 있어도 인용으로 보지 않습니다. `cite_strict`는 【근거 조문】에 정답이 있고 헷갈리는 조문이나 번호가 비슷한 조문을 함께 인용하지 않았는지를 따로 기록합니다(종합 점수에는 반영하지 않음). 다른 법의 같은 번호(예: 근로자퇴직급여 보장법 제34조)는 구분하지 못합니다. 평가 파일의 모범 답변은 650문항 모두 1.0점입니다.
+- **범위 밖 질문**: 근로기준법으로 답할 수 없는 질문 102개로 거절률을 따로 잽니다(`data/oos_eval.csv`).
+  - 2026-10-19에 근로기준법과 개념이 겹치는 다른 노동법 질문 20개(OOS083–102)를 추가했습니다. 근거 조문(`note`)은 [Legalize KR](https://github.com/legalize-kr/legalize-kr) 법령 원문으로 확인했습니다. 위 성능 수치는 추가 전 82문항 기준입니다.
+  - 답변은 거절, 안내(`refer_lsa`에 적힌, 다른 법에 맡기는 조문만 인용), 억지적용(그 밖의 근로기준법 조문으로 답함), 미인용(거절 문구도 인용도 없음)으로 판정합니다. `near_lsa`는 README 수치의 기준이고, `near_lsa_v2`는 누락을 보완한 표시입니다.
+- **범위 안 대조군**: 다른 노동법 질문과 닮았지만 근로기준법으로 답해야 하는 테스트 문항 20개입니다(`data/scope_controls.csv`, `twin_oos`에 짝 문항). 범위 밖 거절을 늘리는 개선이 이 문항들까지 거절하게 만들지 않는지 확인합니다.
+- **근거 없는 주장 사례**: `refusal_v1_4bit.csv`에서 거절하지 않은 86건을 억지적용 77, 지어냄 4, 근거밖_정답 2, 결론타당 3으로 분류했습니다(`data/refusal_hard_cases.csv`). 억지적용·지어냄 81건은 `eval_refusal --hard`로 다시 평가합니다.
+- **평가 데이터 사용 제한**: `data/labor_eval_keywords.csv`, `data/oos_eval.csv`, `data/scope_controls.csv`, `data/refusal_hard_cases.csv`는 평가 전용입니다. 모델 학습이나 설정 선택에 쓰지 마세요.
 - **`results/` 안내**: 채점 전 모델 원본 출력과 문항별 점수이며, 점수가 낮은 답변은 법적으로 틀린 내용을 포함합니다.
 
 ### 실패한 실험
@@ -305,7 +349,7 @@ Question classification over 130 classes (logistic regression):
 
 **Answer generation (Colab, bf16)**
 
-Total score = keyword-group coverage × correct article citation × (0.5 if a forbidden phrase appears). The maximum is 1.0.
+Total score = keyword-group coverage × correct article citation × (0.5 if a forbidden phrase appears). The maximum is 1.0, and refusals score 0. The Colab numbers below were measured before the 2026-10-19 scorer fix (refusals listing the provided articles were counted as citations). The fix only affects false refusals, so its effect is at most 0.005.
 
 | Setting | Citation accuracy | Keyword coverage | Total score |
 | --- | --- | --- | --- |
@@ -323,13 +367,13 @@ Total score = keyword-group coverage × correct article citation × (0.5 if a fo
 | Refusal rate on out-of-scope questions (82, retrieved articles) | 0.098 | **0.707** |
 | Refusal rate given only similar but non-answering articles (100) | - | 0.20 |
 
-The out-of-scope set has 25 everyday questions, 32 questions governed by other labor laws (severance pay, minimum wage, equal employment, and so on), and 25 questions on other laws (`data/oos_eval.csv`). The 4-bit MLX model scores 0.671 and 0.24 on the last two rows, close to bf16. Questions under other labor laws that resemble a Labor Standards Act article are refused only 25% of the time even after fine-tuning, the largest remaining weakness.
+The out-of-scope set has 25 everyday questions, 32 questions governed by other labor laws (severance pay, minimum wage, equal employment, and so on), and 25 questions on other laws (`data/oos_eval.csv`). The 4-bit MLX model scores 0.671 and 0.24 on the last two rows, close to bf16. Questions under other labor laws that resemble a Labor Standards Act article are refused only 25% of the time even after fine-tuning, the largest remaining weakness. Of the 32 other-labor-law questions, 5 non-refusals only cite an article that delegates to another law (retirement benefits, Article 34; safety and health, Article 76) and point to that law, while 13 (0.406) force a Labor Standards Act article onto the question, such as answering an industrial-accident leave benefit question with Article 79. The forced-answer rate over all 82 questions is 0.256 (`refusal.oos_verdict`).
 
 **Local inference (MacBook Air 8 GB, MLX 4-bit, 100 dev questions)**
 
 | Metric | Value |
 | --- | --- |
-| Total score (retrieved / gold articles) | 0.812 / 0.945 |
+| Total score (retrieved / gold articles) | 0.812 / 0.937 |
 | Time to first token (median) | 5.4 s |
 | Generation speed | 24.5 tokens/s |
 | Time per question | 20.4 s |
@@ -419,13 +463,32 @@ GitHub Actions (`.github/workflows/ci.yml`) runs `uv sync --locked`, a syntax ch
 
 ```bash
 uv run lawbot-eval --n 0      # retrieval only (650 questions)
-uv run lawbot-eval --n 100    # retrieval + generation + scoring (100 random questions)
+uv run lawbot-eval --n 100    # retrieval + generation + scoring (100 random questions); retrieval ranks go to results/retrieval_<embedding-folder>.csv
 uv run python -m lawbot.summ_dev scored_sllm_mlx_4bit.csv   # false refusals and refusals on retrieval misses
-uv run python -m lawbot.eval_oos       # refusal on 82 out-of-scope questions
-uv run python -m lawbot.eval_refusal   # refusal given unrelated / similar articles only (100 each)
+uv run python -m lawbot.eval_oos       # refusal and forced-answer rate on 102 out-of-scope questions → results/oos_v2_4bit.csv
+uv run python -m lawbot.eval_refusal   # refusal given unrelated / similar articles only (100 each) → results/refusal_v2_4bit.csv
+uv run python -m lawbot.eval_refusal --hard   # re-ask the 81 unsupported-claim cases with the same articles → results/refusal_hard_4bit.csv
 ```
 
-Per-question results are written to `results/` (`scored_<model-folder>.csv`, `oos_v1_4bit.csv`, `refusal_v1_4bit.csv`).
+Per-question results are written to `results/`. A final argument changes the file name (e.g. `uv run python -m lawbot.eval_oos oos_v3_4bit.csv`). `oos_v1_4bit.csv` (82 questions) and `refusal_v1_4bit.csv` are the baselines behind the README numbers and tests, so the defaults never overwrite them.
+
+**Comparing before and after a change**
+
+`lawbot.report` gathers the evaluation results in `results/` into one row and appends it to `results/metrics.csv`. It needs no model and finishes immediately. It records retrieval Recall@3, the total answer score, false refusals, false refusals on the in-scope controls, refusal given unrelated or similar articles, and out-of-scope refusal and forced-answer rates. Out-of-scope metrics use the original 82 questions so that they stay comparable with the baseline; the 20 added questions are reported separately.
+
+With `--baseline`, it shows the baseline run side by side and warns about side effects when performance on ordinary questions drops. This catches changes that raise refusal only by failing to answer questions the bot should answer.
+
+| Metric | Warn when, versus the baseline |
+| --- | --- |
+| Retrieval Recall@3 | drops by more than 0.005 |
+| Total answer score (all / retrieval hits) | drops by more than 0.02 |
+| Citation accuracy (normal / strict) | drops by more than 0.02 |
+| False refusal rate (retrieval hits) | rises by more than 0.01 |
+| In-scope control false refusals / total score | worsens by more than 0.05 (1 of 20) |
+
+See the Korean section above for the full command sequence: first complete the baseline with the current model (Recall@3, controls, 102 out-of-scope questions, hard-case re-evaluation), then run the same evaluations for a new model under different file names and compare with `--baseline v1_4bit_full --strict`. `eval_oos` and `eval_refusal` use the model in `LLM_PATH`, like the web app.
+
+`metrics.csv` already holds two rows built from existing results: `v1_4bit` (baseline) and `v1_4bit_hybrid` (the failed hybrid retrieval experiment). Hybrid retrieval raised out-of-scope refusal from 0.671 to 0.683, but its forced-answer rate also rose from 0.256 to 0.268, so higher refusal alone was not an improvement.
 
 ### Project layout
 
@@ -438,10 +501,11 @@ src/lawbot/
 ├── security.py        # local-only launch settings (127.0.0.1, login required, no share link)
 ├── eval_dev.py        # retrieval and answer evaluation
 ├── score_answers.py   # keyword-based answer scorer
-├── refusal.py         # refusal detection ('확인할 수 없' in the conclusion)
+├── refusal.py         # refusal detection ('확인할 수 없' in the conclusion), out-of-scope verdicts (refusal, referral, forced, uncited)
 ├── summ_dev.py        # refusal metrics from eval_dev results
+├── report.py          # combine evaluation results into a metrics.csv row and compare with a baseline
 ├── eval_oos.py        # refusal on out-of-scope questions
-├── eval_refusal.py    # refusal given unrelated / similar articles
+├── eval_refusal.py    # refusal given unrelated / similar articles, --hard: re-evaluate unsupported-claim cases
 ├── diag_oracle.py     # answer evaluation with gold articles
 ├── diag_fail.py       # failures where retrieval hit but citation missed
 └── diag_pos.py        # citation accuracy by gold-article position
@@ -455,9 +519,13 @@ src/lawbot/
   - Test: 650 questions (one per article and type)
   - Training and validation: the remaining 1,952 questions
   - Model selection and hyperparameters were decided on validation data only.
-- **Answer scoring**: Each test question specifies required keyword groups, forbidden phrases, and the gold article. Scoring is automatic and distinguishes similar article numbers such as Article 43 and Article 43-2. The reference answers in the evaluation file score 1.0 on all 650 questions.
-- **Out-of-scope questions**: 82 questions the Labor Standards Act cannot answer measure refusal separately (`data/oos_eval.csv`).
-- **Evaluation-only data**: `data/labor_eval_keywords.csv` and `data/oos_eval.csv` are for evaluation only. Do not use them for training or model selection.
+- **Answer scoring**: Each test question specifies required keyword groups, forbidden phrases, and the gold article. Scoring is automatic and distinguishes similar article numbers such as Article 43 and Article 43-2. A refusal is never counted as a citation, even when its list of provided articles contains the gold article. `cite_strict` separately records whether the cited-articles section names the gold article without also citing a confusable or similarly numbered article (not part of the total score). The same number in another law (e.g. Article 34 of the Employee Retirement Benefit Security Act) is not distinguished. The reference answers in the evaluation file score 1.0 on all 650 questions.
+- **Out-of-scope questions**: 102 questions the Labor Standards Act cannot answer measure refusal separately (`data/oos_eval.csv`).
+  - On 2026-10-19, 20 other-labor-law questions that overlap with Labor Standards Act concepts (OOS083-102) were added. Their legal basis (`note`) was checked against statute text from [Legalize KR](https://github.com/legalize-kr/legalize-kr). The results above use the original 82.
+  - Answers are classified as refusal, referral (cites only an article in `refer_lsa` that delegates to another law), forced (answers with any other Labor Standards Act article), or uncited (neither a refusal phrase nor a citation). `near_lsa` is the basis of the README numbers; `near_lsa_v2` fills in missing labels.
+- **In-scope controls**: 20 test questions that resemble other-labor-law questions but must be answered under the Labor Standards Act (`data/scope_controls.csv`, paired via `twin_oos`). They check that raising out-of-scope refusal does not make the model refuse these too.
+- **Unsupported-claim cases**: The 86 non-refusals in `refusal_v1_4bit.csv` are labeled forced 77, fabricated 4, correct-but-unsupported 2 and reasonable 3 (`data/refusal_hard_cases.csv`). The 81 forced and fabricated cases are re-evaluated with `eval_refusal --hard`.
+- **Evaluation-only data**: `data/labor_eval_keywords.csv`, `data/oos_eval.csv`, `data/scope_controls.csv` and `data/refusal_hard_cases.csv` are for evaluation only. Do not use them for training or model selection.
 - **About `results/`**: These are raw model outputs with per-question scores. Low-scoring answers contain legally incorrect statements.
 
 ### Failed experiments
