@@ -1,9 +1,6 @@
 # src/lawbot/app.py  →  uv run lawbot-app
-import os
 import gradio as gr
-from lawbot.paths import LLM_4BIT
-from lawbot.retriever import Retriever
-from lawbot.llm import LLM
+from lawbot.service import answer_stream, load_models
 from lawbot.security import get_local_launch_config
 
 def fmt_sources(hits):
@@ -14,10 +11,10 @@ def fmt_sources(hits):
 def make_chat(retriever, llm):
     # 이름이 chat인 함수를 넘겨야 Gradio API 이름(/gradio_api/call/chat)이 유지됨
     def chat(message, history):      # 단일 턴: history는 쓰지 않음
-        hits = retriever.search(message, k=3)
+        hits, chunks = answer_stream(retriever, llm, message)
         src, text = fmt_sources(hits), ''
-        for r in llm.stream(message, hits):
-            text += r.text
+        for chunk in chunks:
+            text += chunk
             yield text, src          # (답변, 근거 조문 칸)
     return chat
 
@@ -41,7 +38,7 @@ def build_demo(retriever, llm):      # 화면만 만든다: 인증 검사·모�
 
 def main():
     config = get_local_launch_config()   # 인증 정보가 없으면 모델 로딩 전에 실행 거부
-    demo = build_demo(Retriever(), LLM(os.environ.get('LLM_PATH', LLM_4BIT)))
+    demo = build_demo(*load_models())
     demo.launch(**config)            # 127.0.0.1:7860, 로그인 필수, 공유 링크 없음
 
 if __name__ == '__main__':

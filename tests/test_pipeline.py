@@ -1,5 +1,6 @@
 # tests/test_pipeline.py  →  검색(Retriever)·생성(LLM)·웹앱(app) 흐름 테스트
 # 실제 임베딩·sLLM 대신 가짜 모델을 넣는다: 모델 파일·MPS·Metal·네트워크 불필요
+import subprocess
 import sys
 import types
 import numpy as np
@@ -7,6 +8,7 @@ import pandas as pd
 import pytest
 import lawbot.llm as llm_mod
 import lawbot.retriever as retriever_mod
+import lawbot.service as service
 from conftest import set_auth
 from fakes import HITS, FakeLLM, FakeRetriever
 from lawbot.llm import LLM, SYSTEM, build_prompt
@@ -129,15 +131,54 @@ def test_llm_load_failure_propagates(env):
     with pytest.raises(FileNotFoundError):
         LLM('models/없는폴더')
 
-# ---- 웹앱 ----
+# ---- 질의응답 흐름 (service) ----
 @pytest.fixture
-def app(env):
-    """가짜 모델을 쓰는 lawbot.app. launch는 실제 서버 대신 설정만 기록한다"""
-    import lawbot.app as app
+def fake_models(env):
     FakeRetriever.created = FakeLLM.created = 0
     FakeLLM.chunks = ['【결론】', '예고해야', ' 합니다.']
-    env.setattr(app, 'Retriever', FakeRetriever)
-    env.setattr(app, 'LLM', FakeLLM)
+    env.setattr(service, 'Retriever', FakeRetriever)
+    env.setattr(service, 'LLM', FakeLLM)
+
+def test_service_does_not_import_gradio():
+    # 핵심 흐름은 UI와 독립: 다른 UI·API 서버가 gradio 없이 가져다 쓸 수 있어야 함
+    code = 'import sys, lawbot.service; print("gradio" in sys.modules)'
+    out = subprocess.run([sys.executable, '-c', code], capture_output=True, text=True, check=True)
+    assert out.stdout.strip() == 'False'
+
+def test_load_models_llm_path_default(fake_models):
+    r, m = service.load_models()
+    assert isinstance(r, FakeRetriever) and m.path == service.LLM_4BIT
+    assert FakeRetriever.created == 1 and FakeLLM.created == 1
+
+def test_load_models_llm_path_env(fake_models, env):
+    env.setenv('LLM_PATH', 'models/sllm_mlx_8bit')
+    assert service.load_models()[1].path == 'models/sllm_mlx_8bit'
+
+def test_answer_stream_returns_sources_then_chunks(fake_models):
+    r, m = FakeRetriever(), FakeLLM('models/fake')
+    hits, chunks = service.answer_stream(r, m, '수습 기간에도 해고 예고?')
+    assert hits == HITS[:service.TOP_K]             # 생성 전에 근거 조문이 정해짐
+    assert r.query == '수습 기간에도 해고 예고?'
+    assert list(chunks) == ['【결론】', '예고해야', ' 합니다.']
+    assert m.args == ('수습 기간에도 해고 예고?', hits)
+
+def test_answer_stream_k(fake_models):
+    r, m = FakeRetriever(), FakeLLM('models/fake')
+    hits, chunks = service.answer_stream(r, m, '질문', k=1)
+    list(chunks)
+    assert hits == HITS[:1] and m.args == ('질문', HITS[:1])
+
+def test_answer_stream_generation_failure_propagates(fake_models):
+    FakeLLM.chunks = ['【결론】', RuntimeError('generation failed')]
+    _, chunks = service.answer_stream(FakeRetriever(), FakeLLM('models/fake'), '질문')
+    with pytest.raises(RuntimeError, match='generation failed'):
+        list(chunks)
+
+# ---- 웹앱 ----
+@pytest.fixture
+def app(env, fake_models):
+    """가짜 모델을 쓰는 lawbot.app. launch는 실제 서버 대신 설정만 기록한다"""
+    import lawbot.app as app
     env.setattr(app, 'launched', [], raising=False)   # 테스트가 끝나면 지워짐
     env.setattr(app.gr.Blocks, 'launch', lambda demo, **kw: app.launched.append((demo, kw)))
     return app
@@ -178,20 +219,16 @@ def test_app_launches_local_only(app, env):
                         'auth': ('tester', 'test-only-pw'), 'share': False}
     assert FakeRetriever.created == 1 and FakeLLM.created == 1
 
-def test_app_llm_path_env(app, env):
+def test_app_loads_models_via_service(app, env):
+    # main은 service.load_models로 불러온 모델(LLM_PATH 반영)을 화면에 넘긴다
     set_auth(env)
     env.setenv('LLM_PATH', 'models/sllm_mlx_8bit')
-    paths = []
-    env.setattr(app, 'LLM', lambda path: paths.append(path) or FakeLLM(path))
+    build, models = app.build_demo, []
+    env.setattr(app, 'build_demo', lambda r, m: models.append((r, m)) or build(r, m))
     app.main()
-    assert paths == ['models/sllm_mlx_8bit']
-
-def test_app_llm_path_default(app, env):
-    set_auth(env)
-    paths = []
-    env.setattr(app, 'LLM', lambda path: paths.append(path) or FakeLLM(path))
-    app.main()
-    assert paths == [app.LLM_4BIT]
+    [(r, m)] = models
+    assert isinstance(r, FakeRetriever) and m.path == 'models/sllm_mlx_8bit'
+    assert len(app.launched) == 1
 
 def test_chat_streams_answer_with_sources(app):
     r, m = FakeRetriever(), FakeLLM('models/fake')
