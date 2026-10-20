@@ -166,18 +166,9 @@ fish의 `set -Ux`(유니버설 변수)는 값을 `~/.config/fish/fish_variables`
 기본 테스트는 모델 파일, 네트워크, 실제 비밀번호 없이 돌아갑니다. `uv sync`만 하면 됩니다. 실제 모델 대신 가짜 임베딩·sLLM을 넣고, 테스트 중 외부 네트워크 접속은 막습니다. `data/`·`results/`는 읽기만 합니다.
 
 ```bash
-uv run pytest                                   # 기본 테스트 전체
-uv run pytest tests/test_security.py            # 파일 하나만
-uv run pytest -k cite_ok                        # 이름에 cite_ok가 든 테스트만
-uv run pytest -m models                         # 실제 모델 스모크 테스트 (models/ 필요, 기본 실행에서 제외)
+uv run pytest              # 기본 테스트 전체 (모델 불필요)
+uv run pytest -m models    # 실제 모델 테스트 (models/ 필요, 기본 실행에서 제외)
 ```
-
-| 파일 | 검증 내용 |
-| --- | --- |
-| `tests/test_security.py` | 인증 정보 누락·빈 값 거부, 오류에 비밀번호 미노출, `127.0.0.1:7860` 고정, 공유 링크 없음 |
-| `tests/test_pipeline.py` | 검색 결과 형식·정렬, 프롬프트가 학습 형식(`oracle_prompt` 650개)과 같음, 생성 성공·실패, 인증 없으면 모델 로딩 전 실행 거부, 웹앱 답변 스트리밍·근거 조문 표시 |
-| `tests/test_scoring.py` | 거절 판정·채점 규칙, 모범 답변 650개 1.0점, `results/`의 기록된 거절 판정·점수 재현 |
-| `tests/test_models.py` | 실제 임베딩·sLLM으로 질문 하나를 네 부분 형식으로 답하는지 (`-m models`, 맥 전용) |
 
 GitHub Actions(`.github/workflows/ci.yml`)가 `main` 푸시와 모든 pull request에서 macOS(Apple Silicon) 러너로 `uv sync --locked`, 문법 검사(`compileall`), `uv run pytest`를 실행합니다. 비밀정보는 쓰지 않으며, `-m models` 테스트와 평가 스크립트는 CI에서 실행하지 않습니다. 결과는 PR의 체크와 Actions 로그, `pytest-report` 아티팩트에서 볼 수 있습니다.
 
@@ -418,18 +409,9 @@ If either `LAWBOT_USER` or `LAWBOT_PW` is missing or empty, the app refuses to s
 The default tests need no model files, network access or real password; `uv sync` is enough. They use fake embedding and SLM models, block outbound network access, and only read `data/` and `results/`.
 
 ```bash
-uv run pytest                                   # all default tests
-uv run pytest tests/test_security.py            # one file
-uv run pytest -k cite_ok                        # tests whose name contains cite_ok
-uv run pytest -m models                         # real-model smoke test (needs models/, excluded by default)
+uv run pytest              # all default tests (no models needed)
+uv run pytest -m models    # real-model tests (needs models/, excluded by default)
 ```
-
-| File | What it checks |
-| --- | --- |
-| `tests/test_security.py` | Missing or empty credentials rejected, password never in errors, fixed `127.0.0.1:7860`, no share link |
-| `tests/test_pipeline.py` | Retrieval result shape and order, prompt identical to the training format (650 `oracle_prompt`s), generation success and failure, no model loading without credentials, streamed answers and source panel in the web app |
-| `tests/test_scoring.py` | Refusal and scoring rules, all 650 reference answers score 1.0, recorded refusals and scores in `results/` are reproduced |
-| `tests/test_models.py` | The real embedding and SLM answer one question in the four-part format (`-m models`, Mac only) |
 
 GitHub Actions (`.github/workflows/ci.yml`) runs `uv sync --locked`, a syntax check (`compileall`) and `uv run pytest` on a macOS (Apple Silicon) runner for every push to `main` and every pull request. It uses no secrets; `-m models` tests and the evaluation scripts are not run in CI. Results appear as PR checks, in the Actions log and as the `pytest-report` artifact.
 

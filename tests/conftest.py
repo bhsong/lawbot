@@ -8,14 +8,24 @@ ENV_KEYS = ('LAWBOT_USER', 'LAWBOT_PW', 'LLM_PATH',
 
 @pytest.fixture(autouse=True)
 def env(request, monkeypatch):
-    """개발자 셸의 인증·Gradio 환경 변수를 지우고, 외부 네트워크 접속을 막는다"""
+    """개발자 셸의 인증·Gradio 환경 변수를 지우고, 외부 네트워크 접속을 막는다
+    (integration 테스트는 127.0.0.1의 테스트 서버 접속만 허용)"""
     for k in ENV_KEYS:
         monkeypatch.delenv(k, raising=False)
     if request.node.get_closest_marker('models') is None:
-        def no_network(*a, **kw):
-            raise AssertionError('테스트 중 외부 네트워크 접속 시도')
-        monkeypatch.setattr(socket.socket, 'connect', no_network)
-        monkeypatch.setattr(socket, 'create_connection', no_network)
+        local_ok = request.node.get_closest_marker('integration') is not None
+        connect, create_connection = socket.socket.connect, socket.create_connection
+        def check(address):
+            if not (local_ok and isinstance(address, tuple) and address[0] == '127.0.0.1'):
+                raise AssertionError(f'테스트 중 외부 네트워크 접속 시도: {address!r}')
+        def guarded_connect(sock, address):
+            check(address)
+            return connect(sock, address)
+        def guarded_create_connection(address, *a, **kw):
+            check(address)
+            return create_connection(address, *a, **kw)
+        monkeypatch.setattr(socket.socket, 'connect', guarded_connect)
+        monkeypatch.setattr(socket, 'create_connection', guarded_create_connection)
     return monkeypatch
 
 def set_auth(env, user='tester', pw='test-only-pw'):   # 테스트 전용 가짜 값

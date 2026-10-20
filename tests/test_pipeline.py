@@ -8,6 +8,7 @@ import pytest
 import lawbot.llm as llm_mod
 import lawbot.retriever as retriever_mod
 from conftest import set_auth
+from fakes import HITS, FakeLLM, FakeRetriever
 from lawbot.llm import LLM, SYSTEM, build_prompt
 from lawbot.paths import ARTICLES, EVAL
 
@@ -129,36 +130,6 @@ def test_llm_load_failure_propagates(env):
         LLM('models/없는폴더')
 
 # ---- 웹앱 ----
-HITS = [{'article_id': '제26조', 'title': '해고의 예고', 'score': 0.91234,
-         'doc': '제26조 해고의 예고\n사용자는 근로자를 해고하려면 적어도 30일 전에 예고를 하여야 한다.'},
-        {'article_id': '제36조', 'title': '금품 청산', 'score': 0.5,
-         'doc': '제36조 금품 청산\n사용자는 근로자가 사망 또는 퇴직한 경우에는 14일 이내에 지급하여야 한다.'}]
-
-class FakeRetriever:
-    created = 0
-
-    def __init__(self):
-        FakeRetriever.created += 1
-
-    def search(self, query, k=3):
-        self.query = query
-        return HITS[:k]
-
-class FakeLLM:
-    created = 0
-    chunks = ['【결론】', '예고해야', ' 합니다.']
-
-    def __init__(self, path):
-        FakeLLM.created += 1
-        self.path = path
-
-    def stream(self, question, hits):
-        self.args = (question, hits)
-        for c in FakeLLM.chunks:
-            if isinstance(c, Exception):
-                raise c
-            yield types.SimpleNamespace(text=c)
-
 @pytest.fixture
 def load_app(env):
     """가짜 모델로 lawbot.app을 새로 import한다 (app은 import 시 설정 확인·모델 로딩을 함)"""
