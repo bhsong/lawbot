@@ -1,0 +1,15 @@
+{
+  "law_name": "근로기준법",
+  "data_file": "labor_articles_20261001.csv",
+  "sha256": "07b790927c4b1ebac98c49d06fb660b5b80efad31fae6ce1391bab7930b5ae5d",
+  "as_of": "2026-10-01",
+  "as_of_basis": "파일 이름과 README에 적힌 기준일. 이 날짜에 원본에서 내려받았다는 기록은 없음",
+  "added_to_repo": "2026-10-18 (커밋 18e956b)",
+  "source": null,
+  "source_note": "원 출처(국가법령정보센터 등)와 수집·가공 방법이 저장소에 기록되어 있지 않음",
+  "law_number": null,
+  "promulgated": null,
+  "effective": null,
+  "amendment_history": null,
+  "notes": "law_number·promulgated·effective는 이 스냅샷이 반영한 법령 버전의 법률 번호·공포일·시행일로, 데이터에 없어 비워 둠. 조문 본문의 <개정 …>·<신설 …> 날짜는 항별 개정 표시일 뿐 시행일이 아님. deleted=1인 2개 중 제16조는 삭제가 아니라 실효 표시 조문"
+}

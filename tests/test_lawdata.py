@@ -1,0 +1,222 @@
+# tests/test_lawdata.py  →  조문 데이터 출처·시점 메타데이터(lawdata) 테스트
+# 저장소의 data/를 읽기만 하고, 깨진 데이터·메타데이터는 tmp_path에 만들어 검사 (모델 불필요)
+import hashlib
+import json
+import re
+from datetime import date, timedelta
+import pandas as pd
+import pytest
+from lawbot.lawdata import (STALE_DAYS, DataError, Snapshot, article_meta, load_articles, main, marks,
+                            read_meta, time_notes)
+from lawbot.paths import ARTICLES, EVAL
+
+E = dict(encoding='utf-8-sig')
+SHA = hashlib.sha256(ARTICLES.read_bytes()).hexdigest()
+TODAY = date(2026, 10, 20)
+
+
+@pytest.fixture(scope='module')
+def loaded():
+    return load_articles(ARTICLES)
+
+
+@pytest.fixture(scope='module')
+def metas(loaded):
+    law, snap = loaded
+    return {a: article_meta(a, t, x, snap) for a, t, x, d in
+            zip(law['article_id'], law['title'], law['text'], law['deleted']) if d == 0}
+
+
+def copy_with_meta(tmp_path, meta, csv_bytes=None):
+    csv = tmp_path / 'law.csv'
+    csv.write_bytes(csv_bytes if csv_bytes is not None else ARTICLES.read_bytes())
+    if meta is not None:
+        (tmp_path / 'law.meta.json').write_text(meta if isinstance(meta, str) else json.dumps(meta), encoding='utf-8')
+    return csv
+
+
+# 저장소 데이터의 메타데이터
+def test_repo_snapshot_records_only_known_facts(loaded):
+    law, snap = loaded
+    assert snap.verified and snap.issues == ()
+    assert (snap.data_file, snap.sha256) == (ARTICLES.name, SHA)
+    assert (snap.law_name, snap.as_of) == ('근로기준법', '2026-10-01')
+    # 출처·공포일·시행일은 저장소에 기록이 없으므로 비어 있어야 함
+    assert snap.source is None and snap.promulgated is None and snap.effective is None
+    meta = json.loads(ARTICLES.with_name(ARTICLES.stem + '.meta.json').read_text(encoding='utf-8'))
+    assert meta['law_number'] is None and meta['amendment_history'] is None
+    assert len(law) == 132 and (law['deleted'] == 0).sum() == 130
+
+
+def test_marks_parse_amendment_annotations():
+    assert marks('① 용어 <개정 2018.3.20, 2019.1.15, 2020.5.26>\n② 내용 <신설 2024.10.22>') == [
+        ('개정', '2018-03-20'), ('개정', '2019-01-15'), ('개정', '2020-05-26'), ('신설', '2024-10-22')]
+    assert marks('② 삭제 <2009.5.21>') == [('삭제', '2009-05-21')]
+    assert marks('표시 없는 조문') == []
+    assert marks('제50조 <근로시간>') == []                 # 날짜 없는 꺾쇠는 표시가 아님
+
+
+def test_marks_cover_every_dated_annotation_in_repo(loaded):
+    law, _ = loaded
+    for a, x in zip(law['article_id'], law['text']):
+        dated = [d for b in re.findall(r'<[^<>]*>', x) for d in re.findall(r'\d{4}\.\d{1,2}\.\d{1,2}', b)]
+        assert len(marks(x)) == len(dated), a
+
+
+def test_article_meta_without_marks_has_no_dates(metas):
+    m = metas['제1조']
+    assert m['marks'] == [] and m['last_marked'] is None and m['expiry_notes'] == []
+    assert metas['제2조']['last_marked'] == '2020-05-26'
+    assert metas['제2조']['marks'][0] == ('개정', '2018-03-20')
+
+
+def test_expiry_note_kept_for_indexed_article(metas, loaded):
+    # 제53조 ③·⑥(30명 미만 사업장 추가 연장근로)은 실효 표시가 있지만 조문 자체는 색인 대상: 표시를 그대로 보존
+    assert metas['제53조']['expiry_notes'] == ['[실효: 2018.3.20. 개정법 부칙에 따라 2022.12.31.까지 유효]',
+                                              '[실효: 2022.12.31.까지 유효]']
+    assert sum(bool(m['expiry_notes']) for m in metas.values()) == 1
+    law, _ = loaded
+    assert '제16조' not in metas and '[실효:' in law.set_index('article_id').loc['제16조', 'text']
+
+
+def test_content_hash_distinguishes_versions():
+    snap = Snapshot(data_file='a.csv', sha256='0' * 64, law_name='근로기준법', as_of='2026-10-01')
+    old = article_meta('제26조', '해고의 예고', '30일 전에 예고', snap)
+    new = article_meta('제26조', '해고의 예고', '30일 전에 예고 <개정 2019.1.15>', snap)
+    assert old['content_sha256'] != new['content_sha256']
+    assert old == article_meta('제26조', '해고의 예고', '30일 전에 예고', snap)
+    assert len(old['content_sha256']) == 16
+
+
+# 메타데이터가 없거나 맞지 않을 때: 기록 값을 쓰지 않고 사유를 남김
+def test_missing_meta(tmp_path):
+    snap = load_articles(copy_with_meta(tmp_path, None))[1]
+    assert not snap.verified and '출처 메타데이터 없음 (law.meta.json)' in snap.issues[0]
+    assert snap.sha256 == SHA and snap.as_of is None and snap.law_name is None
+
+
+def test_hash_mismatch_drops_recorded_values(tmp_path):
+    meta = {'law_name': '근로기준법', 'sha256': SHA, 'as_of': '2026-10-01'}
+    changed = ARTICLES.read_bytes().replace('30일'.encode(), '60일'.encode(), 1)
+    snap = load_articles(copy_with_meta(tmp_path, meta, changed))[1]
+    assert not snap.verified and '해시와 다름' in snap.issues[0]
+    assert snap.as_of is None and snap.law_name is None
+    assert snap.sha256 == hashlib.sha256(changed).hexdigest()
+
+
+@pytest.mark.parametrize('meta,issue', [('{깨진 json', '읽을 수 없음'), ('[1, 2]', '형식 오류')])
+def test_unreadable_meta(tmp_path, meta, issue):
+    snap = read_meta(copy_with_meta(tmp_path, meta), SHA)
+    assert not snap.verified and issue in snap.issues[0] and snap.as_of is None
+
+
+def test_invalid_date_is_not_kept(tmp_path):
+    meta = {'law_name': '근로기준법', 'sha256': SHA, 'as_of': '2026.10.01', 'effective': '2025-02-23'}
+    snap = read_meta(copy_with_meta(tmp_path, meta), SHA)
+    assert snap.as_of is None and snap.effective == '2025-02-23'
+    assert snap.issues == ("메타데이터 as_of 날짜 형식 오류: '2026.10.01'",)
+
+
+def test_recorded_dates_and_source_are_preserved(tmp_path):
+    meta = {'law_name': '근로기준법', 'sha256': SHA, 'as_of': '2026-10-01', 'source': '국가법령정보센터',
+            'promulgated': '2025-10-01', 'effective': '2026-02-19'}
+    snap = read_meta(copy_with_meta(tmp_path, meta), SHA)
+    assert snap.verified
+    assert (snap.source, snap.promulgated, snap.effective) == ('국가법령정보센터', '2025-10-01', '2026-02-19')
+
+
+# 색인할 수 없는 데이터 식별
+def broken_csv(tmp_path, edit):
+    law = pd.read_csv(ARTICLES, **E)
+    law = edit(law)
+    path = tmp_path / 'law.csv'
+    law.to_csv(path, index=False, **E)
+    return path
+
+
+@pytest.mark.parametrize('edit,match', [
+    (lambda d: d.drop(columns='chapter'), r"열 없음 \['chapter'\]"),
+    (lambda d: d.assign(deleted=d['deleted'].replace({1: 2})), 'deleted는 0 또는 1'),
+    (lambda d: pd.concat([d, d.iloc[[25]]]), r"조문 번호 중복 \['제26조'\]"),
+    (lambda d: d.assign(article_id=d['article_id'].replace({'제26조': '26조'})), '조문 번호 형식 오류'),
+    (lambda d: d.assign(text=d['text'].where(d['article_id'] != '제26조', '  ')), r"빈 조문 \['제26조'\]"),
+    (lambda d: d.assign(title=d['title'].where(d['article_id'] != '제2조')), r"빈 조문 \['제2조'\]"),
+    (lambda d: d.assign(deleted=1), '색인할 조문이 없음'),
+])
+def test_broken_data_raises(tmp_path, edit, match):
+    with pytest.raises(DataError, match=match):
+        load_articles(broken_csv(tmp_path, edit))
+
+
+def test_deleted_article_may_have_empty_title(tmp_path):
+    # 제35조처럼 삭제된 조문은 제목이 비어 있어도 색인하지 않으므로 문제없음
+    law, _ = load_articles(broken_csv(tmp_path, lambda d: d))
+    assert pd.isna(law.set_index('article_id').loc['제35조', 'title'])
+
+
+# 최신성·시점 안내
+def snap(**kw):
+    return Snapshot(data_file='a.csv', sha256='0' * 64, law_name='근로기준법', **({'as_of': '2026-10-01'} | kw))
+
+
+def test_no_notes_for_ordinary_questions(metas):
+    # 평가 650문항(시점 표현 없음)에 정답 조문을 줄 때, 실효 표시 조문을 빼면 안내가 붙지 않아야 함
+    ev = pd.read_csv(EVAL, **E)
+    for q, a in zip(ev['question'], ev['article_id']):
+        notes = time_notes(q, [metas[a]], snap(), TODAY)
+        assert notes == ([] if a != '제53조' else [notes[0]]), (q, notes)
+        if a == '제53조':
+            assert notes[0] == ('제53조 본문에 실효 표시가 있습니다: [실효: 2018.3.20. 개정법 부칙에 따라 '
+                                '2022.12.31.까지 유효] [실효: 2022.12.31.까지 유효]. 표시된 부분은 현재 적용되지 않을 수 있습니다.')
+
+
+def test_stale_snapshot_note():
+    as_of = date(2026, 10, 1)
+    assert time_notes('질문', [], snap(), as_of + timedelta(days=STALE_DAYS)) == []
+    [note] = time_notes('질문', [], snap(), as_of + timedelta(days=STALE_DAYS + 1))
+    assert note == f'조문 데이터 기준일(2026-10-01)이 {STALE_DAYS + 1}일 전입니다. 그 뒤 개정 여부는 확인하지 않았습니다.'
+
+
+def test_unverified_or_undated_snapshot_note():
+    broken = Snapshot(data_file='a.csv', sha256='0' * 64, issues=('출처 메타데이터 없음 (a.meta.json)',))
+    assert time_notes('질문', [], broken, TODAY) == [
+        '조문 데이터의 출처·기준일을 확인할 수 없습니다: 출처 메타데이터 없음 (a.meta.json)']
+    assert time_notes('질문', [], snap(as_of=None), TODAY) == ['조문 데이터의 기준일이 기록되어 있지 않습니다.']
+
+
+def test_question_with_year(metas):
+    notes = time_notes('2019년에 1주 몇 시간까지 연장근로가 가능했나요?', [metas['제53조'], metas['제1조']], snap(), TODAY)
+    assert notes[0] == ('질문에 특정 시점(2019년)이 있습니다. 이 데이터는 2026-10-01 기준 조문 한 가지뿐이라 '
+                        '그 시점에 적용되는 조문인지 확인할 수 없습니다.')
+    assert notes[1].startswith('제53조에는 2019년 이후 개정 표시(최근 2021-01-05)가 있어')
+    assert not any(n.startswith('제1조') for n in notes)    # 개정 표시가 없는 조문은 언급하지 않음
+    assert notes[2].startswith('제53조 본문에 실효 표시가 있습니다') and len(notes) == 3
+    # 그 해보다 앞선 개정만 있으면 조문별 안내는 없음
+    assert time_notes('2021년 2월 기준 연장근로', [metas['제53조']], snap(), TODAY)[1:] == [
+        '제53조에는 2021년 이후 개정 표시(최근 2021-01-05)가 있어 그 시점의 내용과 다를 수 있습니다.',
+        time_notes('', [metas['제53조']], snap(), TODAY)[0]]
+    assert len(time_notes('2022년 이후 연장근로', [metas['제1조']], snap(), TODAY)) == 1
+
+
+def test_question_mentioning_previous_law():
+    [note] = time_notes('개정 전에는 어땠나요?', [], snap(), TODAY)
+    assert '특정 시점(개정 전)' in note
+    assert time_notes('근속 3년, 연차 15일', [], snap(), TODAY) == []   # 연도가 아닌 숫자는 무시
+
+
+# 데이터 점검 명령
+def test_check_command_ok(capsys):
+    assert main([str(ARTICLES)]) == 0
+    out = capsys.readouterr().out
+    assert f'조문 132개 (색인 130개), sha256 {SHA}' in out
+    assert '기준일 2026-10-01 · 출처 미기록 · 공포일 미기록 · 시행일 미기록' in out
+    assert "본문 최근 개정 표시 2026-02-19 · 실효 표시가 있는 색인 조문 ['제53조']" in out
+    assert '문제' not in out
+
+
+def test_check_command_reports_stale_meta_and_broken_data(tmp_path, capsys):
+    changed = ARTICLES.read_bytes().replace('30일'.encode(), '60일'.encode(), 1)
+    assert main([str(copy_with_meta(tmp_path, {'sha256': SHA}, changed))]) == 1
+    assert '문제: 데이터 파일이 메타데이터에 기록된 해시와 다름' in capsys.readouterr().out
+    assert main([str(broken_csv(tmp_path, lambda d: d.drop(columns='text')))]) == 1
+    assert "데이터 오류: law.csv: 열 없음 ['text']" in capsys.readouterr().out

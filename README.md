@@ -228,6 +228,7 @@ uv run python -m lawbot.report --tag v3_4bit --retrieval retrieval_emb_final_v3_
 ```
 src/lawbot/
 ├── paths.py           # 데이터·모델 경로
+├── lawdata.py         # 조문 데이터 검증, 출처·시점 메타데이터, 최신성 안내
 ├── retriever.py       # 임베딩 검색
 ├── llm.py             # 프롬프트 구성, MLX 생성
 ├── service.py         # UI와 무관한 질의응답 흐름 (모델 로딩, 검색 → 답변 스트리밍)
@@ -247,7 +248,9 @@ src/lawbot/
 
 ### 데이터와 평가 방법
 
-- **조문**: 근로기준법 현행 130개 조문. 삭제 조문 2개는 제외했고, 기준일은 2026-10-01입니다.
+- **조문**: 근로기준법 130개 조문(기준일 2026-10-01). 삭제·실효 조문 2개(제35조·제16조)는 제외했습니다. 원 출처와 법률 번호·공포일·시행일은 기록되어 있지 않고, 본문의 `<개정 …>` 날짜는 항별 개정 표시일 뿐 시행일이 아닙니다. 제53조 ③·⑥에는 실효 표시가 있습니다.
+  - 출처·기준일은 `data/labor_articles_20261001.meta.json`에 확인한 값만 적고(모르는 값은 `null`), 파일 해시로 데이터와 맞는지 확인합니다. 검색 결과에는 조문별 출처 메타데이터가 붙고, 근거 패널에 출처를 표시하며, 답변이 검색 결과에 없는 조문을 인용하거나 질문에 특정 연도가 있거나 실효 표시가 있는 조문이 검색되면 알립니다. 자세한 내용과 데이터 갱신 절차는 [docs/data-provenance.md](docs/data-provenance.md)에 있습니다.
+  - 데이터 점검: `uv run python -m lawbot.lawdata` (검증, 파일 해시, 메타데이터 일치 여부)
 - **질문**: 총 2,602개(130조문 × 질문 유형 5종 × 약 4개)입니다.
   - 질문 유형: 구어체, 사용자(사업주) 관점, 간접 질문, 키워드, 상황 설명
   - 테스트: 650개(조문 × 유형마다 1개)
@@ -282,7 +285,7 @@ src/lawbot/
   - Docker
   - vLLM 서빙
   - 클라우드 배포
-  - 법 개정 재인덱싱
+  - 법 개정 재인덱싱 (출처·법률 번호·시행일 확보, 기준일 이후 개정 여부 대조)
 
 ### 고지
 
@@ -496,6 +499,7 @@ See the Korean section above for the full command sequence: first complete the b
 ```
 src/lawbot/
 ├── paths.py           # data and model paths
+├── lawdata.py         # article data validation, source and date metadata, freshness notes
 ├── retriever.py       # embedding retrieval
 ├── llm.py             # prompt construction, MLX generation
 ├── service.py         # UI-independent Q&A flow (model loading, retrieval → streamed answer)
@@ -515,7 +519,9 @@ src/lawbot/
 
 ### Data and evaluation
 
-- **Articles**: The 130 current articles of the Labor Standards Act. Two repealed articles are excluded. The text is as of 2026-10-01.
+- **Articles**: 130 articles of the Labor Standards Act as of 2026-10-01. Two articles (Article 35, repealed; Article 16, expired) are excluded. The original source, act number, promulgation date, and effective date are not recorded, and the `<개정 …>` dates in the text mark amendments, not effective dates. Paragraphs 3 and 6 of Article 53 carry an expiry note.
+  - `data/labor_articles_20261001.meta.json` records only verified facts (unknown values are `null`) and is checked against the file hash. Search results carry per-article source metadata, and the source panel shows the data source and flags citations outside the retrieved articles, questions about a specific year, and articles with expiry notes. See [docs/data-provenance.md](docs/data-provenance.md) (Korean) for details and the data update procedure.
+  - Data check: `uv run python -m lawbot.lawdata` (validation, file hash, metadata match)
 - **Questions**: 2,602 in total (130 articles × 5 question types × about 4 each).
   - Question types: colloquial, employer perspective, indirect, keyword, situational
   - Test: 650 questions (one per article and type)
@@ -550,7 +556,7 @@ src/lawbot/
   - Docker
   - vLLM serving
   - Cloud deployment
-  - Re-indexing after law amendments
+  - Re-indexing after law amendments (obtain the source, act number, and effective date; check for amendments after the as-of date)
 
 ### Notices
 
