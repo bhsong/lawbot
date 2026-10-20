@@ -65,7 +65,7 @@ def test_search_hits_keep_source_metadata(retriever):
     for h in retriever.search('연장 근로 한도', k=5):
         m = h['meta']
         assert (m['article_id'], m['title']) == (h['article_id'], h['title'])
-        assert m['law_name'] == '근로기준법' and m['as_of'] == '2026-10-01' and m['source'] is None
+        assert m['law_name'] == '근로기준법' and m['as_of'] == '2026-10-01' and m['source'] == 'Legalize KR'
         assert m['data_sha256'] == sha and m['data_file'] == ARTICLES.name
         assert m == article_meta(h['article_id'], h['title'], law.loc[h['article_id'], 'text'], retriever.snapshot)
     assert retriever.snapshot.verified
@@ -310,7 +310,11 @@ def test_chat_streams_answer_with_sources(app):
 
 def test_sources_panel_shows_provenance_and_notes(app):
     src = app.fmt_sources(HITS, SNAPSHOT)
-    assert src.startswith('출처: 근로기준법 조문 데이터 `fake_articles.csv` · 기준일 2026-10-01 · 원 출처 미기록')
+    assert src.startswith('출처: 근로기준법 · 원 출처 미기록 `fake_articles.csv` · 기준일 2026-10-01')
+    full = Snapshot(data_file='a.csv', sha256='0' * 64, law_name='근로기준법', law_number='법률 제21373호',
+                    effective='2026-08-20', source='Legalize KR', as_of='2026-10-01')
+    assert app.fmt_sources(HITS, full).startswith(
+        '출처: 근로기준법 법률 제21373호 (2026-08-20 시행) · Legalize KR `a.csv` · 기준일 2026-10-01')
     assert '> ' not in src                          # 확인할 수 없는 시점이 없으면 안내 문장을 붙이지 않음
     src = app.fmt_sources(HITS, SNAPSHOT, ['안내 1', '안내 2'])
     assert '> - 안내 1\n> - 안내 2' in src and src.index('안내 2') < src.index('**제26조')

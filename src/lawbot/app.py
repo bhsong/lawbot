@@ -7,8 +7,10 @@ def fmt_provenance(snapshot):
     """근거 패널 첫 줄: 조문 데이터의 출처. 기록되지 않은 값은 미기록으로 표시"""
     if not snapshot.verified:
         return f'출처: `{snapshot.data_file}` · 출처·기준일 확인 불가'
-    return (f"출처: {snapshot.law_name or '법령명 미기록'} 조문 데이터 `{snapshot.data_file}` · "
-            f"기준일 {snapshot.as_of or '미기록'} · {snapshot.source or '원 출처 미기록'}")
+    law = ' '.join(x for x in (snapshot.law_name or '법령명 미기록', snapshot.law_number) if x)
+    version = f' ({snapshot.effective} 시행)' if snapshot.effective else ''
+    return (f"출처: {law}{version} · {snapshot.source or '원 출처 미기록'} `{snapshot.data_file}` · "
+            f"기준일 {snapshot.as_of or '미기록'}")
 
 def fmt_sources(hits, snapshot=None, notes=()):
     body = '\n\n---\n\n'.join(

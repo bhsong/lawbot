@@ -3,13 +3,65 @@
   "data_file": "labor_articles_20261001.csv",
   "sha256": "07b790927c4b1ebac98c49d06fb660b5b80efad31fae6ce1391bab7930b5ae5d",
   "as_of": "2026-10-01",
-  "as_of_basis": "파일 이름과 README에 적힌 기준일. 이 날짜에 원본에서 내려받았다는 기록은 없음",
+  "as_of_basis": "파일 이름과 README의 기준일. 본문이 2026-10-01에 시행 중이던 버전(법률 제21373호, 2026-08-20 시행)과 일치함 (source_check)",
   "added_to_repo": "2026-10-18 (커밋 18e956b)",
-  "source": null,
-  "source_note": "원 출처(국가법령정보센터 등)와 수집·가공 방법이 저장소에 기록되어 있지 않음",
-  "law_number": null,
-  "promulgated": null,
-  "effective": null,
+  "source": "Legalize KR",
+  "source_url": "https://github.com/legalize-kr/legalize-kr/blob/ee38b100f518dc84260a90164ea58a11ebbd978f/kr/근로기준법/법률(법률).md",
+  "source_commit": "ee38b100f518dc84260a90164ea58a11ebbd978f",
+  "upstream": "국가법령정보센터 https://www.law.go.kr/법령/근로기준법 (Legalize KR 파일의 출처 표기, 법령MST 283457)",
+  "law_number": "법률 제21373호",
+  "promulgated": "2026-02-19",
+  "effective": "2026-08-20",
   "amendment_history": null,
-  "notes": "law_number·promulgated·effective는 이 스냅샷이 반영한 법령 버전의 법률 번호·공포일·시행일로, 데이터에 없어 비워 둠. 조문 본문의 <개정 …>·<신설 …> 날짜는 항별 개정 표시일 뿐 시행일이 아님. deleted=1인 2개 중 제16조는 삭제가 아니라 실효 표시 조문"
+  "source_check": {
+    "checked_at": "2026-10-20",
+    "method": "Legalize KR 파일의 조문을 제목·본문 단위로 CSV와 비교 (굵게 표시·들여쓰기·빈 줄 제거 후)",
+    "result": "132개 조문 제목 일치, 본문은 아래 가공 차이를 빼면 일치",
+    "processing": [
+      "제55조: 원문 끝의 [시행일] 안내 문단(2020~2022년 사업장 규모별 시행)을 뺌",
+      "제16조, 제53조 ③·⑥: 원문에 없는 [실효: …] 표시를 덧붙임",
+      "제16조(실효)와 제35조(삭제)를 deleted=1로 표시"
+    ]
+  },
+  "later_amendments": {
+    "checked_at": "2026-10-20",
+    "source_commit": "609d106d85acc8d1349abe3c29d9a6260b7db059",
+    "note": "기준일 이후 공포되어 Legalize KR 근로기준법 파일에 반영된 개정. articles는 직전 버전과 비교해 그 개정이 본문을 바꾼 조문. effective는 Legalize KR의 법률 시행일자로, 부칙에 조문별 예외가 있으면 effective_clause를 따름",
+    "acts": [
+      {
+        "law_number": "법률 제21472호",
+        "promulgated": "2026-03-17",
+        "effective": "2027-01-01",
+        "source_commit": "7b19f67021724174e5fbc066cbb3bc8c471a4f7f",
+        "articles": ["제43조의6"],
+        "effective_clause": "부칙(고용보험 및 산업재해보상보험의 보험료징수 등에 관한 법률) 제1조: 이 법은 2027년 1월 1일부터 시행한다."
+      },
+      {
+        "law_number": "법률 제21533호",
+        "promulgated": "2026-04-07",
+        "effective": "2026-10-08",
+        "source_commit": "1c16708e257b8dde0b88b1f095ae94aba52ca7f7",
+        "articles": ["제13조", "제44조의4", "제101조", "제102조", "제102조의2", "제103조", "제104조", "제105조", "제107조", "제108조", "제109조", "제110조", "제114조", "제116조"],
+        "effective_clause": "부칙 제1조: 이 법은 공포 후 6개월이 경과한 날부터 시행한다. 다만, 제13조, 제11장의 제목, 제101조, 제102조, 제102조의2, 제103조부터 제105조까지, 제108조, 제110조제1호, 제114조제1호 및 제116조제2항제1호ㆍ제4호의 개정규정은 공포 후 8개월이 경과한 날부터 시행하고, 제44조의4, 제116조제1항제2호 및 제116조제2항제2호의 개정규정은 2027년 1월 1일부터 시행한다."
+      },
+      {
+        "law_number": "법률 제21784호",
+        "promulgated": "2026-06-09",
+        "effective": "2027-06-10",
+        "source_commit": "19d824d5dccdbff7d846396ba02ae64716ab9669",
+        "articles": ["제54조", "제60조", "제61조", "제110조", "제114조"],
+        "effective_clause": "부칙 제1조: 이 법은 공포 후 1년이 경과한 날부터 시행한다. 다만, 제54조의 개정규정은 공포 후 6개월이 경과한 날부터 시행한다."
+      },
+      {
+        "law_number": "법률 제21857호",
+        "promulgated": "2026-08-04",
+        "effective": "2026-10-02",
+        "source_commit": "98e270ba66bb34722e953b4de37fb26dd983381e",
+        "articles": [],
+        "effective_clause": "부칙(형사소송법) 제1조: 이 법은 2026년 10월 2일부터 시행한다.",
+        "note": "조문 본문 변경 없음 (Legalize KR 파일에서 제55조 [시행일] 안내 문단이 빠지고 제116조 띄어쓰기가 바뀜)"
+      }
+    ]
+  },
+  "notes": "조문 본문의 <개정 …>·<신설 …> 날짜는 항별 개정 표시일 뿐 시행일이 아님. Legalize KR 파일은 공포 시점의 본문이라 아직 시행 전인 개정도 담길 수 있음"
 }

@@ -41,11 +41,23 @@ def test_repo_snapshot_records_only_known_facts(loaded):
     assert snap.verified and snap.issues == ()
     assert (snap.data_file, snap.sha256) == (ARTICLES.name, SHA)
     assert (snap.law_name, snap.as_of) == ('근로기준법', '2026-10-01')
-    # 출처·공포일·시행일은 저장소에 기록이 없으므로 비어 있어야 함
-    assert snap.source is None and snap.promulgated is None and snap.effective is None
+    # Legalize KR 커밋 ee38b100의 법률 제21373호와 대조해 확인한 값 (docs/data-provenance.md)
+    assert (snap.source, snap.law_number) == ('Legalize KR', '법률 제21373호')
+    assert (snap.promulgated, snap.effective, snap.checked_at) == ('2026-02-19', '2026-08-20', '2026-10-20')
     meta = json.loads(ARTICLES.with_name(ARTICLES.stem + '.meta.json').read_text(encoding='utf-8'))
-    assert meta['law_number'] is None and meta['amendment_history'] is None
+    assert meta['amendment_history'] is None                 # 과거 버전 본문은 확보하지 않음
+    assert meta['source_commit'] in meta['source_url']
     assert len(law) == 132 and (law['deleted'] == 0).sum() == 130
+
+
+def test_repo_later_amendments(loaded, metas):
+    _, snap = loaded
+    assert [(a['law_number'], a['promulgated'], a['effective']) for a in snap.later] == [
+        ('법률 제21472호', '2026-03-17', '2027-01-01'), ('법률 제21533호', '2026-04-07', '2026-10-08'),
+        ('법률 제21784호', '2026-06-09', '2027-06-10'), ('법률 제21857호', '2026-08-04', '2026-10-02')]
+    changed = {x for a in snap.later for x in a['articles']}
+    assert len(changed) == 18 and '제54조' in changed and snap.later[3]['articles'] == ()
+    assert changed - set(metas) == {'제44조의4'}            # 신설 조문: 이 데이터에 없어 검색되지 않음
 
 
 def test_marks_parse_amendment_annotations():
@@ -170,6 +182,39 @@ def test_no_notes_for_ordinary_questions(metas):
                                 '2022.12.31.까지 유효] [실효: 2022.12.31.까지 유효]. 표시된 부분은 현재 적용되지 않을 수 있습니다.')
 
 
+def test_repo_notes_flag_articles_changed_later(loaded, metas):
+    # 실제 메타데이터: 이후 개정으로 바뀐 조문이 검색되면 그 조문에만 안내, 바뀌지 않은 조문은 안내 없음
+    _, s = loaded
+    assert time_notes('해고 예고 기간은?', [metas['제26조'], metas['제1조']], s, TODAY) == []
+    [note] = time_notes('휴게시간은?', [metas['제54조'], metas['제26조']], s, TODAY)
+    assert note == ('제54조: 이 데이터 이후 공포된 개정(법률 제21784호, 2026-06-09 공포)으로 본문이 바뀌었습니다'
+                    '(2026-10-20 확인). 위 본문은 개정 전 내용이고, 개정 시행 여부는 부칙에 따라 조문마다 달라 확인하지 않았습니다.')
+    [note] = time_notes('근로감독관 권한', [metas['제110조']], s, TODAY)
+    assert '(법률 제21533호, 2026-04-07 공포, 법률 제21784호, 2026-06-09 공포)' in note
+    # 색인 130개 중 안내가 붙는 조문: 이후 개정으로 바뀐 17개 + 실효 표시 제53조
+    assert sum(bool(time_notes('질문', [m], s, TODAY)) for m in metas.values()) == 18
+
+
+def test_later_amendments_validation(tmp_path):
+    act = {'law_number': '법률 제1호', 'promulgated': '2026-04-07', 'effective': '2026-10-08', 'articles': ['제13조']}
+    base = {'law_name': '근로기준법', 'sha256': SHA, 'as_of': '2026-10-01'}
+    ok = read_meta(copy_with_meta(tmp_path, base | {'later_amendments': {'checked_at': '2026-10-20', 'acts': [act]}}), SHA)
+    assert ok.verified and ok.checked_at == '2026-10-20'
+    assert ok.later == ({**act, 'articles': ('제13조',)},)
+    for bad in [{'acts': [act]}, {'checked_at': '2026-10-20', 'acts': [act | {'articles': ['13조']}]},
+                {'checked_at': '2026-10-20', 'acts': [act | {'promulgated': None}]}, {'checked_at': '2026-10-20'}]:
+        snap = read_meta(copy_with_meta(tmp_path, base | {'later_amendments': bad}), SHA)
+        assert snap.later == () and snap.checked_at is None
+        assert snap.issues[0].startswith('메타데이터 later_amendments 형식 오류'), bad
+
+
+def test_stale_uses_last_check_date():
+    s = snap(checked_at='2026-12-01')
+    assert time_notes('질문', [], s, date(2026, 12, 1) + timedelta(days=STALE_DAYS)) == []
+    [note] = time_notes('질문', [], s, date(2026, 12, 1) + timedelta(days=STALE_DAYS + 1))
+    assert note.startswith('개정 여부를 마지막으로 확인한 날(2026-12-01)이 181일 전입니다.')
+
+
 def test_stale_snapshot_note():
     as_of = date(2026, 10, 1)
     assert time_notes('질문', [], snap(), as_of + timedelta(days=STALE_DAYS)) == []
@@ -209,7 +254,9 @@ def test_check_command_ok(capsys):
     assert main([str(ARTICLES)]) == 0
     out = capsys.readouterr().out
     assert f'조문 132개 (색인 130개), sha256 {SHA}' in out
-    assert '기준일 2026-10-01 · 출처 미기록 · 공포일 미기록 · 시행일 미기록' in out
+    assert '법령 근로기준법 법률 제21373호 · 기준일 2026-10-01 · 출처 Legalize KR · 공포일 2026-02-19 · 시행일 2026-08-20' in out
+    assert '- 법률 제21784호 (2026-06-09 공포, 시행일자 2027-06-10): 제54조, 제60조, 제61조, 제110조, 제114조' in out
+    assert '- 법률 제21857호 (2026-08-04 공포, 시행일자 2026-10-02): 본문 변경 없음' in out
     assert "본문 최근 개정 표시 2026-02-19 · 실효 표시가 있는 색인 조문 ['제53조']" in out
     assert '문제' not in out
 
