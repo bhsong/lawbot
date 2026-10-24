@@ -32,9 +32,9 @@ def _path(env, default):
     return p if p.is_absolute() else paths.ROOT / p
 
 def get_profile(name=None):
-    name = name or os.environ.get('LAWBOT_PROFILE', 'v1')
+    name = name or os.environ.get('LAWBOT_PROFILE', 'v4')     # 기본 v4. v4 자산이 없으면 LAWBOT_PROFILE=v1
     # Fast(4B LoRA)는 학습한 4섹션 그대로, Pro(14B)는 간결형 system으로 처음부터 짧게 생성 (14B QLoRA도 간결형으로 학습)
-    if name == 'v1':         # 현재 동작: 근로기준법 130조문, v1 검색·4B. Pro는 튜닝 전 14B로 속도·메모리 시험
+    if name == 'v1':         # 이전 동작: 근로기준법 130조문, v1 검색·4B. Pro는 튜닝 전 14B로 속도·메모리 시험
         return Profile('v1', '근로기준법 챗봇', paths.ARTICLES, _path('LAWBOT_EMB', paths.EMB), 512, 'v1', None, (
             ModelSpec('fast', 'Lawbot Fast', '4B · 빠른 응답, 4항목 답변', _path('LAWBOT_FAST_PATH', paths.LLM_4BIT), 'full'),
             ModelSpec('pro', 'Lawbot Pro', '14B · 큰 모델, 간결한 답변, 응답이 더 느림',

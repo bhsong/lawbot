@@ -33,7 +33,7 @@ def server(tmp_path_factory):
     tmp = tmp_path_factory.mktemp('auth_server')
     port, calls, log = free_port(), tmp / 'chat_calls.txt', tmp / 'server.log'
     env = {k: v for k, v in os.environ.items() if k not in ENV_KEYS}
-    env.update(LAWBOT_USER=USER, LAWBOT_PW=PW, GRADIO_ANALYTICS_ENABLED='False')
+    env.update(LAWBOT_USER=USER, LAWBOT_PW=PW, LAWBOT_PROFILE='v1', GRADIO_ANALYTICS_ENABLED='False')
     url = f'http://127.0.0.1:{port}'
     with log.open('w') as out:
         proc = subprocess.Popen([sys.executable, str(SERVER), str(port), str(calls)],

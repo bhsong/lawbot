@@ -102,6 +102,9 @@ def build_demo(app):                 # 화면만 만든다: 인증 검사·모�
 def main():
     config = get_local_launch_config()   # 인증 정보가 없으면 모델 로딩 전에 실행 거부
     demo = build_demo(load_app())
+    # 서버는 이 맥의 127.0.0.1에서만 열린다. 다른 기기는 SSH 터널로 접속 (README '다른 기기에서 접속')
+    print(f"[lawbot] 다른 기기에서: ssh -N -L {config['server_port']}:127.0.0.1:{config['server_port']} <이 맥 주소> "
+          f"후 브라우저에서 http://127.0.0.1:{config['server_port']}")
     demo.launch(**config)            # 127.0.0.1:7860, 로그인 필수, 공유 링크 없음
 
 if __name__ == '__main__':

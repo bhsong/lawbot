@@ -14,6 +14,7 @@ def env(request, monkeypatch):
     (integration 테스트는 127.0.0.1의 테스트 서버 접속만 허용)"""
     for k in ENV_KEYS:
         monkeypatch.delenv(k, raising=False)
+    monkeypatch.setenv('LAWBOT_PROFILE', 'v1')   # 가짜 모델·조문(fakes.py)은 v1 형식. v4·기본값 테스트는 직접 바꿈
     if request.node.get_closest_marker('models') is None:
         local_ok = request.node.get_closest_marker('integration') is not None
         connect, create_connection = socket.socket.connect, socket.create_connection

@@ -43,6 +43,19 @@ def test_profiles_define_fast_and_pro(env):
     assert (v4.max_seq, v4.doc_style, v4.system_file) == (2304, 'v4', paths.V4_SYSTEM)
     assert {v4.articles, v4.emb, v4.models[0].path} & {v1.articles, v1.emb, v1.models[0].path} == set()
 
+def test_default_profile_is_v4(env):
+    env.delenv('LAWBOT_PROFILE')
+    p = deploy.get_profile()
+    assert p.name == 'v4' and p.title == '노동법 챗봇'
+
+def test_v4_without_assets_refuses_before_loading(env, tmp_path):
+    env.delenv('LAWBOT_PROFILE')
+    env.setenv('LAWBOT_V4_ARTICLES', str(tmp_path / '없음.csv'))
+    FakeRetriever.created = 0
+    with pytest.raises(RuntimeError, match='LAWBOT_PROFILE=v1'):
+        make_app(env)
+    assert FakeRetriever.created == 0                   # 검색기·모델을 올리기 전에 거부
+
 def test_profile_env_override_is_absolute(env):
     env.setenv('LAWBOT_PRO_PATH', 'models/qwen3_14b_qlora')
     assert deploy.get_profile('v1').models[1].path == paths.ROOT / 'models/qwen3_14b_qlora'
@@ -78,7 +91,9 @@ def test_load_app_preloads_both_when_resident_two(env):
 def test_load_app_v4_reads_system_file(env, tmp_path):
     (tmp_path / 'system.txt').write_text('V4 SYSTEM\n', encoding='utf-8')
     (tmp_path / 'concise.txt').write_text('V4 CONCISE\n', encoding='utf-8')
+    (tmp_path / 'v4.csv').write_text('law,article_id,title,deleted,text\n', encoding='utf-8')
     env.setenv('LAWBOT_PROFILE', 'v4')
+    env.setenv('LAWBOT_V4_ARTICLES', str(tmp_path / 'v4.csv'))
     env.setenv('LAWBOT_V4_SYSTEM', str(tmp_path / 'system.txt'))
     env.setenv('LAWBOT_PRO_SYSTEM', str(tmp_path / 'concise.txt'))
     a = make_app(env, resident=2)

@@ -70,9 +70,18 @@ def system_text(profile, spec):
     f = spec.system_file or profile.system_file
     return f.read_text(encoding='utf-8').strip() if f else None
 
+def check_profile_files(p):
+    """프로필의 조문 CSV·기본 system 파일이 있는지 모델 로딩 전에 확인 (v4 자산 준비 전 실행을 알기 쉽게 거부)"""
+    missing = [str(f) for f in (p.articles, p.system_file) if f is not None and not f.is_file()]
+    if missing:
+        raise RuntimeError(f"프로필 {p.name}에 필요한 파일이 없습니다: {', '.join(missing)}. "
+                           'uv run python -m lawbot.check_deploy로 확인하거나, '
+                           'v4 자산 준비 전에는 LAWBOT_PROFILE=v1로 실행하세요.')
+
 def load_app(profile=None):
     """웹앱용: 검색기 1개 + Fast/Pro 레지스트리. 기본 모델(Fast)은 미리 올리고, 2개 상주면 Pro도 시도"""
     p = profile or deploy.get_profile()
+    check_profile_files(p)
     retriever = Retriever(p.emb, p.articles, max_seq_length=p.max_seq, doc_style=p.doc_style)
 
     def loader(spec):                    # system 파일이 없으면 FileNotFoundError (화면에서 오류 안내)
