@@ -199,45 +199,35 @@ uv run lawbot-app
 set -e LAWBOT_MAX_RESIDENT        # 기본값(2개 동시 상주)으로 되돌리기
 ```
 
-서버는 맥미니의 `127.0.0.1:7860`에서만 열립니다. 같은 네트워크의 다른 기기에서 직접 접속할 수는 없고, 아래처럼 SSH 터널로만 접속합니다. Gradio 공개 공유 링크(`share`)도 만들지 않습니다. 주소·포트·공유 설정은 `GRADIO_SERVER_NAME` 같은 환경 변수로 바꿀 수 없습니다(`src/lawbot/security.py`).
+서버는 맥미니의 `127.0.0.1:7860`에서만 열립니다. 다른 기기에서 직접 접속할 수는 없고, 아래처럼 Tailscale(또는 SSH 터널)을 거쳐서만 접속합니다. Gradio 공개 공유 링크(`share`)도 만들지 않습니다. 주소·포트·공유 설정은 `GRADIO_SERVER_NAME` 같은 환경 변수로 바꿀 수 없습니다(`src/lawbot/security.py`).
 
-**다른 기기에서 접속 (Omarchy 노트북 → 맥미니)**
+**다른 기기에서 접속 (Omarchy 노트북 → 맥미니, Tailscale)**
 
-SSH 터널은 노트북의 `127.0.0.1:7860`을 맥미니의 `127.0.0.1:7860`으로 암호화해 이어 줍니다. 서버를 네트워크에 열지 않으므로, 로그인 비밀번호와 답변이 같은 네트워크에 평문으로 흐르지 않습니다. Gradio 로그인은 터널을 거쳐도 그대로 필요합니다.
+맥미니와 노트북이 같은 Tailscale 네트워크(tailnet)에 있으면, 맥미니에서 `tailscale serve`로 `127.0.0.1:7860`을 **tailnet 안에만** HTTPS로 내보냅니다. 서버는 계속 `127.0.0.1`에만 열려 있고, Tailscale이 암호화된 연결로 넘겨 줍니다. 공유기 포트 개방이나 SSH 설정이 필요 없고, 같은 집이 아니어도 접속됩니다. Gradio 로그인은 그대로 필요합니다.
 
-1. 맥미니 설정 (한 번)
-   - 시스템 설정 → 일반 → 공유 → **원격 로그인** 켜기 (SSH 서버)
-   - 시스템 설정 → 에너지 → **디스플레이가 꺼져 있을 때 자동으로 잠자기 방지** 켜기. 또는 서버를 `caffeinate -is uv run lawbot-app`으로 실행
-   - IP 확인: `ipconfig getifaddr en0` (유선. Wi‑Fi면 `en1`일 수 있음). 공유기에서 이 IP를 고정(DHCP 예약)해 두면 편합니다.
-2. 노트북(Omarchy, bash) 설정 (한 번). `ssh`가 없으면 `sudo pacman -S openssh`
+1. Tailscale 관리 콘솔(DNS 설정)에서 **MagicDNS**와 **HTTPS Certificates**를 켭니다 (한 번).
+2. 맥미니: 잠자기 방지를 켭니다. 시스템 설정 → 에너지 → **디스플레이가 꺼져 있을 때 자동으로 잠자기 방지**, 또는 서버를 `caffeinate -is uv run lawbot-app`으로 실행합니다.
+3. 맥미니: 웹앱을 실행한 뒤 다른 터미널에서
 
-   ```bash
-   ssh-keygen -t ed25519                  # 키가 없을 때만
-   ssh-copy-id 맥미니사용자명@192.168.0.10   # 맥미니 IP (예시)
+   ```fish
+   tailscale serve --bg 7860       # https://<맥미니 이름>.<tailnet>.ts.net → 127.0.0.1:7860
+   tailscale serve status          # 접속 주소 확인
    ```
 
-   `~/.ssh/config`에 추가:
+   `tailscale` 명령이 없으면 Tailscale 앱 설정에서 CLI를 설치하거나 `/Applications/Tailscale.app/Contents/MacOS/Tailscale serve --bg 7860`으로 실행합니다. `--bg`로 켠 설정은 맥미니를 다시 켜도 유지되며, 끌 때는 `tailscale serve reset`입니다.
+4. 노트북 브라우저에서 `tailscale serve status`에 나온 `https://…ts.net` 주소를 열고 로그인합니다.
 
-   ```
-   Host lawbot
-       HostName 192.168.0.10            # 맥미니 IP (예시)
-       User 맥미니사용자명
-       LocalForward 7860 127.0.0.1:7860
-       ExitOnForwardFailure yes
-       ServerAliveInterval 30
-   ```
+> 주의: `tailscale funnel`은 인터넷 전체에 공개하므로 쓰지 마세요. tailnet에 다른 사람·기기가 있으면 Tailscale ACL로 이 주소에 접근할 기기를 제한하세요.
 
-   맥미니 이름(`맥미니이름.local`)으로 접속하려면 노트북에 mDNS(avahi, nss-mdns) 설정이 필요할 수 있어 IP를 권합니다.
-3. 접속: 맥미니에서 웹앱을 실행해 둔 뒤, 노트북에서
+`tailscale serve`(역방향 프록시) 뒤에서 화면이 깨지거나 로그인이 반복되면, 대신 Tailscale 주소로 SSH 터널을 씁니다. 맥미니에서 시스템 설정 → 일반 → 공유 → **원격 로그인**을 켜고, 노트북(Omarchy, bash)에서:
 
-   ```bash
-   ssh -N lawbot     # 터널만 열어 둠 (Ctrl+C로 닫기)
-   ```
+```bash
+ssh -N -L 7860:127.0.0.1:7860 맥미니사용자명@<맥미니 이름>   # MagicDNS 이름 또는 100.x.y.z 주소
+```
 
-   브라우저에서 `http://127.0.0.1:7860`을 열고 로그인합니다. 노트북에서 7860 포트를 이미 쓰고 있으면 `LocalForward 17860 127.0.0.1:7860`으로 바꾸고 `http://127.0.0.1:17860`으로 접속합니다.
-4. (선택) 노트북에서 SSH로 맥미니에 들어가 서버를 켤 때
-   - SSH가 끊겨도 서버가 계속 돌도록 `tmux`(`brew install tmux`) 안에서 실행합니다.
-   - SSH 세션에서는 로그인 키체인이 잠겨 있을 수 있어, 키체인에서 비밀번호를 꺼내기 전에 `security unlock-keychain ~/Library/Keychains/login.keychain-db`를 실행합니다.
+브라우저에서 `http://127.0.0.1:7860`을 엽니다. 노트북에서 7860을 이미 쓰면 `-L 17860:127.0.0.1:7860`으로 바꾸고 `http://127.0.0.1:17860`으로 접속합니다.
+
+(선택) 노트북에서 SSH로 맥미니에 들어가 서버를 켤 때는 SSH가 끊겨도 서버가 계속 돌도록 `tmux`(`brew install tmux`) 안에서 실행하고, 키체인에서 비밀번호를 꺼내기 전에 `security unlock-keychain ~/Library/Keychains/login.keychain-db`를 실행합니다(SSH 세션에서는 로그인 키체인이 잠겨 있을 수 있음).
 
 | 변수 | 필수 | 용도 |
 | --- | --- | --- |
@@ -583,45 +573,35 @@ uv run lawbot-app
 set -e LAWBOT_MAX_RESIDENT        # back to the default (both models resident)
 ```
 
-The server listens only on the Mac mini's `127.0.0.1:7860`. Other devices on the network cannot connect directly; they connect only through an SSH tunnel as below. No public Gradio share link is created. The address, port and share setting cannot be changed through environment variables such as `GRADIO_SERVER_NAME` (`src/lawbot/security.py`).
+The server listens only on the Mac mini's `127.0.0.1:7860`. Other devices cannot connect directly; they connect only through Tailscale (or an SSH tunnel) as below. No public Gradio share link is created. The address, port and share setting cannot be changed through environment variables such as `GRADIO_SERVER_NAME` (`src/lawbot/security.py`).
 
-**Connect from another device (Omarchy laptop → Mac mini)**
+**Connect from another device (Omarchy laptop → Mac mini, Tailscale)**
 
-An SSH tunnel connects the laptop's `127.0.0.1:7860` to the Mac mini's `127.0.0.1:7860` over an encrypted connection. The server is never exposed to the network, so the login password and answers do not travel over the network in plain text. The Gradio login is still required through the tunnel.
+With the Mac mini and the laptop on the same Tailscale network (tailnet), `tailscale serve` on the Mac mini exposes `127.0.0.1:7860` over HTTPS **only inside the tailnet**. The server keeps listening only on `127.0.0.1`; Tailscale forwards traffic over its encrypted connection. No router port forwarding or SSH setup is needed, and it works away from home too. The Gradio login is still required.
 
-1. Mac mini (once)
-   - System Settings → General → Sharing → turn on **Remote Login** (SSH server)
-   - System Settings → Energy → turn on **Prevent automatic sleeping when the display is off**, or run the server with `caffeinate -is uv run lawbot-app`
-   - Find the IP: `ipconfig getifaddr en0` (Ethernet; Wi-Fi may be `en1`). A DHCP reservation on the router keeps it fixed.
-2. Laptop (Omarchy, bash, once). If `ssh` is missing: `sudo pacman -S openssh`
+1. In the Tailscale admin console (DNS settings), turn on **MagicDNS** and **HTTPS Certificates** (once).
+2. Mac mini: prevent sleep. System Settings → Energy → **Prevent automatic sleeping when the display is off**, or run the server with `caffeinate -is uv run lawbot-app`.
+3. Mac mini: with the web app running, in another terminal:
 
-   ```bash
-   ssh-keygen -t ed25519                     # only if you have no key
-   ssh-copy-id macmini-user@192.168.0.10     # Mac mini IP (example)
+   ```fish
+   tailscale serve --bg 7860       # https://<mac-mini-name>.<tailnet>.ts.net → 127.0.0.1:7860
+   tailscale serve status          # shows the URL
    ```
 
-   Add to `~/.ssh/config`:
+   If the `tailscale` command is missing, install the CLI from the Tailscale app settings or run `/Applications/Tailscale.app/Contents/MacOS/Tailscale serve --bg 7860`. A `--bg` configuration persists across restarts; turn it off with `tailscale serve reset`.
+4. On the laptop, open the `https://…ts.net` URL from `tailscale serve status` and log in.
 
-   ```
-   Host lawbot
-       HostName 192.168.0.10            # Mac mini IP (example)
-       User macmini-user
-       LocalForward 7860 127.0.0.1:7860
-       ExitOnForwardFailure yes
-       ServerAliveInterval 30
-   ```
+> Warning: do not use `tailscale funnel`, which publishes to the whole internet. If other people or devices share the tailnet, restrict access to this address with Tailscale ACLs.
 
-   Connecting by name (`macmini-name.local`) may need mDNS (avahi, nss-mdns) on the laptop, so the IP is recommended.
-3. Connect: with the web app running on the Mac mini, run on the laptop
+If the page breaks or the login keeps repeating behind `tailscale serve` (a reverse proxy), use an SSH tunnel over the Tailscale address instead. On the Mac mini turn on System Settings → General → Sharing → **Remote Login**, then on the laptop (Omarchy, bash):
 
-   ```bash
-   ssh -N lawbot     # keeps only the tunnel open (Ctrl+C to close)
-   ```
+```bash
+ssh -N -L 7860:127.0.0.1:7860 macmini-user@<mac-mini-name>   # MagicDNS name or 100.x.y.z address
+```
 
-   Open `http://127.0.0.1:7860` in the browser and log in. If port 7860 is already used on the laptop, change it to `LocalForward 17860 127.0.0.1:7860` and open `http://127.0.0.1:17860`.
-4. (Optional) Starting the server from the laptop over SSH
-   - Run it inside `tmux` (`brew install tmux`) so it keeps running when SSH disconnects.
-   - The login keychain may be locked in an SSH session; run `security unlock-keychain ~/Library/Keychains/login.keychain-db` before reading the password from it.
+Open `http://127.0.0.1:7860` in the browser. If port 7860 is already used on the laptop, use `-L 17860:127.0.0.1:7860` and open `http://127.0.0.1:17860`.
+
+(Optional) When starting the server from the laptop over SSH, run it inside `tmux` (`brew install tmux`) so it keeps running when SSH disconnects, and run `security unlock-keychain ~/Library/Keychains/login.keychain-db` before reading the password from the keychain (the login keychain may be locked in an SSH session).
 
 | Variable | Required | Purpose |
 | --- | --- | --- |
