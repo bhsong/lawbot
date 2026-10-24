@@ -12,6 +12,8 @@ class Retriever:
     def __init__(self, model_dir=EMB, law_csv=ARTICLES, max_seq_length=512, doc_style='v1'):
         law = pd.read_csv(law_csv, encoding='utf-8-sig')
         law = law[law['deleted'] == 0].reset_index(drop=True)   # v1 130개, v4 415개 조문
+        if 'article_no' in law:      # v4 CSV는 article_id에 법령명이 들어 있음('근로기준법 제26조') → 번호만 쓴다
+            law['article_id'] = law['article_no']
         self.ids = law['article_id'].to_numpy()
         self.titles = law['title'].to_numpy()
         self.laws = law['law'].to_numpy() if doc_style == 'v4' else None   # v4: 법령마다 조문 번호가 겹침

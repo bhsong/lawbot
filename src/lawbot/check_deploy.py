@@ -45,6 +45,11 @@ def check_articles(p, out):
     out.append(('OK' if n_ok else 'FAIL', f'비삭제 조문 {len(live)}개 (기대 {EXPECTED_ARTICLES[p.name]}) · sha256 {sha256(p.articles)[:12]}'))
     if len(dup):
         out.append(('FAIL', f'중복 조문 {len(dup)}행: {dup[key].head().values.tolist()}'))
+    nums = live['article_no'] if 'article_no' in live else live['article_id']   # retriever와 같은 규칙
+    bad = nums[~nums.astype(str).str.fullmatch(r'제\d+조(?:의\d+)?')]
+    if len(bad):             # 법령명이 붙은 번호는 검색 문서·인용 대조에서 법령명이 두 번 들어감
+        out.append(('FAIL', f"조문 번호가 '제N조' 형식이 아님 {len(bad)}행: {bad.head().tolist()} "
+                            '(법령명이 들어 있으면 번호만 담은 article_no 열 추가)'))
     if p.doc_style == 'v4':
         out.append(('INFO', f"법령별 조문 수: {live['law'].value_counts().to_dict()}"))
 

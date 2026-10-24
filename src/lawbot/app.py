@@ -4,9 +4,10 @@ from lawbot.answer_format import render
 from lawbot.service import ask, load_app
 from lawbot.security import get_local_launch_config
 
-EXAMPLES = ['수습 기간에도 해고 예고를 해야 하나요?',
-            '주휴수당은 어떤 조건에서 받을 수 있나요?',
-            '회사가 연차를 못 쓰게 하면 어떻게 되나요?']
+# v4 Fast로 검색·답변을 확인한 질문 (근로기준법 제26조, 최저임금법 제6조, 남녀고용평등법 제19조)
+EXAMPLES = ['해고 예고 없이 갑자기 해고되면 어떻게 하나요?',
+            '최저임금보다 적게 주기로 한 근로계약은 효력이 있나요?',
+            '육아휴직을 썼다고 불이익을 줘도 되나요?']
 EMPTY = '답변을 생성하지 못했습니다. 다시 질문해 주세요.'
 
 def fmt_sources(hits):

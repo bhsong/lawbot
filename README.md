@@ -114,7 +114,7 @@ uv sync
 
 ```
 data/v4/
-├── articles_v4.csv          # 7개 법률 비삭제 415조문 (열: law, article_id, title, deleted, text)
+├── articles_v4.csv          # 7개 법률 비삭제 415조문 (열: law, article_id, title, deleted, text, 선택 article_no)
 ├── system_v4.txt            # 4B v4 학습 때 쓴 system 원문 (4항목 형식)
 └── system_v4_concise.txt    # 14B QLoRA 학습 때 쓴 system 원문 (간결형)
 models/v4/
@@ -122,6 +122,8 @@ models/v4/
 ├── sllm_4b_lora_mlx_4bit/   # Qwen3-4B + v4 LoRA (MLX 4비트) = 웹앱 Lawbot Fast
 └── sllm_14b_mlx_4bit/       # Qwen3-14B QLoRA (MLX 4비트) = 웹앱 Lawbot Pro (선택, 없으면 Fast만 사용)
 ```
+
+`article_id`에 법령명이 들어 있으면(`근로기준법 제26조`) 번호만 담은 `article_no` 열(`제26조`)을 함께 둡니다. 앱은 `article_no`가 있으면 그 값을 조문 번호로 씁니다.
 
 sLLM은 병합한 Hugging Face 모델을 MLX 4비트로 변환해서 만듭니다.
 
@@ -458,7 +460,7 @@ Trained models are too large for the repository. The web app's default profile i
 
 ```
 data/v4/
-├── articles_v4.csv          # 415 current articles from 7 laws (columns: law, article_id, title, deleted, text)
+├── articles_v4.csv          # 415 current articles from 7 laws (columns: law, article_id, title, deleted, text, optional article_no)
 ├── system_v4.txt            # system prompt used to train the v4 4B model (four-part format)
 └── system_v4_concise.txt    # system prompt used to train the 14B QLoRA model (concise)
 models/v4/
@@ -466,6 +468,8 @@ models/v4/
 ├── sllm_4b_lora_mlx_4bit/   # Qwen3-4B + v4 LoRA (MLX 4-bit) = web app Lawbot Fast
 └── sllm_14b_mlx_4bit/       # Qwen3-14B QLoRA (MLX 4-bit) = web app Lawbot Pro (optional; without it only Fast is available)
 ```
+
+If `article_id` includes the law name (`근로기준법 제26조`), add an `article_no` column with the number only (`제26조`). The app uses `article_no` as the article number when present.
 
 To build the MLX models, convert the merged Hugging Face models:
 
