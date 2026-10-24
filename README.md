@@ -155,7 +155,9 @@ fish의 `set -Ux`(유니버설 변수)는 값을 `~/.config/fish/fish_variables`
 | --- | --- | --- |
 | `LAWBOT_USER` | 예 | 로그인 사용자명 (앞뒤 공백 제거 후 비어 있으면 안 됨) |
 | `LAWBOT_PW` | 예 | 로그인 비밀번호 (빈 값·공백만 있는 값은 안 됨) |
-| `LLM_PATH` | 아니요 | 다른 sLLM 폴더 사용 (예: `models/sllm_mlx_8bit`) |
+| `LAWBOT_FAST_PATH` / `LAWBOT_PRO_PATH` | 아니요 | 웹앱 Fast(4B)·Pro(14B) 모델 폴더 (기본값은 `src/lawbot/deploy.py`) |
+| `LAWBOT_MAX_RESIDENT` | 아니요 | 동시에 올려 둘 답변 모델 수: 2(기본) 또는 1 |
+| `LLM_PATH` | 아니요 | 평가 스크립트(`eval_oos`·`eval_refusal`)가 쓸 sLLM 폴더 (예: `models/sllm_mlx_8bit`) |
 
 `LAWBOT_USER`와 `LAWBOT_PW`가 하나라도 없거나 비어 있으면 모델을 불러오기 전에 `RuntimeError`로 실행을 거부합니다. 인증 없이 서버를 띄우는 방법은 없습니다.
 
@@ -183,7 +185,7 @@ uv run python -m lawbot.eval_refusal   # 무관한 조문 / 비슷한 조문만 
 uv run python -m lawbot.eval_refusal --hard   # 근거 없이 주장했던 81건을 같은 참고 조문으로 다시 → results/refusal_hard_4bit.csv
 ```
 
-문항별 결과는 `results/`에 저장됩니다. 마지막 인자로 파일 이름을 바꿀 수 있습니다(예: `uv run python -m lawbot.eval_oos oos_v3_4bit.csv`). `oos_v1_4bit.csv`(82문항)와 `refusal_v1_4bit.csv`는 README 수치와 테스트의 기준선이므로 기본 설정으로는 덮어쓰지 않습니다. `eval_oos`와 `eval_refusal`은 웹앱처럼 `LLM_PATH`의 모델을 씁니다.
+문항별 결과는 `results/`에 저장됩니다. 마지막 인자로 파일 이름을 바꿀 수 있습니다(예: `uv run python -m lawbot.eval_oos oos_v3_4bit.csv`). `oos_v1_4bit.csv`(82문항)와 `refusal_v1_4bit.csv`는 README 수치와 테스트의 기준선이므로 기본 설정으로는 덮어쓰지 않습니다. `eval_oos`와 `eval_refusal`은 `LLM_PATH`의 모델을 씁니다.
 
 **개선 전후 비교**
 
@@ -443,7 +445,9 @@ The web app is local-only, for use on this Mac. The server listens only on `127.
 | --- | --- | --- |
 | `LAWBOT_USER` | Yes | Login username (must not be empty after trimming whitespace) |
 | `LAWBOT_PW` | Yes | Login password (must not be empty or whitespace only) |
-| `LLM_PATH` | No | Use a different SLM folder (e.g. `models/sllm_mlx_8bit`) |
+| `LAWBOT_FAST_PATH` / `LAWBOT_PRO_PATH` | No | Web app Fast (4B) and Pro (14B) model folders (defaults in `src/lawbot/deploy.py`) |
+| `LAWBOT_MAX_RESIDENT` | No | Number of answer models kept in memory: 2 (default) or 1 |
+| `LLM_PATH` | No | SLM folder used by the evaluation scripts (`eval_oos`, `eval_refusal`), e.g. `models/sllm_mlx_8bit` |
 
 If either `LAWBOT_USER` or `LAWBOT_PW` is missing or empty, the app refuses to start with a `RuntimeError` before loading any model. There is no way to run the server without a login.
 
@@ -487,7 +491,7 @@ With `--baseline`, it shows the baseline run side by side and warns about side e
 | False refusal rate (retrieval hits) | rises by more than 0.01 |
 | In-scope control false refusals / total score | worsens by more than 0.05 (1 of 20) |
 
-See the Korean section above for the full command sequence: first complete the baseline with the current model (Recall@3, controls, 102 out-of-scope questions, hard-case re-evaluation), then run the same evaluations for a new model under different file names and compare with `--baseline v1_4bit_full --strict`. `eval_oos` and `eval_refusal` use the model in `LLM_PATH`, like the web app.
+See the Korean section above for the full command sequence: first complete the baseline with the current model (Recall@3, controls, 102 out-of-scope questions, hard-case re-evaluation), then run the same evaluations for a new model under different file names and compare with `--baseline v1_4bit_full --strict`. `eval_oos` and `eval_refusal` use the model in `LLM_PATH`.
 
 `metrics.csv` already holds two rows built from existing results: `v1_4bit` (baseline) and `v1_4bit_hybrid` (the failed hybrid retrieval experiment). Hybrid retrieval raised out-of-scope refusal from 0.671 to 0.683, but its forced-answer rate also rose from 0.256 to 0.268, so higher refusal alone was not an improvement.
 
