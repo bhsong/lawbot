@@ -1,3 +1,15 @@
+diff --git a/data/system_v1_concise.txt b/data/system_v1_concise.txt
+new file mode 100644
+index 0000000..179f8fb
+--- /dev/null
++++ b/data/system_v1_concise.txt
+@@ -0,0 +1,6 @@
++당신은 대한민국 근로기준법 상담 도우미입니다. 사용자 메시지의 [참고 조문]만 근거로 답변하세요.
++답변은 반드시 다음 두 부분으로 짧게 작성합니다.
++【결론】 질문에 대한 핵심 답과 꼭 필요한 조건·예외를 2~3문장으로
++【근거 조문】 실제 근거로 쓴 조문만 '근로기준법 제N조(제목)' 형식으로 인용 (필요하면 항 번호 포함)
++조문 본문을 다시 옮겨 적지 마세요.
++제공된 조문에서 근거를 찾을 수 없으면 추측하지 말고 【결론】에 확인할 수 없다고 답하세요.
 diff --git a/src/lawbot/answer_format.py b/src/lawbot/answer_format.py
 new file mode 100644
 index 0000000..6d8cbfd
@@ -62,10 +74,10 @@ index 0000000..6d8cbfd
 +    """fmt: 'concise'(간결형) / 'full'(모델 원문 4섹션)"""
 +    return concise(raw, hits, done) if fmt == 'concise' else raw
 diff --git a/src/lawbot/app.py b/src/lawbot/app.py
-index 125cdb8..d2b4da0 100644
+index 125cdb8..d63abdc 100644
 --- a/src/lawbot/app.py
 +++ b/src/lawbot/app.py
-@@ -1,44 +1,102 @@
+@@ -1,44 +1,107 @@
  # src/lawbot/app.py  →  uv run lawbot-app
  import gradio as gr
 -from lawbot.service import answer_stream, load_models
@@ -148,6 +160,10 @@ index 125cdb8..d2b4da0 100644
 +    return [(f"{s.label} — {s.info}" + ('' if s.path.is_dir() else ' (모델 폴더 없음)'), s.key)
 +            for s in app.models.specs.values()]
 +
++def default_fmt(app):
++    """모델을 바꾸면 형식 라디오를 그 모델의 기본 형식으로 (Fast 4항목 / Pro 간결). 사용자가 다시 바꿀 수 있음"""
++    return lambda model_key: app.models.specs[model_key].fmt
++
 +def build_demo(app):                 # 화면만 만든다: 인증 검사·모델 로딩은 main에서
 +    p = app.profile
 +    with gr.Blocks(title=p.title) as demo:
@@ -160,8 +176,9 @@ index 125cdb8..d2b4da0 100644
 +                with gr.Row():
 +                    model = gr.Radio(model_choices(app), value=p.models[0].key, label='답변 모델',
 +                                     info='Fast는 4B, Pro는 14B 모델입니다. 같은 조문을 참고하며, Pro는 답변이 더 느립니다.')
-+                    fmt = gr.Radio([('간결', 'concise'), ('전체 (4단 형식)', 'full')], value='concise',
++                    fmt = gr.Radio([('간결', 'concise'), ('전체 (4항목)', 'full')], value=p.models[0].fmt,
 +                                   label='답변 형식')
++                model.change(default_fmt(app), model, fmt, queue=False, api_visibility='private')
                  gr.ChatInterface(
 -                    fn=make_chat(retriever, llm),
 -                    additional_outputs=[sources],
@@ -189,10 +206,10 @@ index 125cdb8..d2b4da0 100644
  if __name__ == '__main__':
 diff --git a/src/lawbot/bench_models.py b/src/lawbot/bench_models.py
 new file mode 100644
-index 0000000..5617ef1
+index 0000000..b7b57d0
 --- /dev/null
 +++ b/src/lawbot/bench_models.py
-@@ -0,0 +1,89 @@
+@@ -0,0 +1,90 @@
 +# src/lawbot/bench_models.py  →  uv run python -m lawbot.bench_models --tag m32_v1_r2
 +# 웹앱과 같은 경로(service.load_app·ask)로 Fast/Pro를 번갈아 질문하며 지연·메모리를 잰다 (UI 없이, 맥 전용)
 +#   LAWBOT_MAX_RESIDENT=2: 동시 상주 / 1: 전환 때마다 다시 로딩 (전환 시간 측정)
@@ -261,7 +278,8 @@ index 0000000..5617ef1
 +            for key in args.models.split(','):
 +                for stage, hits, raw, st in ask(app, q, key, early_stop=args.early_stop):
 +                    pass
-+                rows.append({'round': rnd, 'model': key, 'question': q, **st, **memory(),
++                rows.append({'round': rnd, 'model': key, 'fmt': app.models.specs[key].fmt, 'question': q,
++                             **st, **memory(),
 +                             'answer_len': len(raw), 'concise_len': len(concise(raw, hits)),
 +                             'resident': ','.join(app.models.loaded), 'answer': raw})
 +                r = rows[-1]
@@ -355,10 +373,10 @@ index 0000000..32d1033
 +    main()
 diff --git a/src/lawbot/check_deploy.py b/src/lawbot/check_deploy.py
 new file mode 100644
-index 0000000..fea899e
+index 0000000..1f5bdf7
 --- /dev/null
 +++ b/src/lawbot/check_deploy.py
-@@ -0,0 +1,109 @@
+@@ -0,0 +1,119 @@
 +# src/lawbot/check_deploy.py  →  uv run python -m lawbot.check_deploy [v1|v4]
 +# 웹앱이 쓸 조문 CSV·system·임베딩·MLX 모델 폴더를 모델을 올리지 않고 검사한다 (파일 헤더만 읽음)
 +# 실패 항목이 있으면 종료 코드 1. LoRA 병합 여부는 파일로 확정할 수 없어 '어댑터 파일 없음'까지만 본다
@@ -409,14 +427,24 @@ index 0000000..fea899e
 +    if p.doc_style == 'v4':
 +        out.append(('INFO', f"법령별 조문 수: {live['law'].value_counts().to_dict()}"))
 +
++def check_system_file(name, f, out):
++    if not f.is_file():
++        return out.append(('FAIL', f'{name} system 파일 없음: {f} (학습 노트북의 system 원문을 글자 그대로 저장)'))
++    text = f.read_text(encoding='utf-8').strip()
++    out.append(('OK', f'{name} system {len(text)}자 · sha256 {hashlib.sha256(text.encode()).hexdigest()[:12]} · '
++                      f'첫 줄: {text.splitlines()[0][:60]}'))
++
 +def check_system(p, out):
 +    if p.system_file is None:
 +        from lawbot.llm import SYSTEM   # v1: 코드에 든 학습 system
-+        return out.append(('OK', f'system: llm.SYSTEM (v1) · sha256 {hashlib.sha256(SYSTEM.encode()).hexdigest()[:12]}'))
-+    if not p.system_file.is_file():
-+        return out.append(('FAIL', f'system 파일 없음: {p.system_file} (v4 학습 노트북의 system 원문을 글자 그대로 저장)'))
-+    text = p.system_file.read_text(encoding='utf-8').strip()
-+    out.append(('OK', f'system {len(text)}자 · sha256 {hashlib.sha256(text.encode()).hexdigest()[:12]} · 첫 줄: {text.splitlines()[0][:60]}'))
++        out.append(('OK', f'기본 system: llm.SYSTEM (v1) · sha256 {hashlib.sha256(SYSTEM.encode()).hexdigest()[:12]}'))
++    else:
++        check_system_file('기본', p.system_file, out)
++    for spec in p.models:               # 모델별 system (Pro 간결형)
++        if spec.system_file:
++            check_system_file(spec.label, spec.system_file, out)
++        out.append(('INFO', f"{spec.label}: 기본 답변 형식 {spec.fmt} · system "
++                            f"{spec.system_file.name if spec.system_file else '기본'}"))
 +
 +def check_emb(p, out):
 +    d = p.emb
@@ -470,10 +498,10 @@ index 0000000..fea899e
 +    main()
 diff --git a/src/lawbot/deploy.py b/src/lawbot/deploy.py
 new file mode 100644
-index 0000000..94ee568
+index 0000000..6c4b8d3
 --- /dev/null
 +++ b/src/lawbot/deploy.py
-@@ -0,0 +1,54 @@
+@@ -0,0 +1,61 @@
 +# src/lawbot/deploy.py  →  웹앱 배포 설정: 검색 프로필(v1/v4)과 답변 모델(Fast/Pro) 레지스트리
 +# 모델 라이브러리를 import하지 않는다 (check_deploy·테스트가 모델 없이 읽음)
 +import os
@@ -487,6 +515,8 @@ index 0000000..94ee568
 +    label: str               # 화면 표시명
 +    info: str                # 크기·속도 설명 (정확도 비교는 쓰지 않음: 실측 전)
 +    path: Path               # 로컬 MLX 폴더 (절대 경로)
++    fmt: str                 # 기본 답변 형식: 'full'(4섹션 원문) / 'concise'(결론 + 근거)
++    system_file: Path | None = None   # 이 모델만 쓰는 system (None이면 프로필 system)
 +
 +@dataclass(frozen=True)
 +class Profile:
@@ -496,7 +526,7 @@ index 0000000..94ee568
 +    emb: Path                # 검색 임베딩 폴더
 +    max_seq: int             # 조문 인코딩 최대 토큰
 +    doc_style: str           # 검색 문서·참고 조문 형식 (retriever.DOC_STYLES, llm.build_messages)
-+    system_file: Path | None # None이면 llm.SYSTEM (v1 학습 system)
++    system_file: Path | None # None이면 llm.SYSTEM (v1 학습 system). 모델별 system_file이 있으면 그쪽 우선
 +    models: tuple            # (Fast, Pro). 첫 번째가 기본 선택
 +
 +def _path(env, default):
@@ -507,15 +537,20 @@ index 0000000..94ee568
 +
 +def get_profile(name=None):
 +    name = name or os.environ.get('LAWBOT_PROFILE', 'v1')
-+    if name == 'v1':         # 현재 동작: 근로기준법 130조문, v1 검색·4B. Pro는 튜닝 전 14B로 속도·메모리만 시험
++    # Fast(4B LoRA)는 학습한 4섹션 그대로, Pro(14B)는 간결형 system으로 처음부터 짧게 생성 (14B QLoRA도 간결형으로 학습)
++    if name == 'v1':         # 현재 동작: 근로기준법 130조문, v1 검색·4B. Pro는 튜닝 전 14B로 속도·메모리 시험
 +        return Profile('v1', '근로기준법 챗봇', paths.ARTICLES, _path('LAWBOT_EMB', paths.EMB), 512, 'v1', None, (
-+            ModelSpec('fast', 'Lawbot Fast', '4B · 빠른 응답', _path('LAWBOT_FAST_PATH', paths.LLM_4BIT)),
-+            ModelSpec('pro', 'Lawbot Pro', '14B · 큰 모델, 응답이 더 느림', _path('LAWBOT_PRO_PATH', paths.PRO_BASE))))
++            ModelSpec('fast', 'Lawbot Fast', '4B · 빠른 응답, 4항목 답변', _path('LAWBOT_FAST_PATH', paths.LLM_4BIT), 'full'),
++            ModelSpec('pro', 'Lawbot Pro', '14B · 큰 모델, 간결한 답변, 응답이 더 느림',
++                      _path('LAWBOT_PRO_PATH', paths.PRO_BASE), 'concise',
++                      _path('LAWBOT_PRO_SYSTEM', paths.SYSTEM_V1_CONCISE))))
 +    if name == 'v4':         # 7개 법률 415조문, v4 검색 (MAX_SEQ 2304). 경로는 paths.py의 미확인 자리표시
 +        return Profile('v4', '노동법 챗봇', _path('LAWBOT_V4_ARTICLES', paths.V4_ARTICLES),
 +                       _path('LAWBOT_V4_EMB', paths.V4_EMB), 2304, 'v4', _path('LAWBOT_V4_SYSTEM', paths.V4_SYSTEM), (
-+            ModelSpec('fast', 'Lawbot Fast', '4B · 빠른 응답', _path('LAWBOT_FAST_PATH', paths.V4_FAST)),
-+            ModelSpec('pro', 'Lawbot Pro', '14B · 큰 모델, 응답이 더 느림', _path('LAWBOT_PRO_PATH', paths.V4_PRO))))
++            ModelSpec('fast', 'Lawbot Fast', '4B · 빠른 응답, 4항목 답변', _path('LAWBOT_FAST_PATH', paths.V4_FAST), 'full'),
++            ModelSpec('pro', 'Lawbot Pro', '14B · 큰 모델, 간결한 답변, 응답이 더 느림',
++                      _path('LAWBOT_PRO_PATH', paths.V4_PRO), 'concise',
++                      _path('LAWBOT_PRO_SYSTEM', paths.V4_SYSTEM_CONCISE))))
 +    raise ValueError(f'알 수 없는 LAWBOT_PROFILE: {name!r} (v1 또는 v4)')
 +
 +def max_resident():
@@ -530,16 +565,17 @@ index 0000000..94ee568
 +    return os.environ.get('LAWBOT_EARLY_STOP', '0') == '1'
 diff --git a/src/lawbot/eval_concise.py b/src/lawbot/eval_concise.py
 new file mode 100644
-index 0000000..c9e8c75
+index 0000000..40769b6
 --- /dev/null
 +++ b/src/lawbot/eval_concise.py
-@@ -0,0 +1,111 @@
+@@ -0,0 +1,116 @@
 +# src/lawbot/eval_concise.py  →  uv run python -m lawbot.eval_concise --val <val.csv> --model fast --tag v4_fast
 +# 간결형 답변 실험 (val 전용, 기존 평가 결과 파일과 분리: results/concise_<tag>.csv)
 +#   full   : 모델 원문 4섹션 (기준)
 +#   concise: 같은 원문을 answer_format.concise로 후처리 (재생성 없음)
 +#   early  : concise와 같은 화면, 【설명】이 나온 시점에 생성을 멈췄다면 걸렸을 시간 (temp 0이라 원문 앞부분과 같음)
-+#   prompt : --concise-system 파일의 system으로 다시 생성한 뒤 concise 후처리 (프롬프트만 바꾼 효과)
++#   alt    : --alt-system의 system으로 다시 생성한 뒤 concise 후처리 (system만 바꾼 효과)
++#            Fast(4섹션 학습)에 간결형 system을 주거나, Pro(간결형)에 v1 4섹션 system('v1')을 줘서 형식 효과와 모델 효과를 나눔
 +# val CSV 열: id, question, article_id (v4는 law도). must_include 등 키워드 열이 있으면 score_one으로 채점
 +import argparse
 +import os
@@ -589,7 +625,7 @@ index 0000000..c9e8c75
 +    ap.add_argument('--model', default='fast', help='deploy 프로필의 모델 key')
 +    ap.add_argument('--tag', required=True, help='results/concise_<tag>.csv')
 +    ap.add_argument('--n', type=int, default=0, help='앞에서 n문항만 (0이면 전체)')
-+    ap.add_argument('--concise-system', help='prompt 조건용 system 파일 (없으면 prompt 조건 생략)')
++    ap.add_argument('--alt-system', help="alt 조건용 system 파일, 'v1'이면 llm.SYSTEM (없으면 alt 조건 생략)")
 +    args = ap.parse_args()
 +    pd.set_option('display.width', 200, 'display.max_columns', None)
 +    val_path = Path(args.val).resolve()
@@ -600,7 +636,11 @@ index 0000000..c9e8c75
 +
 +    os.environ['LAWBOT_MAX_RESIDENT'] = '1'     # 실험은 한 모델만 올림 (Pro 실험이면 미리 올린 Fast는 내려감)
 +    app = load_app()
-+    alt = Path(args.concise_system).read_text(encoding='utf-8').strip() if args.concise_system else None
++    alt = None
++    if args.alt_system == 'v1':
++        from lawbot.llm import SYSTEM as alt
++    elif args.alt_system:
++        alt = Path(args.alt_system).read_text(encoding='utf-8').strip()
 +    rows = []
 +    for _, row in val.iterrows():
 +        row = row.to_dict()
@@ -619,7 +659,7 @@ index 0000000..c9e8c75
 +                raw2, hits2, st2, _ = run(app, row['question'], args.model)
 +            finally:
 +                llm.system = sys0
-+            rows.append(base | {'mode': 'prompt'} | judge(concise(raw2, hits2), raw2, hits2, row, st2['finish'],
++            rows.append(base | {'mode': 'alt'} | judge(concise(raw2, hits2), raw2, hits2, row, st2['finish'],
 +                                                           st2['total']) | {'raw': raw2})
 +        print(row['id'], ' / '.join(f"{r['mode']}:{'거절' if r['refusal'] else int(r['cite_gold'])}"
 +                                    for r in rows if r['id'] == row['id']))
@@ -677,10 +717,10 @@ index f6c2eb1..db1a848 100644
      def stream(self, question, hits, max_tokens=1024):
          prompt = self.tok.apply_chat_template(
 diff --git a/src/lawbot/paths.py b/src/lawbot/paths.py
-index 739428e..f88f8c2 100644
+index 739428e..3880914 100644
 --- a/src/lawbot/paths.py
 +++ b/src/lawbot/paths.py
-@@ -7,3 +7,12 @@ ARTICLES = DATA / "labor_articles_20261001.csv"
+@@ -7,3 +7,14 @@ ARTICLES = DATA / "labor_articles_20261001.csv"
  EVAL = DATA / "labor_eval_keywords.csv"
  EMB = MODELS / "emb_final_v3_fp16"
  LLM_4BIT = MODELS / "sllm_mlx_4bit"
@@ -688,11 +728,13 @@ index 739428e..f88f8c2 100644
 +# ---- v4 웹앱 배포 (Fast/Pro). 모두 미확인 자리표시: 실제 산출물 이름을 확인한 뒤 바꾼다 ----
 +# 환경 변수(LAWBOT_V4_ARTICLES 등, lawbot.deploy)로도 바꿀 수 있고, uv run python -m lawbot.check_deploy로 검사
 +V4_ARTICLES = DATA / "v4" / "articles_v4.csv"      # 7개 법률 비삭제 415조문
-+V4_SYSTEM = DATA / "v4" / "system_v4.txt"          # v4 학습 때 쓴 system 원문 (글자 그대로)
++V4_SYSTEM = DATA / "v4" / "system_v4.txt"          # v4 4B 학습 때 쓴 system 원문 (글자 그대로, 4섹션)
++V4_SYSTEM_CONCISE = DATA / "v4" / "system_v4_concise.txt"  # v4 14B QLoRA 학습 system (간결형, 글자 그대로)
 +V4_EMB = MODELS / "v4" / "emb_v4_fp16"             # v4 튜닝 Qwen3-Embedding-0.6B
 +V4_FAST = MODELS / "v4" / "sllm_4b_lora_mlx_4bit"  # Qwen3-4B + v4 LoRA 병합 → MLX 4비트
 +V4_PRO = MODELS / "v4" / "sllm_14b_mlx_4bit"       # Qwen3-14B MLX 4비트 (v4 QLoRA 완성 시 교체)
 +PRO_BASE = MODELS / "qwen3_14b_mlx_4bit"           # v1 프로필에서 시험할 14B (튜닝 전)
++SYSTEM_V1_CONCISE = DATA / "system_v1_concise.txt" # 튜닝 전 14B용 간결형 system (v1 4섹션 system을 줄인 초안)
 diff --git a/src/lawbot/retriever.py b/src/lawbot/retriever.py
 index b13af40..6d67d6e 100644
 --- a/src/lawbot/retriever.py
@@ -741,10 +783,10 @@ index b13af40..6d67d6e 100644
 -                 'doc': self.docs[i], 'score': float(s[i])} for i in np.argsort(-s)[:k]]
 +        return [self._hit(i, float(s[i])) for i in np.argsort(-s)[:k]]
 diff --git a/src/lawbot/service.py b/src/lawbot/service.py
-index e644757..18935c9 100644
+index e644757..8170894 100644
 --- a/src/lawbot/service.py
 +++ b/src/lawbot/service.py
-@@ -1,17 +1,115 @@
+@@ -1,17 +1,121 @@
  # src/lawbot/service.py  →  UI와 무관한 질의응답 흐름 (Gradio 앱이 쓰고, 이후 API 서버도 그대로 씀)
  # 이 모듈은 gradio를 import하지 않는다 (tests/test_pipeline.py가 검사)
 +import gc
@@ -814,14 +856,20 @@ index e644757..18935c9 100644
 +    models: ModelManager
 +    early_stop: bool = False
 +
++def system_text(profile, spec):
++    """모델별 system 파일 → 프로필 system 파일 → None(llm.SYSTEM, v1 4섹션) 순서"""
++    f = spec.system_file or profile.system_file
++    return f.read_text(encoding='utf-8').strip() if f else None
++
 +def load_app(profile=None):
 +    """웹앱용: 검색기 1개 + Fast/Pro 레지스트리. 기본 모델(Fast)은 미리 올리고, 2개 상주면 Pro도 시도"""
 +    p = profile or deploy.get_profile()
 +    retriever = Retriever(p.emb, p.articles, max_seq_length=p.max_seq, doc_style=p.doc_style)
-+    kw = {'prompt_style': p.doc_style}
-+    if p.system_file:
-+        kw['system'] = p.system_file.read_text(encoding='utf-8').strip()
-+    models = ModelManager(p.models, lambda spec: LLM(spec.path, **kw), deploy.max_resident())
++
++    def loader(spec):                    # system 파일이 없으면 FileNotFoundError (화면에서 오류 안내)
++        system = system_text(p, spec)
++        return LLM(spec.path, prompt_style=p.doc_style, **({'system': system} if system else {}))
++    models = ModelManager(p.models, loader, deploy.max_resident())
 +    models.get(p.models[0].key)          # 기본 모델이 없으면 여기서 실행 중단
 +    if models.max_resident >= 2:
 +        for spec in p.models[1:]:
@@ -898,14 +946,14 @@ index 0000000..95b7df0
 +if __name__ == '__main__':
 +    main()
 diff --git a/tests/conftest.py b/tests/conftest.py
-index 4c633d7..db4f5f0 100644
+index 4c633d7..0ae8d9d 100644
 --- a/tests/conftest.py
 +++ b/tests/conftest.py
 @@ -4,6 +4,8 @@ import socket
  import pytest
  
  ENV_KEYS = ('LAWBOT_USER', 'LAWBOT_PW', 'LLM_PATH',
-+            'LAWBOT_PROFILE', 'LAWBOT_EMB', 'LAWBOT_FAST_PATH', 'LAWBOT_PRO_PATH', 'LAWBOT_MAX_RESIDENT',
++            'LAWBOT_PROFILE', 'LAWBOT_EMB', 'LAWBOT_FAST_PATH', 'LAWBOT_PRO_PATH', 'LAWBOT_PRO_SYSTEM', 'LAWBOT_MAX_RESIDENT',
 +            'LAWBOT_EARLY_STOP', 'LAWBOT_V4_ARTICLES', 'LAWBOT_V4_EMB', 'LAWBOT_V4_SYSTEM',
              'GRADIO_SERVER_NAME', 'GRADIO_SERVER_PORT', 'GRADIO_SHARE')
  
@@ -1084,10 +1132,10 @@ index 02b8884..dc2e57b 100644
 +        list(chat('질문', [], 'fast', 'full'))
 diff --git a/tests/test_webapp.py b/tests/test_webapp.py
 new file mode 100644
-index 0000000..924b20a
+index 0000000..8b01f67
 --- /dev/null
 +++ b/tests/test_webapp.py
-@@ -0,0 +1,259 @@
+@@ -0,0 +1,283 @@
 +# tests/test_webapp.py  →  Fast/Pro 모델 선택·전환, 간결형 답변, v4 검색 형식, 배포 검사 (가짜 모델, 모델 파일 불필요)
 +import json
 +import struct
@@ -1124,9 +1172,12 @@ index 0000000..924b20a
 +        assert [m.label for m in p.models] == ['Lawbot Fast', 'Lawbot Pro']
 +        assert all(m.path.is_absolute() for m in p.models)
 +        assert '정확' not in ' '.join(m.info for m in p.models)     # 검증 전 정확도 단정 금지
++        assert [m.fmt for m in p.models] == ['full', 'concise']     # Fast 4항목, Pro 간결형
++        assert p.models[0].system_file is None and p.models[1].system_file is not None
 +    v1, v4 = deploy.get_profile('v1'), deploy.get_profile('v4')
 +    assert (v1.articles, v1.emb, v1.max_seq, v1.doc_style) == (paths.ARTICLES, paths.EMB, 512, 'v1')
 +    assert v1.models[0].path == paths.LLM_4BIT and v1.system_file is None
++    assert v1.models[1].system_file == paths.SYSTEM_V1_CONCISE and v4.models[1].system_file == paths.V4_SYSTEM_CONCISE
 +    assert (v4.max_seq, v4.doc_style, v4.system_file) == (2304, 'v4', paths.V4_SYSTEM)
 +    assert {v4.articles, v4.emb, v4.models[0].path} & {v1.articles, v1.emb, v1.models[0].path} == set()
 +
@@ -1157,15 +1208,35 @@ index 0000000..924b20a
 +    a = make_app(env, resident=2)
 +    assert list(a.models.loaded) == ['fast', 'pro']
 +    assert a.retriever.args[1] == {'max_seq_length': 512, 'doc_style': 'v1'}
-+    assert a.models.loaded['fast'].kw == {'prompt_style': 'v1'}      # v1은 llm.SYSTEM 그대로
++    assert a.models.loaded['fast'].kw == {'prompt_style': 'v1'}      # Fast는 llm.SYSTEM(v1 4섹션) 그대로
++    concise_system = paths.SYSTEM_V1_CONCISE.read_text(encoding='utf-8').strip()
++    assert a.models.loaded['pro'].kw == {'prompt_style': 'v1', 'system': concise_system}
++    assert '【결론】' in concise_system and '【근거 조문】' in concise_system and '【설명】' not in concise_system
 +
 +def test_load_app_v4_reads_system_file(env, tmp_path):
 +    (tmp_path / 'system.txt').write_text('V4 SYSTEM\n', encoding='utf-8')
++    (tmp_path / 'concise.txt').write_text('V4 CONCISE\n', encoding='utf-8')
 +    env.setenv('LAWBOT_PROFILE', 'v4')
 +    env.setenv('LAWBOT_V4_SYSTEM', str(tmp_path / 'system.txt'))
-+    a = make_app(env, resident=1)
++    env.setenv('LAWBOT_PRO_SYSTEM', str(tmp_path / 'concise.txt'))
++    a = make_app(env, resident=2)
 +    assert a.models.loaded['fast'].kw == {'prompt_style': 'v4', 'system': 'V4 SYSTEM'}
++    assert a.models.loaded['pro'].kw == {'prompt_style': 'v4', 'system': 'V4 CONCISE'}
 +    assert a.retriever.args[1] == {'max_seq_length': 2304, 'doc_style': 'v4'}
++
++def test_pro_system_missing_is_reported(env, tmp_path):
++    env.setenv('LAWBOT_PRO_SYSTEM', str(tmp_path / '없음.txt'))
++    chat = app_mod.make_chat(make_app(env, resident=1))
++    with pytest.raises(app_mod.gr.Error, match='Lawbot Pro 모델을 불러오지 못했습니다'):
++        list(chat('질문', [], 'pro', 'concise'))
++
++def test_format_follows_model_by_default(env):
++    a = make_app(env)
++    demo = app_mod.build_demo(a)
++    radios = {c.label: c for c in demo.blocks.values() if isinstance(c, app_mod.gr.Radio)}
++    assert radios['답변 형식'].value == 'full'                       # 기본 선택 Fast → 4항목
++    follow = app_mod.default_fmt(a)
++    assert (follow('fast'), follow('pro')) == ('full', 'concise')
 +
 +def test_pro_preload_failure_keeps_fast(env, capsys):
 +    class ProMissing(PathLLM):
@@ -1339,8 +1410,9 @@ index 0000000..924b20a
 +    env.setenv('LAWBOT_V4_EMB', str(tmp_path / '없음'))
 +    env.setenv('LAWBOT_FAST_PATH', str(tmp_path / '없음4b'))
 +    env.setenv('LAWBOT_PRO_PATH', str(tmp_path / '없음14b'))
++    env.setenv('LAWBOT_PRO_SYSTEM', str(tmp_path / '없음_concise.txt'))
 +    fails = [m for level, m in check_deploy.run('v4') if level == 'FAIL']
-+    assert len(fails) == 5 and all('없' in m for m in fails)
++    assert len(fails) == 6 and all('없' in m for m in fails)
 +
 +def test_eval_concise_refuses_test_set(env):
 +    import lawbot.eval_concise as ec
