@@ -12,11 +12,12 @@ from pathlib import Path
 import httpx
 import pytest
 from conftest import ENV_KEYS
+from lawbot.app import EXAMPLES
 
 pytestmark = pytest.mark.integration
 
 USER, PW = 'tester', 'test-only-pw'   # 테스트 전용 가짜 값
-QUESTION = '수습 기간에도 해고 예고를 해야 하나요?'
+QUESTION = EXAMPLES[0]                # 로그인 후 챗봇 화면에만 나오는 예시 질문
 SERVER = Path(__file__).with_name('integration_server.py')
 START_TIMEOUT = 60
 

@@ -10,6 +10,7 @@ import lawbot.service as service
 from fakes import HITS, FakeLLM, FakeRetriever
 from lawbot import check_deploy, deploy, paths
 from lawbot.answer_format import cited_hits, concise
+from lawbot.llm import build_prompt_v4
 
 class PathLLM(FakeLLM):
     """모델 폴더 이름을 답으로 내는 가짜 sLLM: 어떤 모델이 답했는지 확인용"""
@@ -247,6 +248,22 @@ def test_retriever_v4_format(env, tmp_path):
     assert {(h['law'], h['article_id']) for h in hits} == {('근로기준법', '제2조'), ('최저임금법', '제2조')}
     assert app_mod.fmt_sources(hits).count('**최저임금법 제2조 정의**') == 1
 
+def test_retriever_v4_article_no(env, tmp_path):
+    """실제 v4 CSV: article_id에 법령명이 들어 있고 번호는 article_no. 법령명이 두 번 들어가면 안 됨"""
+    csv = tmp_path / 'v4.csv'
+    pd.DataFrame({'law': ['근로기준법', '최저임금법'], 'article_id': ['근로기준법 제26조', '최저임금법 제5조'],
+                  'article_no': ['제26조', '제5조'], 'title': ['해고의 예고', '최저임금액'], 'deleted': [0, 0],
+                  'text': ['본문 A', '본문 B']}).to_csv(csv, index=False, encoding='utf-8-sig')
+    env.setattr(retriever_mod, 'SentenceTransformer', FakeEncoder)
+    env.setattr(retriever_mod.torch.mps, 'empty_cache', lambda: None)
+    r = retriever_mod.Retriever('models/fake', csv, max_seq_length=2304, doc_style='v4')
+    assert r.docs == ['근로기준법 제26조(해고의 예고)\n본문 A', '최저임금법 제5조(최저임금액)\n본문 B']
+    hits = r.search('해고', k=2)
+    assert {h['article_id'] for h in hits} == {'제26조', '제5조'}
+    assert build_prompt_v4(hits, 'q').count('근로기준법 제26조(해고의 예고)') == 1
+    assert '근로기준법 근로기준법' not in build_prompt_v4(hits, 'q') + app_mod.fmt_sources(hits)
+    assert cited_hits('근로기준법 제26조(해고의 예고)', hits) == ([h for h in hits if h['law'] == '근로기준법'], [])
+
 # ---- 배포 검사 ----
 def write_safetensors(path, dtype):
     header = json.dumps({'w': {'dtype': dtype, 'shape': [1], 'data_offsets': [0, 2]}}).encode()
@@ -290,6 +307,19 @@ def test_check_deploy_v4_placeholders_fail(env, tmp_path):
     env.setenv('LAWBOT_PRO_SYSTEM', str(tmp_path / '없음_concise.txt'))
     fails = [m for level, m in check_deploy.run('v4') if level == 'FAIL']
     assert len(fails) == 6 and all('없' in m for m in fails)
+
+def test_check_deploy_article_number_format(env, tmp_path):
+    csv = tmp_path / 'v4.csv'
+    rows = {'law': ['근로기준법'] * 415, 'article_id': [f'근로기준법 제{i}조' for i in range(1, 416)],
+            'title': ['t'] * 415, 'deleted': [0] * 415, 'text': ['x'] * 415}
+    pd.DataFrame(rows).to_csv(csv, index=False, encoding='utf-8-sig')
+    env.setenv('LAWBOT_V4_ARTICLES', str(csv))
+    fails = [m for level, m in check_deploy.run('v4') if level == 'FAIL']
+    assert any("'제N조' 형식이 아님 415행" in m for m in fails)
+    pd.DataFrame(rows | {'article_no': [f'제{i}조' for i in range(1, 416)]}).to_csv(csv, index=False, encoding='utf-8-sig')
+    out = check_deploy.run('v4')
+    assert ('OK', next(m for lv, m in out if '비삭제 조문' in m)) in out
+    assert not any('형식이 아님' in m for lv, m in out)
 
 def test_eval_concise_refuses_test_set(env):
     import lawbot.eval_concise as ec
