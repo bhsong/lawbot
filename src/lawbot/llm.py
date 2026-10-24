@@ -23,14 +23,23 @@ def build_prompt(ids, question):
     blocks = [f'[{i}] {a}({ART[a][0]})\n{ART[a][1]}' for i, a in enumerate(ids, 1)]
     return '[참고 조문]\n' + '\n\n'.join(blocks) + f'\n\n[질문]\n{question}'
 
+def build_prompt_v4(hits, question):
+    """v4: 검색 결과의 법령명·조문을 그대로 쓴다 (7개 법률은 조문 번호가 겹쳐 ART로 찾을 수 없음)
+    미확인: v4 학습 노트북의 [참고 조문] 형식과 글자 단위로 대조해야 함"""
+    blocks = [f"[{i}] {h['law']} {h['article_id']}({h['title']})\n{_clean(h['doc'].split(chr(10), 1)[1])}"
+              for i, h in enumerate(hits, 1)]
+    return '[참고 조문]\n' + '\n\n'.join(blocks) + f'\n\n[질문]\n{question}'
+
 class LLM:
-    def __init__(self, path=LLM_4BIT, temp=0.0):
+    def __init__(self, path=LLM_4BIT, temp=0.0, system=SYSTEM, prompt_style='v1'):
         self.model, self.tok = load(str(path))
         self.sampler = make_sampler(temp=temp)
+        self.system, self.prompt_style = system, prompt_style    # v4: deploy 프로필의 system 파일
 
     def build_messages(self, question, hits):
-        return [{'role': 'system', 'content': SYSTEM},
-                {'role': 'user', 'content': build_prompt([h['article_id'] for h in hits], question)}]
+        user = (build_prompt_v4(hits, question) if self.prompt_style == 'v4'
+                else build_prompt([h['article_id'] for h in hits], question))
+        return [{'role': 'system', 'content': self.system}, {'role': 'user', 'content': user}]
 
     def stream(self, question, hits, max_tokens=1024):
         prompt = self.tok.apply_chat_template(
