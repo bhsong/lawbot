@@ -110,18 +110,40 @@ uv sync
 
 **모델 준비**
 
-학습된 모델은 용량이 커서 저장소에 포함하지 않습니다. 아래 경로에 두면 됩니다. 조문·평가 데이터(`data/`)와 평가 결과(`results/`)는 저장소에 포함되어 있습니다.
+학습된 모델은 용량이 커서 저장소에 포함하지 않습니다. 웹앱 기본 프로필은 **v4**(7개 노동 관련 법률 415조문)이고, 아래 경로에 파일을 두면 됩니다. 이름은 아직 확정 전이므로, 다르면 아래 환경 변수 표의 변수로 지정합니다.
 
 ```
-models/
-├── emb_final_v3_fp16/     # 튜닝 임베딩 (sentence-transformers 형식, fp16)
-└── sllm_mlx_4bit/         # 튜닝 sLLM (MLX 4비트)
+data/v4/
+├── articles_v4.csv          # 7개 법률 비삭제 415조문 (열: law, article_id, title, deleted, text)
+├── system_v4.txt            # 4B v4 학습 때 쓴 system 원문 (4항목 형식)
+└── system_v4_concise.txt    # 14B QLoRA 학습 때 쓴 system 원문 (간결형)
+models/v4/
+├── emb_v4_fp16/             # v4 튜닝 임베딩 (sentence-transformers 형식, fp16)
+├── sllm_4b_lora_mlx_4bit/   # Qwen3-4B + v4 LoRA (MLX 4비트) = 웹앱 Lawbot Fast
+└── sllm_14b_mlx_4bit/       # Qwen3-14B QLoRA (MLX 4비트) = 웹앱 Lawbot Pro (선택, 없으면 Fast만 사용)
 ```
 
 sLLM은 병합한 Hugging Face 모델을 MLX 4비트로 변환해서 만듭니다.
 
 ```bash
-uv run mlx_lm.convert --hf-path models/sllm_merged --mlx-path models/sllm_mlx_4bit -q --q-bits 4 --q-group-size 64
+uv run mlx_lm.convert --hf-path <병합한 4B 폴더> --mlx-path models/v4/sllm_4b_lora_mlx_4bit -q --q-bits 4 --q-group-size 64
+uv run mlx_lm.convert --hf-path <병합한 14B 폴더> --mlx-path models/v4/sllm_14b_mlx_4bit -q --q-bits 4 --q-group-size 64
+```
+
+이전 v1(근로기준법 130조문) 구성은 `LAWBOT_PROFILE=v1`로 실행하며, 아래 파일을 씁니다. 조문·평가 데이터(`data/`)와 평가 결과(`results/`)는 저장소에 포함되어 있고, 평가 스크립트(`lawbot-eval` 등)는 v1 파일을 씁니다.
+
+```
+models/
+├── emb_final_v3_fp16/     # v1 튜닝 임베딩
+├── sllm_mlx_4bit/         # v1 튜닝 sLLM = v1 Fast
+└── qwen3_14b_mlx_4bit/    # Qwen3-14B 튜닝 전 = v1 Pro (system: data/system_v1_concise.txt)
+```
+
+파일이 웹앱 설정과 맞는지는 모델을 올리지 않고 확인할 수 있습니다. 문제가 있는 항목은 `FAIL`로 표시됩니다.
+
+```bash
+uv run python -m lawbot.check_deploy        # 현재 프로필 (기본 v4, LAWBOT_PROFILE=v1이면 v1)
+uv run python -m lawbot.versions            # 설치된 패키지 버전·맥 사양
 ```
 
 **웹앱 실행**
@@ -149,13 +171,47 @@ set -gx LAWBOT_PW (security find-generic-password -a lawbot -s lawbot -w)
 
 fish의 `set -Ux`(유니버설 변수)는 값을 `~/.config/fish/fish_variables`에 평문으로 저장하므로 비밀번호에 쓰지 마세요.
 
+v4 파일(조문 CSV, 4B system)이 없으면 모델을 올리기 전에 실행을 거부하고 안내합니다. v4 준비 전에는 v1으로 실행합니다.
+
+```fish
+set -gx LAWBOT_PROFILE v1
+uv run lawbot-app
+set -e LAWBOT_PROFILE        # 다시 기본(v4)으로
+```
+
+화면에서 답변 모델을 고릅니다. 두 모델은 같은 검색 결과(상위 3개 조문)를 참고합니다.
+
+| 모델 | 구성 (v4 기본 경로) | 기본 답변 형식 |
+| --- | --- | --- |
+| Lawbot Fast | Qwen3-4B + LoRA (`models/v4/sllm_4b_lora_mlx_4bit`) | 전체: `【결론】【근거 조문】【설명】【참고】` 4항목 |
+| Lawbot Pro | Qwen3-14B QLoRA (`models/v4/sllm_14b_mlx_4bit`), 간결형 system(`data/v4/system_v4_concise.txt`) | 간결: 결론 + `근거: 실제 인용 조문`. 답변이 더 느림 |
+
+모델을 바꾸면 답변 형식도 그 모델의 기본값으로 바뀌고, 형식은 직접 다시 고를 수 있습니다. 화면 아래 측정 줄에 검색·모델 전환·첫 토큰·첫 글자·생성 속도·완료 시간이 표시됩니다. Pro 폴더나 Pro system 파일이 없으면 Fast만으로 실행되고, Pro를 고르면 오류 안내가 나옵니다.
+
+모델 경로나 메모리 설정을 바꿀 때는 실행 전에 환경 변수를 지정합니다(fish 예시, 상대 경로는 저장소 최상위 기준).
+
+```fish
+set -gx LAWBOT_PRO_PATH models/v4/qwen3_14b_qlora_mlx_4bit   # Pro 모델 폴더 이름이 다른 경우
+set -gx LAWBOT_MAX_RESIDENT 1     # 메모리가 부족하면 선택한 모델만 올림 (바꿀 때 다시 불러옴)
+uv run lawbot-app
+set -e LAWBOT_MAX_RESIDENT        # 기본값(2개 동시 상주)으로 되돌리기
+```
+
 웹앱은 이 맥에서만 쓰는 로컬 전용입니다. 서버는 `127.0.0.1:7860`에서만 열리고, 브라우저에서 `http://127.0.0.1:7860`으로 접속해 로그인합니다. 같은 네트워크의 다른 기기에서는 접속할 수 없으며, Gradio 공개 공유 링크(`share`)도 만들지 않습니다. 주소·포트·공유 설정은 `GRADIO_SERVER_NAME` 같은 환경 변수로 바꿀 수 없습니다(`src/lawbot/security.py`).
 
 | 변수 | 필수 | 용도 |
 | --- | --- | --- |
 | `LAWBOT_USER` | 예 | 로그인 사용자명 (앞뒤 공백 제거 후 비어 있으면 안 됨) |
 | `LAWBOT_PW` | 예 | 로그인 비밀번호 (빈 값·공백만 있는 값은 안 됨) |
-| `LLM_PATH` | 아니요 | 다른 sLLM 폴더 사용 (예: `models/sllm_mlx_8bit`) |
+| `LAWBOT_PROFILE` | 아니요 | `v4`(기본, 7개 법률 415조문) 또는 `v1`(근로기준법 130조문, 이전 구성) |
+| `LAWBOT_FAST_PATH` | 아니요 | Fast(4B) 모델 폴더. 기본 v4 `models/v4/sllm_4b_lora_mlx_4bit`, v1 `models/sllm_mlx_4bit` |
+| `LAWBOT_PRO_PATH` | 아니요 | Pro(14B) 모델 폴더. 기본 v4 `models/v4/sllm_14b_mlx_4bit`, v1 `models/qwen3_14b_mlx_4bit` |
+| `LAWBOT_PRO_SYSTEM` | 아니요 | Pro 간결형 system 파일. 기본 v4 `data/v4/system_v4_concise.txt`, v1 `data/system_v1_concise.txt` |
+| `LAWBOT_V4_ARTICLES` / `LAWBOT_V4_EMB` / `LAWBOT_V4_SYSTEM` | 아니요 | v4 조문 CSV / 임베딩 폴더 / 4B system 파일 (기본 `data/v4/articles_v4.csv`, `models/v4/emb_v4_fp16`, `data/v4/system_v4.txt`) |
+| `LAWBOT_EMB` | 아니요 | v1 검색 임베딩 폴더 (기본 `models/emb_final_v3_fp16`) |
+| `LAWBOT_MAX_RESIDENT` | 아니요 | 동시에 올려 둘 답변 모델 수. `2`(기본, Fast·Pro 모두 상주, 전환 대기 없음) 또는 `1`(선택한 모델만, 바꿀 때 다시 불러옴) |
+| `LAWBOT_EARLY_STOP` | 아니요 | `1`이면 간결 형식에서 【설명】이 시작될 때 생성을 멈춤 (기본 꺼짐, 검증 전) |
+| `LLM_PATH` | 아니요 | 평가 스크립트(`eval_oos`·`eval_refusal`)가 쓸 sLLM 폴더 (예: `models/sllm_mlx_8bit`). 웹앱은 쓰지 않음 |
 
 `LAWBOT_USER`와 `LAWBOT_PW`가 하나라도 없거나 비어 있으면 모델을 불러오기 전에 `RuntimeError`로 실행을 거부합니다. 인증 없이 서버를 띄우는 방법은 없습니다.
 
@@ -183,7 +239,7 @@ uv run python -m lawbot.eval_refusal   # 무관한 조문 / 비슷한 조문만 
 uv run python -m lawbot.eval_refusal --hard   # 근거 없이 주장했던 81건을 같은 참고 조문으로 다시 → results/refusal_hard_4bit.csv
 ```
 
-문항별 결과는 `results/`에 저장됩니다. 마지막 인자로 파일 이름을 바꿀 수 있습니다(예: `uv run python -m lawbot.eval_oos oos_v3_4bit.csv`). `oos_v1_4bit.csv`(82문항)와 `refusal_v1_4bit.csv`는 README 수치와 테스트의 기준선이므로 기본 설정으로는 덮어쓰지 않습니다. `eval_oos`와 `eval_refusal`은 웹앱처럼 `LLM_PATH`의 모델을 씁니다.
+문항별 결과는 `results/`에 저장됩니다. 마지막 인자로 파일 이름을 바꿀 수 있습니다(예: `uv run python -m lawbot.eval_oos oos_v3_4bit.csv`). `oos_v1_4bit.csv`(82문항)와 `refusal_v1_4bit.csv`는 README 수치와 테스트의 기준선이므로 기본 설정으로는 덮어쓰지 않습니다. `eval_oos`와 `eval_refusal`은 `LLM_PATH`의 모델을 씁니다.
 
 **개선 전후 비교**
 
@@ -398,18 +454,40 @@ uv sync
 
 **Models**
 
-Trained models are too large for the repository. Place them as follows. The article and evaluation data (`data/`) and evaluation results (`results/`) are included in the repository.
+Trained models are too large for the repository. The web app's default profile is **v4** (415 articles from 7 labor laws). Place the files as follows. The names are not final yet; if yours differ, set the variables in the table below.
+
+```
+data/v4/
+├── articles_v4.csv          # 415 current articles from 7 laws (columns: law, article_id, title, deleted, text)
+├── system_v4.txt            # system prompt used to train the v4 4B model (four-part format)
+└── system_v4_concise.txt    # system prompt used to train the 14B QLoRA model (concise)
+models/v4/
+├── emb_v4_fp16/             # v4 fine-tuned embedding (sentence-transformers format, fp16)
+├── sllm_4b_lora_mlx_4bit/   # Qwen3-4B + v4 LoRA (MLX 4-bit) = web app Lawbot Fast
+└── sllm_14b_mlx_4bit/       # Qwen3-14B QLoRA (MLX 4-bit) = web app Lawbot Pro (optional; without it only Fast is available)
+```
+
+To build the MLX models, convert the merged Hugging Face models:
+
+```bash
+uv run mlx_lm.convert --hf-path <merged 4B folder> --mlx-path models/v4/sllm_4b_lora_mlx_4bit -q --q-bits 4 --q-group-size 64
+uv run mlx_lm.convert --hf-path <merged 14B folder> --mlx-path models/v4/sllm_14b_mlx_4bit -q --q-bits 4 --q-group-size 64
+```
+
+The previous v1 setup (130 Labor Standards Act articles) runs with `LAWBOT_PROFILE=v1` and uses the files below. The article and evaluation data (`data/`) and evaluation results (`results/`) are included in the repository; the evaluation scripts (`lawbot-eval` and others) use the v1 files.
 
 ```
 models/
-├── emb_final_v3_fp16/     # fine-tuned embedding (sentence-transformers format, fp16)
-└── sllm_mlx_4bit/         # fine-tuned SLM (MLX 4-bit)
+├── emb_final_v3_fp16/     # v1 fine-tuned embedding
+├── sllm_mlx_4bit/         # v1 fine-tuned SLM = v1 Fast
+└── qwen3_14b_mlx_4bit/    # base Qwen3-14B = v1 Pro (system: data/system_v1_concise.txt)
 ```
 
-To build the MLX model, convert the merged Hugging Face model:
+To check that the files match the web app settings without loading any model (problems are marked `FAIL`):
 
 ```bash
-uv run mlx_lm.convert --hf-path models/sllm_merged --mlx-path models/sllm_mlx_4bit -q --q-bits 4 --q-group-size 64
+uv run python -m lawbot.check_deploy        # current profile (default v4; v1 if LAWBOT_PROFILE=v1)
+uv run python -m lawbot.versions            # installed package versions and Mac specs
 ```
 
 **Run the web app**
@@ -437,13 +515,47 @@ set -gx LAWBOT_PW (security find-generic-password -a lawbot -s lawbot -w)
 
 Do not use fish's `set -Ux` (universal variables) for the password: it stores the value in plain text in `~/.config/fish/fish_variables`.
 
+If the v4 files (article CSV, 4B system prompt) are missing, the app refuses to start before loading any model and says what is missing. Until v4 is ready, run v1:
+
+```fish
+set -gx LAWBOT_PROFILE v1
+uv run lawbot-app
+set -e LAWBOT_PROFILE        # back to the default (v4)
+```
+
+Choose the answer model in the UI. Both models use the same retrieval results (top 3 articles).
+
+| Model | Setup (v4 default paths) | Default answer format |
+| --- | --- | --- |
+| Lawbot Fast | Qwen3-4B + LoRA (`models/v4/sllm_4b_lora_mlx_4bit`) | Full: four parts (Conclusion, Cited articles, Explanation, Notes) |
+| Lawbot Pro | Qwen3-14B QLoRA (`models/v4/sllm_14b_mlx_4bit`) with a concise system prompt (`data/v4/system_v4_concise.txt`) | Concise: conclusion + `근거:` the articles actually cited. Slower |
+
+Switching models also switches the answer format to that model's default; you can change the format afterwards. A status line under the chat shows retrieval, model switch, first token, first character, generation speed and total time. If the Pro folder or Pro system prompt is missing, the app runs with Fast only and shows an error when Pro is selected.
+
+To change model paths or memory settings, set environment variables before launching (fish example; relative paths are resolved from the repository root):
+
+```fish
+set -gx LAWBOT_PRO_PATH models/v4/qwen3_14b_qlora_mlx_4bit   # if the Pro folder has another name
+set -gx LAWBOT_MAX_RESIDENT 1     # low memory: keep only the selected model (reloads on switch)
+uv run lawbot-app
+set -e LAWBOT_MAX_RESIDENT        # back to the default (both models resident)
+```
+
 The web app is local-only, for use on this Mac. The server listens only on `127.0.0.1:7860`; open `http://127.0.0.1:7860` in a browser and log in. Other devices on the network cannot connect, and no public Gradio share link is created. The address, port and share setting cannot be changed through environment variables such as `GRADIO_SERVER_NAME` (`src/lawbot/security.py`).
 
 | Variable | Required | Purpose |
 | --- | --- | --- |
 | `LAWBOT_USER` | Yes | Login username (must not be empty after trimming whitespace) |
 | `LAWBOT_PW` | Yes | Login password (must not be empty or whitespace only) |
-| `LLM_PATH` | No | Use a different SLM folder (e.g. `models/sllm_mlx_8bit`) |
+| `LAWBOT_PROFILE` | No | `v4` (default, 415 articles from 7 laws) or `v1` (130 Labor Standards Act articles, previous setup) |
+| `LAWBOT_FAST_PATH` | No | Fast (4B) model folder. Default v4 `models/v4/sllm_4b_lora_mlx_4bit`, v1 `models/sllm_mlx_4bit` |
+| `LAWBOT_PRO_PATH` | No | Pro (14B) model folder. Default v4 `models/v4/sllm_14b_mlx_4bit`, v1 `models/qwen3_14b_mlx_4bit` |
+| `LAWBOT_PRO_SYSTEM` | No | Pro concise system prompt file. Default v4 `data/v4/system_v4_concise.txt`, v1 `data/system_v1_concise.txt` |
+| `LAWBOT_V4_ARTICLES` / `LAWBOT_V4_EMB` / `LAWBOT_V4_SYSTEM` | No | v4 article CSV / embedding folder / 4B system prompt file (defaults `data/v4/articles_v4.csv`, `models/v4/emb_v4_fp16`, `data/v4/system_v4.txt`) |
+| `LAWBOT_EMB` | No | v1 retrieval embedding folder (default `models/emb_final_v3_fp16`) |
+| `LAWBOT_MAX_RESIDENT` | No | Answer models kept in memory: `2` (default, Fast and Pro both resident, no switch wait) or `1` (selected model only, reloads on switch) |
+| `LAWBOT_EARLY_STOP` | No | `1` stops generation when 【설명】 starts in the concise format (off by default, not yet validated) |
+| `LLM_PATH` | No | SLM folder used by the evaluation scripts (`eval_oos`, `eval_refusal`), e.g. `models/sllm_mlx_8bit`. Not used by the web app |
 
 If either `LAWBOT_USER` or `LAWBOT_PW` is missing or empty, the app refuses to start with a `RuntimeError` before loading any model. There is no way to run the server without a login.
 
@@ -487,7 +599,7 @@ With `--baseline`, it shows the baseline run side by side and warns about side e
 | False refusal rate (retrieval hits) | rises by more than 0.01 |
 | In-scope control false refusals / total score | worsens by more than 0.05 (1 of 20) |
 
-See the Korean section above for the full command sequence: first complete the baseline with the current model (Recall@3, controls, 102 out-of-scope questions, hard-case re-evaluation), then run the same evaluations for a new model under different file names and compare with `--baseline v1_4bit_full --strict`. `eval_oos` and `eval_refusal` use the model in `LLM_PATH`, like the web app.
+See the Korean section above for the full command sequence: first complete the baseline with the current model (Recall@3, controls, 102 out-of-scope questions, hard-case re-evaluation), then run the same evaluations for a new model under different file names and compare with `--baseline v1_4bit_full --strict`. `eval_oos` and `eval_refusal` use the model in `LLM_PATH`.
 
 `metrics.csv` already holds two rows built from existing results: `v1_4bit` (baseline) and `v1_4bit_hybrid` (the failed hybrid retrieval experiment). Hybrid retrieval raised out-of-scope refusal from 0.671 to 0.683, but its forced-answer rate also rose from 0.256 to 0.268, so higher refusal alone was not an improvement.
 

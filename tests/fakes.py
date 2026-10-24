@@ -9,9 +9,11 @@ HITS = [{'article_id': '제26조', 'title': '해고의 예고', 'score': 0.91234
 
 class FakeRetriever:
     created = 0
+    ids = [h['article_id'] for h in HITS]
 
-    def __init__(self):
+    def __init__(self, *args, **kw):    # service.load_app이 넘기는 경로·설정을 기록
         FakeRetriever.created += 1
+        self.args = (args, kw)
 
     def search(self, query, k=3):
         self.query = query
@@ -21,9 +23,9 @@ class FakeLLM:
     created = 0
     chunks = ['【결론】', '예고해야', ' 합니다.']
 
-    def __init__(self, path):
+    def __init__(self, path, **kw):
         FakeLLM.created += 1
-        self.path = path
+        self.path, self.kw = path, kw
 
     def stream(self, question, hits):
         self.args = (question, hits)

@@ -11,7 +11,7 @@ import lawbot.retriever as retriever_mod
 import lawbot.service as service
 from conftest import set_auth
 from fakes import HITS, FakeLLM, FakeRetriever
-from lawbot.llm import LLM, SYSTEM, build_prompt
+from lawbot.llm import LLM, SYSTEM, build_prompt, build_prompt_v4
 from lawbot.paths import ARTICLES, EVAL
 
 # ---- 검색 ----
@@ -124,6 +124,19 @@ def test_llm_stream_failure_propagates(fake_llm):
     with pytest.raises(RuntimeError, match='generation failed'):
         ''.join(r.text for r in m.stream('질문', [{'article_id': '제1조'}]))
 
+def test_llm_v4_prompt_and_system(fake_llm, env):
+    # v4: 프로필의 system 문자열과 법령명이 붙은 참고 조문을 쓴다 (v1 기본값은 위 테스트)
+    _, tok, _ = fake_llm
+    m = LLM('models/fake', system='V4 SYSTEM', prompt_style='v4')
+    hits = [{'law': '최저임금법', 'article_id': '제6조', 'title': '최저임금의 효력',
+             'doc': '최저임금법 제6조(최저임금의 효력)\n① 사용자는 지급하여야 한다. <개정 2020.5.26>'}]
+    list(m.stream('최저임금?', hits))
+    messages, _ = tok.calls[-1]
+    assert messages[0] == {'role': 'system', 'content': 'V4 SYSTEM'}
+    assert messages[1]['content'] == ('[참고 조문]\n[1] 최저임금법 제6조(최저임금의 효력)\n① 사용자는 지급하여야 한다.'
+                                      '\n\n[질문]\n최저임금?')
+    assert messages[1]['content'] == build_prompt_v4(hits, '최저임금?')
+
 def test_llm_load_failure_propagates(env):
     def missing(path):
         raise FileNotFoundError(path)
@@ -197,9 +210,11 @@ def test_import_does_not_check_auth_or_load_models(env):
         sys.modules.pop('lawbot.app', None)
 
 def test_build_demo_with_fakes_needs_no_auth(app):
-    demo = app.build_demo(FakeRetriever(), FakeLLM('models/fake'))
+    lawbot = service.load_app()
+    FakeRetriever.created = FakeLLM.created = 0
+    demo = app.build_demo(lawbot)
     assert isinstance(demo, app.gr.Blocks) and demo.title == '근로기준법 챗봇'
-    assert FakeRetriever.created == 1 and FakeLLM.created == 1   # 넘겨준 객체 외에 모델을 만들지 않음
+    assert FakeRetriever.created == 0 and FakeLLM.created == 0   # 넘겨준 객체 외에 모델을 만들지 않음
     assert app.launched == []
 
 def test_app_refuses_to_start_without_auth_before_loading_models(app):
@@ -217,36 +232,39 @@ def test_app_launches_local_only(app, env):
     assert demo.title == '근로기준법 챗봇'
     assert launched == {'server_name': '127.0.0.1', 'server_port': 7860,
                         'auth': ('tester', 'test-only-pw'), 'share': False}
-    assert FakeRetriever.created == 1 and FakeLLM.created == 1
+    assert FakeRetriever.created == 1 and FakeLLM.created == 2   # 검색기 1개 + Fast·Pro (기본 2개 상주)
 
 def test_app_loads_models_via_service(app, env):
-    # main은 service.load_models로 불러온 모델(LLM_PATH 반영)을 화면에 넘긴다
+    # main은 service.load_app으로 불러온 검색기·모델(LAWBOT_FAST_PATH 반영)을 화면에 넘긴다
     set_auth(env)
-    env.setenv('LLM_PATH', 'models/sllm_mlx_8bit')
-    build, models = app.build_demo, []
-    env.setattr(app, 'build_demo', lambda r, m: models.append((r, m)) or build(r, m))
+    env.setenv('LAWBOT_FAST_PATH', 'models/sllm_mlx_8bit')
+    build, apps = app.build_demo, []
+    env.setattr(app, 'build_demo', lambda a: apps.append(a) or build(a))
     app.main()
-    [(r, m)] = models
-    assert isinstance(r, FakeRetriever) and m.path == 'models/sllm_mlx_8bit'
+    [a] = apps
+    assert isinstance(a.retriever, FakeRetriever)
+    assert a.models.loaded['fast'].path == service.deploy.paths.ROOT / 'models/sllm_mlx_8bit'
     assert len(app.launched) == 1
 
 def test_chat_streams_answer_with_sources(app):
-    r, m = FakeRetriever(), FakeLLM('models/fake')
-    chat = app.make_chat(r, m)
+    lawbot = service.load_app()
+    chat = app.make_chat(lawbot)
     assert chat.__name__ == 'chat'                  # Gradio API 이름(/gradio_api/call/chat)
-    steps = list(chat('수습 기간에도 해고 예고?', []))
-    assert [t for t, _ in steps] == ['【결론】', '【결론】예고해야', '【결론】예고해야 합니다.']
+    steps = list(chat('수습 기간에도 해고 예고?', [], 'fast', 'full'))
+    # 토큰마다 누적 답변, 마지막은 생성 완료 후 측정값(완료 시간·tok/s)을 채운 같은 답변
+    assert [t for t, _, _ in steps] == ['【결론】', '【결론】예고해야', '【결론】예고해야 합니다.', '【결론】예고해야 합니다.']
     src = steps[-1][1]
-    assert all(s == src for _, s in steps)          # 근거 조문 칸은 답변 내내 같음
+    assert all(s == src for _, s, _ in steps)       # 근거 조문 칸은 답변 내내 같음
     assert '**제26조 해고의 예고** · 유사도 0.912' in src
     assert '30일 전에 예고' in src
     assert src.count('제26조 해고의 예고') == 1     # 조문 본문 첫 줄(제목 줄)은 중복 표시 안 함
-    assert r.query == '수습 기간에도 해고 예고?'
-    assert m.args == ('수습 기간에도 해고 예고?', HITS)
+    assert lawbot.retriever.query == '수습 기간에도 해고 예고?'
+    assert lawbot.models.loaded['fast'].args == ('수습 기간에도 해고 예고?', HITS)
+    assert steps[-1][2].startswith('Lawbot Fast · 검색') and '완료' in steps[-1][2]
 
 def test_chat_generation_failure_is_not_hidden(app):
     # 생성 실패를 빈 답변이나 부분 답변으로 끝내지 않고 예외로 올린다 (Gradio가 오류로 표시)
     FakeLLM.chunks = ['【결론】', RuntimeError('generation failed')]
-    chat = app.make_chat(FakeRetriever(), FakeLLM('models/fake'))
+    chat = app.make_chat(service.load_app())
     with pytest.raises(RuntimeError, match='generation failed'):
-        list(chat('질문', []))
+        list(chat('질문', [], 'fast', 'full'))

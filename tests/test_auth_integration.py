@@ -33,7 +33,7 @@ def server(tmp_path_factory):
     tmp = tmp_path_factory.mktemp('auth_server')
     port, calls, log = free_port(), tmp / 'chat_calls.txt', tmp / 'server.log'
     env = {k: v for k, v in os.environ.items() if k not in ENV_KEYS}
-    env.update(LAWBOT_USER=USER, LAWBOT_PW=PW, GRADIO_ANALYTICS_ENABLED='False')
+    env.update(LAWBOT_USER=USER, LAWBOT_PW=PW, LAWBOT_PROFILE='v1', GRADIO_ANALYTICS_ENABLED='False')
     url = f'http://127.0.0.1:{port}'
     with log.open('w') as out:
         proc = subprocess.Popen([sys.executable, str(SERVER), str(port), str(calls)],
@@ -72,9 +72,10 @@ def chat_calls(server):
 def login(c, user, pw):
     return c.post('/login', data={'username': user, 'password': pw})
 
-def ask(c, question):
-    """chat API 호출. 성공하면 마지막 출력 (답변, 대화창, 근거 조문)을, 실패하면 응답 객체를 돌려준다"""
-    r = c.post('/gradio_api/call/chat', json={'data': [question]})
+def ask(c, question, model='fast', fmt='full'):
+    """chat API 호출. 성공하면 마지막 출력 (답변, 대화창, 근거 조문, 측정)을, 실패하면 응답 객체를 돌려준다
+    입력은 [질문, 모델 key, 답변 형식] (Gradio 6.30은 빠진 입력을 기본값으로 채우지 않음)"""
+    r = c.post('/gradio_api/call/chat', json={'data': [question, model, fmt]})
     if r.status_code != 200:
         return r
     events = c.get(f"/gradio_api/call/chat/{r.json()['event_id']}").text
@@ -91,7 +92,7 @@ def assert_locked_out(c, server):
     for path in PROTECTED_GET:
         assert c.get(path).status_code == 401, path
     for path in PROTECTED_POST:
-        assert c.post(path, json={'data': [QUESTION], 'fn_index': 0}).status_code == 401, path
+        assert c.post(path, json={'data': [QUESTION, 'fast', 'full'], 'fn_index': 0}).status_code == 401, path
     assert len(chat_calls(server)) == before      # chat 함수가 실행되지 않았음
 
 # A. 로그인 없이 접근하면 차단
@@ -130,7 +131,10 @@ def test_valid_login_can_use_chatbot(client, server):
     assert cfg.status_code == 200 and cfg.json()['title'] == '근로기준법 챗봇'
 
     before = len(chat_calls(server))
-    answer, _, sources = ask(client, QUESTION)
+    answer, _, sources, stats = ask(client, QUESTION)
     assert answer == '【결론】예고해야 합니다.'
     assert '제26조 해고의 예고' in sources
-    assert chat_calls(server)[before:] == [QUESTION]
+    assert stats.startswith('Lawbot Fast')
+    answer, _, _, stats = ask(client, QUESTION, 'pro', 'concise')   # 같은 로그인으로 모델·형식 선택
+    assert answer.startswith('예고해야 합니다.') and stats.startswith('Lawbot Pro')
+    assert chat_calls(server)[before:] == [QUESTION, QUESTION]
