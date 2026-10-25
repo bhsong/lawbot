@@ -20,6 +20,7 @@ from lawbot.service import ask, load_app
 
 # 평가 전용 데이터(README '평가 데이터 사용 제한'): 형식 선택에 쓰지 않는다
 EVAL_ONLY = {DATA / f for f in ('labor_eval_keywords.csv', 'oos_eval.csv', 'scope_controls.csv', 'refusal_hard_cases.csv')}
+EVAL_ONLY |= {DATA / 'v4' / f for f in ('qa_full_v4.csv', 'split_v4.csv')}   # v4 test 문항이 들어 있음 (val은 따로 뽑아 쓰기)
 PENALTY = ('벌칙', '벌금', '징역', '과태료')
 
 def judge(view, raw, hits, row, finish, sec_to_view):

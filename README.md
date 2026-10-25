@@ -258,7 +258,25 @@ uv run pytest -m models    # 실제 모델 테스트 (models/ 필요, 기본 실
 
 GitHub Actions(`.github/workflows/ci.yml`)가 `main` 푸시와 모든 pull request에서 macOS(Apple Silicon) 러너로 `uv sync --locked`, 문법 검사(`compileall`), `uv run pytest`를 실행합니다. 비밀정보는 쓰지 않으며, `-m models` 테스트와 평가 스크립트는 CI에서 실행하지 않습니다. 결과는 PR의 체크와 Actions 로그, `pytest-report` 아티팩트에서 볼 수 있습니다.
 
-**평가 실행**
+**평가 실행 (v4 웹앱 구성)**
+
+`lawbot.eval_v4`가 `.env` 구성 그대로(v4 검색 415조문 + 리랭커 + 답변 모델) 웹앱과 같은 경로로 평가합니다. 문항은 `data/v4/qa_full_v4.csv`·`split_v4.csv`의 test 2,075문항(근로기준법 A_lsa 650 + 신규 6개 법률 B_newlaw 1,425)입니다. 결과는 `results/v4/<단계>_<tag>.csv`에 문항마다 바로 쓰므로 중간에 멈춰도 같은 명령으로 이어집니다.
+
+```zsh
+uv run python -m lawbot.eval_v4 retrieval   # test 2,075 전체: 임베딩 Recall@1·3·10, 리랭킹 Recall@1·3·MRR@3
+uv run python -m lawbot.eval_v4 answers     # 고정 시드 표본 200 (A_lsa·B_newlaw 100씩): 인용·거짓 거절, A_lsa는 키워드 채점
+uv run python -m lawbot.eval_v4 oos         # 범위 밖 102 (7개 법률 출처 27문항은 범위 안으로 재분류) + 대조군 20
+uv run python -m lawbot.eval_v4 refusal     # 표본 중 100문항에 다른 법률 조문 / 비슷한 조문만 줄 때 거절률
+uv run python -m lawbot.eval_v4 summary --tag pro_concise_rr   # 지표 표 → results/v4/summary_<tag>.csv
+uv run python -m lawbot.eval_v4 all         # 네 단계를 차례로 (오래 걸림)
+```
+
+- tag 기본값은 `<모델>_<형식>_<rr|emb>`입니다(예: `pro_concise_rr`). `--fmt full`이면 4항목 system으로 생성합니다.
+- 인용은 법령명까지 맞아야 정답입니다(`근로기준법 제26조`와 `최저임금법 제26조`를 구분). 법령명 없이 이어 쓴 번호(`근로기준법 제26조, 제27조`)는 앞 법령으로 봅니다.
+- 2026.4.7 근로기준법 개정으로 임금체불 벌칙이 제109조(3년·3천만원)에서 제107조(5년·5천만원)로 옮겨졌습니다. v4 정답은 개정 후 기준이고, 키워드가 개정 전 형량인 2문항(Q2443·Q2453)만 평가 때 개정 후 형량으로 바꿉니다(`eval_v4.KEYWORD_FIX`, 평가 파일은 그대로).
+- 범위 밖 질문 중 남녀고용평등법·최저임금법·퇴직급여법·기간제법·임금채권보장법·파견법이 출처인 27문항은 이제 범위 안이므로 거절하면 오답, 그 법을 인용하면 정답으로 봅니다. 나머지 75문항만 거절률을 잽니다.
+
+아래는 이전 v1(근로기준법 130조문, 4B) 평가 스크립트입니다. README 성능 수치와 `results/`의 기준선이 이 결과입니다.
 
 ```bash
 uv run lawbot-eval --n 0      # 검색 성능만 (650문항)
@@ -345,7 +363,7 @@ src/lawbot/
   - 답변은 거절, 안내(`refer_lsa`에 적힌, 다른 법에 맡기는 조문만 인용), 억지적용(그 밖의 근로기준법 조문으로 답함), 미인용(거절 문구도 인용도 없음)으로 판정합니다. `near_lsa`는 README 수치의 기준이고, `near_lsa_v2`는 누락을 보완한 표시입니다.
 - **범위 안 대조군**: 다른 노동법 질문과 닮았지만 근로기준법으로 답해야 하는 테스트 문항 20개입니다(`data/scope_controls.csv`, `twin_oos`에 짝 문항). 범위 밖 거절을 늘리는 개선이 이 문항들까지 거절하게 만들지 않는지 확인합니다.
 - **근거 없는 주장 사례**: `refusal_v1_4bit.csv`에서 거절하지 않은 86건을 억지적용 77, 지어냄 4, 근거밖_정답 2, 결론타당 3으로 분류했습니다(`data/refusal_hard_cases.csv`). 억지적용·지어냄 81건은 `eval_refusal --hard`로 다시 평가합니다.
-- **평가 데이터 사용 제한**: `data/labor_eval_keywords.csv`, `data/oos_eval.csv`, `data/scope_controls.csv`, `data/refusal_hard_cases.csv`는 평가 전용입니다. 모델 학습이나 설정 선택에 쓰지 마세요.
+- **평가 데이터 사용 제한**: `data/labor_eval_keywords.csv`, `data/oos_eval.csv`, `data/scope_controls.csv`, `data/refusal_hard_cases.csv`와 `data/v4/split_v4.csv`의 test 문항은 평가 전용입니다. 모델 학습이나 설정 선택에 쓰지 마세요.
 - **`results/` 안내**: 채점 전 모델 원본 출력과 문항별 점수이며, 점수가 낮은 답변은 법적으로 틀린 내용을 포함합니다.
 
 ### 실패한 실험
@@ -609,7 +627,21 @@ uv run pytest -m models    # real-model tests (needs models/, excluded by defaul
 
 GitHub Actions (`.github/workflows/ci.yml`) runs `uv sync --locked`, a syntax check (`compileall`) and `uv run pytest` on a macOS (Apple Silicon) runner for every push to `main` and every pull request. It uses no secrets; `-m models` tests and the evaluation scripts are not run in CI. Results appear as PR checks, in the Actions log and as the `pytest-report` artifact.
 
-**Run the evaluation**
+**Run the evaluation (v4 web app setup)**
+
+`lawbot.eval_v4` evaluates the `.env` setup (v4 retrieval over 415 articles + reranker + answer model) through the same path as the web app, on the 2,075 test questions in `data/v4/qa_full_v4.csv` / `split_v4.csv` (650 Labor Standards Act + 1,425 from the six added laws). Results are appended per question to `results/v4/<stage>_<tag>.csv`, so an interrupted run resumes with the same command.
+
+```zsh
+uv run python -m lawbot.eval_v4 retrieval   # all 2,075: embedding Recall@1/3/10, reranked Recall@1/3, MRR@3
+uv run python -m lawbot.eval_v4 answers     # fixed-seed sample of 200 (100 per group): citation, false refusal, keyword scoring for the 650 set
+uv run python -m lawbot.eval_v4 oos         # 102 out-of-scope (27 from the seven laws reclassified as in scope) + 20 controls
+uv run python -m lawbot.eval_v4 refusal     # 100 sampled questions with only other-law / similar articles: refusal rate
+uv run python -m lawbot.eval_v4 summary --tag pro_concise_rr
+```
+
+Citations count only with the right law name. The 2026-04-07 amendment moved the wage-arrears penalty from Art. 109 (3 years / 30M won) to Art. 107 (5 years / 50M won); the v4 gold labels follow the amended law, and the two keyword rows that still expected the old penalty (Q2443, Q2453) are updated at scoring time (`eval_v4.KEYWORD_FIX`; the data file is unchanged).
+
+The previous v1 evaluation scripts (130 articles, 4B), which produced the README numbers and the baselines in `results/`:
 
 ```bash
 uv run lawbot-eval --n 0      # retrieval only (650 questions)
@@ -676,7 +708,7 @@ src/lawbot/
   - Answers are classified as refusal, referral (cites only an article in `refer_lsa` that delegates to another law), forced (answers with any other Labor Standards Act article), or uncited (neither a refusal phrase nor a citation). `near_lsa` is the basis of the README numbers; `near_lsa_v2` fills in missing labels.
 - **In-scope controls**: 20 test questions that resemble other-labor-law questions but must be answered under the Labor Standards Act (`data/scope_controls.csv`, paired via `twin_oos`). They check that raising out-of-scope refusal does not make the model refuse these too.
 - **Unsupported-claim cases**: The 86 non-refusals in `refusal_v1_4bit.csv` are labeled forced 77, fabricated 4, correct-but-unsupported 2 and reasonable 3 (`data/refusal_hard_cases.csv`). The 81 forced and fabricated cases are re-evaluated with `eval_refusal --hard`.
-- **Evaluation-only data**: `data/labor_eval_keywords.csv`, `data/oos_eval.csv`, `data/scope_controls.csv` and `data/refusal_hard_cases.csv` are for evaluation only. Do not use them for training or model selection.
+- **Evaluation-only data**: `data/labor_eval_keywords.csv`, `data/oos_eval.csv`, `data/scope_controls.csv`, `data/refusal_hard_cases.csv` and the test questions in `data/v4/split_v4.csv` are for evaluation only. Do not use them for training or model selection.
 - **About `results/`**: These are raw model outputs with per-question scores. Low-scoring answers contain legally incorrect statements.
 
 ### Failed experiments
