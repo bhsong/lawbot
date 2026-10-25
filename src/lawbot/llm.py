@@ -1,4 +1,5 @@
 # src/lawbot/llm.py
+import copy
 import re
 import pandas as pd
 from mlx_lm import load, stream_generate
@@ -30,11 +31,67 @@ def build_prompt_v4(hits, question):
               for i, h in enumerate(hits, 1)]
     return '[참고 조문]\n' + '\n\n'.join(blocks) + f'\n\n[질문]\n{question}'
 
+THINK = ('<think>', '</think>')     # Qwen3 계열 생각 블록 표시
+
+def think_markers(tok):
+    """토크나이저에 Qwen식 생각 토큰이 있으면 (시작, 끝), 없으면 None (mlx_lm TokenizerWrapper가 어휘에서 찾은 값)"""
+    pair = (getattr(tok, 'think_start', None), getattr(tok, 'think_end', None))
+    return pair if pair == THINK else None
+
+def close_thinking(prompt, markers):
+    """enable_thinking=False를 무시하는 chat template 대비: 프롬프트 끝에 빈 생각 블록이 없으면 직접 붙인다
+    (Qwen3 템플릿이 생각을 끌 때 넣는 '<think>\\n\\n</think>\\n\\n'과 같은 문자열). 이미 닫혀 있으면 그대로"""
+    if markers is None:
+        return prompt
+    start, end = markers
+    tail = prompt.rstrip()
+    if tail.endswith(end):
+        return prompt
+    if tail.endswith(start):                 # 템플릿이 생각을 강제로 연 경우: 비운 채 닫는다
+        return tail + f'\n\n{end}\n\n'
+    return prompt + f'{start}\n\n{end}\n\n'
+
+def _with_text(r, text):
+    r = copy.copy(r)
+    r.text = text
+    return r
+
+def hide_thinking(responses, markers):
+    """그래도 모델이 생각 블록으로 시작하면 끝 표시까지 text를 비워서 낸다 (토큰마다 응답은 그대로: 측정값 유지)
+    생각 블록이 없으면 이어 붙인 출력은 원문과 글자 단위로 같다"""
+    if markers is None:
+        yield from responses
+        return
+    start, end = markers
+    buf, state = '', 'head'                  # head: 시작 표시인지 판단 전, think: 생각 중, body: 본문
+    for r in responses:
+        if state == 'body':
+            yield r
+            continue
+        buf += r.text
+        if state == 'head':
+            head = buf.lstrip()
+            if not head or (start.startswith(head) and head != start):   # 공백 또는 시작 표시를 쓰는 중
+                yield _with_text(r, '')
+                continue
+            if not head.startswith(start):   # 생각 블록 없음: 모아 둔 글을 그대로 내보냄
+                state = 'body'
+                yield _with_text(r, buf)
+                continue
+            state = 'think'
+        i = buf.find(end)
+        if i < 0:
+            yield _with_text(r, '')
+            continue
+        state = 'body'
+        yield _with_text(r, buf[i + len(end):].lstrip())
+
 class LLM:
     def __init__(self, path=LLM_4BIT, temp=0.0, system=SYSTEM, prompt_style='v1'):
         self.model, self.tok = load(str(path))
         self.sampler = make_sampler(temp=temp)
         self.system, self.prompt_style = system, prompt_style    # v4: deploy 프로필의 system 파일
+        self.think = think_markers(self.tok)
 
     def build_messages(self, question, hits):
         user = (build_prompt_v4(hits, question) if self.prompt_style == 'v4'
@@ -45,5 +102,6 @@ class LLM:
         prompt = self.tok.apply_chat_template(
             self.build_messages(question, hits), add_generation_prompt=True,
             tokenize=False, enable_thinking=False)       # 학습 때와 같이 생각 단계 끄기
-        yield from stream_generate(self.model, self.tok, prompt,
-                                   max_tokens=max_tokens, sampler=self.sampler)
+        prompt = close_thinking(prompt, self.think)        # 템플릿이 끄기를 지원하지 않는 모델(튜닝 전 27B 등) 대비
+        yield from hide_thinking(stream_generate(self.model, self.tok, prompt,
+                                                 max_tokens=max_tokens, sampler=self.sampler), self.think)

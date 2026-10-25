@@ -268,3 +268,37 @@ def test_chat_generation_failure_is_not_hidden(app):
     chat = app.make_chat(service.load_app())
     with pytest.raises(RuntimeError, match='generation failed'):
         list(chat('질문', [], 'fast', 'full'))
+
+# ---- 생각 단계 끄기 (튜닝 전 모델의 chat template이 enable_thinking을 무시할 때) ----
+from lawbot.llm import THINK, close_thinking, hide_thinking
+
+def test_close_thinking_prompt():
+    ok = '<|im_start|>assistant\n<think>\n\n</think>\n\n'
+    assert close_thinking(ok, THINK) == ok                         # Qwen3 템플릿이 이미 끈 경우: 프롬프트 그대로
+    assert close_thinking('<|im_start|>assistant\n', THINK) == '<|im_start|>assistant\n<think>\n\n</think>\n\n'
+    assert close_thinking('<|im_start|>assistant\n<think>\n', THINK) == '<|im_start|>assistant\n<think>\n\n</think>\n\n'
+    assert close_thinking('<|im_start|>assistant\n', None) == '<|im_start|>assistant\n'   # 생각 토큰이 없는 모델
+
+def chunks(*texts):
+    return [types.SimpleNamespace(text=t, generation_tps=1.0) for t in texts]
+
+def test_hide_thinking_block():
+    out = list(hide_thinking(chunks('<thi', 'nk>\n음…', '고민', '</think>\n\n【결론】', ' 답'), THINK))
+    assert len(out) == 5 and all(o.generation_tps == 1.0 for o in out)   # 토큰마다 응답 유지 (측정값 그대로)
+    assert [o.text for o in out] == ['', '', '', '【결론】', ' 답']
+
+def test_hide_thinking_passthrough():
+    for texts in (('【결론】', '답'), (' ', '\n【결론】', '답'), ('<', 'b>굵게',), ('생각 <think> 아님',)):
+        assert ''.join(o.text for o in hide_thinking(chunks(*texts), THINK)) == ''.join(texts)
+    src = chunks('<think>', '끝나지 않음')
+    assert ''.join(o.text for o in hide_thinking(src, None)) == '<think>끝나지 않음'   # 생각 토큰이 없는 모델은 그대로
+    assert ''.join(o.text for o in hide_thinking(chunks('<think>', '끝나지 않음'), THINK)) == ''
+
+def test_llm_closes_thinking_when_template_ignores_it(fake_llm, env):
+    _, tok, seen = fake_llm
+    tok.think_start, tok.think_end = THINK                          # Qwen 어휘, 템플릿은 'PROMPT'만 냄 (끄기 무시)
+    seen['gen'] = lambda: iter(chunks('<think>', '생각', '</think>', '【결론】답'))
+    m = LLM('models/fake', prompt_style='v1')
+    assert ''.join(r.text for r in m.stream('질문', [{'article_id': '제1조'}])) == '【결론】답'
+    assert seen['prompt'] == 'PROMPT<think>\n\n</think>\n\n'
+    assert tok.calls[-1][1]['enable_thinking'] is False
