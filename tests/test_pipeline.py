@@ -302,3 +302,10 @@ def test_llm_closes_thinking_when_template_ignores_it(fake_llm, env):
     assert ''.join(r.text for r in m.stream('질문', [{'article_id': '제1조'}])) == '【결론】답'
     assert seen['prompt'] == 'PROMPT<think>\n\n</think>\n\n'
     assert tok.calls[-1][1]['enable_thinking'] is False
+
+def test_llm_system_override(fake_llm):
+    m, tok, _ = fake_llm
+    list(m.stream('질문', [{'article_id': '제1조'}], system='4항목 SYSTEM'))
+    assert tok.calls[-1][0][0] == {'role': 'system', 'content': '4항목 SYSTEM'}
+    list(m.stream('질문', [{'article_id': '제1조'}]))
+    assert tok.calls[-1][0][0] == {'role': 'system', 'content': SYSTEM}   # 다음 요청은 기본 system

@@ -48,12 +48,14 @@ def make_chat(app):
         if not (message or '').strip():
             yield '질문을 입력해 주세요.', '', ''
             return
+        if any(s.key == model_key for s in app.profile.disabled):
+            raise gr.Error('이 기기에서는 사용하지 않는 모델입니다. 다른 답변 모델을 고르세요.')
         spec = app.models.specs.get(model_key)
         if spec is None or fmt not in ('concise', 'full'):
             raise gr.Error(f'알 수 없는 선택: {model_key!r}, {fmt!r}')
         early = fmt == 'concise' and app.early_stop
         try:
-            for stage, hits, raw, st in ask(app, message, model_key, early_stop=early):
+            for stage, hits, raw, st in ask(app, message, model_key, early_stop=early, fmt=fmt):
                 src = fmt_sources(hits)          # 오른쪽 조문 3개는 생성 내내 같음
                 if stage == 'load':
                     yield f'⏳ {spec.label} 불러오는 중…', src, fmt_stats(spec.label, stage, st)
@@ -70,12 +72,22 @@ def make_chat(app):
     return chat
 
 def model_choices(app):
-    return [(f"{s.label} — {s.info}" + ('' if s.path.is_dir() else ' (모델 폴더 없음)'), s.key)
-            for s in app.models.specs.values()]
+    """쓰는 모델 + LAWBOT_MODELS에서 뺀 모델(비활성 표시, 고르면 되돌림)"""
+    return ([(f"{s.label} — {s.info}" + ('' if s.path.is_dir() else ' (모델 폴더 없음)'), s.key)
+             for s in app.models.specs.values()] +
+            [(f'{s.label} — 이 기기에서 사용 안 함', s.key) for s in app.profile.disabled])
 
 def default_fmt(app):
-    """모델을 바꾸면 형식 라디오를 그 모델의 기본 형식으로 (Fast 4항목 / Pro 간결). 사용자가 다시 바꿀 수 있음"""
-    return lambda model_key: app.models.specs[model_key].fmt
+    """모델을 바꾸면 형식 라디오를 그 모델의 기본 형식으로 (Fast 4항목 / Pro 간결). 사용자가 다시 바꿀 수 있음
+    비활성 모델을 고르면 안내하고 기본 모델로 되돌린다 → (모델, 형식)"""
+    first = app.profile.models[0]
+    def follow(model_key):
+        spec = app.models.specs.get(model_key)
+        if spec is None:
+            gr.Warning('이 기기에서는 사용하지 않는 모델입니다.')
+            return first.key, first.fmt
+        return model_key, spec.fmt
+    return follow
 
 def build_demo(app):                 # 화면만 만든다: 인증 검사·모델 로딩은 main에서
     p = app.profile
@@ -88,10 +100,11 @@ def build_demo(app):                 # 화면만 만든다: 인증 검사·모�
             with gr.Column(scale=3):
                 with gr.Row():
                     model = gr.Radio(model_choices(app), value=p.models[0].key, label='답변 모델',
-                                     info='모델마다 같은 조문을 참고합니다.' if len(p.models) > 1 else None)
+                                     info='모델마다 같은 조문을 참고합니다.' if len(p.models) > 1 else
+                                          ('비활성 모델은 이 기기에서 쓰지 않습니다.' if p.disabled else None))
                     fmt = gr.Radio([('간결', 'concise'), ('전체 (4항목)', 'full')], value=p.models[0].fmt,
                                    label='답변 형식')
-                model.change(default_fmt(app), model, fmt, queue=False, api_visibility='private')
+                model.change(default_fmt(app), model, [model, fmt], queue=False, api_visibility='private')
                 gr.ChatInterface(
                     fn=make_chat(app),
                     additional_inputs=[model, fmt],

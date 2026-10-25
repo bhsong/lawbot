@@ -93,14 +93,15 @@ class LLM:
         self.system, self.prompt_style = system, prompt_style    # v4: deploy 프로필의 system 파일
         self.think = think_markers(self.tok)
 
-    def build_messages(self, question, hits):
+    def build_messages(self, question, hits, system=None):
         user = (build_prompt_v4(hits, question) if self.prompt_style == 'v4'
                 else build_prompt([h['article_id'] for h in hits], question))
-        return [{'role': 'system', 'content': self.system}, {'role': 'user', 'content': user}]
+        return [{'role': 'system', 'content': system or self.system}, {'role': 'user', 'content': user}]
 
-    def stream(self, question, hits, max_tokens=1024):
+    def stream(self, question, hits, max_tokens=1024, system=None):
+        """system: 이번 요청만 다른 system으로 (None이면 모델의 기본 system)"""
         prompt = self.tok.apply_chat_template(
-            self.build_messages(question, hits), add_generation_prompt=True,
+            self.build_messages(question, hits, system), add_generation_prompt=True,
             tokenize=False, enable_thinking=False)       # 학습 때와 같이 생각 단계 끄기
         prompt = close_thinking(prompt, self.think)        # 템플릿이 끄기를 지원하지 않는 모델(튜닝 전 27B 등) 대비
         yield from hide_thinking(stream_generate(self.model, self.tok, prompt,

@@ -9,7 +9,7 @@ from dataclasses import dataclass
 from lawbot import deploy
 from lawbot.paths import LLM_4BIT
 from lawbot.retriever import Retriever
-from lawbot.llm import LLM
+from lawbot.llm import LLM, SYSTEM
 from lawbot.reranker import Reranker
 
 TOP_K = 3                            # 답변 근거로 넘기는 조문 수 (Fast·Pro 공통)
@@ -66,6 +66,7 @@ class LawbotApp:
     models: ModelManager
     early_stop: bool = False
     reranker: object = None          # None: 임베딩 상위 TOP_K개 그대로 (LAWBOT_RERANKER_ENABLED=0, 기본)
+    full_system: str = None          # '전체(4항목)' system: 프로필 system 파일, 없으면 llm.SYSTEM (v1)
 
 def system_text(profile, spec):
     """모델별 system 파일 → 프로필 system 파일 → None(llm.SYSTEM, v1 4섹션) 순서"""
@@ -116,7 +117,16 @@ def load_app(profile=None):
                 print(f'[lawbot] {spec.label} 미리 불러오기 실패: {type(e).__name__}: {e}')
     print(f"[lawbot] 프로필 {p.name} · 조문 {len(retriever.ids)}개 · 리랭커 {'켜짐' if reranker else '꺼짐'} · "
           f"상주 {list(models.loaded)}")
-    return LawbotApp(p, retriever, models, deploy.early_stop(), reranker)
+    full = p.system_file.read_text(encoding='utf-8').strip() if p.system_file else SYSTEM
+    return LawbotApp(p, retriever, models, deploy.early_stop(), reranker, full)
+
+def format_system(app, model_key, fmt):
+    """화면 형식에 맞춘 이번 요청의 system (None이면 모델 기본 system)
+    간결형이 기본인 모델(튜닝 전 Pro)에서 '전체'를 고르면 4항목 system으로 생성한다 (간결형 출력을 그대로 보여 주지 않음)
+    4항목으로 학습한 Fast는 system을 바꾸지 않는다: 간결형은 화면 후처리(answer_format.concise)"""
+    if fmt == 'full' and app.models.specs[model_key].fmt == 'concise':
+        return app.full_system
+    return None
 
 def retrieve(app, question, k, st):
     """근거 조문 k개. 리랭커가 없으면 기존과 같은 임베딩 상위 k개,
@@ -142,9 +152,10 @@ def log_timing(st):
              if st.get(key) is not None]
     print(f"[lawbot] {st['model']} · " + ' · '.join(parts))
 
-def ask(app, question, model_key, k=TOP_K, early_stop=False):
+def ask(app, question, model_key, k=TOP_K, early_stop=False, fmt=None):
     """질문 하나: (단계, 검색 조문, 답변 원문, 측정값)을 차례로 돌려준다
     단계 'load'(모델 전환 대기) → 'generate'(토큰마다) → 'done'. 조문은 생성 전에 정해짐
+    fmt: 화면 형식 ('full'/'concise'). 주면 format_system으로 system을 고름 (None이면 모델 기본, 평가 스크립트)
     측정값(초): search, rerank(리랭커가 켜져 있을 때만), load(이번에 로딩했을 때만), ttft(생성 호출→첫 토큰, 프리필),
     first_text(질문 수신→첫 글자), total, early_stop_at(간결형 조기 종료 시점) / tps, prompt_tokens, prompt_tps(프리필 속도), gen_tokens, peak_gb, finish"""
     t0 = time.perf_counter()
@@ -153,8 +164,9 @@ def ask(app, question, model_key, k=TOP_K, early_stop=False):
     if not app.models.is_loaded(model_key):
         yield 'load', hits, '', st
     llm, st['load'] = app.models.get(model_key)
+    system = format_system(app, model_key, fmt)
     raw, last, t_gen = '', None, time.perf_counter()
-    for r in llm.stream(question, hits):
+    for r in llm.stream(question, hits, **({'system': system} if system else {})):
         if last is None:
             st['ttft'] = time.perf_counter() - t_gen
         last = r

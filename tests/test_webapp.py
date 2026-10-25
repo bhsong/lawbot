@@ -14,8 +14,8 @@ from lawbot.llm import build_prompt_v4
 
 class PathLLM(FakeLLM):
     """모델 폴더 이름을 답으로 내는 가짜 sLLM: 어떤 모델이 답했는지 확인용"""
-    def stream(self, question, hits):
-        self.args = (question, hits)
+    def stream(self, question, hits, system=None):
+        self.args, self.system = (question, hits), system
         for c in ('【결론】', self.path.name, '\n【근거 조문】\n근로기준법 제26조(해고의 예고)\n【설명】\n- 설명'):
             yield types.SimpleNamespace(text=c, generation_tps=20.0, finish_reason='stop')
 
@@ -114,7 +114,7 @@ def test_format_follows_model_by_default(env):
     radios = {c.label: c for c in demo.blocks.values() if isinstance(c, app_mod.gr.Radio)}
     assert radios['답변 형식'].value == 'full'                       # 기본 선택 Fast → 4항목
     follow = app_mod.default_fmt(a)
-    assert (follow('fast'), follow('pro')) == ('full', 'concise')
+    assert (follow('fast'), follow('pro')) == (('fast', 'full'), ('pro', 'concise'))
 
 def test_pro_preload_failure_keeps_fast(env, capsys):
     class ProMissing(PathLLM):
@@ -389,9 +389,41 @@ def test_models_selection(env):
 def test_pro_only_app(env):
     env.setenv('LAWBOT_MODELS', 'pro')
     a = make_app(env, resident=1)
-    assert list(a.models.specs) == ['pro'] and list(a.models.loaded) == ['pro']
+    assert list(a.models.specs) == ['pro'] and list(a.models.loaded) == ['pro']   # Fast는 올리지 않음
+    assert [m.key for m in a.profile.disabled] == ['fast']
     demo = app_mod.build_demo(a)
     radios = {c.label: c for c in demo.blocks.values() if isinstance(c, app_mod.gr.Radio)}
     assert radios['답변 모델'].value == 'pro' and radios['답변 형식'].value == 'concise'
-    text, _, stats = list(app_mod.make_chat(a)('해고 예고?', [], 'pro', 'concise'))[-1]
+    assert [k for _, k in radios['답변 모델'].choices] == ['pro', 'fast']         # Fast는 비활성으로 남김
+    assert '이 기기에서 사용 안 함' in radios['답변 모델'].choices[1][0]
+    with pytest.warns(UserWarning, match='사용하지 않는 모델'):                    # 화면 안내 (gr.Warning)
+        assert app_mod.default_fmt(a)('fast') == ('pro', 'concise')                # 고르면 기본 모델로 되돌림
+    chat = app_mod.make_chat(a)
+    with pytest.raises(app_mod.gr.Error, match='사용하지 않는 모델'):
+        list(chat('질문', [], 'fast', 'full'))
+    assert FakeLLM.created == 1 or list(a.models.loaded) == ['pro']
+    text, _, stats = list(chat('해고 예고?', [], 'pro', 'concise'))[-1]
     assert stats.startswith('Lawbot Pro')
+    assert any('사용 안 함' in m for lv, m in check_deploy.run('v4'))
+
+def test_full_format_uses_four_part_system(env):
+    # 간결형이 기본인 Pro에서 '전체'를 고르면 4항목 system으로 생성 (간결형 출력이 그대로 나오지 않게)
+    a = make_app(env, resident=2)
+    chat = app_mod.make_chat(a)
+    list(chat('질문', [], 'pro', 'full'))
+    assert a.models.loaded['pro'].system == a.full_system
+    from lawbot.llm import SYSTEM
+    assert a.full_system == SYSTEM                                  # v1 프로필: llm.SYSTEM (4섹션)
+    list(chat('질문', [], 'pro', 'concise'))
+    assert a.models.loaded['pro'].system is None                    # 간결형: Pro 기본(간결형) system
+    for f in ('full', 'concise'):                                   # Fast(4항목 학습)는 system을 바꾸지 않음
+        list(chat('질문', [], 'fast', f))
+        assert a.models.loaded['fast'].system is None
+    list(service.ask(a, '질문', 'pro'))                             # fmt 없이 (평가·벤치): 모델 기본
+    assert a.models.loaded['pro'].system is None
+
+def test_full_system_v4_profile(env):
+    env.setenv('LAWBOT_PROFILE', 'v4')
+    a = make_app(env, resident=1)
+    assert a.full_system == paths.V4_SYSTEM.read_text(encoding='utf-8').strip()
+    assert '【설명】' in a.full_system and '【설명】' not in paths.V4_SYSTEM_CONCISE.read_text(encoding='utf-8')
