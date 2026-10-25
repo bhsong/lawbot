@@ -8,6 +8,7 @@ import sys
 from collections import Counter
 from pathlib import Path
 import pandas as pd
+from lawbot import deploy, envfile
 from lawbot.deploy import get_profile
 
 EXPECTED_ARTICLES = {'v1': 130, 'v4': 415}
@@ -104,6 +105,30 @@ def check_llm(spec, out):
     out.append(('OK' if (d / 'tokenizer.json').is_file() and has_template else 'FAIL',
                 f'{spec.label}: tokenizer.json·chat template ' + ('있음' if has_template else '없음')))
 
+def check_reranker(p, out):
+    """켜져 있을 때만 검사 (꺼져 있으면 앱이 리랭커를 올리지 않음). 실제 로딩·채점은 test_models (-m models)"""
+    try:
+        rr = deploy.reranker(p)
+    except ValueError as e:
+        return out.append(('FAIL', f'리랭커 설정: {e}'))
+    if rr is None:
+        return out.append(('INFO', '리랭커 꺼짐 (LAWBOT_RERANKER_ENABLED=1이면 리랭커 폴더도 검사)'))
+    out.append(('OK' if rr.candidates >= 3 else 'FAIL', f'리랭커 후보 {rr.candidates}개 → 3개 (v4 실험 10개)'))
+    d = rr.path
+    if not d.is_dir():
+        return out.append(('FAIL', f'리랭커 모델 폴더 없음: {d}'))
+    cfg = json.loads((d / 'config.json').read_text()) if (d / 'config.json').is_file() else {}
+    q = cfg.get('quantization') or cfg.get('quantization_config') or {}
+    size = HIDDEN_SIZE.get(cfg.get('hidden_size'), f"hidden_size {cfg.get('hidden_size')}")
+    out.append(('OK' if cfg.get('model_type') == 'qwen3' and q.get('bits') == 4 else 'FAIL',
+                f"리랭커 {d.name}: {cfg.get('model_type')} {size} · 양자화 {q or '없음'} · {folder_gb(d):.2f}GB"))
+    tj = d / 'tokenizer.json'
+    vocab = json.loads(tj.read_text(encoding='utf-8')).get('model', {}).get('vocab', {}) if tj.is_file() else {}
+    out.append(('OK' if {'yes', 'no'} <= set(vocab) else 'FAIL',
+                '리랭커 tokenizer.json ' + ('yes/no 토큰 있음' if vocab else '없음 또는 어휘 없음')))
+    if not list(d.glob('*.safetensors')):
+        out.append(('FAIL', '리랭커 폴더에 safetensors 없음'))
+
 def run(name=None):
     p = get_profile(name)
     out = [('INFO', f'프로필 {p.name}: {p.title}')]
@@ -112,9 +137,11 @@ def run(name=None):
     check_emb(p, out)
     for spec in p.models:
         check_llm(spec, out)
+    check_reranker(p, out)
     return out
 
 def main():
+    envfile.load()                       # 웹앱과 같은 .env 설정으로 검사
     out = run(sys.argv[1] if len(sys.argv) > 1 else None)
     for level, msg in out:
         print(f'[{level:4}] {msg}')

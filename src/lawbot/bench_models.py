@@ -1,6 +1,7 @@
 # src/lawbot/bench_models.py  →  uv run python -m lawbot.bench_models --tag m32_v1_r2
 # 웹앱과 같은 경로(service.load_app·ask)로 Fast/Pro를 번갈아 질문하며 지연·메모리를 잰다 (UI 없이, 맥 전용)
 #   LAWBOT_MAX_RESIDENT=2: 동시 상주 / 1: 전환 때마다 다시 로딩 (전환 시간 측정)
+#   LAWBOT_RERANKER_ENABLED=1: 리랭커 포함 (같은 tag 규칙으로 0/1을 각각 돌려 메모리·지연 전후 비교)
 # 결과: results/bench_<tag>.csv (질문마다 한 행) + 모델별 중앙값 표
 import argparse
 import platform
@@ -8,6 +9,7 @@ import re
 import subprocess
 import time
 import pandas as pd
+from lawbot import envfile
 from lawbot.answer_format import concise
 from lawbot.paths import RESULTS
 from lawbot.service import ask, load_app
@@ -50,11 +52,12 @@ def memory():
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('--tag', required=True, help='결과 파일 이름 (예: m32_v1_r2)')
-    ap.add_argument('--models', default='fast,pro', help='번갈아 물을 모델 key 순서')
+    ap.add_argument('--models', default=None, help='번갈아 물을 모델 key 순서 (기본: 앱에 설정된 모델 전부)')
     ap.add_argument('--rounds', type=int, default=2, help='질문 목록 반복 횟수 (1회차는 워밍업 포함)')
     ap.add_argument('--early-stop', action='store_true', help='간결형 조기 종료 조건으로 측정')
     args = ap.parse_args()
     pd.set_option('display.width', 200, 'display.max_columns', None)
+    envfile.load()
 
     print('시작 메모리', memory())
     t0 = time.perf_counter()
@@ -63,7 +66,7 @@ def main():
     rows = []
     for rnd in range(args.rounds):
         for q in QUESTIONS:
-            for key in args.models.split(','):
+            for key in (args.models.split(',') if args.models else list(app.models.specs)):
                 for stage, hits, raw, st in ask(app, q, key, early_stop=args.early_stop):
                     pass
                 rows.append({'round': rnd, 'model': key, 'fmt': app.models.specs[key].fmt, 'question': q,
@@ -71,16 +74,19 @@ def main():
                              'answer_len': len(raw), 'concise_len': len(concise(raw, hits)),
                              'resident': ','.join(app.models.loaded), 'answer': raw})
                 r = rows[-1]
-                print(f"[{rnd}] {key:4} load={r['load'] or 0:5.1f} ttft={r.get('ttft', 0):5.2f} "
+                print(f"[{rnd}] {key:4} search={r['search']:5.2f} rerank={r.get('rerank') or 0:5.2f} "
+                      f"load={r['load'] or 0:5.1f} ttft={r.get('ttft', 0):5.2f} "
                       f"first={r.get('first_text', 0):5.2f} tps={r['tps'] or 0:5.1f} total={r['total']:5.1f} "
                       f"mlx_peak={r.get('mlx_peak_gb')} pressure={r['pressure']} swap={r['swap_used_gb']}")
     o = pd.DataFrame(rows)
     RESULTS.mkdir(exist_ok=True)
     o.to_csv(RESULTS / f'bench_{args.tag}.csv', index=False, encoding='utf-8-sig')
     warm = o[o['round'] > 0] if args.rounds > 1 else o
-    cols = ['search', 'ttft', 'first_text', 'tps', 'total', 'gen_tokens', 'prompt_tokens', 'prompt_tps']
+    cols = ['search', 'rerank', 'ttft', 'first_text', 'tps', 'total', 'gen_tokens', 'prompt_tokens', 'prompt_tps']
     print(f"\n[중앙값, {'워밍업(1회차) 제외 ' if args.rounds > 1 else ''}{len(warm)}건]")
     print(warm.groupby('model')[[c for c in cols if c in warm]].median().round(2))
+    print('[p95]')
+    print(warm.groupby('model')[[c for c in cols if c in warm]].quantile(.95).round(2))
     print('\n전환(로딩) 초:', o.loc[o['load'].notna(), ['round', 'model', 'load']].round(1).values.tolist())
     print('최대 MLX 메모리(GB):', o['mlx_peak_gb'].max() if 'mlx_peak_gb' in o else None,
           '· 최악 압박:', o['pressure'].dropna().unique().tolist(), '· 최대 스왑(GB):', o['swap_used_gb'].max())

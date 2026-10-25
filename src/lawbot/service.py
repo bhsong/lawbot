@@ -10,6 +10,7 @@ from lawbot import deploy
 from lawbot.paths import LLM_4BIT
 from lawbot.retriever import Retriever
 from lawbot.llm import LLM
+from lawbot.reranker import Reranker
 
 TOP_K = 3                            # 답변 근거로 넘기는 조문 수 (Fast·Pro 공통)
 
@@ -64,6 +65,7 @@ class LawbotApp:
     retriever: object
     models: ModelManager
     early_stop: bool = False
+    reranker: object = None          # None: 임베딩 상위 TOP_K개 그대로 (LAWBOT_RERANKER_ENABLED=0, 기본)
 
 def system_text(profile, spec):
     """모델별 system 파일 → 프로필 system 파일 → None(llm.SYSTEM, v1 4섹션) 순서"""
@@ -78,11 +80,28 @@ def check_profile_files(p):
                            'uv run python -m lawbot.check_deploy로 확인하거나, '
                            'v4 자산 준비 전에는 LAWBOT_PROFILE=v1로 실행하세요.')
 
+def check_reranker(rr):
+    """켜진 리랭커의 후보 수·폴더를 모델 로딩 전에 확인"""
+    if rr.candidates < TOP_K:
+        raise ValueError(f'LAWBOT_RERANKER_CANDIDATES는 {TOP_K} 이상: {rr.candidates}')
+    if not rr.path.is_dir():
+        raise RuntimeError(f'리랭커 모델 폴더가 없습니다: {rr.path}. uv run python -m lawbot.check_deploy로 확인하거나, '
+                           'LAWBOT_RERANKER_ENABLED=0으로 끄고 실행하세요.')
+
 def load_app(profile=None):
-    """웹앱용: 검색기 1개 + Fast/Pro 레지스트리. 기본 모델(Fast)은 미리 올리고, 2개 상주면 Pro도 시도"""
+    """웹앱용: 검색기 1개 (+ 켜져 있으면 리랭커 1개) + Fast/Pro 레지스트리. 기본 모델(Fast)은 미리 올리고, 2개 상주면 Pro도 시도
+    리랭커는 여기서 한 번만 올려 Fast·Pro가 함께 쓰고, 답변 모델 LRU 교체와 무관하게 상주한다"""
     p = profile or deploy.get_profile()
     check_profile_files(p)
+    rr = deploy.reranker(p)              # 꺼져 있으면 None: 리랭커 모델을 올리지 않음
+    if rr:
+        check_reranker(rr)
     retriever = Retriever(p.emb, p.articles, max_seq_length=p.max_seq, doc_style=p.doc_style)
+    reranker = None
+    if rr:                               # 불러오기 실패는 그대로 올려 실행 중단 (Fast 모델과 같음)
+        t0 = time.perf_counter()
+        reranker = Reranker(rr.path, rr.candidates)
+        print(f'[lawbot] 리랭커 {rr.path.name} 불러오기 {time.perf_counter() - t0:.1f}초 · 후보 {rr.candidates}개 → {TOP_K}개')
 
     def loader(spec):                    # system 파일이 없으면 FileNotFoundError (화면에서 오류 안내)
         system = system_text(p, spec)
@@ -95,18 +114,42 @@ def load_app(profile=None):
                 models.get(spec.key)
             except Exception as e:       # Pro 준비 전에도 Fast로는 실행 (선택하면 오류 안내)
                 print(f'[lawbot] {spec.label} 미리 불러오기 실패: {type(e).__name__}: {e}')
-    print(f"[lawbot] 프로필 {p.name} · 조문 {len(retriever.ids)}개 · 상주 {list(models.loaded)}")
-    return LawbotApp(p, retriever, models, deploy.early_stop())
+    print(f"[lawbot] 프로필 {p.name} · 조문 {len(retriever.ids)}개 · 리랭커 {'켜짐' if reranker else '꺼짐'} · "
+          f"상주 {list(models.loaded)}")
+    return LawbotApp(p, retriever, models, deploy.early_stop(), reranker)
+
+def retrieve(app, question, k, st):
+    """근거 조문 k개. 리랭커가 없으면 기존과 같은 임베딩 상위 k개,
+    있으면 임베딩 상위 reranker.candidates개를 리랭킹해 점수순 k개. 측정값 search·rerank(초)를 st에 적는다
+    리랭커 오류는 임베딩 순위로 몰래 되돌리지 않고 그대로 올린다 (생성 오류와 같이 화면에 오류로 표시):
+    되돌리면 화면의 조문이 어느 방식으로 고른 것인지 알 수 없고, 켜 둔 설정과 다른 결과가 섞인다"""
+    t0 = time.perf_counter()
+    if app.reranker is None:
+        hits = app.retriever.search(question, k=k)
+        st['search'] = time.perf_counter() - t0
+        return hits
+    candidates = app.retriever.search(question, k=app.reranker.candidates)
+    st['search'] = time.perf_counter() - t0
+    t1 = time.perf_counter()
+    hits = app.reranker.rerank(question, candidates, top_k=k)
+    st['rerank'] = time.perf_counter() - t1
+    return hits
+
+def log_timing(st):
+    """질문마다 단계별 시간 한 줄 (질문 내용은 남기지 않음)"""
+    parts = [f"{name} {st[key]:.2f}s" for name, key in (('검색', 'search'), ('리랭킹', 'rerank'), ('모델 전환', 'load'),
+                                                        ('첫 토큰', 'ttft'), ('첫 글자', 'first_text'), ('완료', 'total'))
+             if st.get(key) is not None]
+    print(f"[lawbot] {st['model']} · " + ' · '.join(parts))
 
 def ask(app, question, model_key, k=TOP_K, early_stop=False):
     """질문 하나: (단계, 검색 조문, 답변 원문, 측정값)을 차례로 돌려준다
     단계 'load'(모델 전환 대기) → 'generate'(토큰마다) → 'done'. 조문은 생성 전에 정해짐
-    측정값(초): search, load(이번에 로딩했을 때만), ttft(생성 호출→첫 토큰, 프리필), first_text(질문 수신→첫 글자),
-    total, early_stop_at(간결형 조기 종료 시점) / tps, prompt_tokens, prompt_tps(프리필 속도), gen_tokens, peak_gb, finish"""
+    측정값(초): search, rerank(리랭커가 켜져 있을 때만), load(이번에 로딩했을 때만), ttft(생성 호출→첫 토큰, 프리필),
+    first_text(질문 수신→첫 글자), total, early_stop_at(간결형 조기 종료 시점) / tps, prompt_tokens, prompt_tps(프리필 속도), gen_tokens, peak_gb, finish"""
     t0 = time.perf_counter()
     st = {'model': model_key, 'load': None}
-    hits = app.retriever.search(question, k=k)
-    st['search'] = time.perf_counter() - t0
+    hits = retrieve(app, question, k, st)
     if not app.models.is_loaded(model_key):
         yield 'load', hits, '', st
     llm, st['load'] = app.models.get(model_key)
@@ -127,4 +170,5 @@ def ask(app, question, model_key, k=TOP_K, early_stop=False):
                        ('gen_tokens', 'generation_tokens'), ('peak_gb', 'peak_memory'),
                        ('finish', 'finish_reason')):
         st[name] = getattr(last, attr, None)
+    log_timing(st)
     yield 'done', hits, raw, st

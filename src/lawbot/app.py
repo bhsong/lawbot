@@ -1,5 +1,6 @@
 # src/lawbot/app.py  →  uv run lawbot-app
 import gradio as gr
+from lawbot import envfile
 from lawbot.answer_format import render
 from lawbot.service import ask, load_app
 from lawbot.security import get_local_launch_config
@@ -12,8 +13,9 @@ EMPTY = '답변을 생성하지 못했습니다. 다시 질문해 주세요.'
 
 def fmt_sources(hits):
     return '\n\n---\n\n'.join(
-        f"**{h['law'] + ' ' if 'law' in h else ''}{h['article_id']} {h['title']}** · 유사도 {h['score']:.3f}\n\n"
-        f"{h['doc'].split(chr(10), 1)[1]}"
+        f"**{h['law'] + ' ' if 'law' in h else ''}{h['article_id']} {h['title']}** · 유사도 {h['score']:.3f}"
+        + (f" · 리랭커 {h['rerank_score']:.3f} (임베딩 {h['emb_rank']}위)" if 'rerank_score' in h else '')
+        + f"\n\n{h['doc'].split(chr(10), 1)[1]}"
         for h in hits)
 
 def fmt_stats(label, stage, st):
@@ -21,6 +23,8 @@ def fmt_stats(label, stage, st):
     if stage == 'load':
         return f'⏳ {label} 불러오는 중… (모델 전환 대기, 검색 {st["search"]:.2f}초)'
     parts = [label, f"검색 {st['search']:.2f}초"]
+    if 'rerank' in st:
+        parts.append(f"리랭킹 {st['rerank']:.2f}초")
     if st['load'] is not None:
         parts.append(f"모델 전환 {st['load']:.1f}초")
     if 'ttft' in st:
@@ -84,7 +88,7 @@ def build_demo(app):                 # 화면만 만든다: 인증 검사·모�
             with gr.Column(scale=3):
                 with gr.Row():
                     model = gr.Radio(model_choices(app), value=p.models[0].key, label='답변 모델',
-                                     info='Fast는 4B, Pro는 14B 모델입니다. 같은 조문을 참고하며, Pro는 답변이 더 느립니다.')
+                                     info='모델마다 같은 조문을 참고합니다.' if len(p.models) > 1 else None)
                     fmt = gr.Radio([('간결', 'concise'), ('전체 (4항목)', 'full')], value=p.models[0].fmt,
                                    label='답변 형식')
                 model.change(default_fmt(app), model, fmt, queue=False, api_visibility='private')
@@ -101,6 +105,7 @@ def build_demo(app):                 # 화면만 만든다: 인증 검사·모�
     return demo
 
 def main():
+    envfile.load()                       # .env (셸에 있는 변수 우선). 인증·모델 설정을 읽기 전에
     config = get_local_launch_config()   # 인증 정보가 없으면 모델 로딩 전에 실행 거부
     demo = build_demo(load_app())
     demo.launch(**config)            # 127.0.0.1:7860, 로그인 필수, 공유 링크 없음

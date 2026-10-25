@@ -116,11 +116,12 @@ uv sync
 data/v4/
 ├── articles_v4.csv          # 7개 법률 비삭제 415조문 (열: law, article_id, title, deleted, text, 선택 article_no)
 ├── system_v4.txt            # 4B v4 학습 때 쓴 system 원문 (4항목 형식)
-└── system_v4_concise.txt    # 14B QLoRA 학습 때 쓴 system 원문 (간결형)
+└── system_v4_concise.txt    # Pro 간결형 system (튜닝 전 27B용 초안, 저장소에 포함)
 models/v4/
-├── emb_v4_fp16/             # v4 튜닝 임베딩 (sentence-transformers 형식, fp16)
-├── sllm_4b_lora_mlx_4bit/   # Qwen3-4B + v4 LoRA (MLX 4비트) = 웹앱 Lawbot Fast
-└── sllm_14b_mlx_4bit/       # Qwen3-14B QLoRA (MLX 4비트) = 웹앱 Lawbot Pro (선택, 없으면 Fast만 사용)
+├── emb_v4_fp16/             # v4 튜닝 Qwen3-Embedding-0.6B (sentence-transformers 형식, fp16)
+├── reranker_4b_mlx_4bit/    # Qwen3-Reranker-4B (튜닝 없음, MLX 4비트) = 리랭커 (선택)
+├── sllm_4b_lora_mlx_4bit/   # Qwen3-4B + v4 LoRA (MLX 4비트) = 웹앱 Lawbot Fast (소형 맥용)
+└── qwen3.8_27b_mlx_4bit/    # mlx-community/Qwen3.8-27B-4bit (튜닝 전) = 웹앱 Lawbot Pro
 ```
 
 `article_id`에 법령명이 들어 있으면(`근로기준법 제26조`) 번호만 담은 `article_no` 열(`제26조`)을 함께 둡니다. 앱은 `article_no`가 있으면 그 값을 조문 번호로 씁니다.
@@ -129,7 +130,13 @@ sLLM은 병합한 Hugging Face 모델을 MLX 4비트로 변환해서 만듭니�
 
 ```bash
 uv run mlx_lm.convert --hf-path <병합한 4B 폴더> --mlx-path models/v4/sllm_4b_lora_mlx_4bit -q --q-bits 4 --q-group-size 64
-uv run mlx_lm.convert --hf-path <병합한 14B 폴더> --mlx-path models/v4/sllm_14b_mlx_4bit -q --q-bits 4 --q-group-size 64
+```
+
+Pro(27B)는 이미 4비트로 변환된 MLX 모델을 그대로 내려받고, 리랭커는 원본을 4비트로 변환합니다.
+
+```bash
+uv run hf download mlx-community/Qwen3.8-27B-4bit --local-dir models/v4/qwen3.8_27b_mlx_4bit
+uv run mlx_lm.convert --hf-path Qwen/Qwen3-Reranker-4B --mlx-path models/v4/reranker_4b_mlx_4bit -q --q-bits 4 --q-group-size 64 --dtype float16
 ```
 
 이전 v1(근로기준법 130조문) 구성은 `LAWBOT_PROFILE=v1`로 실행하며, 아래 파일을 씁니다. 조문·평가 데이터(`data/`)와 평가 결과(`results/`)는 저장소에 포함되어 있고, 평가 스크립트(`lawbot-eval` 등)는 v1 파일을 씁니다.
@@ -148,56 +155,48 @@ uv run python -m lawbot.check_deploy        # 현재 프로필 (기본 v4, LAWBO
 uv run python -m lawbot.versions            # 설치된 패키지 버전·맥 사양
 ```
 
-**웹앱 실행**
+**웹앱 실행 (설정 파일 .env)**
 
-```bash
-export LAWBOT_USER='원하는 사용자명'
-read -rs 'LAWBOT_PW?비밀번호: ' && export LAWBOT_PW   # zsh(맥 기본). bash는 read -rsp '비밀번호: ' LAWBOT_PW
+설정은 레포 최상위의 `.env` 파일에 적어 두면 `uv run lawbot-app`이 시작할 때 읽습니다. `.env.example`(맥 미니 32GB 기본값: v4, 임베딩 0.6B, 후보 10개 → 리랭커 4비트 → 3개, Pro 27B만 사용)을 복사해서 사용자명과 비밀번호만 채우면 됩니다.
+
+```zsh
+cp .env.example .env
+chmod 600 .env            # 나만 읽고 쓰기 (비밀번호가 들어가므로)
+open -e .env              # LAWBOT_USER=, LAWBOT_PW= 뒤에 값 입력 후 저장
 uv run lawbot-app
 ```
 
-fish 셸은 다음과 같습니다.
+- `.env`는 `.gitignore`에 들어 있어 Git에 올라가지 않습니다. `.env.example`에는 비밀번호를 적지 마세요.
+- 셸에서 `export`한 변수가 있으면 그 값이 `.env`보다 우선합니다. 한 번만 다르게 실행할 때는 `LAWBOT_RERANKER_ENABLED=0 uv run lawbot-app`처럼 앞에 붙입니다.
+- 다른 파일을 쓰려면 `LAWBOT_ENV_FILE=.env.small uv run lawbot-app`(예: 소형 맥의 Fast 4B 설정), 파일을 읽지 않으려면 `LAWBOT_ENV_FILE=`.
+- `.env`에는 `LAWBOT_*`와 `LLM_PATH`만 적을 수 있습니다. 서버 주소·포트는 바꿀 수 없습니다(아래 참고).
+- `check_deploy`, `bench_models`, `verify_reranker`, `eval_concise`도 같은 `.env`를 읽습니다.
+- 값에 공백이나 ` #`이 들어가면 작은따옴표로 감쌉니다: `LAWBOT_PW='a b#c'`.
 
-```fish
-set -gx LAWBOT_USER '원하는 사용자명'
-read -gxs -P '비밀번호: ' LAWBOT_PW   # -g 전역, -x 내보내기, -s 입력 숨김
-uv run lawbot-app
+비밀번호를 파일에 두지 않으려면 `.env`의 `LAWBOT_PW=` 줄을 지우고 실행할 때 입력하거나 macOS 키체인에서 꺼내 씁니다(zsh).
+
+```zsh
+read -rs 'LAWBOT_PW?비밀번호: ' && export LAWBOT_PW && uv run lawbot-app
+security add-generic-password -a lawbot -s lawbot -w   # 키체인에 저장 (최초 1회)
+LAWBOT_PW="$(security find-generic-password -a lawbot -s lawbot -w)" uv run lawbot-app
 ```
-
-비밀번호를 매번 입력하지 않으려면 macOS 키체인에 저장해 두고 꺼내 쓸 수 있습니다.
-
-```fish
-security add-generic-password -a lawbot -s lawbot -w   # 최초 1회, 비밀번호 입력
-set -gx LAWBOT_PW (security find-generic-password -a lawbot -s lawbot -w)
-```
-
-fish의 `set -Ux`(유니버설 변수)는 값을 `~/.config/fish/fish_variables`에 평문으로 저장하므로 비밀번호에 쓰지 마세요.
 
 v4 파일(조문 CSV, 4B system)이 없으면 모델을 올리기 전에 실행을 거부하고 안내합니다. v4 준비 전에는 v1으로 실행합니다.
 
-```fish
-set -gx LAWBOT_PROFILE v1
-uv run lawbot-app
-set -e LAWBOT_PROFILE        # 다시 기본(v4)으로
+```zsh
+LAWBOT_PROFILE=v1 LAWBOT_MODELS= LAWBOT_RERANKER_ENABLED=0 uv run lawbot-app
 ```
 
-화면에서 답변 모델을 고릅니다. 두 모델은 같은 검색 결과(상위 3개 조문)를 참고합니다.
+`LAWBOT_MODELS`로 이 맥에서 쓸 답변 모델을 고릅니다(`.env.example`은 `pro`만). 둘 다 쓰면(`fast,pro`) 화면에서 고르고, 두 모델은 같은 검색 결과(상위 3개 조문)를 참고합니다.
 
 | 모델 | 구성 (v4 기본 경로) | 기본 답변 형식 |
 | --- | --- | --- |
 | Lawbot Fast | Qwen3-4B + LoRA (`models/v4/sllm_4b_lora_mlx_4bit`) | 전체: `【결론】【근거 조문】【설명】【참고】` 4항목 |
-| Lawbot Pro | Qwen3-14B QLoRA (`models/v4/sllm_14b_mlx_4bit`), 간결형 system(`data/v4/system_v4_concise.txt`) | 간결: 결론 + `근거: 실제 인용 조문`. 답변이 더 느림 |
+| Lawbot Pro | Qwen3.8-27B 4비트, 튜닝 전 (`models/v4/qwen3.8_27b_mlx_4bit`), 간결형 system(`data/v4/system_v4_concise.txt`, 초안) | 간결: 결론 + `근거: 실제 인용 조문`. 답변이 더 느림 |
 
 모델을 바꾸면 답변 형식도 그 모델의 기본값으로 바뀌고, 형식은 직접 다시 고를 수 있습니다. 화면 아래 측정 줄에 검색·모델 전환·첫 토큰·첫 글자·생성 속도·완료 시간이 표시됩니다. Pro 폴더나 Pro system 파일이 없으면 Fast만으로 실행되고, Pro를 고르면 오류 안내가 나옵니다.
 
-모델 경로나 메모리 설정을 바꿀 때는 실행 전에 환경 변수를 지정합니다(fish 예시, 상대 경로는 저장소 최상위 기준).
-
-```fish
-set -gx LAWBOT_PRO_PATH models/v4/qwen3_14b_qlora_mlx_4bit   # Pro 모델 폴더 이름이 다른 경우
-set -gx LAWBOT_MAX_RESIDENT 1     # 메모리가 부족하면 선택한 모델만 올림 (바꿀 때 다시 불러옴)
-uv run lawbot-app
-set -e LAWBOT_MAX_RESIDENT        # 기본값(2개 동시 상주)으로 되돌리기
-```
+모델 경로나 메모리 설정은 `.env`에서 바꿉니다(상대 경로는 저장소 최상위 기준). 아래 표가 전체 변수입니다.
 
 웹앱은 이 맥에서만 쓰는 로컬 전용입니다. 서버는 `127.0.0.1:7860`에서만 열리고, 브라우저에서 `http://127.0.0.1:7860`으로 접속해 로그인합니다. 같은 네트워크의 다른 기기에서는 접속할 수 없으며, Gradio 공개 공유 링크(`share`)도 만들지 않습니다. 주소·포트·공유 설정은 `GRADIO_SERVER_NAME` 같은 환경 변수로 바꿀 수 없습니다(`src/lawbot/security.py`).
 
@@ -207,17 +206,44 @@ set -e LAWBOT_MAX_RESIDENT        # 기본값(2개 동시 상주)으로 되돌�
 | `LAWBOT_PW` | 예 | 로그인 비밀번호 (빈 값·공백만 있는 값은 안 됨) |
 | `LAWBOT_PROFILE` | 아니요 | `v4`(기본, 7개 법률 415조문) 또는 `v1`(근로기준법 130조문, 이전 구성) |
 | `LAWBOT_FAST_PATH` | 아니요 | Fast(4B) 모델 폴더. 기본 v4 `models/v4/sllm_4b_lora_mlx_4bit`, v1 `models/sllm_mlx_4bit` |
-| `LAWBOT_PRO_PATH` | 아니요 | Pro(14B) 모델 폴더. 기본 v4 `models/v4/sllm_14b_mlx_4bit`, v1 `models/qwen3_14b_mlx_4bit` |
+| `LAWBOT_PRO_PATH` | 아니요 | Pro 모델 폴더. 기본 v4 `models/v4/qwen3.8_27b_mlx_4bit`(27B), v1 `models/qwen3_14b_mlx_4bit`(14B) |
+| `LAWBOT_MODELS` | 아니요 | 쓸 답변 모델 key를 쉼표로 (`pro`, `fast`, `fast,pro`). 첫 번째가 기본 선택. 비우면 프로필의 Fast·Pro 모두 |
+| `LAWBOT_ENV_FILE` | 아니요 | 읽을 설정 파일 (기본 레포 최상위 `.env`, 없으면 안 읽음). 빈 값이면 읽지 않음. 셸에서만 지정 |
 | `LAWBOT_PRO_SYSTEM` | 아니요 | Pro 간결형 system 파일. 기본 v4 `data/v4/system_v4_concise.txt`, v1 `data/system_v1_concise.txt` |
 | `LAWBOT_V4_ARTICLES` / `LAWBOT_V4_EMB` / `LAWBOT_V4_SYSTEM` | 아니요 | v4 조문 CSV / 임베딩 폴더 / 4B system 파일 (기본 `data/v4/articles_v4.csv`, `models/v4/emb_v4_fp16`, `data/v4/system_v4.txt`) |
 | `LAWBOT_EMB` | 아니요 | v1 검색 임베딩 폴더 (기본 `models/emb_final_v3_fp16`) |
 | `LAWBOT_MAX_RESIDENT` | 아니요 | 동시에 올려 둘 답변 모델 수. `2`(기본, Fast·Pro 모두 상주, 전환 대기 없음) 또는 `1`(선택한 모델만, 바꿀 때 다시 불러옴) |
 | `LAWBOT_EARLY_STOP` | 아니요 | `1`이면 간결 형식에서 【설명】이 시작될 때 생성을 멈춤 (기본 꺼짐, 검증 전) |
+| `LAWBOT_RERANKER_ENABLED` | 아니요 | `1`이면 임베딩 상위 후보를 Qwen3-Reranker-4B로 다시 정렬해 상위 3개를 씀 (기본 `0`: 리랭커를 올리지 않고 기존 임베딩 상위 3개). v4 프로필 전용 |
+| `LAWBOT_RERANKER_MODEL_PATH` | 아니요 | 리랭커 MLX 폴더 (기본 `models/v4/reranker_4b_mlx_4bit`) |
+| `LAWBOT_RERANKER_CANDIDATES` | 아니요 | 리랭커에 넘길 임베딩 후보 수 (기본 `10`, 실험값. 3 이상) |
 | `LLM_PATH` | 아니요 | 평가 스크립트(`eval_oos`·`eval_refusal`)가 쓸 sLLM 폴더 (예: `models/sllm_mlx_8bit`). 웹앱은 쓰지 않음 |
 
 `LAWBOT_USER`와 `LAWBOT_PW`가 하나라도 없거나 비어 있으면 모델을 불러오기 전에 `RuntimeError`로 실행을 거부합니다. 인증 없이 서버를 띄우는 방법은 없습니다.
 
-> 주의: 비밀번호를 소스 코드, 셸 설정 파일, 스크립트 등 Git에 올라가는 파일에 적지 마세요. 위처럼 실행할 때 입력하거나 macOS 키체인 같은 비밀 저장소를 쓰세요.
+**리랭커 (선택, v4)**
+
+켜면 검색 흐름이 `임베딩 상위 10개 → Qwen3-Reranker-4B(튜닝 없음) → 리랭킹 상위 3개 → 답변 모델`이 됩니다. Fast·Pro가 같은 리랭킹 결과를 참고하고, 리랭커는 앱 시작 때 한 번 올려 상주합니다. 끄면(기본) 리랭커를 올리지 않고 이전과 같은 임베딩 상위 3개를 씁니다. 채점 방식(instruction, 프롬프트, 최대 2,560토큰, yes/no 로짓, 동점은 임베딩 순위)은 v4 리랭커 실험 노트북과 같습니다(`src/lawbot/reranker.py`).
+
+`.env.example`에는 켜져 있습니다(`LAWBOT_RERANKER_ENABLED=1`). 모델 준비는 위 "모델 준비"의 변환 명령을 씁니다.
+
+```zsh
+uv run python -m lawbot.check_deploy           # .env 설정 그대로: 리랭커 폴더·양자화·yes/no 토큰 검사
+uv run pytest -m models tests/test_reranker_models.py   # 실제 로딩·채점 스모크 테스트
+LAWBOT_RERANKER_ENABLED=0 uv run lawbot-app    # 한 번만 끄고 실행
+```
+
+리랭커 오류(점수가 NaN 등)는 임베딩 순위로 몰래 되돌리지 않고 화면에 오류로 표시합니다. 폴더가 없거나 v1 프로필에서 켜면 모델을 올리기 전에 실행을 거부합니다. 화면의 조문 카드에는 리랭커 점수와 원래 임베딩 순위가, 측정 줄에는 리랭킹 시간이 나오고, 터미널에는 질문마다 검색·리랭킹·첫 토큰·완료 시간이 한 줄씩 남습니다.
+
+Colab 실험(transformers fp16)과의 순위 일치는 같은 질문·임베딩 Top 10으로 따로 대조합니다. 실험 폴더(Drive `labor_law/v4`)를 내려받아 지정합니다. 기본은 val이며, test는 기록된 수치와 대조할 때만 쓰고 설정 조정에 쓰지 않습니다.
+
+```zsh
+uv run python -m lawbot.verify_reranker --colab ~/Downloads/v4 --split val     # → results/reranker_verify_val_mlx4bit.csv
+uv run python -m lawbot.bench_models --tag m32_v4_rr                            # .env 그대로 (리랭커 포함) 지연·메모리
+LAWBOT_RERANKER_ENABLED=0 uv run python -m lawbot.bench_models --tag m32_v4     # 비교 기준
+```
+
+> 주의: 비밀번호를 소스 코드, 셸 설정 파일, 스크립트, `.env.example` 등 Git에 올라가는 파일에 적지 마세요. 파일에 둘 때는 Git에서 제외된 `.env`(권한 600)에만 두고, 더 안전하게는 실행할 때 입력하거나 macOS 키체인을 쓰세요.
 
 **테스트 실행**
 
@@ -462,11 +488,12 @@ Trained models are too large for the repository. The web app's default profile i
 data/v4/
 ├── articles_v4.csv          # 415 current articles from 7 laws (columns: law, article_id, title, deleted, text, optional article_no)
 ├── system_v4.txt            # system prompt used to train the v4 4B model (four-part format)
-└── system_v4_concise.txt    # system prompt used to train the 14B QLoRA model (concise)
+└── system_v4_concise.txt    # concise Pro system prompt (draft for the untuned 27B, in the repo)
 models/v4/
-├── emb_v4_fp16/             # v4 fine-tuned embedding (sentence-transformers format, fp16)
-├── sllm_4b_lora_mlx_4bit/   # Qwen3-4B + v4 LoRA (MLX 4-bit) = web app Lawbot Fast
-└── sllm_14b_mlx_4bit/       # Qwen3-14B QLoRA (MLX 4-bit) = web app Lawbot Pro (optional; without it only Fast is available)
+├── emb_v4_fp16/             # v4 fine-tuned Qwen3-Embedding-0.6B (sentence-transformers format, fp16)
+├── reranker_4b_mlx_4bit/    # Qwen3-Reranker-4B (not fine-tuned, MLX 4-bit) = optional reranker
+├── sllm_4b_lora_mlx_4bit/   # Qwen3-4B + v4 LoRA (MLX 4-bit) = web app Lawbot Fast (small Macs)
+└── qwen3.8_27b_mlx_4bit/    # mlx-community/Qwen3.8-27B-4bit (untuned) = web app Lawbot Pro
 ```
 
 If `article_id` includes the law name (`근로기준법 제26조`), add an `article_no` column with the number only (`제26조`). The app uses `article_no` as the article number when present.
@@ -475,7 +502,13 @@ To build the MLX models, convert the merged Hugging Face models:
 
 ```bash
 uv run mlx_lm.convert --hf-path <merged 4B folder> --mlx-path models/v4/sllm_4b_lora_mlx_4bit -q --q-bits 4 --q-group-size 64
-uv run mlx_lm.convert --hf-path <merged 14B folder> --mlx-path models/v4/sllm_14b_mlx_4bit -q --q-bits 4 --q-group-size 64
+```
+
+Pro (27B) is downloaded as an already-quantized MLX model; the reranker is converted to 4-bit:
+
+```bash
+uv run hf download mlx-community/Qwen3.8-27B-4bit --local-dir models/v4/qwen3.8_27b_mlx_4bit
+uv run mlx_lm.convert --hf-path Qwen/Qwen3-Reranker-4B --mlx-path models/v4/reranker_4b_mlx_4bit -q --q-bits 4 --q-group-size 64 --dtype float16
 ```
 
 The previous v1 setup (130 Labor Standards Act articles) runs with `LAWBOT_PROFILE=v1` and uses the files below. The article and evaluation data (`data/`) and evaluation results (`results/`) are included in the repository; the evaluation scripts (`lawbot-eval` and others) use the v1 files.
@@ -494,56 +527,35 @@ uv run python -m lawbot.check_deploy        # current profile (default v4; v1 if
 uv run python -m lawbot.versions            # installed package versions and Mac specs
 ```
 
-**Run the web app**
+**Run the web app (settings file .env)**
 
-```bash
-export LAWBOT_USER='your-username'
-read -rs 'LAWBOT_PW?Password: ' && export LAWBOT_PW   # zsh (macOS default). bash: read -rsp 'Password: ' LAWBOT_PW
+Settings in a `.env` file at the repository root are read when `uv run lawbot-app` starts. Copy `.env.example` (32GB Mac mini defaults: v4, 0.6B embedding, 10 candidates → 4-bit reranker → 3, Pro 27B only) and fill in only the username and password:
+
+```zsh
+cp .env.example .env
+chmod 600 .env            # owner-only (it holds the password)
+open -e .env              # fill LAWBOT_USER= and LAWBOT_PW=, then save
 uv run lawbot-app
 ```
 
-In the fish shell:
-
-```fish
-set -gx LAWBOT_USER 'your-username'
-read -gxs -P 'Password: ' LAWBOT_PW   # -g global, -x export, -s hide input
-uv run lawbot-app
-```
-
-To avoid typing the password each time, store it in the macOS Keychain and read it from there:
-
-```fish
-security add-generic-password -a lawbot -s lawbot -w   # once; prompts for the password
-set -gx LAWBOT_PW (security find-generic-password -a lawbot -s lawbot -w)
-```
-
-Do not use fish's `set -Ux` (universal variables) for the password: it stores the value in plain text in `~/.config/fish/fish_variables`.
+`.env` is git-ignored. Variables already exported in the shell win over the file (e.g. `LAWBOT_RERANKER_ENABLED=0 uv run lawbot-app` for a one-off run). `LAWBOT_ENV_FILE=<file>` picks another file and `LAWBOT_ENV_FILE=` disables it. Only `LAWBOT_*` and `LLM_PATH` are allowed in the file. `check_deploy`, `bench_models`, `verify_reranker` and `eval_concise` read the same file. To keep the password out of the file, delete the `LAWBOT_PW=` line and use `read -rs 'LAWBOT_PW?Password: ' && export LAWBOT_PW` or the macOS Keychain (`LAWBOT_PW="$(security find-generic-password -a lawbot -s lawbot -w)" uv run lawbot-app`).
 
 If the v4 files (article CSV, 4B system prompt) are missing, the app refuses to start before loading any model and says what is missing. Until v4 is ready, run v1:
 
-```fish
-set -gx LAWBOT_PROFILE v1
-uv run lawbot-app
-set -e LAWBOT_PROFILE        # back to the default (v4)
+```zsh
+LAWBOT_PROFILE=v1 LAWBOT_MODELS= LAWBOT_RERANKER_ENABLED=0 uv run lawbot-app
 ```
 
-Choose the answer model in the UI. Both models use the same retrieval results (top 3 articles).
+`LAWBOT_MODELS` selects the answer models used on this machine (`.env.example`: `pro` only). With both (`fast,pro`) you choose in the UI, and both use the same retrieval results (top 3 articles).
 
 | Model | Setup (v4 default paths) | Default answer format |
 | --- | --- | --- |
 | Lawbot Fast | Qwen3-4B + LoRA (`models/v4/sllm_4b_lora_mlx_4bit`) | Full: four parts (Conclusion, Cited articles, Explanation, Notes) |
-| Lawbot Pro | Qwen3-14B QLoRA (`models/v4/sllm_14b_mlx_4bit`) with a concise system prompt (`data/v4/system_v4_concise.txt`) | Concise: conclusion + `근거:` the articles actually cited. Slower |
+| Lawbot Pro | Qwen3.8-27B 4-bit, untuned (`models/v4/qwen3.8_27b_mlx_4bit`) with a draft concise system prompt (`data/v4/system_v4_concise.txt`) | Concise: conclusion + `근거:` the articles actually cited. Slower |
 
 Switching models also switches the answer format to that model's default; you can change the format afterwards. A status line under the chat shows retrieval, model switch, first token, first character, generation speed and total time. If the Pro folder or Pro system prompt is missing, the app runs with Fast only and shows an error when Pro is selected.
 
-To change model paths or memory settings, set environment variables before launching (fish example; relative paths are resolved from the repository root):
-
-```fish
-set -gx LAWBOT_PRO_PATH models/v4/qwen3_14b_qlora_mlx_4bit   # if the Pro folder has another name
-set -gx LAWBOT_MAX_RESIDENT 1     # low memory: keep only the selected model (reloads on switch)
-uv run lawbot-app
-set -e LAWBOT_MAX_RESIDENT        # back to the default (both models resident)
-```
+Change model paths or memory settings in `.env` (relative paths are resolved from the repository root); the table below lists every variable.
 
 The web app is local-only, for use on this Mac. The server listens only on `127.0.0.1:7860`; open `http://127.0.0.1:7860` in a browser and log in. Other devices on the network cannot connect, and no public Gradio share link is created. The address, port and share setting cannot be changed through environment variables such as `GRADIO_SERVER_NAME` (`src/lawbot/security.py`).
 
@@ -553,17 +565,36 @@ The web app is local-only, for use on this Mac. The server listens only on `127.
 | `LAWBOT_PW` | Yes | Login password (must not be empty or whitespace only) |
 | `LAWBOT_PROFILE` | No | `v4` (default, 415 articles from 7 laws) or `v1` (130 Labor Standards Act articles, previous setup) |
 | `LAWBOT_FAST_PATH` | No | Fast (4B) model folder. Default v4 `models/v4/sllm_4b_lora_mlx_4bit`, v1 `models/sllm_mlx_4bit` |
-| `LAWBOT_PRO_PATH` | No | Pro (14B) model folder. Default v4 `models/v4/sllm_14b_mlx_4bit`, v1 `models/qwen3_14b_mlx_4bit` |
+| `LAWBOT_PRO_PATH` | No | Pro model folder. Default v4 `models/v4/qwen3.8_27b_mlx_4bit` (27B), v1 `models/qwen3_14b_mlx_4bit` (14B) |
+| `LAWBOT_MODELS` | No | Comma-separated answer model keys to use (`pro`, `fast`, `fast,pro`); the first is the default. Empty: both |
+| `LAWBOT_ENV_FILE` | No | Settings file to read (default `.env` at the repo root, skipped if absent); empty disables it. Shell only |
 | `LAWBOT_PRO_SYSTEM` | No | Pro concise system prompt file. Default v4 `data/v4/system_v4_concise.txt`, v1 `data/system_v1_concise.txt` |
 | `LAWBOT_V4_ARTICLES` / `LAWBOT_V4_EMB` / `LAWBOT_V4_SYSTEM` | No | v4 article CSV / embedding folder / 4B system prompt file (defaults `data/v4/articles_v4.csv`, `models/v4/emb_v4_fp16`, `data/v4/system_v4.txt`) |
 | `LAWBOT_EMB` | No | v1 retrieval embedding folder (default `models/emb_final_v3_fp16`) |
 | `LAWBOT_MAX_RESIDENT` | No | Answer models kept in memory: `2` (default, Fast and Pro both resident, no switch wait) or `1` (selected model only, reloads on switch) |
 | `LAWBOT_EARLY_STOP` | No | `1` stops generation when 【설명】 starts in the concise format (off by default, not yet validated) |
+| `LAWBOT_RERANKER_ENABLED` | No | `1` re-ranks the embedding candidates with Qwen3-Reranker-4B and keeps the top 3 (default `0`: no reranker is loaded, plain embedding top 3). v4 profile only |
+| `LAWBOT_RERANKER_MODEL_PATH` | No | Reranker MLX folder (default `models/v4/reranker_4b_mlx_4bit`) |
+| `LAWBOT_RERANKER_CANDIDATES` | No | Embedding candidates passed to the reranker (default `10`, the experiment value; at least 3) |
 | `LLM_PATH` | No | SLM folder used by the evaluation scripts (`eval_oos`, `eval_refusal`), e.g. `models/sllm_mlx_8bit`. Not used by the web app |
 
 If either `LAWBOT_USER` or `LAWBOT_PW` is missing or empty, the app refuses to start with a `RuntimeError` before loading any model. There is no way to run the server without a login.
 
-> Warning: never put the password in source code, shell profiles, scripts or any other file that goes into Git. Type it at launch as above, or use a secret store such as the macOS Keychain.
+**Reranker (optional, v4)**
+
+When enabled, retrieval becomes `embedding top 10 → Qwen3-Reranker-4B (not fine-tuned) → reranked top 3 → answer model`. Fast and Pro share the reranked context, and the reranker is loaded once at startup and stays resident. When disabled (default) it is not loaded and the app uses the embedding top 3 as before. Scoring (instruction, prompt, 2,560-token limit, yes/no logits, ties kept in embedding order) matches the v4 reranker experiment notebook (`src/lawbot/reranker.py`).
+
+`.env.example` enables it (`LAWBOT_RERANKER_ENABLED=1`); see "Model setup" above for the conversion command.
+
+```zsh
+uv run python -m lawbot.check_deploy           # with .env: reranker folder, quantization, yes/no tokens
+uv run pytest -m models tests/test_reranker_models.py   # real load + scoring smoke test
+LAWBOT_RERANKER_ENABLED=0 uv run lawbot-app    # one-off run without it
+```
+
+Reranker errors (e.g. NaN scores) are shown as errors instead of silently falling back to the embedding order. A missing folder, or enabling it with the v1 profile, stops the app before any model is loaded. Agreement with the Colab run (transformers fp16) is checked separately on the same questions and embedding top 10 with `uv run python -m lawbot.verify_reranker --colab <v4 folder> --split val`; latency and memory with `lawbot.bench_models` run once with the reranker on and once off.
+
+> Warning: never put the password in source code, shell profiles, scripts, `.env.example` or any other file that goes into Git. If you keep it in a file, use only the git-ignored `.env` (mode 600); typing it at launch or the macOS Keychain is safer.
 
 **Run the tests**
 
