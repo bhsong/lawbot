@@ -187,7 +187,9 @@ v4 파일(조문 CSV, 4B system)이 없으면 모델을 올리기 전에 실행�
 LAWBOT_PROFILE=v1 LAWBOT_MODELS= LAWBOT_RERANKER_ENABLED=0 uv run lawbot-app
 ```
 
-`LAWBOT_MODELS`로 이 맥에서 쓸 답변 모델을 고릅니다(`.env.example`은 `pro`만). 둘 다 쓰면(`fast,pro`) 화면에서 고르고, 두 모델은 같은 검색 결과(상위 3개 조문)를 참고합니다.
+`LAWBOT_MODELS`로 이 맥에서 쓸 답변 모델을 고릅니다(`.env.example`은 `pro`만). 빠진 모델은 올리지 않고 화면에 "이 기기에서 사용 안 함"으로 비활성 표시합니다(고르면 기본 모델로 되돌림). 둘 다 쓰면(`fast,pro`) 화면에서 고르고, 두 모델은 같은 검색 결과(상위 3개 조문)를 참고합니다.
+
+답변 형식에서 Fast(4항목으로 학습)는 항상 4항목으로 생성하고 "간결"은 화면에서 결론·근거만 보여 줍니다. 간결형이 기본인 Pro는 "전체 (4항목)"를 고르면 4항목 system(`data/v4/system_v4.txt`, v1은 학습 system)으로 다시 생성합니다.
 
 | 모델 | 구성 (v4 기본 경로) | 기본 답변 형식 |
 | --- | --- | --- |
@@ -546,7 +548,7 @@ If the v4 files (article CSV, 4B system prompt) are missing, the app refuses to 
 LAWBOT_PROFILE=v1 LAWBOT_MODELS= LAWBOT_RERANKER_ENABLED=0 uv run lawbot-app
 ```
 
-`LAWBOT_MODELS` selects the answer models used on this machine (`.env.example`: `pro` only). With both (`fast,pro`) you choose in the UI, and both use the same retrieval results (top 3 articles).
+`LAWBOT_MODELS` selects the answer models used on this machine (`.env.example`: `pro` only). Models left out are not loaded and appear disabled in the UI ("이 기기에서 사용 안 함"; selecting one switches back to the default). With both (`fast,pro`) you choose in the UI, and both use the same retrieval results (top 3 articles). Fast (trained on the four-part format) always generates four parts and "간결" only trims the display; Pro (concise by default) regenerates with the four-part system prompt (`data/v4/system_v4.txt`) when "전체 (4항목)" is selected.
 
 | Model | Setup (v4 default paths) | Default answer format |
 | --- | --- | --- |

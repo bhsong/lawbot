@@ -137,6 +137,8 @@ def run(name=None):
     check_emb(p, out)
     for spec in p.models:
         check_llm(spec, out)
+    for spec in p.disabled:             # LAWBOT_MODELS에서 뺀 모델은 검사하지 않음 (화면에 비활성 표시)
+        out.append(('INFO', f'{spec.label}: 이 기기에서 사용 안 함 (LAWBOT_MODELS)'))
     check_reranker(p, out)
     return out
 

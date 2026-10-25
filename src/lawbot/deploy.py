@@ -24,6 +24,7 @@ class Profile:
     doc_style: str           # 검색 문서·참고 조문 형식 (retriever.DOC_STYLES, llm.build_messages)
     system_file: Path | None # None이면 llm.SYSTEM (v1 학습 system). 모델별 system_file이 있으면 그쪽 우선
     models: tuple            # (Fast, Pro). 첫 번째가 기본 선택
+    disabled: tuple = ()     # LAWBOT_MODELS에서 뺀 모델: 화면에 '사용 안 함'으로만 표시하고 올리지 않음
 
 def _path(env, default):
     """환경 변수가 있으면 그 경로. 상대 경로는 레포 최상위 기준 절대 경로로 바꾼다
@@ -32,7 +33,8 @@ def _path(env, default):
     return p if p.is_absolute() else paths.ROOT / p
 
 def get_profile(name=None):
-    """프로필 + LAWBOT_MODELS로 고른 답변 모델 (예: 'pro'면 Pro만, 'fast,pro'면 둘 다. 첫 번째가 기본 선택)"""
+    """프로필 + LAWBOT_MODELS로 고른 답변 모델 (예: 'pro'면 Pro만, 'fast,pro'면 둘 다. 첫 번째가 기본 선택)
+    고르지 않은 모델은 disabled로 옮겨 화면에 비활성으로 남긴다"""
     p = _profile(name or os.environ.get('LAWBOT_PROFILE', 'v4'))   # 기본 v4. v4 자산이 없으면 LAWBOT_PROFILE=v1
     keys = [k.strip() for k in os.environ.get('LAWBOT_MODELS', '').split(',') if k.strip()]
     if not keys:
@@ -41,7 +43,8 @@ def get_profile(name=None):
     bad = [k for k in keys if k not in specs]
     if bad or len(set(keys)) != len(keys):
         raise ValueError(f"LAWBOT_MODELS는 {', '.join(specs)} 중에서 쉼표로: {os.environ['LAWBOT_MODELS']!r}")
-    return replace(p, models=tuple(specs[k] for k in keys))
+    return replace(p, models=tuple(specs[k] for k in keys),
+                   disabled=tuple(m for m in p.models if m.key not in keys))
 
 def _profile(name):
     # Fast(4B LoRA)는 학습한 4섹션 그대로, Pro는 간결형 system으로 처음부터 짧게 생성

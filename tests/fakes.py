@@ -27,8 +27,9 @@ class FakeLLM:
         FakeLLM.created += 1
         self.path, self.kw = path, kw
 
-    def stream(self, question, hits):
+    def stream(self, question, hits, system=None):
         self.args = (question, hits)
+        self.system = system
         for c in FakeLLM.chunks:
             if isinstance(c, Exception):
                 raise c
