@@ -11,6 +11,7 @@ import os
 import time
 from pathlib import Path
 import pandas as pd
+from lawbot import envfile
 from lawbot.answer_format import cited_hits, concise, sections
 from lawbot.paths import DATA, RESULTS
 from lawbot.refusal import is_refusal
@@ -63,6 +64,7 @@ def main():
     val = pd.read_csv(val_path, encoding='utf-8-sig', dtype=str)
     val = val.head(args.n) if args.n else val
 
+    envfile.load()
     os.environ['LAWBOT_MAX_RESIDENT'] = '1'     # 실험은 한 모델만 올림 (Pro 실험이면 미리 올린 Fast는 내려감)
     app = load_app()
     alt = None

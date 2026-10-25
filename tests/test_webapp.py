@@ -326,3 +326,72 @@ def test_eval_concise_refuses_test_set(env):
     env.setattr('sys.argv', ['eval_concise', '--val', str(paths.EVAL), '--tag', 'x'])
     with pytest.raises(SystemExit, match='평가 전용'):
         ec.main()
+
+# ---- 실행 설정 파일 (.env) ----
+from lawbot import envfile
+
+def test_env_example_is_complete_without_secrets(env):
+    """레포의 .env.example: 형식이 맞고, 비밀번호·사용자명은 비어 있고, 모든 값이 앱 설정으로 읽힌다"""
+    values = envfile.parse((paths.ROOT / '.env.example').read_text(encoding='utf-8'))
+    assert values['LAWBOT_USER'] == '' and values['LAWBOT_PW'] == ''
+    assert values['LAWBOT_RERANKER_ENABLED'] == '1' and values['LAWBOT_MODELS'] == 'pro'
+    for k, v in values.items():
+        env.setenv(k, v)
+    p = deploy.get_profile()
+    assert p.name == 'v4' and [m.key for m in p.models] == ['pro']
+    assert p.models[0].path == paths.V4_PRO and p.models[0].system_file == paths.V4_SYSTEM_CONCISE
+    assert p.emb == paths.V4_EMB and p.articles == paths.V4_ARTICLES
+    assert deploy.reranker(p) == deploy.RerankerConfig(paths.V4_RERANKER, 10)
+    assert paths.V4_SYSTEM_CONCISE.is_file()                       # Pro 간결형 system은 저장소에 있음
+
+def test_env_file_loading(env, tmp_path, capsys):
+    f = tmp_path / 'lawbot.env'
+    f.write_text("# 주석\nexport LAWBOT_PROFILE=v4\nLAWBOT_USER = 'me'\nLAWBOT_PW=\"p w#1\"\n"
+                 "LAWBOT_MODELS=pro  # 끝 주석\nLAWBOT_EARLY_STOP=1\n", encoding='utf-8')
+    f.chmod(0o600)
+    env.setenv('LAWBOT_ENV_FILE', str(f))
+    env.delenv('LAWBOT_PROFILE')                                 # conftest의 v1을 지워 파일 값이 들어가게
+    env.setenv('LAWBOT_EARLY_STOP', '0')                         # 셸 값이 우선
+    assert envfile.load() == f
+    import os
+    assert (os.environ['LAWBOT_PROFILE'], os.environ['LAWBOT_USER'], os.environ['LAWBOT_PW']) == ('v4', 'me', 'p w#1')
+    assert os.environ['LAWBOT_MODELS'] == 'pro' and os.environ['LAWBOT_EARLY_STOP'] == '0'
+    out = capsys.readouterr().out
+    assert 'p w#1' not in out and '경고' not in out               # 값은 출력하지 않음
+    f.chmod(0o644)
+    env.delenv('LAWBOT_PW')
+    envfile.load()
+    assert 'chmod 600' in capsys.readouterr().out                 # 비밀번호가 든 파일을 남이 읽을 수 있으면 경고
+
+def test_env_file_errors_and_defaults(env, tmp_path):
+    env.setenv('LAWBOT_ENV_FILE', str(tmp_path / '없음.env'))
+    with pytest.raises(FileNotFoundError):                        # 직접 지정한 파일이 없으면 오류
+        envfile.load()
+    env.setenv('LAWBOT_ENV_FILE', '')
+    assert envfile.load() is None                                 # 빈 값이면 읽지 않음
+    env.delenv('LAWBOT_ENV_FILE')
+    env.setattr(envfile, 'DEFAULT', tmp_path / '.env')
+    assert envfile.load() is None                                 # 기본 .env가 없으면 아무것도 안 함
+    for bad in ('LAWBOT_PW', 'GRADIO_SERVER_NAME=0.0.0.0', 'PATH=/tmp', 'LAWBOT_ENV_FILE=x'):
+        with pytest.raises(ValueError, match='1번째 줄'):
+            envfile.parse(bad)
+
+def test_models_selection(env):
+    env.setenv('LAWBOT_MODELS', 'pro')
+    assert [m.key for m in deploy.get_profile('v4').models] == ['pro']
+    env.setenv('LAWBOT_MODELS', 'pro, fast')
+    assert [m.key for m in deploy.get_profile('v1').models] == ['pro', 'fast']   # 첫 번째가 기본 선택
+    for bad in ('ultra', 'pro,pro'):
+        env.setenv('LAWBOT_MODELS', bad)
+        with pytest.raises(ValueError, match='LAWBOT_MODELS'):
+            deploy.get_profile('v4')
+
+def test_pro_only_app(env):
+    env.setenv('LAWBOT_MODELS', 'pro')
+    a = make_app(env, resident=1)
+    assert list(a.models.specs) == ['pro'] and list(a.models.loaded) == ['pro']
+    demo = app_mod.build_demo(a)
+    radios = {c.label: c for c in demo.blocks.values() if isinstance(c, app_mod.gr.Radio)}
+    assert radios['답변 모델'].value == 'pro' and radios['답변 형식'].value == 'concise'
+    text, _, stats = list(app_mod.make_chat(a)('해고 예고?', [], 'pro', 'concise'))[-1]
+    assert stats.startswith('Lawbot Pro')

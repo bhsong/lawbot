@@ -1,5 +1,6 @@
 # src/lawbot/app.py  →  uv run lawbot-app
 import gradio as gr
+from lawbot import envfile
 from lawbot.answer_format import render
 from lawbot.service import ask, load_app
 from lawbot.security import get_local_launch_config
@@ -87,7 +88,7 @@ def build_demo(app):                 # 화면만 만든다: 인증 검사·모�
             with gr.Column(scale=3):
                 with gr.Row():
                     model = gr.Radio(model_choices(app), value=p.models[0].key, label='답변 모델',
-                                     info='Fast는 4B, Pro는 14B 모델입니다. 같은 조문을 참고하며, Pro는 답변이 더 느립니다.')
+                                     info='모델마다 같은 조문을 참고합니다.' if len(p.models) > 1 else None)
                     fmt = gr.Radio([('간결', 'concise'), ('전체 (4항목)', 'full')], value=p.models[0].fmt,
                                    label='답변 형식')
                 model.change(default_fmt(app), model, fmt, queue=False, api_visibility='private')
@@ -104,6 +105,7 @@ def build_demo(app):                 # 화면만 만든다: 인증 검사·모�
     return demo
 
 def main():
+    envfile.load()                       # .env (셸에 있는 변수 우선). 인증·모델 설정을 읽기 전에
     config = get_local_launch_config()   # 인증 정보가 없으면 모델 로딩 전에 실행 거부
     demo = build_demo(load_app())
     demo.launch(**config)            # 127.0.0.1:7860, 로그인 필수, 공유 링크 없음

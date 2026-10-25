@@ -1,7 +1,7 @@
 # src/lawbot/deploy.py  →  웹앱 배포 설정: 검색 프로필(v1/v4)과 답변 모델(Fast/Pro) 레지스트리
 # 모델 라이브러리를 import하지 않는다 (check_deploy·테스트가 모델 없이 읽음)
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from lawbot import paths
 
@@ -32,19 +32,30 @@ def _path(env, default):
     return p if p.is_absolute() else paths.ROOT / p
 
 def get_profile(name=None):
-    name = name or os.environ.get('LAWBOT_PROFILE', 'v4')     # 기본 v4. v4 자산이 없으면 LAWBOT_PROFILE=v1
-    # Fast(4B LoRA)는 학습한 4섹션 그대로, Pro(14B)는 간결형 system으로 처음부터 짧게 생성 (14B QLoRA도 간결형으로 학습)
+    """프로필 + LAWBOT_MODELS로 고른 답변 모델 (예: 'pro'면 Pro만, 'fast,pro'면 둘 다. 첫 번째가 기본 선택)"""
+    p = _profile(name or os.environ.get('LAWBOT_PROFILE', 'v4'))   # 기본 v4. v4 자산이 없으면 LAWBOT_PROFILE=v1
+    keys = [k.strip() for k in os.environ.get('LAWBOT_MODELS', '').split(',') if k.strip()]
+    if not keys:
+        return p
+    specs = {m.key: m for m in p.models}
+    bad = [k for k in keys if k not in specs]
+    if bad or len(set(keys)) != len(keys):
+        raise ValueError(f"LAWBOT_MODELS는 {', '.join(specs)} 중에서 쉼표로: {os.environ['LAWBOT_MODELS']!r}")
+    return replace(p, models=tuple(specs[k] for k in keys))
+
+def _profile(name):
+    # Fast(4B LoRA)는 학습한 4섹션 그대로, Pro는 간결형 system으로 처음부터 짧게 생성
     if name == 'v1':         # 이전 동작: 근로기준법 130조문, v1 검색·4B. Pro는 튜닝 전 14B로 속도·메모리 시험
         return Profile('v1', '근로기준법 챗봇', paths.ARTICLES, _path('LAWBOT_EMB', paths.EMB), 512, 'v1', None, (
             ModelSpec('fast', 'Lawbot Fast', '4B · 빠른 응답, 4항목 답변', _path('LAWBOT_FAST_PATH', paths.LLM_4BIT), 'full'),
             ModelSpec('pro', 'Lawbot Pro', '14B · 큰 모델, 간결한 답변, 응답이 더 느림',
                       _path('LAWBOT_PRO_PATH', paths.PRO_BASE), 'concise',
                       _path('LAWBOT_PRO_SYSTEM', paths.SYSTEM_V1_CONCISE))))
-    if name == 'v4':         # 7개 법률 415조문, v4 검색 (MAX_SEQ 2304). 경로는 paths.py의 미확인 자리표시
+    if name == 'v4':         # 7개 법률 415조문, v4 검색 (MAX_SEQ 2304). Pro는 튜닝 전 Qwen3.8-27B 4비트
         return Profile('v4', '노동법 챗봇', _path('LAWBOT_V4_ARTICLES', paths.V4_ARTICLES),
                        _path('LAWBOT_V4_EMB', paths.V4_EMB), 2304, 'v4', _path('LAWBOT_V4_SYSTEM', paths.V4_SYSTEM), (
             ModelSpec('fast', 'Lawbot Fast', '4B · 빠른 응답, 4항목 답변', _path('LAWBOT_FAST_PATH', paths.V4_FAST), 'full'),
-            ModelSpec('pro', 'Lawbot Pro', '14B · 큰 모델, 간결한 답변, 응답이 더 느림',
+            ModelSpec('pro', 'Lawbot Pro', '27B · 큰 모델(튜닝 전), 간결한 답변, 응답이 더 느림',
                       _path('LAWBOT_PRO_PATH', paths.V4_PRO), 'concise',
                       _path('LAWBOT_PRO_SYSTEM', paths.V4_SYSTEM_CONCISE))))
     raise ValueError(f'알 수 없는 LAWBOT_PROFILE: {name!r} (v1 또는 v4)')

@@ -7,6 +7,7 @@ ENV_KEYS = ('LAWBOT_USER', 'LAWBOT_PW', 'LLM_PATH',
             'LAWBOT_PROFILE', 'LAWBOT_EMB', 'LAWBOT_FAST_PATH', 'LAWBOT_PRO_PATH', 'LAWBOT_PRO_SYSTEM', 'LAWBOT_MAX_RESIDENT',
             'LAWBOT_EARLY_STOP', 'LAWBOT_V4_ARTICLES', 'LAWBOT_V4_EMB', 'LAWBOT_V4_SYSTEM',
             'LAWBOT_RERANKER_ENABLED', 'LAWBOT_RERANKER_MODEL_PATH', 'LAWBOT_RERANKER_CANDIDATES',
+            'LAWBOT_MODELS', 'LAWBOT_ENV_FILE',
             'GRADIO_SERVER_NAME', 'GRADIO_SERVER_PORT', 'GRADIO_SHARE')
 
 @pytest.fixture(autouse=True)
@@ -15,6 +16,7 @@ def env(request, monkeypatch):
     (integration 테스트는 127.0.0.1의 테스트 서버 접속만 허용)"""
     for k in ENV_KEYS:
         monkeypatch.delenv(k, raising=False)
+    monkeypatch.setenv('LAWBOT_ENV_FILE', '')    # 개발자의 .env를 읽지 않음 (envfile 테스트는 직접 지정)
     monkeypatch.setenv('LAWBOT_PROFILE', 'v1')   # 가짜 모델·조문(fakes.py)은 v1 형식. v4·기본값 테스트는 직접 바꿈
     if request.node.get_closest_marker('models') is None:
         local_ok = request.node.get_closest_marker('integration') is not None

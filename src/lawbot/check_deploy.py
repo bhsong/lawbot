@@ -8,7 +8,7 @@ import sys
 from collections import Counter
 from pathlib import Path
 import pandas as pd
-from lawbot import deploy
+from lawbot import deploy, envfile
 from lawbot.deploy import get_profile
 
 EXPECTED_ARTICLES = {'v1': 130, 'v4': 415}
@@ -141,6 +141,7 @@ def run(name=None):
     return out
 
 def main():
+    envfile.load()                       # 웹앱과 같은 .env 설정으로 검사
     out = run(sys.argv[1] if len(sys.argv) > 1 else None)
     for level, msg in out:
         print(f'[{level:4}] {msg}')

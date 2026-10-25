@@ -12,7 +12,7 @@ import time
 from pathlib import Path
 import numpy as np
 import pandas as pd
-from lawbot import deploy
+from lawbot import deploy, envfile
 from lawbot.paths import RESULTS
 from lawbot.reranker import Reranker, pair_text, rank_order
 from lawbot.retriever import DOC_STYLES
@@ -62,6 +62,7 @@ def main():
     ap.add_argument('--limit', type=int, default=0, help='앞에서부터 N문항만 (0: 전체)')
     ap.add_argument('--tag', default='mlx4bit')
     args = ap.parse_args()
+    envfile.load()
     v = args.colab
     frame = colab_frame(v, args.split)
     colab = read(v / 'reranker_exp' / f'r4_{args.split}.csv').set_index('id')

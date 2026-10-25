@@ -9,6 +9,7 @@ import re
 import subprocess
 import time
 import pandas as pd
+from lawbot import envfile
 from lawbot.answer_format import concise
 from lawbot.paths import RESULTS
 from lawbot.service import ask, load_app
@@ -51,11 +52,12 @@ def memory():
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('--tag', required=True, help='결과 파일 이름 (예: m32_v1_r2)')
-    ap.add_argument('--models', default='fast,pro', help='번갈아 물을 모델 key 순서')
+    ap.add_argument('--models', default=None, help='번갈아 물을 모델 key 순서 (기본: 앱에 설정된 모델 전부)')
     ap.add_argument('--rounds', type=int, default=2, help='질문 목록 반복 횟수 (1회차는 워밍업 포함)')
     ap.add_argument('--early-stop', action='store_true', help='간결형 조기 종료 조건으로 측정')
     args = ap.parse_args()
     pd.set_option('display.width', 200, 'display.max_columns', None)
+    envfile.load()
 
     print('시작 메모리', memory())
     t0 = time.perf_counter()
@@ -64,7 +66,7 @@ def main():
     rows = []
     for rnd in range(args.rounds):
         for q in QUESTIONS:
-            for key in args.models.split(','):
+            for key in (args.models.split(',') if args.models else list(app.models.specs)):
                 for stage, hits, raw, st in ask(app, q, key, early_stop=args.early_stop):
                     pass
                 rows.append({'round': rnd, 'model': key, 'fmt': app.models.specs[key].fmt, 'question': q,

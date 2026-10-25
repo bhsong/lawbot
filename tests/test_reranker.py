@@ -263,10 +263,7 @@ def test_reranker_loaded_once(env, tmp_path):
     a = v4_app(env, tmp_path, enabled=True)
     chat = app_mod.make_chat(a)
     for key in ('fast', 'pro', 'fast'):
-        try:
-            list(chat('질문', [], key, 'full'))
-        except app_mod.gr.Error:                  # v4 Pro system 파일이 저장소에 없으면 Pro는 오류 안내
-            pass
+        list(chat('질문', [], key, 'full'))
     assert FakeReranker.created == 1 and len(a.reranker.calls) == 3
 
 def test_enabled_candidates_env(env, tmp_path):
