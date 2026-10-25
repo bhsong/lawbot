@@ -56,6 +56,28 @@ def max_resident():
         raise ValueError(f'LAWBOT_MAX_RESIDENT는 1 또는 2: {n}')
     return n
 
+@dataclass(frozen=True)
+class RerankerConfig:
+    path: Path               # Qwen3-Reranker-4B MLX 폴더 (절대 경로)
+    candidates: int          # 리랭커에 넘길 임베딩 상위 후보 수 (v4 실험 10). 최종 조문 수는 service.TOP_K
+
+def reranker_path():
+    return _path('LAWBOT_RERANKER_MODEL_PATH', paths.V4_RERANKER)
+
+def reranker(profile):
+    """LAWBOT_RERANKER_ENABLED=1이면 리랭커 설정, 아니면 None (기본 꺼짐: 임베딩 상위 3개를 그대로 씀)
+    v4 실험(법령명이 붙은 조문 형식)으로만 검증했으므로 v1 프로필에서 켜면 거부한다"""
+    flag = os.environ.get('LAWBOT_RERANKER_ENABLED', '0')
+    if flag not in ('0', '1'):
+        raise ValueError(f'LAWBOT_RERANKER_ENABLED는 0 또는 1: {flag!r}')
+    if flag == '0':
+        return None
+    if profile.doc_style != 'v4':
+        raise ValueError(f'리랭커는 v4 프로필에서만 쓸 수 있습니다 (현재 {profile.name}). '
+                         'LAWBOT_RERANKER_ENABLED=0으로 끄거나 LAWBOT_PROFILE=v4로 실행하세요.')
+    n = int(os.environ.get('LAWBOT_RERANKER_CANDIDATES', '10'))
+    return RerankerConfig(reranker_path(), n)
+
 def early_stop():
     """간결형에서 【설명】이 시작되면 생성을 멈출지. val 실험(eval_concise)으로 확인하기 전에는 끈다"""
     return os.environ.get('LAWBOT_EARLY_STOP', '0') == '1'

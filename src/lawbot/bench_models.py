@@ -1,6 +1,7 @@
 # src/lawbot/bench_models.py  →  uv run python -m lawbot.bench_models --tag m32_v1_r2
 # 웹앱과 같은 경로(service.load_app·ask)로 Fast/Pro를 번갈아 질문하며 지연·메모리를 잰다 (UI 없이, 맥 전용)
 #   LAWBOT_MAX_RESIDENT=2: 동시 상주 / 1: 전환 때마다 다시 로딩 (전환 시간 측정)
+#   LAWBOT_RERANKER_ENABLED=1: 리랭커 포함 (같은 tag 규칙으로 0/1을 각각 돌려 메모리·지연 전후 비교)
 # 결과: results/bench_<tag>.csv (질문마다 한 행) + 모델별 중앙값 표
 import argparse
 import platform
@@ -71,16 +72,19 @@ def main():
                              'answer_len': len(raw), 'concise_len': len(concise(raw, hits)),
                              'resident': ','.join(app.models.loaded), 'answer': raw})
                 r = rows[-1]
-                print(f"[{rnd}] {key:4} load={r['load'] or 0:5.1f} ttft={r.get('ttft', 0):5.2f} "
+                print(f"[{rnd}] {key:4} search={r['search']:5.2f} rerank={r.get('rerank') or 0:5.2f} "
+                      f"load={r['load'] or 0:5.1f} ttft={r.get('ttft', 0):5.2f} "
                       f"first={r.get('first_text', 0):5.2f} tps={r['tps'] or 0:5.1f} total={r['total']:5.1f} "
                       f"mlx_peak={r.get('mlx_peak_gb')} pressure={r['pressure']} swap={r['swap_used_gb']}")
     o = pd.DataFrame(rows)
     RESULTS.mkdir(exist_ok=True)
     o.to_csv(RESULTS / f'bench_{args.tag}.csv', index=False, encoding='utf-8-sig')
     warm = o[o['round'] > 0] if args.rounds > 1 else o
-    cols = ['search', 'ttft', 'first_text', 'tps', 'total', 'gen_tokens', 'prompt_tokens', 'prompt_tps']
+    cols = ['search', 'rerank', 'ttft', 'first_text', 'tps', 'total', 'gen_tokens', 'prompt_tokens', 'prompt_tps']
     print(f"\n[중앙값, {'워밍업(1회차) 제외 ' if args.rounds > 1 else ''}{len(warm)}건]")
     print(warm.groupby('model')[[c for c in cols if c in warm]].median().round(2))
+    print('[p95]')
+    print(warm.groupby('model')[[c for c in cols if c in warm]].quantile(.95).round(2))
     print('\n전환(로딩) 초:', o.loc[o['load'].notna(), ['round', 'model', 'load']].round(1).values.tolist())
     print('최대 MLX 메모리(GB):', o['mlx_peak_gb'].max() if 'mlx_peak_gb' in o else None,
           '· 최악 압박:', o['pressure'].dropna().unique().tolist(), '· 최대 스왑(GB):', o['swap_used_gb'].max())

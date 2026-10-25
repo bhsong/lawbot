@@ -12,8 +12,9 @@ EMPTY = '답변을 생성하지 못했습니다. 다시 질문해 주세요.'
 
 def fmt_sources(hits):
     return '\n\n---\n\n'.join(
-        f"**{h['law'] + ' ' if 'law' in h else ''}{h['article_id']} {h['title']}** · 유사도 {h['score']:.3f}\n\n"
-        f"{h['doc'].split(chr(10), 1)[1]}"
+        f"**{h['law'] + ' ' if 'law' in h else ''}{h['article_id']} {h['title']}** · 유사도 {h['score']:.3f}"
+        + (f" · 리랭커 {h['rerank_score']:.3f} (임베딩 {h['emb_rank']}위)" if 'rerank_score' in h else '')
+        + f"\n\n{h['doc'].split(chr(10), 1)[1]}"
         for h in hits)
 
 def fmt_stats(label, stage, st):
@@ -21,6 +22,8 @@ def fmt_stats(label, stage, st):
     if stage == 'load':
         return f'⏳ {label} 불러오는 중… (모델 전환 대기, 검색 {st["search"]:.2f}초)'
     parts = [label, f"검색 {st['search']:.2f}초"]
+    if 'rerank' in st:
+        parts.append(f"리랭킹 {st['rerank']:.2f}초")
     if st['load'] is not None:
         parts.append(f"모델 전환 {st['load']:.1f}초")
     if 'ttft' in st:

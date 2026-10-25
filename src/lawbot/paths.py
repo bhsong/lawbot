@@ -16,5 +16,6 @@ V4_SYSTEM_CONCISE = DATA / "v4" / "system_v4_concise.txt"  # v4 14B QLoRA 학습
 V4_EMB = MODELS / "v4" / "emb_v4_fp16"             # v4 튜닝 Qwen3-Embedding-0.6B
 V4_FAST = MODELS / "v4" / "sllm_4b_lora_mlx_4bit"  # Qwen3-4B + v4 LoRA 병합 → MLX 4비트
 V4_PRO = MODELS / "v4" / "sllm_14b_mlx_4bit"       # Qwen3-14B MLX 4비트 (v4 QLoRA 완성 시 교체)
+V4_RERANKER = MODELS / "v4" / "reranker_4b_mlx_4bit"  # Qwen3-Reranker-4B(튜닝 없음) → MLX 4비트 (LAWBOT_RERANKER_ENABLED=1일 때만)
 PRO_BASE = MODELS / "qwen3_14b_mlx_4bit"           # v1 프로필에서 시험할 14B (튜닝 전)
 SYSTEM_V1_CONCISE = DATA / "system_v1_concise.txt" # 튜닝 전 14B용 간결형 system (v1 4섹션 system을 줄인 초안)
