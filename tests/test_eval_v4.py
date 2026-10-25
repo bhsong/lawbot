@@ -167,3 +167,16 @@ def test_eval_concise_refuses_v4_test_files(env):
         env.setattr('sys.argv', ['eval_concise', '--val', str(DATA / 'v4' / f), '--tag', 'x'])
         with pytest.raises(SystemExit, match='평가 전용'):
             ec.main()
+
+def test_default_stage_is_all(env, monkeypatch, tmp_path):
+    # 단계를 생략하면 네 단계를 차례로 실행하고 요약까지
+    calls = []
+    env.setenv('LAWBOT_MODELS', 'pro')                          # 맥 미니 .env와 같은 구성
+    monkeypatch.setattr(ev, 'OUT', tmp_path)
+    monkeypatch.setattr(service, 'load_app', fake_app)
+    for name in ('run_retrieval', 'run_answers', 'run_oos', 'run_refusal'):
+        monkeypatch.setattr(ev, name, lambda *a, n=name, **k: calls.append(n))
+    monkeypatch.setattr(ev, 'summarize', lambda tag, test: calls.append(('summary', tag)))
+    monkeypatch.setattr('sys.argv', ['lawbot-eval-v4'])
+    ev.main()
+    assert calls == ['run_retrieval', 'run_answers', 'run_oos', 'run_refusal', ('summary', 'pro_concise_rr')]

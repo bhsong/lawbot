@@ -263,12 +263,12 @@ GitHub Actions(`.github/workflows/ci.yml`)가 `main` 푸시와 모든 pull reque
 `lawbot.eval_v4`가 `.env` 구성 그대로(v4 검색 415조문 + 리랭커 + 답변 모델) 웹앱과 같은 경로로 평가합니다. 문항은 `data/v4/qa_full_v4.csv`·`split_v4.csv`의 test 2,075문항(근로기준법 A_lsa 650 + 신규 6개 법률 B_newlaw 1,425)입니다. 결과는 `results/v4/<단계>_<tag>.csv`에 문항마다 바로 쓰므로 중간에 멈춰도 같은 명령으로 이어집니다.
 
 ```zsh
-uv run python -m lawbot.eval_v4 retrieval   # test 2,075 전체: 임베딩 Recall@1·3·10, 리랭킹 Recall@1·3·MRR@3
-uv run python -m lawbot.eval_v4 answers     # 고정 시드 표본 200 (A_lsa·B_newlaw 100씩): 인용·거짓 거절, A_lsa는 키워드 채점
-uv run python -m lawbot.eval_v4 oos         # 범위 밖 102 (7개 법률 출처 27문항은 범위 안으로 재분류) + 대조군 20
-uv run python -m lawbot.eval_v4 refusal     # 표본 중 100문항에 다른 법률 조문 / 비슷한 조문만 줄 때 거절률
-uv run python -m lawbot.eval_v4 summary --tag pro_concise_rr   # 지표 표 → results/v4/summary_<tag>.csv
-uv run python -m lawbot.eval_v4 all         # 네 단계를 차례로 (오래 걸림)
+uv run lawbot-eval-v4                       # 전체: 아래 네 단계를 차례로 실행한 뒤 요약 (오래 걸림)
+uv run lawbot-eval-v4 retrieval             # test 2,075 전체: 임베딩 Recall@1·3·10, 리랭킹 Recall@1·3·MRR@3
+uv run lawbot-eval-v4 answers               # 고정 시드 표본 200 (A_lsa·B_newlaw 100씩): 인용·거짓 거절, A_lsa는 키워드 채점
+uv run lawbot-eval-v4 oos                   # 범위 밖 102 (7개 법률 출처 27문항은 범위 안으로 재분류) + 대조군 20
+uv run lawbot-eval-v4 refusal               # 표본 중 100문항에 다른 법률 조문 / 비슷한 조문만 줄 때 거절률
+uv run lawbot-eval-v4 summary --tag pro_concise_rr   # 결과 파일로 지표 표만 다시 → results/v4/summary_<tag>.csv
 ```
 
 - tag 기본값은 `<모델>_<형식>_<rr|emb>`입니다(예: `pro_concise_rr`). `--fmt full`이면 4항목 system으로 생성합니다.
@@ -632,11 +632,12 @@ GitHub Actions (`.github/workflows/ci.yml`) runs `uv sync --locked`, a syntax ch
 `lawbot.eval_v4` evaluates the `.env` setup (v4 retrieval over 415 articles + reranker + answer model) through the same path as the web app, on the 2,075 test questions in `data/v4/qa_full_v4.csv` / `split_v4.csv` (650 Labor Standards Act + 1,425 from the six added laws). Results are appended per question to `results/v4/<stage>_<tag>.csv`, so an interrupted run resumes with the same command.
 
 ```zsh
-uv run python -m lawbot.eval_v4 retrieval   # all 2,075: embedding Recall@1/3/10, reranked Recall@1/3, MRR@3
-uv run python -m lawbot.eval_v4 answers     # fixed-seed sample of 200 (100 per group): citation, false refusal, keyword scoring for the 650 set
-uv run python -m lawbot.eval_v4 oos         # 102 out-of-scope (27 from the seven laws reclassified as in scope) + 20 controls
-uv run python -m lawbot.eval_v4 refusal     # 100 sampled questions with only other-law / similar articles: refusal rate
-uv run python -m lawbot.eval_v4 summary --tag pro_concise_rr
+uv run lawbot-eval-v4                       # everything: the four stages below, then the summary
+uv run lawbot-eval-v4 retrieval             # all 2,075: embedding Recall@1/3/10, reranked Recall@1/3, MRR@3
+uv run lawbot-eval-v4 answers               # fixed-seed sample of 200 (100 per group): citation, false refusal, keyword scoring for the 650 set
+uv run lawbot-eval-v4 oos                   # 102 out-of-scope (27 from the seven laws reclassified as in scope) + 20 controls
+uv run lawbot-eval-v4 refusal               # 100 sampled questions with only other-law / similar articles: refusal rate
+uv run lawbot-eval-v4 summary --tag pro_concise_rr
 ```
 
 Citations count only with the right law name. The 2026-04-07 amendment moved the wage-arrears penalty from Art. 109 (3 years / 30M won) to Art. 107 (5 years / 50M won); the v4 gold labels follow the amended law, and the two keyword rows that still expected the old penalty (Q2443, Q2453) are updated at scoring time (`eval_v4.KEYWORD_FIX`; the data file is unchanged).

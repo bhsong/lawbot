@@ -1,4 +1,5 @@
-# src/lawbot/eval_v4.py  →  uv run python -m lawbot.eval_v4 <단계> [--tag 이름] [--n 200] [--fmt concise|full]
+# src/lawbot/eval_v4.py  →  uv run lawbot-eval-v4            (전체: retrieval → answers → oos → refusal → summary)
+#                             uv run lawbot-eval-v4 <단계> [--tag 이름] [--n 200] [--fmt concise|full]
 # v4 웹앱 구성(.env 그대로: v4 검색 415조문 + 리랭커 + 답변 모델)을 다시 평가한다 (맥 전용, 모델 필요)
 #   retrieval: test 2,075문항 전체. 임베딩 순위(415조문 중)와 리랭킹 순위(후보 10개 중) → Recall@1·3·10, MRR
 #   answers  : test에서 A_lsa·B_newlaw 반씩 고정 시드 표본 (--n). 웹앱과 같은 service.ask로 답하고 채점
@@ -289,7 +290,8 @@ def summarize(tag, test):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument('stage', choices=['retrieval', 'answers', 'oos', 'refusal', 'summary', 'all'])
+    ap.add_argument('stage', nargs='?', default='all', choices=['retrieval', 'answers', 'oos', 'refusal', 'summary', 'all'],
+                    help='생략하면 all (네 단계를 차례로 실행한 뒤 요약)')
     ap.add_argument('--tag', default=None, help='결과 파일 이름 (기본: <모델 key>_<형식>_rr 또는 _emb)')
     ap.add_argument('--n', type=int, default=200, help='답변 생성 표본 수 (A_lsa·B_newlaw 반씩)')
     ap.add_argument('--model', default=None, help='답변 모델 key (기본: .env의 첫 번째 모델)')
@@ -315,6 +317,7 @@ def main():
     print(f'[eval_v4] tag {tag} · 모델 {model} · 형식 {fmt} · 리랭커 {"켜짐" if app.reranker else "꺼짐"} · '
           f'test {len(test)} · 표본 {len(sample)}')
     stages = ['retrieval', 'answers', 'oos', 'refusal'] if args.stage == 'all' else [args.stage]
+    t0 = time.perf_counter()
     for s in stages:
         if s == 'retrieval':
             run_retrieval(app, test, OUT / f'retrieval_{tag}.csv', rerank=not args.no_rerank)
@@ -325,6 +328,7 @@ def main():
         elif s == 'refusal':
             run_refusal(app, model, fmt, sample, OUT / f'refusal_{tag}.csv')
     summarize(tag, test)
+    print(f'[eval_v4] {", ".join(stages)} 완료 · {(time.perf_counter() - t0) / 60:.1f}분 · 결과 {OUT}/*_{tag}.csv')
 
 if __name__ == '__main__':
     main()
