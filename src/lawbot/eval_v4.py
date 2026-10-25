@@ -17,8 +17,7 @@ import numpy as np
 import pandas as pd
 from lawbot import envfile
 from lawbot.paths import DATA, EVAL, RESULTS, V4_QA, V4_SPLIT
-from lawbot.refusal import is_refusal
-from lawbot.score_answers import norm, score_one
+from lawbot.score_answers import conclusion_part, norm, score_one
 
 OUT = RESULTS / 'v4'
 SEED = 42
@@ -41,6 +40,14 @@ OOS_IN_SCOPE = {'남녀고용평등법': '남녀고용평등과 일ㆍ가정 양
 # 2026.4.7 근로기준법 개정: 임금체불 등 벌칙이 제109조(3년·3천만원)에서 제107조(5년·5천만원)로 옮겨짐
 # v4 정답 조문(qa_full_v4)은 개정 후 기준. 키워드가 개정 전 형량인 문항만 개정 후 형량으로 바꾼다 (평가 파일은 그대로 둠)
 KEYWORD_FIX = {'Q2443': '[["5년이하"], ["5천만원", "5000만원"]]', 'Q2453': '[["5년이하"], ["5천만원", "5000만원"]]'}
+
+# 거절 판정: v1 규칙(【결론】에 '확인할 수 없')은 4B 학습 문구만 잡는다. 튜닝 전 27B는 같은 뜻을 다른 말로 쓰므로
+# 근거·답변이 없다는 표현을 함께 본다 (in-scope 200문항 결과에서 이 확장으로 새로 잡힌 거절 0건 확인). refusal.is_refusal은 그대로
+REFUSAL = re.compile(r'확인할 수 없|근거를 찾을 수 없|근거를 찾지 못|근거가 (?:없|되지 않|포함되어 있지 않)|포함되어 있지 않'
+                     r'|답변할 수 없|답변드릴 수 없|답할 수 없|판단할 수 없')
+
+def refused(answer):
+    return REFUSAL.search(conclusion_part(answer)) is not None
 
 _ALIAS = sorted(((norm(a), law) for law, al in LAW_ALIASES.items() for a in al), key=lambda x: -len(x[0]))
 _TOKEN = re.compile('|'.join(re.escape(a) for a, _ in _ALIAS) + r'|제\d+조(?:의\d+)?')
@@ -68,7 +75,7 @@ def citations(answer):
 def cite_gold(answer, gold):
     """gold: '근로기준법 제26조'. 법령명까지 맞게 인용했고 거절이 아님"""
     law, no = gold.rsplit(' ', 1)
-    return (law, no) in citations(answer) and not is_refusal(answer)
+    return (law, no) in citations(answer) and not refused(answer)
 
 def key(h):
     return f"{h['law']} {h['article_id']}"
@@ -88,6 +95,28 @@ def keywords():
     for i, v in KEYWORD_FIX.items():
         ev.loc[i, 'must_include'] = v
     return ev
+
+def cited_text(answer):
+    return '|'.join(f'{l} {a}' if l else a for l, a in citations(answer))
+
+KW_COLS = ('group_score', 'must_not_ok', 'total_v4', 'missing_groups', 'must_not_hits')
+
+def score_answer(qid, cat, gold, raw, kw):
+    """answers 채점 열 (생성 때와 summary 재채점에 같이 씀). 키워드 열은 A_lsa만 값, 나머지는 빈 값 (이어 쓰기: 열은 항상 같게)"""
+    s = score_a(kw.loc[qid].to_dict() | {'gold': gold}, raw) if cat == 'A_lsa' else {}
+    return {'refusal': refused(raw), 'cite_v4': int(cite_gold(raw, gold)), 'cited': cited_text(raw),
+            'answer_len': len(raw)} | {k: s.get(k) for k in KW_COLS}
+
+def score_oos(scope, source, raw):
+    """oos 채점 열. source: 범위 밖은 oos_eval의 source, 대조군은 정답 조문('근로기준법 제N조')"""
+    law = '근로기준법' if scope == 'in_control' else OOS_IN_SCOPE.get(source)
+    cited, no = citations(raw), refused(raw)
+    return {'refusal': no, 'cited': cited_text(raw), 'cites_any': bool(cited) and not no,
+            'cites_law': bool(law) and any(l == law for l, _ in cited) and not no,
+            'cite_gold': int(scope == 'in_control' and cite_gold(raw, source))}
+
+def score_refusal(raw):
+    return {'refusal': refused(raw), 'cited': cited_text(raw)}
 
 def score_a(row, answer):
     """키워드 채점 (score_answers.score_one) + 법령명까지 맞춘 인용으로 total_v4"""
@@ -162,13 +191,9 @@ def run_answers(app, model, fmt, sample, path):
 
     def one(qid, q, gold, cat):
         hits, raw, st = answer(app, model, fmt, q)
-        row = {'id': qid, 'eval_cat': cat, 'gold': gold, 'retrieved': gold in [key(h) for h in hits],
-               'top3': '|'.join(key(h) for h in hits), 'refusal': is_refusal(raw), 'cite_v4': int(cite_gold(raw, gold)),
-               'cited': '|'.join(f'{l} {a}' if l else a for l, a in citations(raw)), 'answer_len': len(raw)}
-        keys = ('group_score', 'must_not_ok', 'total_v4', 'missing_groups', 'must_not_hits')   # 이어 쓰기: 열은 항상 같게
-        s = score_a(kw.loc[qid].to_dict() | {'gold': gold}, raw) if cat == 'A_lsa' else {}
-        row |= {k: s.get(k) for k in keys}
-        return row | stats_cols(st) | {'answer': raw}
+        return ({'id': qid, 'eval_cat': cat, 'gold': gold, 'retrieved': gold in [key(h) for h in hits],
+                 'top3': '|'.join(key(h) for h in hits)} | score_answer(qid, cat, gold, raw, kw)
+                | stats_cols(st) | {'answer': raw})
     resume(path, list(zip(sample['id'], sample['question'], sample['article_id'], sample['eval_cat'])), one, 'answers')
 
 def run_oos(app, model, fmt, path):
@@ -179,19 +204,11 @@ def run_oos(app, model, fmt, path):
 
     def one(qid, q, kind, category, source):
         hits, raw, st = answer(app, model, fmt, q)
-        cited = citations(raw)
-        if kind == 'control':
-            scope, law = 'in_control', '근로기준법'
-        else:
-            law = OOS_IN_SCOPE.get(source)
-            scope = 'in_reclassified' if law else 'out'
-        return {'id': qid, 'scope': scope, 'category': category, 'source': source, 'refusal': is_refusal(raw),
-                'cited': '|'.join(f'{l} {a}' if l else a for l, a in cited),
-                'cites_any': bool(cited) and not is_refusal(raw),
-                'cites_law': bool(law) and any(l == law for l, _ in cited) and not is_refusal(raw),
-                'cite_gold': int(kind == 'control' and cite_gold(raw, source)),
-                'retrieved_law': bool(law) and any(h['law'] == law for h in hits),
-                'top3': '|'.join(key(h) for h in hits)} | stats_cols(st) | {'answer': raw}
+        scope = 'in_control' if kind == 'control' else ('in_reclassified' if source in OOS_IN_SCOPE else 'out')
+        law = '근로기준법' if kind == 'control' else OOS_IN_SCOPE.get(source)
+        return ({'id': qid, 'scope': scope, 'category': category, 'source': source} | score_oos(scope, source, raw)
+                | {'retrieved_law': bool(law) and any(h['law'] == law for h in hits),
+                   'top3': '|'.join(key(h) for h in hits)} | stats_cols(st) | {'answer': raw})
     resume(path, items, one, 'oos')
 
 def refusal_cases(app, sample, n=100):
@@ -216,9 +233,28 @@ def run_refusal(app, model, fmt, sample, path):
 
     def one(cid, test, q, ctx):
         raw, sec = answer_with(app, model, fmt, q, [table[k] for k in ctx])
-        return {'id': cid, 'test': test, 'context': '|'.join(ctx), 'refusal': is_refusal(raw),
-                'cited': '|'.join(f'{l} {a}' if l else a for l, a in citations(raw)), 'sec': round(sec, 2), 'answer': raw}
+        return {'id': cid, 'test': test, 'context': '|'.join(ctx)} | score_refusal(raw) | {'sec': round(sec, 2), 'answer': raw}
     resume(path, refusal_cases(app, sample), one, 'refusal')
+
+def rescore(tag):
+    """저장된 답변 원문으로 채점 열만 다시 계산해 덮어쓴다 (답변·측정값은 그대로). 채점 규칙을 고친 뒤 재생성 없이 반영"""
+    kw = keywords()
+    for stage, fn in (('answers', lambda r: score_answer(r['id'], r['eval_cat'], r['gold'], r['answer'], kw)),
+                      ('oos', lambda r: score_oos(r['scope'], r['source'], r['answer'])),
+                      ('refusal', lambda r: score_refusal(r['answer']))):
+        p = OUT / f'{stage}_{tag}.csv'
+        if not p.exists():
+            continue
+        d = pd.read_csv(p, keep_default_na=False, **E)
+        d['answer'] = d['answer'].astype(str)
+        new = pd.DataFrame([fn(r) for _, r in d.iterrows()], index=d.index)
+        if 'must_not_ok' in new:                 # 정수 열 (B_newlaw는 빈 값): 1이 1.0으로 바뀌지 않게
+            new['must_not_ok'] = new['must_not_ok'].astype('Int64')
+        changed = int((d['refusal'].astype(str) != new['refusal'].astype(str)).sum())
+        for c in new:
+            d[c] = new[c]
+        d.to_csv(p, index=False, **E)
+        print(f'[rescore] {p.name}: 거절 판정이 바뀐 행 {changed}')
 
 # ---- 요약 ----
 def mean(s):
@@ -304,6 +340,7 @@ def main():
     if args.stage == 'summary':
         if not args.tag:
             raise SystemExit('summary는 --tag가 필요합니다 (results/v4의 파일 이름)')
+        rescore(args.tag)
         summarize(args.tag, test)
         return
     from lawbot.service import load_app

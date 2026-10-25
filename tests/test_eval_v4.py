@@ -180,3 +180,25 @@ def test_default_stage_is_all(env, monkeypatch, tmp_path):
     monkeypatch.setattr('sys.argv', ['lawbot-eval-v4'])
     ev.main()
     assert calls == ['run_retrieval', 'run_answers', 'run_oos', 'run_refusal', ('summary', 'pro_concise_rr')]
+
+# ---- 거절 판정 (튜닝 전 27B의 표현) ----
+@pytest.mark.parametrize('answer,expected', [
+    ('【결론】\n제공된 조문만으로는 확인할 수 없습니다.\n【근거 조문】\n해당 없음', True),                 # v1 학습 문구
+    ('【결론】\n제공된 [참고 조문]은 근로기준법 관련 내용으로, 김치찌개 조리법에 대한 근거를 찾을 수 없습니다.\n【근거 조문】\n근거 조문 없음', True),
+    ('【결론】\n노동법 관련 내용만 포함되어 있어 해당 질문에 대해 답변할 수 없습니다.', True),
+    ('【결론】\n사용자는 정당한 이유 없이 해고할 수 없습니다.\n【근거 조문】\n근로기준법 제23조(해고 등의 제한)', False),  # 법 내용의 '할 수 없'은 거절 아님
+    ('【결론】\n30일 전에 예고해야 합니다.\n【설명】\n- 예외는 확인할 수 없는 경우도 있음', False),        # 결론 밖은 보지 않음
+])
+def test_refused(answer, expected):
+    assert ev.refused(answer) is expected
+
+def test_rescore_updates_only_scores(tmp_path, env):
+    env.setattr(ev, 'OUT', tmp_path)
+    ans = '【결론】\n제공된 조문은 노동법 내용이라 날씨에 대한 근거를 찾을 수 없습니다.\n\n【근거 조문】\n근로기준법 제26조(해고의 예고)'
+    pd.DataFrame([{'id': 'OOS001', 'scope': 'out', 'category': 'unrelated', 'source': '날씨', 'refusal': False,
+                   'cited': '근로기준법 제26조', 'cites_any': True, 'cites_law': False, 'cite_gold': 0,
+                   'retrieved_law': False, 'top3': 'x', 'total': 3.5, 'answer': ans}]).to_csv(tmp_path / 'oos_t.csv', index=False, **E)
+    ev.rescore('t')
+    o = pd.read_csv(tmp_path / 'oos_t.csv', **E).iloc[0]
+    assert bool(o['refusal']) and not bool(o['cites_any'])           # 거절하며 제공 조문을 나열한 것은 억지적용 아님
+    assert o['answer'] == ans and o['total'] == 3.5                 # 답변·측정값은 그대로
