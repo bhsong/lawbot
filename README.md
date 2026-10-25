@@ -8,7 +8,7 @@
 
 ### 소개
 
-Lawbot은 대한민국 근로기준법 질문에 조문을 근거로 답하는 검색 증강 생성(RAG) 챗봇입니다. 튜닝한 임베딩 모델로 현행 130개 조문 중 관련 조문 3개를 찾고, 튜닝한 소형 언어 모델(sLLM)이 그 조문만 근거로 네 부분 형식의 답변을 생성합니다. 모든 구성 요소가 Apple Silicon 맥 한 대에서 로컬로 동작합니다.
+Lawbot은 대한민국 노동법 질문에 조문을 근거로 답하는 검색 증강 생성(RAG) 챗봇입니다. 현재 웹앱 기본 구성(v4)은 근로기준법 등 7개 노동 관련 법률의 415개 조문을 대상으로, 튜닝한 임베딩 모델이 후보 10개를 찾고 리랭커가 3개로 좁힌 뒤 답변 모델이 그 조문만 근거로 답합니다. 첫 구성(v1)은 근로기준법 130개 조문과 튜닝한 소형 언어 모델(Qwen3-4B)을 썼습니다. 모든 구성 요소가 Apple Silicon 맥 한 대에서 로컬로 동작합니다.
 
 이 챗봇은 학습·포트폴리오 목적의 프로젝트이며, 답변은 법률 자문이 아닌 참고 정보입니다.
 
@@ -26,6 +26,18 @@ Lawbot은 대한민국 근로기준법 질문에 조문을 근거로 답하는 �
 
 ### 구조
 
+v4 (현재 기본, `.env.example`):
+
+```
+질문
+ └─ 검색: 튜닝 임베딩 (Qwen3-Embedding-0.6B, fp16, MPS) → 415개 조문 중 상위 10개
+     └─ 리랭커: Qwen3-Reranker-4B (튜닝 없음, MLX 4비트) → 상위 3개
+         └─ 답변: Qwen3.8-27B (튜닝 없음, MLX 4비트, 간결형) / 소형 맥은 Qwen3-4B + v4 LoRA
+             └─ 답변 + 근거 조문 표시 (Gradio)
+```
+
+v1:
+
 ```
 질문
  └─ 검색: 튜닝 임베딩 (Qwen3-Embedding-0.6B, fp16, MPS)
@@ -42,6 +54,74 @@ Lawbot은 대한민국 근로기준법 질문에 조문을 근거로 답하는 �
 | 학습 | Google Colab (NVIDIA L4) | TRL SFTTrainer, PEFT |
 
 ### 성능
+
+**v4 웹앱 구성 (7개 법률 415조문 · 리랭커 · Qwen3.8-27B 4비트)**
+
+2026-10-25 맥 미니 32GB에서 `uv run lawbot-eval-v4`로 측정했습니다(문항별 결과 `results/v4/*_pro_concise_rr.csv`). 구성은 `.env.example` 그대로입니다: 튜닝 Qwen3-Embedding-0.6B 상위 10개 → Qwen3-Reranker-4B(튜닝 없음, MLX 4비트) 상위 3개 → Qwen3.8-27B(튜닝 없음, MLX 4비트, 간결형 답변). 문항은 학습·검증에 쓰지 않은 v4 test 2,075문항(근로기준법 650 + 신규 6개 법률 1,425)입니다.
+
+*검색 (test 2,075문항, 415조문 대상)*
+
+| 단계 | Recall@1 | Recall@3 | Recall@10 | MRR |
+| --- | --- | --- | --- | --- |
+| 튜닝 임베딩 | 0.765 | 0.913 | 0.976 | 0.845 (@10) |
+| + 리랭커 (후보 10개 → 3개) | **0.829** | **0.940** | - | **0.880** (@3) |
+
+근로기준법 650문항은 리랭킹 후 Recall@3 0.923, 신규 법률 1,425문항은 0.947입니다. Colab(L4, fp16) 실험의 같은 test 수치(임베딩 0.765·0.914, 리랭커 0.827·0.941·MRR@3 0.880)와 0.002 이내로 같습니다.
+
+리랭커는 Colab과 같은 질문·임베딩 Top 10으로 따로 대조했습니다(val 1,110문항, `results/reranker_verify_val_mlx4bit.csv`).
+
+| 리랭커 | Recall@1 | Recall@3 | MRR@3 | 질문당 시간 |
+| --- | --- | --- | --- | --- |
+| Colab (transformers fp16, L4) | 0.836 | 0.950 | 0.888 | 1.01초 |
+| 맥 (MLX 4비트) | 0.819 | 0.946 | 0.877 | 1.93초 (p95 3.04) |
+
+1위 조문은 90%가 Colab과 같지만, 4비트 양자화로 점수 크기는 크게 달라집니다(질문별 최대 점수 차 중앙값 0.28, 상위 3개 집합 일치 0.58). 그래도 정답 순위 지표는 Recall@1 0.017, Recall@3 0.004 차이에 그칩니다.
+
+*답변 (test 표본 200문항: 근로기준법 100 + 신규 법률 100, 고정 시드)*
+
+| 지표 | 전체 | 근로기준법 | 신규 6개 법률 |
+| --- | --- | --- | --- |
+| 검색 top3 적중률 | 0.915 | 0.93 | 0.90 |
+| 조문 인용 정확도 (법령명까지) | 0.905 | 0.91 | 0.90 |
+| 거짓 거절률 | 0.065 | 0.07 | 0.06 |
+| 거짓 거절률 (검색 적중 문항) | 0.011 | 0.022 | 0.000 |
+| 키워드 그룹 충족률 | - | 0.853 | - |
+| 종합 점수 (검색 적중 문항) | - | 0.828 (0.891) | - |
+
+- 검색이 정답을 놓친 17문항 중 11문항은 거절했고, 검색이 맞았는데 거절한 것은 2문항입니다. 검색이 맞고 거절하지 않은 문항은 모두 정답 조문을 인용했습니다.
+- 키워드 채점은 기존 650문항 기준이 있는 근로기준법 문항만 합니다. 신규 법률 문항은 인용·거절만 봅니다.
+- 2026.4.7 근로기준법 개정(임금체불 벌칙 제109조 → 제107조, 5년·5천만원)에 맞춰 키워드 2문항을 보정했습니다.
+- v1(4B, 4항목 답변, 130조문, 무작위 100문항)의 종합 점수 0.812와는 답변 형식·조문 수·표본이 달라 직접 비교하기 어렵습니다.
+
+*거절 동작*
+
+| 지표 | 값 | 문항 |
+| --- | --- | --- |
+| 범위 밖 질문 거절률 | **0.96** | 75 |
+| 범위 밖 질문 억지 적용률 (거절 않고 조문 인용) | 0.04 | 75 |
+| 다른 법률 조문만 제공 시 거절률 | **1.00** | 100 |
+| 비슷한 조문만 제공 시 거절률 | 0.69 | 100 |
+| 범위 안이 된 7개 법률 질문: 거짓 거절률 / 해당 법률 인용률 | 0.111 / 0.889 | 27 |
+| 범위 안 대조군(근로기준법): 거짓 거절률 / 정답 조문 인용률 | 0.10 / 0.80 | 20 |
+
+- 범위 밖 102문항 중 출처가 7개 법률인 27문항은 이제 범위 안이므로 따로 셉니다. 그래서 v1의 범위 밖 거절률(82문항, 0.707)과 같은 문항이 아닙니다. 억지 적용 3건은 산재 신청(→ 근로기준법 제88조), 미성년자 계약 취소(→ 제67조), 직장폐쇄 임금(→ 제46조)입니다.
+- 범위 안 27문항의 거짓 거절 3건 중 2건(올해 최저시급 금액, 육아기 근로시간 단축 신청 방법)은 그 내용이 조문이 아니라 고시·시행령에 있어 거절이 타당한 쪽입니다. 나머지 1건(1년 미만 퇴직금)은 검색이 근퇴법 제4조를 찾지 못했습니다.
+- 비슷한 조문 중에는 실제로 답이 되는 조문이 섞일 수 있어 1.0이 목표는 아닙니다(v1 4B는 0.20, 맥 4비트 0.24).
+- 튜닝하지 않은 27B는 v1 학습 문구("확인할 수 없") 대신 "근거를 찾을 수 없습니다", "답변할 수 없습니다"처럼 거절해, v4 평가는 이런 표현도 거절로 봅니다(`eval_v4.REFUSAL`). 범위 안 답변 200문항에서는 이 확장으로 새로 거절로 잡힌 답변이 없었습니다.
+
+*속도·메모리 (답변 200문항, 맥 미니 32GB)*
+
+| 지표 | 값 |
+| --- | --- |
+| 임베딩 검색 | 0.03초 |
+| 리랭킹 (후보 10개) | 평균 1.95초, p95 3.1초 |
+| 첫 토큰 (생성 시작부터) | 중앙값 2.8초 |
+| 질문당 완료 (검색부터 답변 끝까지) | 평균 15.1초, p95 20.9초 |
+| 생성 속도 | 9.7 토큰/초 |
+| 답변 길이 | 평균 165자 (96토큰) |
+| MLX 최대 메모리 (27B + 리랭커) | 20.4GB |
+
+**v1 (근로기준법 130조문 · Qwen3-4B LoRA)**
 
 모든 수치는 학습·검증에 사용하지 않은 테스트 650문항 기준입니다(별도 표기 제외). 측정일은 2026-10-16부터 10-18까지입니다.
 
@@ -258,7 +338,25 @@ uv run pytest -m models    # 실제 모델 테스트 (models/ 필요, 기본 실
 
 GitHub Actions(`.github/workflows/ci.yml`)가 `main` 푸시와 모든 pull request에서 macOS(Apple Silicon) 러너로 `uv sync --locked`, 문법 검사(`compileall`), `uv run pytest`를 실행합니다. 비밀정보는 쓰지 않으며, `-m models` 테스트와 평가 스크립트는 CI에서 실행하지 않습니다. 결과는 PR의 체크와 Actions 로그, `pytest-report` 아티팩트에서 볼 수 있습니다.
 
-**평가 실행**
+**평가 실행 (v4 웹앱 구성)**
+
+`lawbot.eval_v4`가 `.env` 구성 그대로(v4 검색 415조문 + 리랭커 + 답변 모델) 웹앱과 같은 경로로 평가합니다. 문항은 `data/v4/qa_full_v4.csv`·`split_v4.csv`의 test 2,075문항(근로기준법 A_lsa 650 + 신규 6개 법률 B_newlaw 1,425)입니다. 결과는 `results/v4/<단계>_<tag>.csv`에 문항마다 바로 쓰므로 중간에 멈춰도 같은 명령으로 이어집니다.
+
+```zsh
+uv run lawbot-eval-v4                       # 전체: 아래 네 단계를 차례로 실행한 뒤 요약 (오래 걸림)
+uv run lawbot-eval-v4 retrieval             # test 2,075 전체: 임베딩 Recall@1·3·10, 리랭킹 Recall@1·3·MRR@3
+uv run lawbot-eval-v4 answers               # 고정 시드 표본 200 (A_lsa·B_newlaw 100씩): 인용·거짓 거절, A_lsa는 키워드 채점
+uv run lawbot-eval-v4 oos                   # 범위 밖 102 (7개 법률 출처 27문항은 범위 안으로 재분류) + 대조군 20
+uv run lawbot-eval-v4 refusal               # 표본 중 100문항에 다른 법률 조문 / 비슷한 조문만 줄 때 거절률
+uv run lawbot-eval-v4 summary --tag pro_concise_rr   # 결과 파일로 지표 표만 다시 → results/v4/summary_<tag>.csv
+```
+
+- tag 기본값은 `<모델>_<형식>_<rr|emb>`입니다(예: `pro_concise_rr`). `--fmt full`이면 4항목 system으로 생성합니다.
+- 인용은 법령명까지 맞아야 정답입니다(`근로기준법 제26조`와 `최저임금법 제26조`를 구분). 법령명 없이 이어 쓴 번호(`근로기준법 제26조, 제27조`)는 앞 법령으로 봅니다.
+- 2026.4.7 근로기준법 개정으로 임금체불 벌칙이 제109조(3년·3천만원)에서 제107조(5년·5천만원)로 옮겨졌습니다. v4 정답은 개정 후 기준이고, 키워드가 개정 전 형량인 2문항(Q2443·Q2453)만 평가 때 개정 후 형량으로 바꿉니다(`eval_v4.KEYWORD_FIX`, 평가 파일은 그대로).
+- 범위 밖 질문 중 남녀고용평등법·최저임금법·퇴직급여법·기간제법·임금채권보장법·파견법이 출처인 27문항은 이제 범위 안이므로 거절하면 오답, 그 법을 인용하면 정답으로 봅니다. 나머지 75문항만 거절률을 잽니다.
+
+아래는 이전 v1(근로기준법 130조문, 4B) 평가 스크립트입니다. README 성능 수치와 `results/`의 기준선이 이 결과입니다.
 
 ```bash
 uv run lawbot-eval --n 0      # 검색 성능만 (650문항)
@@ -345,7 +443,7 @@ src/lawbot/
   - 답변은 거절, 안내(`refer_lsa`에 적힌, 다른 법에 맡기는 조문만 인용), 억지적용(그 밖의 근로기준법 조문으로 답함), 미인용(거절 문구도 인용도 없음)으로 판정합니다. `near_lsa`는 README 수치의 기준이고, `near_lsa_v2`는 누락을 보완한 표시입니다.
 - **범위 안 대조군**: 다른 노동법 질문과 닮았지만 근로기준법으로 답해야 하는 테스트 문항 20개입니다(`data/scope_controls.csv`, `twin_oos`에 짝 문항). 범위 밖 거절을 늘리는 개선이 이 문항들까지 거절하게 만들지 않는지 확인합니다.
 - **근거 없는 주장 사례**: `refusal_v1_4bit.csv`에서 거절하지 않은 86건을 억지적용 77, 지어냄 4, 근거밖_정답 2, 결론타당 3으로 분류했습니다(`data/refusal_hard_cases.csv`). 억지적용·지어냄 81건은 `eval_refusal --hard`로 다시 평가합니다.
-- **평가 데이터 사용 제한**: `data/labor_eval_keywords.csv`, `data/oos_eval.csv`, `data/scope_controls.csv`, `data/refusal_hard_cases.csv`는 평가 전용입니다. 모델 학습이나 설정 선택에 쓰지 마세요.
+- **평가 데이터 사용 제한**: `data/labor_eval_keywords.csv`, `data/oos_eval.csv`, `data/scope_controls.csv`, `data/refusal_hard_cases.csv`와 `data/v4/split_v4.csv`의 test 문항은 평가 전용입니다. 모델 학습이나 설정 선택에 쓰지 마세요.
 - **`results/` 안내**: 채점 전 모델 원본 출력과 문항별 점수이며, 점수가 낮은 답변은 법적으로 틀린 내용을 포함합니다.
 
 ### 실패한 실험
@@ -382,7 +480,7 @@ src/lawbot/
 
 ### Overview
 
-Lawbot is a retrieval-augmented generation (RAG) chatbot that answers questions about the Korean Labor Standards Act, citing the articles it relies on. A fine-tuned embedding model retrieves the three most relevant of the 130 current articles. A fine-tuned small language model then writes a four-part answer grounded only in those articles. The whole stack runs locally on a single Apple Silicon Mac.
+Lawbot is a retrieval-augmented generation (RAG) chatbot that answers questions about Korean labor law, citing the articles it relies on. The current default setup (v4) covers 415 articles from seven labor-related laws: a fine-tuned embedding model retrieves 10 candidates, a reranker narrows them to 3, and the answer model writes an answer grounded only in those articles. The first setup (v1) used the 130 articles of the Labor Standards Act and a fine-tuned small language model (Qwen3-4B). The whole stack runs locally on a single Apple Silicon Mac.
 
 This is a learning and portfolio project. Its answers are informational and do not constitute legal advice.
 
@@ -400,6 +498,18 @@ This is a learning and portfolio project. Its answers are informational and do n
 
 ### Architecture
 
+v4 (current default, `.env.example`):
+
+```
+Question
+ └─ Retrieval: fine-tuned embedding (Qwen3-Embedding-0.6B, fp16, MPS) → top 10 of 415 articles
+     └─ Reranker: Qwen3-Reranker-4B (not fine-tuned, MLX 4-bit) → top 3
+         └─ Answer: Qwen3.8-27B (not fine-tuned, MLX 4-bit, concise) / small Macs: Qwen3-4B + v4 LoRA
+             └─ Answer + source article panel (Gradio)
+```
+
+v1:
+
 ```
 Question
  └─ Retrieval: fine-tuned embedding (Qwen3-Embedding-0.6B, fp16, MPS)
@@ -416,6 +526,41 @@ Question
 | Training | Google Colab (NVIDIA L4) | TRL SFTTrainer, PEFT |
 
 ### Results
+
+**v4 web app setup (415 articles from 7 laws · reranker · Qwen3.8-27B 4-bit)**
+
+Measured on 2026-10-25 on a 32GB Mac mini with `uv run lawbot-eval-v4` (per-question results in `results/v4/*_pro_concise_rr.csv`), using the `.env.example` setup: fine-tuned Qwen3-Embedding-0.6B top 10 → Qwen3-Reranker-4B (not fine-tuned, MLX 4-bit) top 3 → Qwen3.8-27B (not fine-tuned, MLX 4-bit, concise answers). Questions are the 2,075 v4 test questions (650 Labor Standards Act + 1,425 from the six added laws), never used for training or validation.
+
+| Retrieval (2,075 test) | Recall@1 | Recall@3 | Recall@10 | MRR |
+| --- | --- | --- | --- | --- |
+| Fine-tuned embedding | 0.765 | 0.913 | 0.976 | 0.845 (@10) |
+| + reranker (10 → 3) | **0.829** | **0.940** | - | **0.880** (@3) |
+
+These match the Colab (L4, fp16) run on the same test set within 0.002. On the same val questions and embedding top 10 (1,110 questions), the MLX 4-bit reranker gives Recall@1 0.819 / Recall@3 0.946 vs Colab 0.836 / 0.950; the top-1 article agrees 90% of the time, but quantization changes the raw scores a lot (median max score difference 0.28). Reranking takes 1.93 s per question (p95 3.04 s) vs 1.01 s on Colab L4.
+
+| Answers (200 sampled: 100 + 100) | All | Labor Standards Act | Six added laws |
+| --- | --- | --- | --- |
+| Gold article in retrieved top 3 | 0.915 | 0.93 | 0.90 |
+| Citation accuracy (law name included) | 0.905 | 0.91 | 0.90 |
+| False refusal rate | 0.065 | 0.07 | 0.06 |
+| False refusal rate (retrieval hits) | 0.011 | 0.022 | 0.000 |
+| Keyword group coverage | - | 0.853 | - |
+| Overall score (retrieval hits) | - | 0.828 (0.891) | - |
+
+| Refusal behavior | Value | Questions |
+| --- | --- | --- |
+| Out-of-scope refusal rate | **0.96** | 75 |
+| Out-of-scope forced answers (cites an article instead of refusing) | 0.04 | 75 |
+| Refusal with only other-law articles | **1.00** | 100 |
+| Refusal with only similar articles | 0.69 | 100 |
+| Former out-of-scope questions now in scope: false refusal / cites that law | 0.111 / 0.889 | 27 |
+| In-scope controls: false refusal / gold citation | 0.10 / 0.80 | 20 |
+
+The 27 questions whose source is one of the seven laws are now in scope, so the out-of-scope set differs from v1 (82 questions, 0.707). Two of the three false refusals there (this year's minimum wage amount, how to apply for reduced hours during childcare) concern details set by notice or decree rather than the statute text. The untuned 27B refuses in its own words ("근거를 찾을 수 없습니다", "답변할 수 없습니다"), so the v4 evaluation also counts those phrases (`eval_v4.REFUSAL`); this added no refusals among the 200 in-scope answers. Keyword scoring uses the existing 650-question keyword set, with two rows updated for the 2026-04-07 amendment. Scores are not directly comparable with v1 (4B, four-part answers, 130 articles, different sample).
+
+Speed and memory (200 answers): embedding search 0.03 s, reranking 1.95 s (p95 3.1 s), first token 2.8 s (median, from generation start), 15.1 s per question end to end (p95 20.9 s), 9.7 tokens/s, 165 characters (96 tokens) per answer, MLX peak memory 20.4GB (27B + reranker).
+
+**v1 (130 Labor Standards Act articles · Qwen3-4B LoRA)**
 
 Unless noted otherwise, all numbers are on the 650-question test set, which was never used for training or model selection. Measured from 2026-10-16 to 2026-10-18.
 
@@ -609,7 +754,22 @@ uv run pytest -m models    # real-model tests (needs models/, excluded by defaul
 
 GitHub Actions (`.github/workflows/ci.yml`) runs `uv sync --locked`, a syntax check (`compileall`) and `uv run pytest` on a macOS (Apple Silicon) runner for every push to `main` and every pull request. It uses no secrets; `-m models` tests and the evaluation scripts are not run in CI. Results appear as PR checks, in the Actions log and as the `pytest-report` artifact.
 
-**Run the evaluation**
+**Run the evaluation (v4 web app setup)**
+
+`lawbot.eval_v4` evaluates the `.env` setup (v4 retrieval over 415 articles + reranker + answer model) through the same path as the web app, on the 2,075 test questions in `data/v4/qa_full_v4.csv` / `split_v4.csv` (650 Labor Standards Act + 1,425 from the six added laws). Results are appended per question to `results/v4/<stage>_<tag>.csv`, so an interrupted run resumes with the same command.
+
+```zsh
+uv run lawbot-eval-v4                       # everything: the four stages below, then the summary
+uv run lawbot-eval-v4 retrieval             # all 2,075: embedding Recall@1/3/10, reranked Recall@1/3, MRR@3
+uv run lawbot-eval-v4 answers               # fixed-seed sample of 200 (100 per group): citation, false refusal, keyword scoring for the 650 set
+uv run lawbot-eval-v4 oos                   # 102 out-of-scope (27 from the seven laws reclassified as in scope) + 20 controls
+uv run lawbot-eval-v4 refusal               # 100 sampled questions with only other-law / similar articles: refusal rate
+uv run lawbot-eval-v4 summary --tag pro_concise_rr
+```
+
+Citations count only with the right law name. The 2026-04-07 amendment moved the wage-arrears penalty from Art. 109 (3 years / 30M won) to Art. 107 (5 years / 50M won); the v4 gold labels follow the amended law, and the two keyword rows that still expected the old penalty (Q2443, Q2453) are updated at scoring time (`eval_v4.KEYWORD_FIX`; the data file is unchanged).
+
+The previous v1 evaluation scripts (130 articles, 4B), which produced the README numbers and the baselines in `results/`:
 
 ```bash
 uv run lawbot-eval --n 0      # retrieval only (650 questions)
@@ -676,7 +836,7 @@ src/lawbot/
   - Answers are classified as refusal, referral (cites only an article in `refer_lsa` that delegates to another law), forced (answers with any other Labor Standards Act article), or uncited (neither a refusal phrase nor a citation). `near_lsa` is the basis of the README numbers; `near_lsa_v2` fills in missing labels.
 - **In-scope controls**: 20 test questions that resemble other-labor-law questions but must be answered under the Labor Standards Act (`data/scope_controls.csv`, paired via `twin_oos`). They check that raising out-of-scope refusal does not make the model refuse these too.
 - **Unsupported-claim cases**: The 86 non-refusals in `refusal_v1_4bit.csv` are labeled forced 77, fabricated 4, correct-but-unsupported 2 and reasonable 3 (`data/refusal_hard_cases.csv`). The 81 forced and fabricated cases are re-evaluated with `eval_refusal --hard`.
-- **Evaluation-only data**: `data/labor_eval_keywords.csv`, `data/oos_eval.csv`, `data/scope_controls.csv` and `data/refusal_hard_cases.csv` are for evaluation only. Do not use them for training or model selection.
+- **Evaluation-only data**: `data/labor_eval_keywords.csv`, `data/oos_eval.csv`, `data/scope_controls.csv`, `data/refusal_hard_cases.csv` and the test questions in `data/v4/split_v4.csv` are for evaluation only. Do not use them for training or model selection.
 - **About `results/`**: These are raw model outputs with per-question scores. Low-scoring answers contain legally incorrect statements.
 
 ### Failed experiments

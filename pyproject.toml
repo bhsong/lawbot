@@ -18,6 +18,7 @@ dependencies = [
 # uv run lawbot-app / uv run lawbot-eval 로 실행
 lawbot-app = "lawbot.app:main"
 lawbot-eval = "lawbot.eval_dev:main"
+lawbot-eval-v4 = "lawbot.eval_v4:main"   # v4 웹앱 구성 전체 재평가 (단계 생략 시 all)
 
 [build-system]
 requires = ["uv_build>=0.12.19,<0.13.0"]
