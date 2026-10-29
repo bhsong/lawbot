@@ -1,6 +1,7 @@
 # src/lawbot/service.py  →  UI와 무관한 질의응답 흐름 (Gradio 앱이 쓰고, 이후 API 서버도 그대로 씀)
 # 이 모듈은 gradio를 import하지 않는다 (tests/test_pipeline.py가 검사)
 import gc
+import importlib
 import os
 import threading
 import time
@@ -8,15 +9,26 @@ from collections import OrderedDict
 from dataclasses import dataclass
 from lawbot import deploy
 from lawbot.paths import LLM_4BIT
-from lawbot.retriever import Retriever
-from lawbot.llm import LLM, SYSTEM
-from lawbot.reranker import Reranker
 
 TOP_K = 3                            # 답변 근거로 넘기는 조문 수 (Fast·Pro 공통)
 
+# 모델 클래스는 처음 쓸 때 import한다: 원격 모드 웹앱(모델 서버에 접속)은 torch·mlx를 올리지 않음
+# service.LLM처럼 모듈 속성으로 읽을 수 있고, 테스트는 이 이름을 가짜로 바꾼다 (바꾼 값이 우선)
+_LAZY = {'Retriever': 'lawbot.retriever', 'LLM': 'lawbot.llm', 'SYSTEM': 'lawbot.llm', 'Reranker': 'lawbot.reranker'}
+
+def __getattr__(name):
+    if name not in _LAZY:
+        raise AttributeError(f'module {__name__!r} has no attribute {name!r}')
+    value = getattr(importlib.import_module(_LAZY[name]), name)
+    globals()[name] = value
+    return value
+
+def _lazy(name):
+    return globals()[name] if name in globals() else __getattr__(name)
+
 def load_models():
     """검색기·sLLM을 불러온다. LLM_PATH 환경 변수로 다른 sLLM을 지정 (평가·기존 호출용, 웹앱은 load_app)"""
-    return Retriever(), LLM(os.environ.get('LLM_PATH', LLM_4BIT))
+    return _lazy('Retriever')(), _lazy('LLM')(os.environ.get('LLM_PATH', LLM_4BIT))
 
 def answer_stream(retriever, llm, question, k=TOP_K):
     """(근거 조문 목록, 답변 조각 생성기). 조문은 생성 전에 정해지므로 먼저 돌려준다"""
@@ -97,6 +109,7 @@ def load_app(profile=None):
     rr = deploy.reranker(p)              # 꺼져 있으면 None: 리랭커 모델을 올리지 않음
     if rr:
         check_reranker(rr)
+    Retriever, Reranker, LLM = _lazy('Retriever'), _lazy('Reranker') if rr else None, _lazy('LLM')
     retriever = Retriever(p.emb, p.articles, max_seq_length=p.max_seq, doc_style=p.doc_style)
     reranker = None
     if rr:                               # 불러오기 실패는 그대로 올려 실행 중단 (Fast 모델과 같음)
@@ -117,7 +130,7 @@ def load_app(profile=None):
                 print(f'[lawbot] {spec.label} 미리 불러오기 실패: {type(e).__name__}: {e}')
     print(f"[lawbot] 프로필 {p.name} · 조문 {len(retriever.ids)}개 · 리랭커 {'켜짐' if reranker else '꺼짐'} · "
           f"상주 {list(models.loaded)}")
-    full = p.system_file.read_text(encoding='utf-8').strip() if p.system_file else SYSTEM
+    full = p.system_file.read_text(encoding='utf-8').strip() if p.system_file else _lazy('SYSTEM')
     return LawbotApp(p, retriever, models, deploy.early_stop(), reranker, full)
 
 def format_system(app, model_key, fmt):
