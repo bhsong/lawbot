@@ -11,28 +11,20 @@
 # 결과는 results/v4/<단계>_<tag>.csv에 문항마다 한 행씩 바로 쓴다: 중간에 멈추면 같은 명령으로 이어서 실행
 # test 문항은 평가 전용 (README '평가 데이터 사용 제한'): 이 결과로 설정·프롬프트를 고르지 않는다
 import argparse
-import re
 import time
 import numpy as np
 import pandas as pd
 from lawbot import envfile
 from lawbot.paths import DATA, EVAL, RESULTS, V4_QA, V4_SPLIT
-from lawbot.score_answers import conclusion_part, norm, score_one
+# 인용·거절 판정은 웹앱 화면과 같은 citation 모듈 (ev.citations·ev.refused·ev.key 등 기존 이름은 그대로 둠)
+from lawbot.citation import LAW_ALIASES, REFUSAL, cite_section, citations, refused
+from lawbot.citation import hit_key as key
+from lawbot.score_answers import score_one
 
 OUT = RESULTS / 'v4'
 SEED = 42
 E = dict(encoding='utf-8-sig')
 
-# 줄임말로 인용해도 인정할 법령 이름 (공백·가운뎃점은 norm으로 맞춤)
-LAW_ALIASES = {
-    '근로기준법': ('근로기준법',),
-    '근로자퇴직급여 보장법': ('근로자퇴직급여 보장법', '근로자퇴직급여보장법', '퇴직급여법'),
-    '최저임금법': ('최저임금법',),
-    '남녀고용평등과 일ㆍ가정 양립 지원에 관한 법률': ('남녀고용평등과 일ㆍ가정 양립 지원에 관한 법률', '남녀고용평등법', '고평법'),
-    '기간제 및 단시간근로자 보호 등에 관한 법률': ('기간제 및 단시간근로자 보호 등에 관한 법률', '기간제법'),
-    '파견근로자 보호 등에 관한 법률': ('파견근로자 보호 등에 관한 법률', '파견법'),
-    '임금채권보장법': ('임금채권보장법',),
-}
 # oos_eval.csv source → v4 범위 안 법령 (나머지 source는 여전히 범위 밖)
 OOS_IN_SCOPE = {'남녀고용평등법': '남녀고용평등과 일ㆍ가정 양립 지원에 관한 법률', '최저임금법': '최저임금법',
                 '근로자퇴직급여 보장법': '근로자퇴직급여 보장법', '기간제법': '기간제 및 단시간근로자 보호 등에 관한 법률',
@@ -41,44 +33,10 @@ OOS_IN_SCOPE = {'남녀고용평등법': '남녀고용평등과 일ㆍ가정 양
 # v4 정답 조문(qa_full_v4)은 개정 후 기준. 키워드가 개정 전 형량인 문항만 개정 후 형량으로 바꾼다 (평가 파일은 그대로 둠)
 KEYWORD_FIX = {'Q2443': '[["5년이하"], ["5천만원", "5000만원"]]', 'Q2453': '[["5년이하"], ["5천만원", "5000만원"]]'}
 
-# 거절 판정: v1 규칙(【결론】에 '확인할 수 없')은 4B 학습 문구만 잡는다. 튜닝 전 27B는 같은 뜻을 다른 말로 쓰므로
-# 근거·답변이 없다는 표현을 함께 본다 (in-scope 200문항 결과에서 이 확장으로 새로 잡힌 거절 0건 확인). refusal.is_refusal은 그대로
-REFUSAL = re.compile(r'확인할 수 없|근거를 찾을 수 없|근거를 찾지 못|근거가 (?:없|되지 않|포함되어 있지 않)|포함되어 있지 않'
-                     r'|답변할 수 없|답변드릴 수 없|답할 수 없|판단할 수 없')
-
-def refused(answer):
-    return REFUSAL.search(conclusion_part(answer)) is not None
-
-_ALIAS = sorted(((norm(a), law) for law, al in LAW_ALIASES.items() for a in al), key=lambda x: -len(x[0]))
-_TOKEN = re.compile('|'.join(re.escape(a) for a, _ in _ALIAS) + r'|제\d+조(?:의\d+)?')
-
-def cite_section(answer):
-    m = re.search(r'【근거 조문】(.*?)(?=【|$)', str(answer), re.S)
-    return m.group(1) if m else str(answer)
-
-def citations(answer):
-    """【근거 조문】(없으면 답변 전체)에서 인용한 (법령, 제N조) 목록. 법령명 없이 이어 쓴 번호는 앞의 법령으로 본다
-    ('근로기준법 제26조, 제27조' → 둘 다 근로기준법). 앞에 법령명이 전혀 없으면 (None, 번호). 거절 형식('해당 없음')은 빈 목록"""
-    text = cite_section(answer)
-    if text.strip().startswith('해당 없음'):
-        return []
-    alias = dict(_ALIAS)
-    law, out = None, []
-    for m in _TOKEN.finditer(norm(text)):
-        t = m[0]
-        if t in alias:
-            law = alias[t]
-        elif (law, t) not in out:
-            out.append((law, t))
-    return out
-
 def cite_gold(answer, gold):
     """gold: '근로기준법 제26조'. 법령명까지 맞게 인용했고 거절이 아님"""
     law, no = gold.rsplit(' ', 1)
     return (law, no) in citations(answer) and not refused(answer)
-
-def key(h):
-    return f"{h['law']} {h['article_id']}"
 
 def load_test():
     qa, sp = pd.read_csv(V4_QA, **E), pd.read_csv(V4_SPLIT, **E)
