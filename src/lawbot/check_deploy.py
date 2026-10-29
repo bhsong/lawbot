@@ -1,14 +1,16 @@
 # src/lawbot/check_deploy.py  →  uv run python -m lawbot.check_deploy [v1|v4]
 # 웹앱이 쓸 조문 CSV·system·임베딩·MLX 모델 폴더를 모델을 올리지 않고 검사한다 (파일 헤더만 읽음)
+# 웹앱 포트(LAWBOT_PORT)와, 원격 모드(LAWBOT_MODEL_SERVER)면 모델 서버 접속·토큰·api_version·프로필 일치도 검사한다
 # 실패 항목이 있으면 종료 코드 1. LoRA 병합 여부는 파일로 확정할 수 없어 '어댑터 파일 없음'까지만 본다
 import hashlib
 import json
+import os
 import struct
 import sys
 from collections import Counter
 from pathlib import Path
 import pandas as pd
-from lawbot import deploy, envfile
+from lawbot import deploy, envfile, remote, security
 from lawbot.deploy import get_profile
 
 EXPECTED_ARTICLES = {'v1': 130, 'v4': 415}
@@ -63,7 +65,7 @@ def check_system_file(name, f, out):
 
 def check_system(p, out):
     if p.system_file is None:
-        from lawbot.llm import SYSTEM   # v1: 코드에 든 학습 system
+        from lawbot.prompts import SYSTEM   # v1: 코드에 든 학습 system
         out.append(('OK', f'기본 system: llm.SYSTEM (v1) · sha256 {hashlib.sha256(SYSTEM.encode()).hexdigest()[:12]}'))
     else:
         check_system_file('기본', p.system_file, out)
@@ -129,6 +131,39 @@ def check_reranker(p, out):
     if not list(d.glob('*.safetensors')):
         out.append(('FAIL', '리랭커 폴더에 safetensors 없음'))
 
+def check_ports(out):
+    try:
+        out.append(('OK', f'웹앱 주소 {security.SERVER_NAME}:{security.server_port()} '
+                          f"({'LAWBOT_PORT' if (os.environ.get('LAWBOT_PORT') or '').strip() else '기본값'})"))
+    except ValueError as e:
+        out.append(('FAIL', f'웹앱 포트 설정: {e}'))
+
+def check_model_server(p, out):
+    """원격 모드: 모델 서버 접속·토큰·api_version·프로필 일치 (모델 서버가 떠 있어야 PASS)"""
+    try:
+        url = security.model_server_url()
+    except ValueError as e:
+        return out.append(('FAIL', f'모델 서버 주소: {e}'))
+    if url is None:
+        return out.append(('INFO', '로컬 모드 (LAWBOT_MODEL_SERVER 없음): 웹앱이 모델을 직접 올림'))
+    try:
+        client = remote.ModelServerClient(url, security.model_token(), timeout=10)
+        ready = client.get_json('/health')['ready']
+    except (RuntimeError, ConnectionError) as e:     # 토큰 없음·불일치·접속 실패 (토큰 값은 출력하지 않음)
+        return out.append(('FAIL', f'모델 서버 {url}: {e}'))
+    out.append(('OK', f'모델 서버 {url} 접속·토큰 확인'))
+    if not ready:
+        return out.append(('FAIL', '모델 서버가 아직 모델을 불러오는 중입니다. 잠시 뒤 다시 확인하세요.'))
+    info = client.get_json('/info')
+    diff = remote.check_info(info, p)
+    out.extend(('FAIL', f'모델 서버 설정 불일치: {d}') for d in diff)
+    if not diff:
+        out.append(('OK', f"모델 서버 api_version {info['api_version']} · 프로필 {info['profile']['name']} 일치"))
+    rr = info['reranker']
+    out.append(('INFO', f"모델 서버: 조문 {info['n_articles']}개 · 리랭커 "
+                        f"{'후보 ' + str(rr['candidates']) + '개' if rr else '꺼짐'} · 모델 {info['models']} · "
+                        f"상주 {info['loaded']} (최대 {info['max_resident']}) · MLX 메모리(GB) {info['memory']}"))
+
 def run(name=None):
     p = get_profile(name)
     out = [('INFO', f'프로필 {p.name}: {p.title}')]
@@ -140,6 +175,8 @@ def run(name=None):
     for spec in p.disabled:             # LAWBOT_MODELS에서 뺀 모델은 검사하지 않음 (화면에 비활성 표시)
         out.append(('INFO', f'{spec.label}: 이 기기에서 사용 안 함 (LAWBOT_MODELS)'))
     check_reranker(p, out)
+    check_ports(out)
+    check_model_server(p, out)
     return out
 
 def main():

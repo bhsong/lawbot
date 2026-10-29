@@ -81,12 +81,15 @@ def test_encode_layout_and_truncation(make_reranker):
 @pytest.mark.parametrize('tie', [True, False])
 def test_last_position_logits_match_full_forward(make_reranker, tie):
     # lm_head를 마지막 위치에만 곱해도 Model.__call__ 전체 계산의 마지막 위치와 같아야 함
+    # 계산 구조 검증이므로 CPU에서 비교: 일부 Apple GPU는 fp32 행렬 곱을 저정밀(NAX·TF32) 경로로 계산해
+    # 오차가 1e-3 수준이 된다 (4비트 양자화 행렬 곱은 해당 없음, 배포 모델은 4비트)
     model = tiny_qwen3(tie=tie)
     r = make_reranker(model=model)
     ids = r.encode('해고 예고?', '근로기준법 제26조(해고의 예고)\n사용자는 30일 전에 예고')
-    full = model(mx.array([ids]))[0, -1]
-    got = r._no_yes_logits(ids)
-    assert mx.allclose(got, full[mx.array([2, 1])], atol=1e-4).item()
+    with mx.stream(mx.cpu):
+        full = model(mx.array([ids]))[0, -1]
+        got = r._no_yes_logits(ids)
+        assert mx.allclose(got, full[mx.array([2, 1])], atol=1e-4).item()
 
 def test_quantized_model_logits(make_reranker):
     # 배포는 4비트: QuantizedEmbedding.as_linear(tie) 경로도 전체 계산과 같아야 함

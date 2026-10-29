@@ -2,6 +2,7 @@
 # 웹앱과 같은 경로(service.load_app·ask)로 Fast/Pro를 번갈아 질문하며 지연·메모리를 잰다 (UI 없이, 맥 전용)
 #   LAWBOT_MAX_RESIDENT=2: 동시 상주 / 1: 전환 때마다 다시 로딩 (전환 시간 측정)
 #   LAWBOT_RERANKER_ENABLED=1: 리랭커 포함 (같은 tag 규칙으로 0/1을 각각 돌려 메모리·지연 전후 비교)
+#   원격 모드(LAWBOT_MODEL_SERVER): 상주 수·리랭커는 모델 서버 설정, mlx_*_gb는 모델 서버 프로세스 값
 # 결과: results/bench_<tag>.csv (질문마다 한 행) + 모델별 중앙값 표
 import argparse
 import platform
@@ -28,14 +29,20 @@ def sysctl(name):
     r = subprocess.run(['sysctl', '-n', name], capture_output=True, text=True)
     return r.stdout.strip() if r.returncode == 0 else None
 
-def memory():
-    """macOS 메모리 압박 단계·스왑 사용량, MLX·PyTorch MPS가 잡은 메모리(GB)"""
+def memory(app=None):
+    """macOS 메모리 압박 단계·스왑 사용량, MLX·PyTorch MPS가 잡은 메모리(GB)
+    원격 모드(모델 서버)면 이 프로세스 대신 모델 서버의 MLX 메모리 (/info). 웹앱 프로세스에는 모델이 없음"""
     m = {}
     level = sysctl('kern.memorystatus_vm_pressure_level')
     m['pressure'] = PRESSURE.get(int(level), level) if level else None
     swap = sysctl('vm.swapusage')          # 'total = 2048.00M  used = 1001.25M  free = ...'
     used = re.search(r'used = ([\d.]+)M', swap or '')
     m['swap_used_gb'] = round(float(used[1]) / 1024, 2) if used else None
+    client = getattr(getattr(app, 'models', None), 'client', None)
+    if client is not None:               # torch·mlx를 이 프로세스에 올리지 않음
+        server = client.get_json('/info')['memory'] or {}
+        m['mlx_active_gb'], m['mlx_peak_gb'] = server.get('active'), server.get('peak')
+        return m
     try:
         import mlx.core as mx
         m['mlx_active_gb'] = round(mx.get_active_memory() / 1e9, 2)
@@ -62,7 +69,7 @@ def main():
     print('시작 메모리', memory())
     t0 = time.perf_counter()
     app = load_app()
-    print(f'앱 준비 {time.perf_counter() - t0:.1f}초 · 상주 {list(app.models.loaded)} ·', memory())
+    print(f'앱 준비 {time.perf_counter() - t0:.1f}초 · 상주 {list(app.models.loaded)} ·', memory(app))
     rows = []
     for rnd in range(args.rounds):
         for q in QUESTIONS:
@@ -70,7 +77,7 @@ def main():
                 for stage, hits, raw, st in ask(app, q, key, early_stop=args.early_stop):
                     pass
                 rows.append({'round': rnd, 'model': key, 'fmt': app.models.specs[key].fmt, 'question': q,
-                             **st, **memory(),
+                             **st, **memory(app),
                              'answer_len': len(raw), 'concise_len': len(concise(raw, hits)),
                              'resident': ','.join(app.models.loaded), 'answer': raw})
                 r = rows[-1]

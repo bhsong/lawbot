@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- Lawbot 모델 서버 (임베딩·리랭커·답변 모델을 한 번만 올림) 상시 실행 템플릿
+     자리표시를 채워 ~/Library/LaunchAgents/com.lawbot.model-server.plist로 복사 (README "상시 운영과 개발 동시 실행"):
+       __UV__       which uv로 찾은 절대 경로 (launchd의 PATH에는 uv가 없음)
+       __PROD_DIR__ 운영 worktree 절대 경로 (.env는 이 폴더에서 envfile이 읽음)
+       __LOG_DIR__  로그 폴더 절대 경로 (launchd는 ~를 풀지 않음, 예: /Users/<이름>/Library/Logs/lawbot)
+     비밀 값(비밀번호·토큰)과 포트는 여기에 넣지 않는다: 모두 운영 worktree의 .env
+     KeepAlive: 종료되면 다시 띄움 (모델 로딩 실패로 종료 코드 1이면 ThrottleInterval 30초 간격으로 재시도) -->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.lawbot.model-server</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>__UV__</string>
+    <string>run</string>
+    <string>--frozen</string>
+    <string>lawbot-model-server</string>
+  </array>
+  <key>WorkingDirectory</key>
+  <string>__PROD_DIR__</string>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PYTHONUNBUFFERED</key>
+    <string>1</string>
+  </dict>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <true/>
+  <key>ThrottleInterval</key>
+  <integer>30</integer>
+  <key>StandardOutPath</key>
+  <string>__LOG_DIR__/model-server.log</string>
+  <key>StandardErrorPath</key>
+  <string>__LOG_DIR__/model-server.log</string>
+</dict>
+</plist>

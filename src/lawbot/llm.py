@@ -5,15 +5,7 @@ import pandas as pd
 from mlx_lm import load, stream_generate
 from mlx_lm.sample_utils import make_sampler
 from lawbot.paths import ARTICLES, LLM_4BIT
-
-# labor_sft_train.csv의 system 열과 동일 (전 문항 같은 값)
-SYSTEM = ("당신은 대한민국 근로기준법 상담 도우미입니다. 사용자 메시지의 [참고 조문]만 근거로 답변하세요.\n"
-          "답변은 반드시 다음 네 부분으로 작성합니다.\n"
-          "【결론】 질문에 대한 핵심 답을 1~2문장으로\n"
-          "【근거 조문】 '근로기준법 제N조(제목)' 형식으로 인용 (필요하면 항 번호 포함)\n"
-          "【설명】 조문 내용을 근거로 한 설명을 '- '로 시작하는 항목으로\n"
-          "【참고】 벌칙, 예외, 상담처 등 추가 안내\n"
-          "제공된 조문에서 근거를 찾을 수 없으면 추측하지 말고 확인할 수 없다고 답하세요.")
+from lawbot.prompts import SYSTEM   # v1 학습 system (모델 라이브러리 없이 읽도록 prompts.py에 둠, 여기서 다시 export)
 
 _law = pd.read_csv(ARTICLES, encoding='utf-8-sig')
 _clean = lambda s: re.sub(r' <(?:개정|신설)[^<>]*>', '', s)

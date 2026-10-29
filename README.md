@@ -249,8 +249,8 @@ uv run lawbot-app
 - `.env`는 `.gitignore`에 들어 있어 Git에 올라가지 않습니다. `.env.example`에는 비밀번호를 적지 마세요.
 - 셸에서 `export`한 변수가 있으면 그 값이 `.env`보다 우선합니다. 한 번만 다르게 실행할 때는 `LAWBOT_RERANKER_ENABLED=0 uv run lawbot-app`처럼 앞에 붙입니다.
 - 다른 파일을 쓰려면 `LAWBOT_ENV_FILE=.env.small uv run lawbot-app`(예: 소형 맥의 Fast 4B 설정), 파일을 읽지 않으려면 `LAWBOT_ENV_FILE=`.
-- `.env`에는 `LAWBOT_*`와 `LLM_PATH`만 적을 수 있습니다. 서버 주소·포트는 바꿀 수 없습니다(아래 참고).
-- `check_deploy`, `bench_models`, `verify_reranker`, `eval_concise`도 같은 `.env`를 읽습니다.
+- `.env`에는 `LAWBOT_*`와 `LLM_PATH`만 적을 수 있습니다. 서버 주소는 바꿀 수 없고, 웹앱 포트는 `LAWBOT_PORT`로 정합니다(아래 참고).
+- `lawbot-model-server`, `check_deploy`, `bench_models`, `bench_ui`, `verify_reranker`, `eval_concise`도 같은 `.env`를 읽습니다.
 - 값에 공백이나 ` #`이 들어가면 작은따옴표로 감쌉니다: `LAWBOT_PW='a b#c'`.
 
 비밀번호를 파일에 두지 않으려면 `.env`의 `LAWBOT_PW=` 줄을 지우고 실행할 때 입력하거나 macOS 키체인에서 꺼내 씁니다(zsh).
@@ -280,7 +280,7 @@ LAWBOT_PROFILE=v1 LAWBOT_MODELS= LAWBOT_RERANKER_ENABLED=0 uv run lawbot-app
 
 모델 경로나 메모리 설정은 `.env`에서 바꿉니다(상대 경로는 저장소 최상위 기준). 아래 표가 전체 변수입니다.
 
-웹앱은 이 맥에서만 쓰는 로컬 전용입니다. 서버는 `127.0.0.1:7860`에서만 열리고, 브라우저에서 `http://127.0.0.1:7860`으로 접속해 로그인합니다. 같은 네트워크의 다른 기기에서는 접속할 수 없으며, Gradio 공개 공유 링크(`share`)도 만들지 않습니다. 주소·포트·공유 설정은 `GRADIO_SERVER_NAME` 같은 환경 변수로 바꿀 수 없습니다(`src/lawbot/security.py`).
+웹앱은 이 맥에서만 쓰는 로컬 전용입니다. 주소는 `127.0.0.1` 고정이고, 포트는 `.env`의 `LAWBOT_PORT`(없으면 기존 기본값)입니다. 브라우저에서 `http://127.0.0.1:<포트>`로 접속해 로그인합니다. 같은 네트워크의 다른 기기에서는 접속할 수 없으며, Gradio 공개 공유 링크(`share`)도 만들지 않습니다. 주소·공유 설정은 바꿀 수 없고, `GRADIO_SERVER_NAME`·`GRADIO_SERVER_PORT` 같은 Gradio 환경 변수는 무시합니다(`src/lawbot/security.py`). 상시 운영할 때는 `.env`에 `LAWBOT_PORT`를 따로 정하세요.
 
 | 변수 | 필수 | 용도 |
 | --- | --- | --- |
@@ -300,6 +300,12 @@ LAWBOT_PROFILE=v1 LAWBOT_MODELS= LAWBOT_RERANKER_ENABLED=0 uv run lawbot-app
 | `LAWBOT_RERANKER_MODEL_PATH` | 아니요 | 리랭커 MLX 폴더 (기본 `models/v4/reranker_4b_mlx_4bit`) |
 | `LAWBOT_RERANKER_CANDIDATES` | 아니요 | 리랭커에 넘길 임베딩 후보 수 (기본 `10`, 실험값. 3 이상) |
 | `LLM_PATH` | 아니요 | 평가 스크립트(`eval_oos`·`eval_refusal`)가 쓸 sLLM 폴더 (예: `models/sllm_mlx_8bit`). 웹앱은 쓰지 않음 |
+| `LAWBOT_PORT` | 아니요 | 웹앱 포트 (1024–65535). 없으면 기존 기본값. 운영·개발을 함께 띄울 때는 서로 다른 값 |
+| `LAWBOT_INSTANCE` | 아니요 | 화면·탭 제목에 붙일 이름 (예: `운영`, `개발`, 40자 이하) |
+| `LAWBOT_MODEL_SERVER` | 아니요 | 모델 서버 주소 `http://127.0.0.1:<모델 서버 포트>`. 있으면 원격 모드(웹앱은 모델을 올리지 않음), 비우면 로컬 모드 |
+| `LAWBOT_MODEL_SERVER_PORT` | 모델 서버 필수 | 모델 서버 포트 (1024–65535, 기본값 없음) |
+| `LAWBOT_MODEL_TOKEN` | 모델 서버·원격 모드 필수 | 모델 서버 토큰 (16자 이상, `openssl rand -hex 32`). 웹앱과 모델 서버가 같은 값 |
+| `LAWBOT_MODEL_SERVER_WAIT` | 아니요 | 원격 모드 웹앱이 시작할 때 모델 서버 준비를 기다리는 최대 초 (기본 `300`) |
 
 `LAWBOT_USER`와 `LAWBOT_PW`가 하나라도 없거나 비어 있으면 모델을 불러오기 전에 `RuntimeError`로 실행을 거부합니다. 인증 없이 서버를 띄우는 방법은 없습니다.
 
@@ -324,6 +330,79 @@ uv run python -m lawbot.verify_reranker --colab ~/Downloads/v4 --split val     #
 uv run python -m lawbot.bench_models --tag m32_v4_rr                            # .env 그대로 (리랭커 포함) 지연·메모리
 LAWBOT_RERANKER_ENABLED=0 uv run python -m lawbot.bench_models --tag m32_v4     # 비교 기준
 ```
+
+**상시 운영과 개발 동시 실행 (모델 서버)**
+
+맥 미니에서 운영 웹앱을 계속 켜 두고(휴대폰은 Tailscale로 접속) 같은 맥에서 개발 웹앱도 띄울 때는, 임베딩·리랭커·답변 모델을 한 번만 올리는 내부 모델 서버(`lawbot-model-server`)를 두 웹앱이 함께 씁니다. 웹앱마다 27B와 리랭커를 따로 올리면 32GB를 넘기 때문입니다. `LAWBOT_MODEL_SERVER`가 비어 있으면 지금처럼 웹앱이 모델을 직접 올리는 로컬 모드입니다.
+
+```
+휴대폰 ──(Tailscale HTTPS, tailscale serve)──▶ 127.0.0.1:<운영 포트>  운영 웹앱 (Gradio, 모델 없음)
+맥 브라우저 ─────────────────────────────────▶ 127.0.0.1:<개발 포트>  개발 웹앱 (Gradio, 모델 없음)
+                                                   │  둘 다 HTTP + 토큰
+                                                   ▼
+                                     127.0.0.1:<모델 서버 포트>  모델 서버 (1개)
+```
+
+| 프로세스 | 포트 | 실행 위치 | 외부 노출 |
+| --- | --- | --- | --- |
+| 운영 웹앱 | `<운영 포트>` | 운영 worktree | `tailscale serve`로 이 포트만 |
+| 개발 웹앱 | `<개발 포트>` | 개발 레포 | 없음 |
+| 모델 서버 | `<모델 서버 포트>` | 운영 worktree | 없음 (127.0.0.1 고정) |
+
+포트 번호는 직접 정해 각 `.env`에만 적습니다(레포에 올리지 않음). 운영·개발 포트는 서로 떨어뜨리고, 모델 서버 포트도 따로 둡니다. 모델 서버는 127.0.0.1에만 열리고, 토큰이나 포트가 없으면 실행을 거부합니다. 질문 내용은 모델 서버 로그에 남기지 않습니다(경로·모델·시간만).
+
+1. 토큰을 한 번 만들어 운영·개발 `.env`의 `LAWBOT_MODEL_TOKEN`에 같은 값으로 적습니다: `openssl rand -hex 32`
+2. 운영 worktree를 만듭니다(배포할 태그 기준, 1회).
+
+   ```zsh
+   cd ~/lawbot
+   git worktree add --detach ~/lawbot-prod <태그>
+   cd ~/lawbot-prod
+   ln -s ~/lawbot/models models                 # 모델 파일 공유
+   cp ~/lawbot/.env .env && chmod 600 .env      # .env.example 맨 아래 운영 블록대로 수정
+   uv sync --frozen
+   ```
+
+   운영 `.env`에는 `LAWBOT_INSTANCE=운영`, `LAWBOT_PORT`, `LAWBOT_MODEL_SERVER_PORT`, `LAWBOT_MODEL_SERVER`, `LAWBOT_MODEL_TOKEN`을, 개발 레포 `.env`에는 `.env.dev.example`대로 `LAWBOT_INSTANCE=개발`, `LAWBOT_PORT`, `LAWBOT_MODEL_SERVER`, `LAWBOT_MODEL_TOKEN`을 적습니다. 두 `.env`의 `LAWBOT_MODEL_SERVER`·`LAWBOT_MODEL_TOKEN`·`LAWBOT_PROFILE`은 같아야 합니다.
+3. 직접 실행해 확인합니다.
+
+   ```zsh
+   uv run lawbot-model-server                   # 운영 worktree. 포트를 먼저 열고 모델을 올린 뒤 'ready'
+   uv run python -m lawbot.check_deploy         # 모델 파일 + 모델 서버 접속·토큰·api_version·프로필 일치
+   uv run lawbot-app                            # 원격 모드: 모델 서버가 준비될 때까지 최대 LAWBOT_MODEL_SERVER_WAIT초 대기
+   ```
+
+4. launchd로 상시 실행합니다(1회). 템플릿의 자리표시를 채워 복사합니다. 비밀 값과 포트는 plist에 넣지 않습니다(`.env`).
+
+   ```zsh
+   mkdir -p ~/Library/Logs/lawbot
+   for k in model-server web; do
+     sed -e "s|__UV__|$(which uv)|g" -e "s|__PROD_DIR__|$HOME/lawbot-prod|g" -e "s|__LOG_DIR__|$HOME/Library/Logs/lawbot|g" \
+       deploy/launchd/com.lawbot.$k.plist.example > ~/Library/LaunchAgents/com.lawbot.$k.plist
+     launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.lawbot.$k.plist   # 등록·시작
+   done
+   launchctl print gui/$(id -u)/com.lawbot.web | grep state
+   tail -f ~/Library/Logs/lawbot/model-server.log
+   launchctl kickstart -k gui/$(id -u)/com.lawbot.web          # 재시작 (서버 쪽 코드가 바뀌면 com.lawbot.model-server도)
+   launchctl bootout gui/$(id -u)/com.lawbot.web               # 해제 (모델 서버도 같은 방식)
+   ```
+
+   종료되면 launchd가 다시 띄웁니다(`KeepAlive`). 모델 로딩에 실패하면 모델 서버는 종료 코드 1로 끝나고 30초 간격(`ThrottleInterval`)으로 다시 시도합니다. 맥이 잠자기에 들어가지 않게 설정합니다.
+5. 휴대폰에서는 Tailscale로 운영 웹앱 포트만 tailnet 안에 HTTPS로 노출합니다. 공개 인터넷에 여는 `tailscale funnel`은 쓰지 않습니다. 인자 형식은 Tailscale 버전마다 다를 수 있으니 `tailscale serve --help`로 확인합니다.
+
+   ```zsh
+   tailscale serve --bg <운영 포트>
+   tailscale serve status
+   ```
+
+이 구조의 제약:
+
+- 웹앱 쪽 코드(`app.py`, `service.ask`, `answer_format.py`, system 파일)는 개발 웹앱만 다시 띄워 시험합니다. system 문구는 웹앱이 자기 레포의 파일을 요청마다 보냅니다.
+- 서버 쪽 코드(`llm.py`의 프롬프트 조립, `reranker.py`, `retriever.py`, `model_server.py`)는 개발용 모델 서버로 시험합니다. 운영 모델 서버를 멈추고(`launchctl bootout …/com.lawbot.model-server`), 개발 레포에서 다른 포트로 띄운 뒤(`LAWBOT_MODEL_SERVER_PORT=<시험 포트> uv run lawbot-model-server`) 개발 웹앱을 그 포트로 연결합니다(`LAWBOT_MODEL_SERVER=http://127.0.0.1:<시험 포트> uv run lawbot-app`). 메모리 때문에 모델 서버는 한 번에 하나만 띄웁니다.
+- 모델 서버는 요청을 한 번에 하나만 처리합니다. 개발 화면에서 질문하는 동안 휴대폰 질문은 기다립니다. 정지 버튼·간결형 조기 종료로 연결이 끊기면 바로 다음 요청을 받지만, 휴대폰이 연결을 끊지 않고 사라지면 생성이 최대 길이(1024토큰)에서 끝날 때까지 기다립니다.
+- 검색 설정(리랭커 사용·후보 수)과 상주 모델 수는 모델 서버(운영 `.env`)가 기준입니다. 원격 모드 웹앱의 `LAWBOT_RERANKER_*`·`LAWBOT_MAX_RESIDENT`는 쓰지 않습니다. 웹앱은 시작할 때 프로필·`doc_style`·모델 key·API 버전이 서버와 같은지 확인하고, 다르면 실행을 거부합니다.
+- 같은 브라우저에서 운영·개발 화면에 번갈아 로그인할 때 로그인 쿠키가 겹치면, 개발 화면은 `http://localhost:<개발 포트>`로 접속합니다(호스트가 다르면 쿠키가 분리됨).
+- `eval_v4`, `eval_concise`, `bench_models`는 원격 모드로도 돌아갑니다. 결과의 `peak_gb`·MLX 메모리는 모델 서버 프로세스 값입니다. `verify_reranker`, `eval_dev`, `eval_refusal`, `eval_oos`, `diag_*`는 모델을 직접 올리는 로컬 모드 전용이므로 실행 전에 모델 서버를 멈춥니다.
 
 > 주의: 비밀번호를 소스 코드, 셸 설정 파일, 스크립트, `.env.example` 등 Git에 올라가는 파일에 적지 마세요. 파일에 둘 때는 Git에서 제외된 `.env`(권한 600)에만 두고, 더 안전하게는 실행할 때 입력하거나 macOS 키체인을 쓰세요.
 
@@ -416,7 +495,10 @@ src/lawbot/
 ├── llm.py             # 프롬프트 구성, MLX 생성
 ├── service.py         # UI와 무관한 질의응답 흐름 (모델 로딩, 검색 → 답변 스트리밍)
 ├── app.py             # Gradio 웹앱
-├── security.py        # 로컬 전용 실행 설정 (127.0.0.1, 로그인 필수, 공유 링크 없음)
+├── security.py        # 로컬 전용 실행 설정 (127.0.0.1, 로그인 필수, 공유 링크 없음, 포트·모델 서버 주소 검증)
+├── prompts.py         # v1 기본 system 문구 (모델 라이브러리 없이 읽음)
+├── model_server.py    # 내부 모델 서버: 임베딩·리랭커·답변 모델을 한 번만 올려 웹앱들이 공유 (127.0.0.1, 토큰)
+├── remote.py          # 원격 모드 웹앱의 모델 서버 클라이언트 (LAWBOT_MODEL_SERVER)
 ├── eval_dev.py        # 검색·답변 평가
 ├── score_answers.py   # 키워드 기반 채점기
 ├── refusal.py         # 거절 판정 (【결론】에 '확인할 수 없'), 범위 밖 답변 판정 (거절·안내·억지적용·미인용)
@@ -427,6 +509,7 @@ src/lawbot/
 ├── diag_oracle.py     # 정답 조문 제공 조건 답변 평가
 ├── diag_fail.py       # 검색은 맞았지만 인용이 틀린 문항 분석
 └── diag_pos.py        # 정답 조문 위치별 인용 정확도 분석
+deploy/launchd/        # 상시 운영용 launchd 템플릿 (모델 서버·웹앱)
 ```
 
 ### 데이터와 평가 방법
@@ -685,7 +768,7 @@ open -e .env              # fill LAWBOT_USER= and LAWBOT_PW=, then save
 uv run lawbot-app
 ```
 
-`.env` is git-ignored. Variables already exported in the shell win over the file (e.g. `LAWBOT_RERANKER_ENABLED=0 uv run lawbot-app` for a one-off run). `LAWBOT_ENV_FILE=<file>` picks another file and `LAWBOT_ENV_FILE=` disables it. Only `LAWBOT_*` and `LLM_PATH` are allowed in the file. `check_deploy`, `bench_models`, `verify_reranker` and `eval_concise` read the same file. To keep the password out of the file, delete the `LAWBOT_PW=` line and use `read -rs 'LAWBOT_PW?Password: ' && export LAWBOT_PW` or the macOS Keychain (`LAWBOT_PW="$(security find-generic-password -a lawbot -s lawbot -w)" uv run lawbot-app`).
+`.env` is git-ignored. Variables already exported in the shell win over the file (e.g. `LAWBOT_RERANKER_ENABLED=0 uv run lawbot-app` for a one-off run). `LAWBOT_ENV_FILE=<file>` picks another file and `LAWBOT_ENV_FILE=` disables it. Only `LAWBOT_*` and `LLM_PATH` are allowed in the file. `lawbot-model-server`, `check_deploy`, `bench_models`, `bench_ui`, `verify_reranker` and `eval_concise` read the same file. To keep the password out of the file, delete the `LAWBOT_PW=` line and use `read -rs 'LAWBOT_PW?Password: ' && export LAWBOT_PW` or the macOS Keychain (`LAWBOT_PW="$(security find-generic-password -a lawbot -s lawbot -w)" uv run lawbot-app`).
 
 If the v4 files (article CSV, 4B system prompt) are missing, the app refuses to start before loading any model and says what is missing. Until v4 is ready, run v1:
 
@@ -704,7 +787,7 @@ Switching models also switches the answer format to that model's default; you ca
 
 Change model paths or memory settings in `.env` (relative paths are resolved from the repository root); the table below lists every variable.
 
-The web app is local-only, for use on this Mac. The server listens only on `127.0.0.1:7860`; open `http://127.0.0.1:7860` in a browser and log in. Other devices on the network cannot connect, and no public Gradio share link is created. The address, port and share setting cannot be changed through environment variables such as `GRADIO_SERVER_NAME` (`src/lawbot/security.py`).
+The web app is local-only, for use on this Mac. The address is fixed to `127.0.0.1`; the port is `LAWBOT_PORT` in `.env` (the previous default if unset). Open `http://127.0.0.1:<port>` in a browser and log in. Other devices on the network cannot connect, and no public Gradio share link is created. The address and share setting cannot be changed, and Gradio variables such as `GRADIO_SERVER_NAME` and `GRADIO_SERVER_PORT` are ignored (`src/lawbot/security.py`). For an always-on setup, set `LAWBOT_PORT` explicitly in `.env`.
 
 | Variable | Required | Purpose |
 | --- | --- | --- |
@@ -724,6 +807,12 @@ The web app is local-only, for use on this Mac. The server listens only on `127.
 | `LAWBOT_RERANKER_MODEL_PATH` | No | Reranker MLX folder (default `models/v4/reranker_4b_mlx_4bit`) |
 | `LAWBOT_RERANKER_CANDIDATES` | No | Embedding candidates passed to the reranker (default `10`, the experiment value; at least 3) |
 | `LLM_PATH` | No | SLM folder used by the evaluation scripts (`eval_oos`, `eval_refusal`), e.g. `models/sllm_mlx_8bit`. Not used by the web app |
+| `LAWBOT_PORT` | No | Web app port (1024–65535). Previous default if unset. Use different values when running production and development together |
+| `LAWBOT_INSTANCE` | No | Name appended to the page and tab title (e.g. `운영`, `개발`; at most 40 characters) |
+| `LAWBOT_MODEL_SERVER` | No | Model server URL `http://127.0.0.1:<model server port>`. Set: remote mode (the web app loads no models). Empty: local mode |
+| `LAWBOT_MODEL_SERVER_PORT` | Model server | Model server port (1024–65535, no default) |
+| `LAWBOT_MODEL_TOKEN` | Model server, remote mode | Model server token (16+ characters, `openssl rand -hex 32`); same value for web apps and server |
+| `LAWBOT_MODEL_SERVER_WAIT` | No | Seconds a remote-mode web app waits at startup for the model server to be ready (default `300`) |
 
 If either `LAWBOT_USER` or `LAWBOT_PW` is missing or empty, the app refuses to start with a `RuntimeError` before loading any model. There is no way to run the server without a login.
 
@@ -740,6 +829,54 @@ LAWBOT_RERANKER_ENABLED=0 uv run lawbot-app    # one-off run without it
 ```
 
 Reranker errors (e.g. NaN scores) are shown as errors instead of silently falling back to the embedding order. A missing folder, or enabling it with the v1 profile, stops the app before any model is loaded. Agreement with the Colab run (transformers fp16) is checked separately on the same questions and embedding top 10 with `uv run python -m lawbot.verify_reranker --colab <v4 folder> --split val`; latency and memory with `lawbot.bench_models` run once with the reranker on and once off.
+
+**Always-on production plus development (model server)**
+
+To keep a production web app running on the Mac mini (reached from a phone over Tailscale) while also running a development web app on the same Mac, both web apps share one internal model server (`lawbot-model-server`) that loads the embedding model, reranker and answer models once. Loading 27B and the reranker in every web app would exceed 32 GB. With `LAWBOT_MODEL_SERVER` empty, the web app loads its own models as before (local mode).
+
+```
+phone ──(Tailscale HTTPS, tailscale serve)──▶ 127.0.0.1:<prod port>   production web app (Gradio, no models)
+Mac browser ────────────────────────────────▶ 127.0.0.1:<dev port>    development web app (Gradio, no models)
+                                                  │  both: HTTP + token
+                                                  ▼
+                                    127.0.0.1:<model server port>  model server (one)
+```
+
+| Process | Port | Runs from | Exposed |
+| --- | --- | --- | --- |
+| Production web app | `<prod port>` | production worktree | only this port, via `tailscale serve` |
+| Development web app | `<dev port>` | development repo | no |
+| Model server | `<model server port>` | production worktree | no (fixed to 127.0.0.1) |
+
+Choose the port numbers yourself and write them only in each `.env` (never in the repository); keep the production and development ports far apart and give the model server its own. The model server listens only on 127.0.0.1 and refuses to start without a token or port. Questions are not written to its log (path, model and timing only).
+
+1. Create a token once and put the same value in `LAWBOT_MODEL_TOKEN` of both `.env` files: `openssl rand -hex 32`
+2. Create the production worktree from the tag to deploy (once): `git worktree add --detach ~/lawbot-prod <tag>`, then in it `ln -s ~/lawbot/models models`, `cp ~/lawbot/.env .env && chmod 600 .env` (edit as in the production block at the end of `.env.example`) and `uv sync --frozen`. The production `.env` sets `LAWBOT_INSTANCE=운영`, `LAWBOT_PORT`, `LAWBOT_MODEL_SERVER_PORT`, `LAWBOT_MODEL_SERVER` and `LAWBOT_MODEL_TOKEN`; the development `.env` follows `.env.dev.example` (`LAWBOT_INSTANCE=개발`, `LAWBOT_PORT`, `LAWBOT_MODEL_SERVER`, `LAWBOT_MODEL_TOKEN`). `LAWBOT_MODEL_SERVER`, `LAWBOT_MODEL_TOKEN` and `LAWBOT_PROFILE` must match.
+3. Check by hand: `uv run lawbot-model-server` (opens the port first, prints `ready` once the models are loaded), `uv run python -m lawbot.check_deploy` (model files plus server reachability, token, API version and profile), `uv run lawbot-app` (remote mode waits up to `LAWBOT_MODEL_SERVER_WAIT` seconds for the server).
+4. Run both under launchd (once). Fill the placeholders in the templates; secrets and ports stay in `.env`, not in the plist.
+
+   ```zsh
+   mkdir -p ~/Library/Logs/lawbot
+   for k in model-server web; do
+     sed -e "s|__UV__|$(which uv)|g" -e "s|__PROD_DIR__|$HOME/lawbot-prod|g" -e "s|__LOG_DIR__|$HOME/Library/Logs/lawbot|g" \
+       deploy/launchd/com.lawbot.$k.plist.example > ~/Library/LaunchAgents/com.lawbot.$k.plist
+     launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.lawbot.$k.plist   # register and start
+   done
+   launchctl kickstart -k gui/$(id -u)/com.lawbot.web          # restart (also com.lawbot.model-server after server-side changes)
+   launchctl bootout gui/$(id -u)/com.lawbot.web               # unregister
+   ```
+
+   launchd restarts a process that exits (`KeepAlive`); if model loading fails the server exits with code 1 and is retried every 30 seconds (`ThrottleInterval`). Keep the Mac from sleeping.
+5. Expose only the production web app port inside the tailnet over HTTPS with `tailscale serve --bg <prod port>` (check the argument form with `tailscale serve --help`). Do not use `tailscale funnel`.
+
+Constraints:
+
+- Web-app-side changes (`app.py`, `service.ask`, `answer_format.py`, system prompt files) are tested by restarting only the development web app; the web app sends its own system prompt with every request.
+- Server-side changes (prompt assembly in `llm.py`, `reranker.py`, `retriever.py`, `model_server.py`) need a development model server: stop the production one, start one from the development repo on another port (`LAWBOT_MODEL_SERVER_PORT=<test port> uv run lawbot-model-server`) and point the development web app at it. Run only one model server at a time because of memory.
+- The model server handles one request at a time, so a phone question waits while a development question is generating. Stop buttons and concise early stop disconnect and free it at once; a phone that disappears without disconnecting holds it until generation reaches the length limit (1024 tokens).
+- Retrieval settings (reranker, candidate count) and resident model count come from the model server (production `.env`); a remote-mode web app ignores `LAWBOT_RERANKER_*` and `LAWBOT_MAX_RESIDENT`. At startup it checks that profile, `doc_style`, model keys and API version match the server and refuses to start otherwise.
+- If login cookies clash when switching between production and development in one browser, open development at `http://localhost:<dev port>` (a different host keeps separate cookies).
+- `eval_v4`, `eval_concise` and `bench_models` also run in remote mode; their `peak_gb` and MLX memory are the model server's. `verify_reranker`, `eval_dev`, `eval_refusal`, `eval_oos` and `diag_*` load models directly (local mode only), so stop the model server first.
 
 > Warning: never put the password in source code, shell profiles, scripts, `.env.example` or any other file that goes into Git. If you keep it in a file, use only the git-ignored `.env` (mode 600); typing it at launch or the macOS Keychain is safer.
 
@@ -809,7 +946,10 @@ src/lawbot/
 ├── llm.py             # prompt construction, MLX generation
 ├── service.py         # UI-independent Q&A flow (model loading, retrieval → streamed answer)
 ├── app.py             # Gradio web app
-├── security.py        # local-only launch settings (127.0.0.1, login required, no share link)
+├── security.py        # local-only launch settings (127.0.0.1, login required, no share link, port and model server URL checks)
+├── prompts.py         # v1 default system prompt (readable without model libraries)
+├── model_server.py    # internal model server: loads embedding, reranker and answer models once for all web apps (127.0.0.1, token)
+├── remote.py          # model server client for remote-mode web apps (LAWBOT_MODEL_SERVER)
 ├── eval_dev.py        # retrieval and answer evaluation
 ├── score_answers.py   # keyword-based answer scorer
 ├── refusal.py         # refusal detection ('확인할 수 없' in the conclusion), out-of-scope verdicts (refusal, referral, forced, uncited)
@@ -820,6 +960,7 @@ src/lawbot/
 ├── diag_oracle.py     # answer evaluation with gold articles
 ├── diag_fail.py       # failures where retrieval hit but citation missed
 └── diag_pos.py        # citation accuracy by gold-article position
+deploy/launchd/        # launchd templates for the always-on setup (model server, web app)
 ```
 
 ### Data and evaluation
