@@ -203,7 +203,8 @@ def rescore(tag):
         p = OUT / f'{stage}_{tag}.csv'
         if not p.exists():
             continue
-        d = pd.read_csv(p, keep_default_na=False, **E)
+        # round_trip: 측정값(초)을 읽고 다시 쓸 때 마지막 자리가 바뀌지 않게 (pandas 3.0 기본 파서는 반올림함)
+        d = pd.read_csv(p, keep_default_na=False, float_precision='round_trip', **E)
         d['answer'] = d['answer'].astype(str)
         new = pd.DataFrame([fn(r) for _, r in d.iterrows()], index=d.index)
         if 'must_not_ok' in new:                 # 정수 열 (B_newlaw는 빈 값): 1이 1.0으로 바뀌지 않게

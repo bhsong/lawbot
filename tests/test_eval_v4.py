@@ -202,3 +202,14 @@ def test_rescore_updates_only_scores(tmp_path, env):
     o = pd.read_csv(tmp_path / 'oos_t.csv', **E).iloc[0]
     assert bool(o['refusal']) and not bool(o['cites_any'])           # 거절하며 제공 조문을 나열한 것은 억지적용 아님
     assert o['answer'] == ans and o['total'] == 3.5                 # 답변·측정값은 그대로
+
+def test_rescore_keeps_measured_floats(tmp_path, env):
+    """채점 규칙이 같으면 재채점해도 파일이 바이트 단위로 같다 (측정값 마지막 자리 포함, pandas 버전과 무관)"""
+    env.setattr(ev, 'OUT', tmp_path)
+    ans = '【결론】\n거절합니다. 근거를 찾을 수 없습니다.'
+    pd.DataFrame([{'id': 'X:similar', 'test': '비슷한 조문', 'context': 'a|b|c', 'refusal': True, 'cited': '',
+                   'sec': 0.025005457981023937, 'answer': ans}]).to_csv(tmp_path / 'refusal_t.csv', index=False, **E)
+    before = (tmp_path / 'refusal_t.csv').read_bytes()
+    ev.rescore('t')
+    assert (tmp_path / 'refusal_t.csv').read_bytes() == before
+    assert '0.025005457981023937' in (tmp_path / 'refusal_t.csv').read_text(encoding='utf-8-sig')
