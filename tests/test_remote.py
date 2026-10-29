@@ -297,3 +297,34 @@ def test_env_file_warns_for_token(env, tmp_path, capsys):
     envfile.load()
     out = capsys.readouterr().out
     assert 'chmod 600' in out and 'LAWBOT_MODEL_TOKEN' in out and TOKEN not in out
+
+# ---- 운영 도구: check_deploy·bench_models ----
+def test_check_deploy_model_server(fakes):
+    from lawbot import check_deploy
+    def server_lines():
+        return [(lv, m) for lv, m in check_deploy.run() if '모델 서버' in m or '로컬 모드' in m or '웹앱 주소' in m]
+    assert ('INFO', '로컬 모드 (LAWBOT_MODEL_SERVER 없음): 웹앱이 모델을 직접 올림') in server_lines()
+    srv = local_app(fakes)
+    with serve(srv) as (_, url):
+        fakes.setenv('LAWBOT_MODEL_SERVER', url)
+        lines = server_lines()
+        assert lines[0][0] == 'OK' and lines[0][1].startswith('웹앱 주소 127.0.0.1:')
+        assert any(lv == 'FAIL' and 'LAWBOT_MODEL_TOKEN' in m for lv, m in lines)
+        fakes.setenv('LAWBOT_MODEL_TOKEN', 'wrong-token-0123456789')
+        assert any(lv == 'FAIL' and '토큰이 맞지 않습니다' in m for lv, m in server_lines())
+        fakes.setenv('LAWBOT_MODEL_TOKEN', TOKEN)
+        levels = [lv for lv, _ in server_lines()]
+        assert levels == ['OK', 'OK', 'OK', 'INFO'], server_lines()
+        fakes.setenv('LAWBOT_PROFILE', 'v4')
+        assert any(lv == 'FAIL' and '프로필: 서버 v1 / 웹앱 v4' in m for lv, m in server_lines())
+    fakes.setenv('LAWBOT_PROFILE', 'v1')
+    assert any(lv == 'FAIL' and '연결할 수 없습니다' in m for lv, m in server_lines())   # 서버가 꺼져 있음
+    fakes.setenv('LAWBOT_MODEL_SERVER', 'http://example.com:80')
+    assert any(lv == 'FAIL' and '모델 서버 주소' in m for lv, m in server_lines())
+
+def test_bench_models_reports_server_memory(fakes):
+    from lawbot import bench_models, model_server
+    fakes.setattr(model_server, 'mlx_memory', lambda: {'active': 18.5, 'peak': 20.4, 'cache': 0.5})
+    with serve(local_app(fakes)) as (_, url):
+        m = bench_models.memory(connect(fakes, url))
+        assert m['mlx_active_gb'] == 18.5 and m['mlx_peak_gb'] == 20.4 and 'mps_driver_gb' not in m
