@@ -146,7 +146,10 @@ def load_remote(p, url):
     if p.system_file is not None and not p.system_file.is_file():   # 조문 CSV·모델 폴더는 서버가 확인
         raise RuntimeError(f'프로필 {p.name}의 system 파일이 없습니다: {p.system_file}')
     client = remote.ModelServerClient(url, security.model_token())
-    wait = float(os.environ.get('LAWBOT_MODEL_SERVER_WAIT') or 300)
+    try:
+        wait = float(os.environ.get('LAWBOT_MODEL_SERVER_WAIT') or 300)
+    except ValueError:
+        raise ValueError(f"LAWBOT_MODEL_SERVER_WAIT는 초(숫자): {os.environ['LAWBOT_MODEL_SERVER_WAIT']!r}") from None
     print(f'[lawbot] 모델 서버 {url} 준비 대기 (최대 {wait:g}초)', flush=True)
     remote.wait_ready(client, wait)
     info = client.get_json('/info')

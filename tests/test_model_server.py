@@ -161,6 +161,9 @@ def test_body_too_large_is_413(lawbot):
                       f'Content-Length: {ms.MAX_BODY + 1}\r\n\r\n'.encode())
             assert s.recv(100).split(b' ')[1] == b'413'
         assert call(url, '/rank_all', {'questions': ['질문'] * 2075})[0] == 200   # 평가 test 전체는 한도 안
+        with socket.create_connection(('127.0.0.1', port), timeout=10) as s:   # 음수 길이로 서버 스레드를 잡아 두지 못함
+            s.sendall(f'POST /search HTTP/1.0\r\nAuthorization: Bearer {TOKEN}\r\nContent-Length: -1\r\n\r\n'.encode())
+            assert s.recv(100).split(b' ')[1] == b'400'
 
 # ---- T6·T7: 끊김·오류 ----
 def test_client_disconnect_stops_generation_and_releases_lock(lawbot, env):

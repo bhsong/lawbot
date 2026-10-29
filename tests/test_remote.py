@@ -328,3 +328,17 @@ def test_bench_models_reports_server_memory(fakes):
     with serve(local_app(fakes)) as (_, url):
         m = bench_models.memory(connect(fakes, url))
         assert m['mlx_active_gb'] == 18.5 and m['mlx_peak_gb'] == 20.4 and 'mps_driver_gb' not in m
+
+def test_proxy_env_is_ignored(fakes):
+    # 프록시 환경 변수가 있어도 127.0.0.1에 직접 접속 (질문이 프록시로 나가지 않음)
+    with serve(local_app(fakes)) as (_, url):
+        for k in ('HTTP_PROXY', 'http_proxy', 'ALL_PROXY'):
+            fakes.setenv(k, 'http://10.255.255.1:3128')
+        fakes.delenv('NO_PROXY', raising=False)
+        fakes.delenv('no_proxy', raising=False)
+        assert run(connect(fakes, url), '질문', 'fast')[-1][2] == '【결론】예고해야 합니다.'
+
+def test_wait_must_be_number(fakes):
+    fakes.setenv('LAWBOT_MODEL_SERVER_WAIT', '5분')
+    with pytest.raises(ValueError, match='LAWBOT_MODEL_SERVER_WAIT'):
+        connect(fakes, f'http://127.0.0.1:{free_port()}')

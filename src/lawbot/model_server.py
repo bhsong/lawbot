@@ -121,6 +121,8 @@ class Handler(BaseHTTPRequestHandler):
             n = int(self.headers.get('Content-Length') or 0)
         except ValueError:
             raise BadRequest('Content-Length 형식 오류') from None
+        if n < 0:                        # 음수면 rfile.read가 연결이 끊길 때까지 기다림
+            raise BadRequest('Content-Length 형식 오류')
         if n > MAX_BODY:
             self.send_error_json(413, 'PayloadTooLarge', f'요청 본문이 {MAX_BODY}바이트를 넘습니다')
             return None

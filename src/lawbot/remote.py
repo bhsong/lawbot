@@ -27,6 +27,8 @@ class RemoteValueError(ValueError):
 class ModelServerClient:
     def __init__(self, url, token, timeout=None):
         self.url, self.token, self.timeout = url.rstrip('/'), token, timeout
+        # HTTP_PROXY 같은 프록시 환경 변수를 쓰지 않는다: 질문이 맥 밖(프록시)으로 나가지 않게 127.0.0.1에 직접 접속
+        self.opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
 
     def _request(self, path, body=None, timeout=None):
         data = None if body is None else json.dumps(body, ensure_ascii=False).encode('utf-8')
@@ -34,7 +36,7 @@ class ModelServerClient:
                                      headers={'Authorization': f'Bearer {self.token}',
                                               'Content-Type': 'application/json; charset=utf-8'})
         try:
-            return urllib.request.urlopen(req, timeout=timeout or self.timeout)
+            return self.opener.open(req, timeout=timeout or self.timeout)
         except urllib.error.HTTPError as e:
             if e.code == 401:            # 토큰 값은 출력하지 않음
                 raise ModelServerError('Unauthorized', '토큰이 맞지 않습니다. 웹앱과 모델 서버의 LAWBOT_MODEL_TOKEN을 '
