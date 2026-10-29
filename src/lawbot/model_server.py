@@ -9,7 +9,7 @@ import json
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from lawbot import envfile, service
+from lawbot import envfile, manifest, service
 from lawbot.security import SERVER_NAME, model_server_port, model_token
 
 API_VERSION = 1                      # 요청·응답 형식을 바꾸면 올린다 (remote.py가 다르면 시작을 거부)
@@ -78,7 +78,8 @@ def info(app):
             'models': list(app.models.specs), 'loaded': list(app.models.loaded),
             'max_resident': app.models.max_resident,
             'reranker': {'candidates': rr.candidates} if rr else None,
-            'n_articles': len(app.retriever.ids), 'memory': mlx_memory()}
+            'n_articles': len(app.retriever.ids), 'memory': mlx_memory(),
+            'dataset': manifest.summary(manifest.load(app.profile.articles))}   # 선택 필드 (API_VERSION 그대로)
 
 def articles(app):
     R = app.retriever

@@ -1,0 +1,10 @@
+{
+  "dataset_version": "v1",
+  "reference_date": "2026-10-01",
+  "articles_file": "labor_articles_20261001.csv",
+  "articles_sha256": "07b790927c4b1ebac98c49d06fb660b5b80efad31fae6ce1391bab7930b5ae5d",
+  "articles_total": 130,
+  "articles_by_kind": {
+    "법률": 130
+  }
+}
