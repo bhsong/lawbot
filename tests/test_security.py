@@ -65,3 +65,59 @@ def test_no_model_libraries_loaded():
             f'print(",".join(m for m in {mods!r} if m in sys.modules))')
     out = subprocess.run([sys.executable, '-c', code], capture_output=True, text=True, check=True)
     assert out.stdout.strip() == ''
+
+# 웹앱 포트 (LAWBOT_PORT) · 인스턴스 이름 (LAWBOT_INSTANCE)
+from conftest import free_port
+from lawbot import security
+
+@pytest.mark.parametrize('value', [None, '', '   '], ids=['unset', 'empty', 'blank'])
+def test_port_defaults_to_legacy(env, value):
+    if value is not None:
+        env.setenv('LAWBOT_PORT', value)
+    set_auth(env)
+    assert security.server_port() == security.SERVER_PORT
+    assert get_local_launch_config()['server_port'] == security.SERVER_PORT
+
+def test_port_from_env(env):
+    port = free_port()
+    set_auth(env)
+    env.setenv('LAWBOT_PORT', str(port))
+    env.setenv('GRADIO_SERVER_PORT', str(free_port()))     # Gradio 변수는 계속 무시
+    cfg = get_local_launch_config()
+    assert cfg['server_port'] == port and cfg['server_name'] == '127.0.0.1'
+
+@pytest.mark.parametrize('value', ['1023', '65536', '0', '-1', 'abc', '12.5'])
+def test_port_invalid_rejected(env, value):
+    set_auth(env)
+    env.setenv('LAWBOT_PORT', value)
+    with pytest.raises(ValueError, match='LAWBOT_PORT'):
+        get_local_launch_config()
+
+def test_port_same_as_model_server_rejected(env):
+    port = free_port()
+    env.setenv('LAWBOT_PORT', str(port))
+    env.setenv('LAWBOT_MODEL_SERVER', f'http://127.0.0.1:{port}')
+    with pytest.raises(ValueError, match='LAWBOT_MODEL_SERVER'):
+        security.server_port()
+
+def test_model_server_port_required(env):
+    with pytest.raises(RuntimeError, match='LAWBOT_MODEL_SERVER_PORT'):
+        security.model_server_port()
+    env.setenv('LAWBOT_MODEL_SERVER_PORT', ' ')
+    with pytest.raises(RuntimeError, match='LAWBOT_MODEL_SERVER_PORT'):
+        security.model_server_port()
+    for bad in ('1023', '65536', 'x'):
+        env.setenv('LAWBOT_MODEL_SERVER_PORT', bad)
+        with pytest.raises(ValueError, match='LAWBOT_MODEL_SERVER_PORT'):
+            security.model_server_port()
+    port = free_port()
+    env.setenv('LAWBOT_MODEL_SERVER_PORT', str(port))
+    assert security.model_server_port() == port
+
+def test_instance_name(env):
+    assert security.instance_name() is None
+    env.setenv('LAWBOT_INSTANCE', '  개발 ')
+    assert security.instance_name() == '개발'
+    env.setenv('LAWBOT_INSTANCE', '가' * 41)
+    with pytest.raises(ValueError, match='LAWBOT_INSTANCE'):
+        security.instance_name()

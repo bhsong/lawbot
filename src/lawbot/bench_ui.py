@@ -1,7 +1,7 @@
 # src/lawbot/bench_ui.py  →  (다른 터미널에서 lawbot-app 실행 중) uv run python -m lawbot.bench_ui --tag m32_v1_ui
 # 실행 중인 웹앱에 로그인해 /gradio_api/call/chat 스트림을 받으며 '질문 전송 → 첫 글자 도착' 시간을 잰다
 # 서버 측 측정(bench_models)에 Gradio 큐·전송 지연이 더해진 값. 브라우저 그리기 시간(수십 ms)은 포함하지 않음
-# 접속 대상은 security.py의 127.0.0.1:7860 고정. 계정은 웹앱과 같은 LAWBOT_USER/LAWBOT_PW 환경 변수
+# 접속 대상은 127.0.0.1:<웹앱 포트> (security.server_port: .env의 LAWBOT_PORT). 계정은 웹앱과 같은 LAWBOT_USER/LAWBOT_PW 환경 변수
 import argparse
 import json
 import os
@@ -10,7 +10,8 @@ import httpx
 import pandas as pd
 from lawbot.bench_models import QUESTIONS
 from lawbot.paths import RESULTS
-from lawbot.security import SERVER_NAME, SERVER_PORT
+from lawbot import envfile
+from lawbot.security import SERVER_NAME, server_port
 
 def ask_timed(c, question, model_key, fmt):
     t0 = time.perf_counter()
@@ -43,11 +44,12 @@ def main():
     ap.add_argument('--fmt', default='concise', choices=['concise', 'full'])
     args = ap.parse_args()
     pd.set_option('display.width', 200, 'display.max_columns', None)
+    envfile.load()                       # 웹앱과 같은 .env (포트·계정)
     user, pw = os.environ.get('LAWBOT_USER', ''), os.environ.get('LAWBOT_PW', '')
     if not user.strip() or not pw.strip():
         raise SystemExit('LAWBOT_USER/LAWBOT_PW 환경 변수가 필요합니다 (웹앱과 같은 값)')
     rows = []
-    with httpx.Client(base_url=f'http://{SERVER_NAME}:{SERVER_PORT}', timeout=30) as c:
+    with httpx.Client(base_url=f'http://{SERVER_NAME}:{server_port()}', timeout=30) as c:
         if c.post('/login', data={'username': user, 'password': pw}).status_code != 200:
             raise SystemExit('로그인 실패')
         for q in QUESTIONS:

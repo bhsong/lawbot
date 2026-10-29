@@ -8,6 +8,8 @@ ENV_KEYS = ('LAWBOT_USER', 'LAWBOT_PW', 'LLM_PATH',
             'LAWBOT_EARLY_STOP', 'LAWBOT_V4_ARTICLES', 'LAWBOT_V4_EMB', 'LAWBOT_V4_SYSTEM',
             'LAWBOT_RERANKER_ENABLED', 'LAWBOT_RERANKER_MODEL_PATH', 'LAWBOT_RERANKER_CANDIDATES',
             'LAWBOT_MODELS', 'LAWBOT_ENV_FILE',
+            'LAWBOT_PORT', 'LAWBOT_INSTANCE', 'LAWBOT_MODEL_SERVER', 'LAWBOT_MODEL_SERVER_PORT', 'LAWBOT_MODEL_TOKEN',
+            'LAWBOT_MODEL_SERVER_WAIT',
             'GRADIO_SERVER_NAME', 'GRADIO_SERVER_PORT', 'GRADIO_SHARE')
 
 @pytest.fixture(autouse=True)
@@ -33,6 +35,12 @@ def env(request, monkeypatch):
         monkeypatch.setattr(socket.socket, 'connect', guarded_connect)
         monkeypatch.setattr(socket, 'create_connection', guarded_create_connection)
     return monkeypatch
+
+def free_port():
+    """지금 비어 있는 127.0.0.1 포트 (테스트에 고정 포트 번호를 쓰지 않음)"""
+    with socket.socket() as s:
+        s.bind(('127.0.0.1', 0))
+        return s.getsockname()[1]
 
 def set_auth(env, user='tester', pw='test-only-pw'):   # 테스트 전용 가짜 값
     env.setenv('LAWBOT_USER', user)

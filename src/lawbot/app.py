@@ -3,7 +3,7 @@ import gradio as gr
 from lawbot import envfile
 from lawbot.answer_format import render
 from lawbot.service import ask, load_app
-from lawbot.security import get_local_launch_config
+from lawbot.security import get_local_launch_config, instance_name
 
 # v4 Fast로 검색·답변을 확인한 질문 (근로기준법 제26조, 최저임금법 제6조, 남녀고용평등법 제19조)
 EXAMPLES = ['해고 예고 없이 갑자기 해고되면 어떻게 하나요?',
@@ -89,10 +89,15 @@ def default_fmt(app):
         return model_key, spec.fmt
     return follow
 
+def page_title(app):
+    """화면·탭 제목. LAWBOT_INSTANCE가 있으면 붙인다 (예: '노동법 챗봇 · 개발', 운영/개발 구분)"""
+    name = instance_name()
+    return f'{app.profile.title} · {name}' if name else app.profile.title
+
 def build_demo(app):                 # 화면만 만든다: 인증 검사·모델 로딩은 main에서
-    p = app.profile
-    with gr.Blocks(title=p.title) as demo:
-        gr.Markdown(f'# {p.title}\n질문과 관련된 조문 3개를 찾아 그 조문을 근거로 답합니다. '
+    p, title = app.profile, page_title(app)
+    with gr.Blocks(title=title) as demo:
+        gr.Markdown(f'# {title}\n질문과 관련된 조문 3개를 찾아 그 조문을 근거로 답합니다. '
                     '법률 자문이 아닌 참고용 답변입니다.')
         sources = gr.Markdown(render=False)
         stats = gr.Markdown(render=False)
@@ -121,7 +126,7 @@ def main():
     envfile.load()                       # .env (셸에 있는 변수 우선). 인증·모델 설정을 읽기 전에
     config = get_local_launch_config()   # 인증 정보가 없으면 모델 로딩 전에 실행 거부
     demo = build_demo(load_app())
-    demo.launch(**config)            # 127.0.0.1:7860, 로그인 필수, 공유 링크 없음
+    demo.launch(**config)            # 127.0.0.1:<LAWBOT_PORT>, 로그인 필수, 공유 링크 없음
 
 if __name__ == '__main__':
     main()

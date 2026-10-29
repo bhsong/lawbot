@@ -130,6 +130,15 @@ def test_pro_preload_failure_keeps_fast(env, capsys):
         list(chat('질문', [], 'pro', 'full'))
     assert list(chat('질문', [], 'fast', 'full'))[-1][0].startswith('【결론】sllm_mlx_4bit')
 
+def test_instance_name_in_title(env):
+    # LAWBOT_INSTANCE: 운영/개발 화면을 탭 제목과 맨 위 제목으로 구분
+    a = make_app(env)
+    assert app_mod.build_demo(a).title == '근로기준법 챗봇'
+    env.setenv('LAWBOT_INSTANCE', '개발')
+    demo = app_mod.build_demo(a)
+    assert demo.title == '근로기준법 챗봇 · 개발'
+    assert any('# 근로기준법 챗봇 · 개발' in str(getattr(b, 'value', '')) for b in demo.blocks.values())
+
 # ---- 모델 선택 ----
 def test_selection_is_per_request(env):
     # 요청마다 고른 모델이 답한다: 이전 선택이 다음 질문에 남지 않음
