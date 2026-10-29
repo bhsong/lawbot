@@ -64,11 +64,15 @@ def make_chat(app):
                 if stage == 'done' and not raw.strip():
                     text = EMPTY
                 yield text, src, fmt_stats(spec.label, stage, st)
-        except (OSError, ValueError) as e:       # 모델 폴더 없음·형식 오류 (mlx_lm.load)
-            if app.models.is_loaded(model_key):
-                raise                            # 생성 중 오류는 그대로 올림 (Gradio가 오류로 표시)
-            raise gr.Error(f'{spec.label} 모델을 불러오지 못했습니다: {spec.path} ({type(e).__name__}). '
-                           'uv run python -m lawbot.check_deploy로 확인하세요.') from e
+        except Exception as e:                   # 유형은 service.ask가 붙임 (요청 로그의 error_type과 같음)
+            kind = getattr(e, 'lawbot_error', None)
+            if kind == 'model_server':           # 연결 실패·토큰 불일치·로딩 중
+                raise gr.Error(f'모델 서버가 준비되지 않았습니다 ({type(e).__name__}). 잠시 뒤 다시 질문하고, 계속되면 '
+                               'uv run python -m lawbot.check_deploy로 모델 서버를 확인하세요.') from e
+            if kind == 'model_load':             # 모델 폴더 없음·형식 오류 (mlx_lm.load)
+                raise gr.Error(f'{spec.label} 모델을 불러오지 못했습니다: {spec.path} ({type(e).__name__}). '
+                               'uv run python -m lawbot.check_deploy로 확인하세요.') from e
+            raise                                # 리랭킹·생성 중 오류는 그대로 올림 (Gradio가 오류로 표시)
     return chat
 
 def model_choices(app):

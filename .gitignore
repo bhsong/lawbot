@@ -14,3 +14,6 @@ wheels/
 models/
 
 .DS_Store
+
+# 요청 로그 (lawbot.service.log_request, 질문 원문 없음)
+logs/
