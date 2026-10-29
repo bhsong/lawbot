@@ -34,7 +34,8 @@ def server(tmp_path_factory):
     tmp = tmp_path_factory.mktemp('auth_server')
     port, calls, log = free_port(), tmp / 'chat_calls.txt', tmp / 'server.log'
     env = {k: v for k, v in os.environ.items() if k not in ENV_KEYS}
-    env.update(LAWBOT_USER=USER, LAWBOT_PW=PW, LAWBOT_PROFILE='v1', LAWBOT_ENV_FILE='', GRADIO_ANALYTICS_ENABLED='False')
+    env.update(LAWBOT_USER=USER, LAWBOT_PW=PW, LAWBOT_PROFILE='v1', LAWBOT_ENV_FILE='', GRADIO_ANALYTICS_ENABLED='False',
+               LAWBOT_REQUEST_LOG='')   # module 범위라 conftest의 env보다 먼저 실행됨: 레포 logs/에 쓰지 않게 직접 끔
     url = f'http://127.0.0.1:{port}'
     with log.open('w') as out:
         proc = subprocess.Popen([sys.executable, str(SERVER), str(port), str(calls)],
