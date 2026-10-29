@@ -101,9 +101,10 @@ def check_reranker(rr):
         raise RuntimeError(f'리랭커 모델 폴더가 없습니다: {rr.path}. uv run python -m lawbot.check_deploy로 확인하거나, '
                            'LAWBOT_RERANKER_ENABLED=0으로 끄고 실행하세요.')
 
-def load_app(profile=None):
+def load_app(profile=None, local=False):
     """웹앱용: 검색기 1개 (+ 켜져 있으면 리랭커 1개) + Fast/Pro 레지스트리. 기본 모델(Fast)은 미리 올리고, 2개 상주면 Pro도 시도
-    리랭커는 여기서 한 번만 올려 Fast·Pro가 함께 쓰고, 답변 모델 LRU 교체와 무관하게 상주한다"""
+    리랭커는 여기서 한 번만 올려 Fast·Pro가 함께 쓰고, 답변 모델 LRU 교체와 무관하게 상주한다
+    local=True: 항상 직접 올림 (모델 서버 자신)"""
     p = profile or deploy.get_profile()
     check_profile_files(p)
     rr = deploy.reranker(p)              # 꺼져 있으면 None: 리랭커 모델을 올리지 않음

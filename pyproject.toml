@@ -19,6 +19,7 @@ dependencies = [
 lawbot-app = "lawbot.app:main"
 lawbot-eval = "lawbot.eval_dev:main"
 lawbot-eval-v4 = "lawbot.eval_v4:main"   # v4 웹앱 구성 전체 재평가 (단계 생략 시 all)
+lawbot-model-server = "lawbot.model_server:main"   # 운영·개발 웹앱이 함께 쓰는 내부 모델 서버 (127.0.0.1, 토큰 필수)
 
 [build-system]
 requires = ["uv_build>=0.12.19,<0.13.0"]
