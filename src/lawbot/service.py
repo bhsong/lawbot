@@ -7,7 +7,7 @@ import threading
 import time
 from collections import OrderedDict
 from dataclasses import dataclass
-from lawbot import deploy
+from lawbot import deploy, security
 from lawbot.paths import LLM_4BIT
 
 TOP_K = 3                            # 답변 근거로 넘기는 조문 수 (Fast·Pro 공통)
@@ -104,8 +104,11 @@ def check_reranker(rr):
 def load_app(profile=None, local=False):
     """웹앱용: 검색기 1개 (+ 켜져 있으면 리랭커 1개) + Fast/Pro 레지스트리. 기본 모델(Fast)은 미리 올리고, 2개 상주면 Pro도 시도
     리랭커는 여기서 한 번만 올려 Fast·Pro가 함께 쓰고, 답변 모델 LRU 교체와 무관하게 상주한다
-    local=True: 항상 직접 올림 (모델 서버 자신)"""
+    LAWBOT_MODEL_SERVER가 있으면 모델을 올리지 않고 모델 서버에 접속한다 (load_remote). local=True면 항상 직접 올림 (모델 서버 자신)"""
     p = profile or deploy.get_profile()
+    url = None if local else security.model_server_url()
+    if url:
+        return load_remote(p, url)
     check_profile_files(p)
     rr = deploy.reranker(p)              # 꺼져 있으면 None: 리랭커 모델을 올리지 않음
     if rr:
@@ -132,6 +135,32 @@ def load_app(profile=None, local=False):
     print(f"[lawbot] 프로필 {p.name} · 조문 {len(retriever.ids)}개 · 리랭커 {'켜짐' if reranker else '꺼짐'} · "
           f"상주 {list(models.loaded)}")
     full = p.system_file.read_text(encoding='utf-8').strip() if p.system_file else _lazy('SYSTEM')
+    return LawbotApp(p, retriever, models, deploy.early_stop(), reranker, full)
+
+def load_remote(p, url):
+    """원격 모드: 같은 LawbotApp을 모델 서버 클라이언트로 만든다 (ask·화면·평가 코드는 그대로)
+    검색 설정(리랭커·후보 수)과 상주 모델 수는 서버 기준. 웹앱은 프로필·doc_style·모델 key가 서버와 맞는지만 확인한다
+    system 문구는 웹앱 쪽 파일을 요청마다 보낸다: 개발 레포의 system 파일을 고치면 웹앱만 다시 띄워 시험"""
+    from lawbot import remote
+    from lawbot.prompts import SYSTEM
+    if p.system_file is not None and not p.system_file.is_file():   # 조문 CSV·모델 폴더는 서버가 확인
+        raise RuntimeError(f'프로필 {p.name}의 system 파일이 없습니다: {p.system_file}')
+    client = remote.ModelServerClient(url, security.model_token())
+    wait = float(os.environ.get('LAWBOT_MODEL_SERVER_WAIT') or 300)
+    print(f'[lawbot] 모델 서버 {url} 준비 대기 (최대 {wait:g}초)', flush=True)
+    remote.wait_ready(client, wait)
+    info = client.get_json('/info')
+    diff = remote.check_info(info, p)
+    if diff:
+        raise RuntimeError('모델 서버와 웹앱 설정이 다릅니다:\n- ' + '\n- '.join(diff))
+    rr = info['reranker']
+    retriever = remote.RemoteRetriever(client)
+    reranker = remote.RemoteReranker(client, rr['candidates']) if rr else None
+    models = remote.RemoteModelManager(p.models, client, lambda spec: system_text(p, spec) or SYSTEM)
+    print(f"[lawbot] 원격 모드 {url} · 서버 프로필 {info['profile']['name']} · 조문 {info['n_articles']}개 · "
+          f"리랭커 {'켜짐 (후보 ' + str(rr['candidates']) + '개, 서버 설정)' if rr else '꺼짐 (서버 설정)'} · "
+          f"상주 {info['loaded']} (최대 {info['max_resident']})")
+    full = p.system_file.read_text(encoding='utf-8').strip() if p.system_file else SYSTEM
     return LawbotApp(p, retriever, models, deploy.early_stop(), reranker, full)
 
 def format_system(app, model_key, fmt):
