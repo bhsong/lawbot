@@ -221,3 +221,36 @@ def test_model_server_does_not_import_gradio():
             'print(",".join(m for m in ("gradio", "mlx", "mlx_lm", "torch", "sentence_transformers") if m in sys.modules))')
     out = subprocess.run([sys.executable, '-c', code], capture_output=True, text=True, check=True)
     assert out.stdout.strip() == ''
+
+# ---- 배포 템플릿 (.env 예시·launchd): 비밀 값·포트 번호 없음 ----
+def test_env_examples_have_no_ports_or_secrets(env):
+    import re
+    from lawbot import deploy, envfile, paths, security
+    prod = (paths.ROOT / '.env.example').read_text(encoding='utf-8')
+    block = prod[prod.index('# ---- 상시 운영'):]
+    assert re.findall(r'^# (LAWBOT_\w+)=$', block, re.M) == ['LAWBOT_PORT', 'LAWBOT_MODEL_SERVER_PORT', 'LAWBOT_MODEL_TOKEN']
+    assert 'LAWBOT_MODEL_SERVER' not in envfile.parse(prod)     # 주석이라 기본 동작은 로컬 모드 그대로
+    dev = envfile.parse((paths.ROOT / '.env.dev.example').read_text(encoding='utf-8'))
+    assert dev['LAWBOT_USER'] == dev['LAWBOT_PW'] == dev['LAWBOT_MODEL_TOKEN'] == dev['LAWBOT_PORT'] == ''
+    assert dev['LAWBOT_INSTANCE'] == '개발'
+    assert dev['LAWBOT_MODEL_SERVER'] == 'http://127.0.0.1:<모델 서버 포트>'   # 채우기 전에는 실행 거부
+    env.setenv('LAWBOT_MODEL_SERVER', dev['LAWBOT_MODEL_SERVER'])
+    with pytest.raises(ValueError, match='LAWBOT_MODEL_SERVER'):
+        security.model_server_url()
+    assert not {k for k in dev if 'PATH' in k or 'RERANKER' in k or 'RESIDENT' in k}   # 모델 설정은 서버 쪽
+    for k in ('LAWBOT_PROFILE', 'LAWBOT_MODELS', 'LAWBOT_PRO_SYSTEM'):
+        env.setenv(k, dev[k])
+    assert deploy.get_profile().models[0].system_file.is_file()
+
+@pytest.mark.parametrize('kind,prog', [('model-server', 'lawbot-model-server'), ('web', 'lawbot-app')])
+def test_launchd_templates(kind, prog):
+    import plistlib
+    from lawbot import paths
+    text = (paths.ROOT / 'deploy' / 'launchd' / f'com.lawbot.{kind}.plist.example').read_text(encoding='utf-8')
+    p = plistlib.loads(text.encode())
+    assert p['Label'] == f'com.lawbot.{kind}'
+    assert p['ProgramArguments'] == ['__UV__', 'run', '--frozen', prog]
+    assert p['WorkingDirectory'] == '__PROD_DIR__' and p['RunAtLoad'] and p['KeepAlive'] and p['ThrottleInterval'] == 30
+    assert p['StandardOutPath'] == p['StandardErrorPath'] == f'__LOG_DIR__/{kind}.log'
+    assert set(p['EnvironmentVariables']) == {'PYTHONUNBUFFERED'}         # 비밀 값·포트는 .env에만
+    assert 'LAWBOT_' not in text and not any('~' in str(v) for v in p.values())
