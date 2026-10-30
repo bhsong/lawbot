@@ -2,13 +2,17 @@
 # 이 모듈은 gradio를 import하지 않는다 (tests/test_pipeline.py가 검사)
 import gc
 import importlib
+import json
 import os
+import sys
 import threading
 import time
+import uuid
 from collections import OrderedDict
 from dataclasses import dataclass
+from pathlib import Path
 from lawbot import deploy, manifest, security
-from lawbot.paths import LLM_4BIT
+from lawbot.paths import LLM_4BIT, ROOT
 
 TOP_K = 3                            # 답변 근거로 넘기는 조문 수 (Fast·Pro 공통)
 
@@ -202,35 +206,102 @@ def log_timing(st):
              if st.get(key) is not None]
     print(f"[lawbot] {st['model']} · " + ' · '.join(parts))
 
+# ---- 요청 로그 (JSONL) ----
+# 질문마다 한 줄: 단계별 시간·토큰·상태·오류 유형. 질문 원문과 답변은 남기지 않는다 (콘솔 로그·모델 서버 로그와 같은 정책)
+# 기본 logs/requests.jsonl (gitignore). LAWBOT_REQUEST_LOG로 경로를 바꾸고, 빈 값이면 기록하지 않음
+REQUEST_LOG = ROOT / 'logs' / 'requests.jsonl'
+MS_FIELDS = ('search', 'rerank', 'load', 'ttft', 'first_text', 'total')
+
+def request_log_path():
+    value = os.environ.get('LAWBOT_REQUEST_LOG')
+    if value is None:
+        return REQUEST_LOG
+    return Path(value).expanduser() if value.strip() else None
+
+def error_type(e, stage):
+    """오류 유형 (로그·화면 안내 공통). stage: 오류가 난 단계 'search'·'rerank'·'load'·'generation'
+    model_server: 모델 서버 연결 실패·토큰 불일치(401)·로딩 중(503). 서버 쪽 연산 오류(500)는 단계로 나눈다
+    model_load: 답변 모델 불러오기 실패 (모델 폴더·system 파일 없음, 원격은 RemoteLoadError·RemoteValueError)"""
+    from lawbot.remote import ModelServerError
+    if isinstance(e, ConnectionError) or isinstance(e, ModelServerError) and e.status in (401, 503):
+        return 'model_server'
+    if isinstance(e, KeyError):          # 없는 모델 key 등 설정 오류
+        return 'config'
+    return 'model_load' if stage == 'load' else stage
+
+def request_record(app, st, fmt, status, error):
+    spec = app.models.specs.get(st['model'])
+    rec = {'ts': time.strftime('%Y-%m-%dT%H:%M:%S%z'), 'request_id': st['request_id'],
+           'mode': 'remote' if getattr(app.retriever, 'client', None) is not None else 'local',
+           'caller': Path(sys.argv[0]).name, 'profile': app.profile.name, 'model': st['model'],
+           'fmt': fmt or (spec.fmt if spec else None), 'reranker': app.reranker is not None}
+    rec |= {f'{k}_ms': None if st.get(k) is None else round(st[k] * 1000) for k in MS_FIELDS}
+    rec |= {k: st.get(k) for k in ('prompt_tokens', 'gen_tokens', 'peak_gb', 'finish')}
+    return rec | {'status': status, 'error_type': error}
+
+def log_request(app, st, fmt, status, error=None):
+    """JSONL 한 줄. 기록 실패는 답변을 막지 않고 콘솔에 경고만"""
+    path = request_log_path()
+    if path is None:
+        return
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open('a', encoding='utf-8') as f:
+            f.write(json.dumps(request_record(app, st, fmt, status, error), ensure_ascii=False, default=str) + '\n')
+    except OSError as e:
+        print(f'[lawbot] 경고: 요청 로그를 쓰지 못했습니다 ({path}: {type(e).__name__})')
+
 def ask(app, question, model_key, k=TOP_K, early_stop=False, fmt=None):
     """질문 하나: (단계, 검색 조문, 답변 원문, 측정값)을 차례로 돌려준다
     단계 'load'(모델 전환 대기) → 'generate'(토큰마다) → 'done'. 조문은 생성 전에 정해짐
     fmt: 화면 형식 ('full'/'concise'). 주면 format_system으로 system을 고름 (None이면 모델 기본, 평가 스크립트)
     측정값(초): search, rerank(리랭커가 켜져 있을 때만), load(이번에 로딩했을 때만), ttft(생성 호출→첫 토큰, 프리필),
-    first_text(질문 수신→첫 글자), total, early_stop_at(간결형 조기 종료 시점) / tps, prompt_tokens, prompt_tps(프리필 속도), gen_tokens, peak_gb, finish"""
+    first_text(질문 수신→첫 글자), total, early_stop_at(간결형 조기 종료 시점) / tps, prompt_tokens, prompt_tps(프리필 속도), gen_tokens, peak_gb, finish
+    질문마다 요청 로그 한 줄 (log_request): 성공 ok / 오류 error(유형은 예외의 lawbot_error에도 붙여 화면 안내에 씀) /
+    중간에 멈춤 cancelled (정지 버튼 등으로 생성기를 닫음)"""
     t0 = time.perf_counter()
-    st = {'model': model_key, 'load': None}
-    hits = retrieve(app, question, k, st)
-    if not app.models.is_loaded(model_key):
-        yield 'load', hits, '', st
-    llm, st['load'] = app.models.get(model_key)
-    system = format_system(app, model_key, fmt)
-    raw, last, t_gen = '', None, time.perf_counter()
-    for r in llm.stream(question, hits, **({'system': system} if system else {})):
-        if last is None:
-            st['ttft'] = time.perf_counter() - t_gen
-        last = r
-        if r.text and not raw:
-            st['first_text'] = time.perf_counter() - t0
-        raw += r.text
-        yield 'generate', hits, raw, st
-        if early_stop and '【설명】' in raw:     # 간결형은 결론·근거 조문까지만 보여 줌
-            st['early_stop_at'] = time.perf_counter() - t0
-            break
-    st['total'] = time.perf_counter() - t0
-    for name, attr in (('tps', 'generation_tps'), ('prompt_tokens', 'prompt_tokens'), ('prompt_tps', 'prompt_tps'),
-                       ('gen_tokens', 'generation_tokens'), ('peak_gb', 'peak_memory'),
-                       ('finish', 'finish_reason')):
-        st[name] = getattr(last, attr, None)
-    log_timing(st)
-    yield 'done', hits, raw, st
+    st = {'model': model_key, 'load': None, 'request_id': uuid.uuid4().hex[:12]}
+    stage, logged = 'search', False
+    try:
+        hits = retrieve(app, question, k, st)
+        stage = 'load'
+        if not app.models.is_loaded(model_key):
+            yield 'load', hits, '', st
+        llm, st['load'] = app.models.get(model_key)
+        stage = 'generation'
+        system = format_system(app, model_key, fmt)
+        raw, last, t_gen = '', None, time.perf_counter()
+        for r in llm.stream(question, hits, **({'system': system} if system else {})):
+            if last is None:
+                st['ttft'] = time.perf_counter() - t_gen
+            last = r
+            if r.text and not raw:
+                st['first_text'] = time.perf_counter() - t0
+            raw += r.text
+            yield 'generate', hits, raw, st
+            if early_stop and '【설명】' in raw:     # 간결형은 결론·근거 조문까지만 보여 줌
+                st['early_stop_at'] = time.perf_counter() - t0
+                break
+        st['total'] = time.perf_counter() - t0
+        for name, attr in (('tps', 'generation_tps'), ('prompt_tokens', 'prompt_tokens'), ('prompt_tps', 'prompt_tps'),
+                           ('gen_tokens', 'generation_tokens'), ('peak_gb', 'peak_memory'),
+                           ('finish', 'finish_reason')):
+            st[name] = getattr(last, attr, None)
+        log_timing(st)
+        log_request(app, st, fmt, 'ok')
+        logged = True
+        yield 'done', hits, raw, st
+    except GeneratorExit:
+        if not logged:
+            st['total'] = time.perf_counter() - t0
+            log_request(app, st, fmt, 'cancelled')
+            logged = True
+        raise
+    except Exception as e:
+        if stage == 'search' and 'search' in st and app.reranker is not None:
+            stage = 'rerank'             # 검색은 끝났고 리랭킹에서 실패
+        e.lawbot_error = error_type(e, stage)
+        if not logged:
+            st['total'] = time.perf_counter() - t0
+            log_request(app, st, fmt, 'error', e.lawbot_error)
+        raise
