@@ -24,9 +24,14 @@ LAW_ALIASES = {
 REFUSAL = re.compile(r'확인할 수 없|근거를 찾을 수 없|근거를 찾지 못|근거가 (?:없|되지 않|포함되어 있지 않)|포함되어 있지 않'
                      r'|답변할 수 없|답변드릴 수 없|답할 수 없|판단할 수 없')
 
+# 단서 문장: 답을 한 뒤 '다만, 제공된 조문에는 … 절차가 포함되어 있지 않아 확인할 수 없습니다'처럼 덧붙인 한계는 거절이 아님
+# (val 200문항에서 거짓 거절로 잡힌 9건 중 1건이 이 경우. test·범위 밖·정답 없는 참고 조문 결과는 바뀌지 않음)
+SENTENCE = re.compile(r'(?<=[.!?])\s+|\n+')
+CAVEAT = re.compile(r'\s*(?:다만|단,)')
+
 def refused(answer):
-    """【결론】(없으면 앞 150자)에 근거·답변이 없다는 표현이 있으면 거절"""
-    return REFUSAL.search(conclusion_part(answer)) is not None
+    """【결론】(없으면 앞 150자)에서 단서 문장('다만', '단,'으로 시작)을 뺀 문장에 근거·답변이 없다는 표현이 있으면 거절"""
+    return any(REFUSAL.search(s) for s in SENTENCE.split(conclusion_part(answer)) if not CAVEAT.match(s))
 
 # ---- 조문 키 ----
 def key(law, no):
