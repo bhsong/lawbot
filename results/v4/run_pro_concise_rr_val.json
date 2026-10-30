@@ -1,0 +1,64 @@
+{
+  "tag": "pro_concise_rr_val",
+  "runs": [
+    {
+      "date": "2026-10-30T22:52:25+09:00",
+      "mode": "remote",
+      "split": "val",
+      "n": 200,
+      "stages": [
+        "retrieval",
+        "answers",
+        "refusal"
+      ],
+      "model": "pro",
+      "fmt": "concise",
+      "model_dir": "qwen_27b_mlx_4bit",
+      "info": {
+        "api_version": 1,
+        "profile": {
+          "name": "v4",
+          "doc_style": "v4"
+        },
+        "models": [
+          "pro"
+        ],
+        "loaded": [
+          "pro"
+        ],
+        "max_resident": 1,
+        "reranker": {
+          "candidates": 10
+        },
+        "n_articles": 415,
+        "memory": {
+          "active": 17.4,
+          "peak": 19.28,
+          "cache": 0.23
+        },
+        "dataset": {
+          "dataset_version": "v4",
+          "reference_date": "2026-10-20",
+          "articles_sha256": "6ff85d6d6c8ecafb2e62b2350ee723ee285c5ea22b062f0614b612ba2f21ec46"
+        }
+      },
+      "dataset": {
+        "dataset_version": "v4",
+        "reference_date": "2026-10-20",
+        "articles_sha256": "6ff85d6d6c8ecafb2e62b2350ee723ee285c5ea22b062f0614b612ba2f21ec46"
+      },
+      "commit": "6fb3ed0d881a44b9423ca199212c6db0b9718d39",
+      "dirty": true,
+      "argv": [
+        "--split",
+        "val",
+        "--tag",
+        "pro_concise_rr_val",
+        "--model",
+        "pro",
+        "--fmt",
+        "concise"
+      ]
+    }
+  ]
+}
