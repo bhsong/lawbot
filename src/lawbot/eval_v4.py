@@ -1,23 +1,31 @@
 # src/lawbot/eval_v4.py  →  uv run lawbot-eval-v4            (전체: retrieval → answers → oos → refusal → summary)
-#                             uv run lawbot-eval-v4 <단계> [--tag 이름] [--n 200] [--fmt concise|full]
+#                             uv run lawbot-eval-v4 <단계> [--tag 이름] [--n 200] [--fmt concise|full] [--split test|val]
+#                             uv run lawbot-eval-v4 compare --base <tag> --new <tag>
 # v4 웹앱 구성(.env 그대로: v4 검색 415조문 + 리랭커 + 답변 모델)을 다시 평가한다 (맥 전용, 모델 필요)
-#   retrieval: test 2,075문항 전체. 임베딩 순위(415조문 중)와 리랭킹 순위(후보 10개 중) → Recall@1·3·10, MRR
-#   answers  : test에서 A_lsa·B_newlaw 반씩 고정 시드 표본 (--n). 웹앱과 같은 service.ask로 답하고 채점
-#              A_lsa(근로기준법 650 = 기존 labor_eval_keywords와 같은 문항)는 키워드 채점, B_newlaw는 인용·거절만
+#   retrieval: 분할 전체(test 2,075 / val 1,110). 임베딩 순위(415조문 중)와 리랭킹 순위(후보 10개 중) → Recall@1·3·10, MRR
+#   answers  : A_lsa·B_newlaw 반씩 고정 시드 표본 (--n). 웹앱과 같은 service.ask로 답하고 채점
+#              A_lsa test 650(= 기존 labor_eval_keywords와 같은 문항)은 키워드 채점, 나머지(B_newlaw, val)는 인용·거절만
 #   oos      : 범위 밖 102문항. 7개 법률이 출처인 문항은 범위 안으로 재분류 (답하고 그 법을 인용해야 함)
-#              + 범위 안 대조군 20문항(scope_controls)
+#              + 범위 안 대조군 20문항(scope_controls). 평가 전용 문항이라 --split val에서는 돌리지 않는다
 #   refusal  : answers 표본 중 100문항에 정답이 없는 참고 조문 3개(다른 법률 조문 / 비슷한 조문)를 주고 거절하는지
-#   summary  : 위 결과 파일로 지표 표 → results/v4/summary_<tag>.csv
+#   summary  : 위 결과 파일로 지표 표 → results/v4/summary_<tag>.csv, 실패 유형 → results/v4/fail_<tag>.csv
+#   compare  : 두 tag의 summary·실패 유형을 나란히 놓고 report.py 경고 기준으로 나빠진 지표를 경고
 # 결과는 results/v4/<단계>_<tag>.csv에 문항마다 한 행씩 바로 쓴다: 중간에 멈추면 같은 명령으로 이어서 실행
-# test 문항은 평가 전용 (README '평가 데이터 사용 제한'): 이 결과로 설정·프롬프트를 고르지 않는다
+# 실행마다 설정(모드·서버 /info·모델 폴더·데이터 버전·커밋)을 results/v4/run_<tag>.json에 남긴다
+# test 문항은 평가 전용 (README '평가 데이터 사용 제한'): 설정·프롬프트·규칙은 --split val 결과로 고른다
 import argparse
+import datetime
+import json
+import subprocess
+import sys
 import time
 import numpy as np
 import pandas as pd
-from lawbot import envfile
-from lawbot.paths import DATA, EVAL, RESULTS, V4_QA, V4_SPLIT
+from lawbot import deploy, envfile, manifest
+from lawbot.paths import DATA, EVAL, RESULTS, ROOT, V4_QA, V4_SPLIT
 # 인용·거절 판정은 웹앱 화면과 같은 citation 모듈 (ev.citations·ev.refused·ev.key 등 기존 이름은 그대로 둠)
 from lawbot.citation import LAW_ALIASES, REFUSAL, cite_section, citations, refused
+from lawbot.citation import NONEXISTENT, OUTSIDE, WRONG_LAW, check
 from lawbot.citation import hit_key as key
 from lawbot.score_answers import score_one
 
@@ -38,10 +46,13 @@ def cite_gold(answer, gold):
     law, no = gold.rsplit(' ', 1)
     return (law, no) in citations(answer) and not refused(answer)
 
-def load_test():
+SPLITS = ('test', 'val')
+
+def load_test(split='test'):
+    """split_emb가 split인 A_lsa·B_newlaw 문항 (test 2,075 / val 1,110)"""
     qa, sp = pd.read_csv(V4_QA, **E), pd.read_csv(V4_SPLIT, **E)
     t = qa.merge(sp[['id', 'split_emb']], on='id', validate='one_to_one')
-    return t[(t.split_emb == 'test') & t.eval_cat.isin(['A_lsa', 'B_newlaw'])].reset_index(drop=True)
+    return t[(t.split_emb == split) & t.eval_cat.isin(['A_lsa', 'B_newlaw'])].reset_index(drop=True)
 
 def answer_sample(test, n):
     """A_lsa·B_newlaw에서 n//2개씩 (고정 시드). 순서는 id 순"""
@@ -60,8 +71,9 @@ def cited_text(answer):
 KW_COLS = ('group_score', 'must_not_ok', 'total_v4', 'missing_groups', 'must_not_hits')
 
 def score_answer(qid, cat, gold, raw, kw):
-    """answers 채점 열 (생성 때와 summary 재채점에 같이 씀). 키워드 열은 A_lsa만 값, 나머지는 빈 값 (이어 쓰기: 열은 항상 같게)"""
-    s = score_a(kw.loc[qid].to_dict() | {'gold': gold}, raw) if cat == 'A_lsa' else {}
+    """answers 채점 열 (생성 때와 summary 재채점에 같이 씀). 키워드 열은 키워드 기준이 있는 A_lsa(test 650)만 값,
+    나머지(B_newlaw, val의 A_lsa)는 빈 값 (이어 쓰기: 열은 항상 같게)"""
+    s = score_a(kw.loc[qid].to_dict() | {'gold': gold}, raw) if cat == 'A_lsa' and qid in kw.index else {}
     return {'refusal': refused(raw), 'cite_v4': int(cite_gold(raw, gold)), 'cited': cited_text(raw),
             'answer_len': len(raw)} | {k: s.get(k) for k in KW_COLS}
 
@@ -215,6 +227,193 @@ def rescore(tag):
         d.to_csv(p, index=False, **E)
         print(f'[rescore] {p.name}: 거절 판정이 바뀐 행 {changed}')
 
+# ---- 실패 유형 ----
+# 문항마다 실패한 첫 원인 하나 (위에서부터 먼저 맞는 것). 통과한 문항은 빈 값. 결과 CSV는 바꾸지 않고 fail_<tag>.csv에 쓴다
+#   retrieval_miss  : 임베딩 상위 10개에 정답 없음 (retrieval 결과가 있을 때)
+#   rerank_drop     : 임베딩 상위 10개에는 있으나 리랭킹 top3 밖
+#   not_retrieved   : top3에 정답(범위 안 문항은 그 법률) 없음, 임베딩 순위를 모름 (retrieval 결과 없음, oos 문항)
+#   false_refusal   : 정답이 top3에 있는데 거절
+#   cite_wrong_law / cite_outside / cite_nonexistent : 정답을 인용하지 않았고 citation.check 판정이 그 인용
+#   missing_keyword / forbidden_phrase : 정답은 인용했으나 키워드 그룹 누락 / 금지 표현 (키워드 기준이 있는 A_lsa만)
+#   format          : 【결론】 없음
+#   truncated       : 최대 길이에서 잘림
+#   cite_missing    : 정답을 인용하지 않음 (인용 없음, 또는 검색 결과의 다른 조문만 인용)
+#   answered_without_basis : 거절해야 하는 문항(범위 밖, 정답 없는 참고 조문)에 거절하지 않음
+FAIL_TYPES = ('retrieval_miss', 'rerank_drop', 'not_retrieved', 'false_refusal', 'cite_wrong_law', 'cite_outside',
+              'cite_nonexistent', 'missing_keyword', 'forbidden_phrase', 'format', 'truncated', 'cite_missing',
+              'answered_without_basis')
+BAD_CITE = {WRONG_LAW: 'cite_wrong_law', OUTSIDE: 'cite_outside', NONEXISTENT: 'cite_nonexistent'}
+
+def article_keys():
+    """전체 조문 {(법령, 제N조)} (v4 프로필 조문 CSV의 비삭제 조문 = 검색 대상과 같음)"""
+    law = pd.read_csv(deploy.get_profile('v4').articles, **E)
+    law = law[law['deleted'] == 0]
+    return set(zip(law['law'], law['article_no'] if 'article_no' in law else law['article_id']))
+
+def key_hits(keys):
+    """'근로기준법 제26조|최저임금법 제6조' → citation.check에 넘길 검색 결과 dict"""
+    return [{'law': k.rsplit(' ', 1)[0], 'article_id': k.rsplit(' ', 1)[1]} for k in str(keys).split('|') if ' ' in k]
+
+def answer_failure(answer, finish, keys, articles):
+    """정답을 인용하지 않은 답변의 원인 (cite_* → format → truncated). (유형, 문제 인용) 또는 None(→ cite_missing)"""
+    for law, no, verdict, _ in check(citations(answer), key_hits(keys), articles):
+        if verdict in BAD_CITE:
+            return BAD_CITE[verdict], f'{law} {no}' if law else no
+    if '【결론】' not in str(answer):
+        return 'format', ''
+    if finish == 'length':
+        return 'truncated', ''
+    return None
+
+def fail_answers(r, ranks, articles):
+    """answers 행 → (유형, 상세). ranks: id → (emb_rank, rr_rank 또는 None) (retrieval 결과)"""
+    has_kw = r['eval_cat'] == 'A_lsa' and not pd.isna(r.get('total_v4'))
+    passed = bool(r['cite_v4']) and (not has_kw or float(r['total_v4']) >= 1)
+    if passed:
+        return '', ''
+    if not r['retrieved']:
+        if r['id'] not in ranks:
+            return 'not_retrieved', ''
+        emb, rr = ranks[r['id']]
+        return ('rerank_drop' if rr is not None and emb <= 10 else 'retrieval_miss'), f'임베딩 {emb}위'
+    if r['refusal']:
+        return 'false_refusal', ''
+    if bool(r['cite_v4']):                # 정답은 인용, 키워드에서 실패
+        return ('missing_keyword', r['missing_groups']) if float(r['group_score']) < 1 else ('forbidden_phrase', r['must_not_hits'])
+    return answer_failure(r['answer'], r.get('finish'), r['top3'], articles) or ('cite_missing', r['cited'])
+
+def fail_oos(r, articles):
+    if r['scope'] == 'out':
+        return ('', '') if r['refusal'] else ('answered_without_basis', r['cited'])
+    if r['scope'] == 'in_control':
+        passed, retrieved = bool(r['cite_gold']), r['source'] in str(r['top3']).split('|')
+    else:                                 # in_reclassified: 그 법률을 인용해야 정답
+        passed, retrieved = bool(r['cites_law']), bool(r['retrieved_law'])
+    if passed:
+        return '', ''
+    if not retrieved:
+        return 'not_retrieved', ''
+    if r['refusal']:
+        return 'false_refusal', ''
+    return answer_failure(r['answer'], r.get('finish'), r['top3'], articles) or ('cite_missing', r['cited'])
+
+def fail_refusal(r):
+    return ('', '') if r['refusal'] else ('answered_without_basis', r['cited'])
+
+def classify(tag):
+    """저장된 결과로 문항마다 실패 유형 → results/v4/fail_<tag>.csv (stage, id, group, fail_type, detail). 결과 CSV는 그대로"""
+    articles, rows = article_keys(), []
+    p = OUT / f'retrieval_{tag}.csv'
+    ranks = {}
+    if p.exists():
+        r = pd.read_csv(p, **E)
+        ranks = {i: (int(e), int(x) if 'rr_rank' in r else None)
+                 for i, e, x in zip(r['id'], r['emb_rank'], r['rr_rank'] if 'rr_rank' in r else r['emb_rank'])}
+    for stage, group, fn in (('answers', 'eval_cat', lambda r: fail_answers(r, ranks, articles)),
+                             ('oos', 'scope', lambda r: fail_oos(r, articles)),
+                             ('refusal', 'test', fail_refusal)):
+        p = OUT / f'{stage}_{tag}.csv'
+        if not p.exists():
+            continue
+        d = pd.read_csv(p, keep_default_na=False, **E)
+        for c in ('retrieved', 'refusal', 'cites_law', 'retrieved_law'):
+            if c in d:
+                d[c] = d[c].astype(str) == 'True'
+        for c in ('cite_v4', 'cite_gold', 'total_v4', 'group_score'):   # 문자열로 읽었으므로 '0'이 참이 되지 않게
+            if c in d:
+                d[c] = pd.to_numeric(d[c], errors='coerce')
+        for _, r in d.iterrows():
+            t, detail = fn(r)
+            rows.append({'stage': stage, 'id': r['id'], 'group': r[group], 'fail_type': t, 'detail': detail})
+    f = pd.DataFrame(rows, columns=['stage', 'id', 'group', 'fail_type', 'detail'])
+    if len(f):
+        f.to_csv(OUT / f'fail_{tag}.csv', index=False, **E)
+        print_failures(f)
+    return f
+
+def print_failures(f):
+    for stage, d in f.groupby('stage', sort=False):
+        bad = d[d['fail_type'] != '']
+        counts = bad['fail_type'].value_counts().reindex(FAIL_TYPES).dropna().astype(int)
+        print(f'[실패 유형] {stage}: 실패 {len(bad)}/{len(d)} · ' + (' · '.join(f'{k} {v}' for k, v in counts.items()) or '없음'))
+
+# ---- 두 실행 비교 ----
+def compare_rules():
+    """(section, group, metric, 좋아지는 방향, 경고 기준) — 기준은 v1 report.py와 같은 값"""
+    from lawbot.report import METRICS
+    return [('검색', '전체', '리랭킹 Recall@3', +1, METRICS['recall@3'][2]),
+            ('검색', '전체', '임베딩 Recall@3', +1, METRICS['recall@3'][2]),
+            ('답변', 'A_lsa', '종합 점수', +1, METRICS['total'][2]),
+            ('답변', 'A_lsa', '종합 점수(검색 적중)', +1, METRICS['total_retrieved'][2]),
+            ('답변', '전체', '조문 인용 정확도(법령명 포함)', +1, METRICS['cite_ok'][2]),
+            ('답변', '전체', '거짓 거절률(검색 적중)', -1, METRICS['false_refusal'][2])]
+
+def compare(base, new, samples=5):
+    """경고 목록. summary_<tag>.csv 두 개를 나란히 출력하고, fail_<tag>.csv가 있으면 실패 유형별 건수와 새 실행의 샘플 id"""
+    paths = [OUT / f'summary_{t}.csv' for t in (base, new)]
+    for p in paths:
+        if not p.exists():
+            raise SystemExit(f'{p.name}이 없습니다: uv run lawbot-eval-v4 summary --tag {p.stem[8:]}')
+    b, n = (pd.read_csv(p, **E) for p in paths)
+    m = b.merge(n, on=['section', 'group', 'metric'], how='outer', suffixes=('_base', '_new'), sort=False)
+    m['diff'] = (m['value_new'] - m['value_base']).round(4)
+    pd.set_option('display.width', 200, 'display.max_rows', 300)
+    print(m[['section', 'group', 'metric', 'value_base', 'value_new', 'diff', 'n_base', 'n_new']]
+          .rename(columns={'value_base': base, 'value_new': new}).to_string(index=False))
+    warn = []
+    for section, group, metric, sign, limit in compare_rules():
+        row = m[(m['section'] == section) & (m['group'] == group) & (m['metric'] == metric)]
+        if not len(row) or row[['value_base', 'value_new']].isna().any(axis=None):
+            continue
+        r = row.iloc[0]
+        if sign * (r['value_new'] - r['value_base']) < -limit:
+            warn.append(f"{group} {metric}: {r['value_base']:.4f} → {r['value_new']:.4f} (기준 {limit})")
+        if r['n_base'] != r['n_new']:
+            warn.append(f"{group} {metric}: 문항 수가 다름 ({int(r['n_base'])} / {int(r['n_new'])}). 같은 분할·표본인지 확인")
+    fails = [OUT / f'fail_{t}.csv' for t in (base, new)]
+    if all(p.exists() for p in fails):
+        fb, fn = (pd.read_csv(p, keep_default_na=False, **E) for p in fails)
+        count = lambda f: f[f['fail_type'] != ''].groupby(['stage', 'fail_type']).size()
+        t = pd.concat([count(fb).rename(base), count(fn).rename(new)], axis=1).fillna(0).astype(int)
+        print('\n[실패 유형별 건수]\n' + t.to_string())
+        for (stage, ft), g in fn[fn['fail_type'] != ''].groupby(['stage', 'fail_type']):
+            print(f"  {new} {stage} {ft}: {', '.join(g['id'].astype(str).head(samples))}")
+    print('\n경고 없음' if not warn else '\n[경고]\n- ' + '\n- '.join(warn))
+    return warn
+
+# ---- 실행 기록 ----
+def git_state():
+    """(커밋 해시, 작업 트리 변경 여부). git이 없으면 (None, None)"""
+    try:
+        head = subprocess.run(['git', 'rev-parse', 'HEAD'], cwd=ROOT, capture_output=True, text=True, check=True).stdout.strip()
+        dirty = subprocess.run(['git', 'status', '--porcelain', '--', 'src', 'data'], cwd=ROOT, capture_output=True,
+                               text=True, check=True).stdout.strip() != ''
+        return head, dirty
+    except (OSError, subprocess.CalledProcessError):
+        return None, None
+
+def run_meta(app, model, fmt, split, n, stages):
+    """이번 실행의 설정: 모드(local/remote), 서버 /info(원격) 또는 같은 형식의 로컬 값, 답변 모델 폴더, 데이터 버전, 커밋"""
+    client = getattr(app.retriever, 'client', None)
+    if client is not None:
+        info = client.get_json('/info')
+    else:
+        from lawbot.model_server import info as local_info
+        info = local_info(app)
+    head, dirty = git_state()
+    return {'date': datetime.datetime.now().astimezone().isoformat(timespec='seconds'),
+            'mode': 'remote' if client is not None else 'local', 'split': split, 'n': n, 'stages': stages,
+            'model': model, 'fmt': fmt, 'model_dir': app.models.specs[model].path.name, 'info': info,
+            'dataset': manifest.summary(manifest.load(app.profile.articles)), 'commit': head, 'dirty': dirty,
+            'argv': sys.argv[1:]}
+
+def write_run_meta(tag, meta):
+    """results/v4/run_<tag>.json의 runs 목록에 추가 (이어서 실행하면 실행마다 한 항목)"""
+    p = OUT / f'run_{tag}.json'
+    runs = json.loads(p.read_text(encoding='utf-8'))['runs'] if p.exists() else []
+    p.write_text(json.dumps({'tag': tag, 'runs': runs + [meta]}, ensure_ascii=False, indent=2, default=str) + '\n',
+                 encoding='utf-8')
+
 # ---- 요약 ----
 def mean(s):
     return round(float(s.mean()), 4) if len(s) else None
@@ -246,7 +445,7 @@ def summarize(tag, test):
             add('답변', g, '조문 인용 정확도(법령명 포함)', mean(d['cite_v4']), len(d))
             add('답변', g, '거짓 거절률', mean(d['refusal']), len(d))
             add('답변', g, '거짓 거절률(검색 적중)', mean(d.loc[d['retrieved'], 'refusal']), int(d['retrieved'].sum()))
-            if g == 'A_lsa':                 # 키워드 채점은 기존 650문항(근로기준법)만
+            if g == 'A_lsa' and d['group_score'].notna().any():   # 키워드 채점은 기존 650문항(근로기준법 test)만
                 hit = d[d['retrieved']]
                 add('답변', g, '키워드 그룹 충족률', mean(d['group_score']), len(d))
                 add('답변', g, '금지 표현 없음', mean(d['must_not_ok']), len(d))
@@ -285,22 +484,38 @@ def summarize(tag, test):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument('stage', nargs='?', default='all', choices=['retrieval', 'answers', 'oos', 'refusal', 'summary', 'all'],
+    ap.add_argument('stage', nargs='?', default='all',
+                    choices=['retrieval', 'answers', 'oos', 'refusal', 'summary', 'compare', 'all'],
                     help='생략하면 all (네 단계를 차례로 실행한 뒤 요약)')
-    ap.add_argument('--tag', default=None, help='결과 파일 이름 (기본: <모델 key>_<형식>_rr 또는 _emb)')
+    ap.add_argument('--tag', default=None, help='결과 파일 이름 (기본: <모델 key>_<형식>_rr 또는 _emb, val은 끝에 _val)')
+    ap.add_argument('--split', choices=SPLITS, default='test',
+                    help='문항 분할 (기본 test: 평가 전용. 설정·규칙 선택은 val로)')
+    ap.add_argument('--base', default=None, help='compare: 기준 tag')
+    ap.add_argument('--new', default=None, help='compare: 비교 tag')
+    ap.add_argument('--strict', action='store_true', help='compare: 경고가 있으면 종료 코드 1')
     ap.add_argument('--n', type=int, default=200, help='답변 생성 표본 수 (A_lsa·B_newlaw 반씩)')
     ap.add_argument('--model', default=None, help='답변 모델 key (기본: .env의 첫 번째 모델)')
     ap.add_argument('--fmt', choices=['concise', 'full'], default=None, help='답변 형식 (기본: 그 모델의 기본 형식)')
     ap.add_argument('--no-rerank', action='store_true', help='retrieval 단계에서 리랭킹 순위를 재지 않음')
     args = ap.parse_args()
     envfile.load()
-    test = load_test()
     OUT.mkdir(parents=True, exist_ok=True)
+    if args.stage == 'compare':
+        if not (args.base and args.new):
+            raise SystemExit('compare는 --base와 --new가 필요합니다 (results/v4/summary_<tag>.csv의 tag)')
+        warn = compare(args.base, args.new)
+        if args.strict and warn:
+            raise SystemExit(1)
+        return
+    if args.split == 'val' and args.stage == 'oos':
+        raise SystemExit('범위 밖·대조군 문항은 평가 전용이라 val이 없습니다 (--split test로만 실행)')
+    test = load_test(args.split)
     if args.stage == 'summary':
         if not args.tag:
             raise SystemExit('summary는 --tag가 필요합니다 (results/v4의 파일 이름)')
         rescore(args.tag)
         summarize(args.tag, test)
+        classify(args.tag)
         return
     from lawbot.service import load_app
     app = load_app()
@@ -308,11 +523,14 @@ def main():
         raise SystemExit('v4 프로필에서 실행하세요 (LAWBOT_PROFILE=v4)')
     model = args.model or app.profile.models[0].key
     fmt = args.fmt or app.models.specs[model].fmt
-    tag = args.tag or f"{model}_{fmt}_{'rr' if app.reranker else 'emb'}"
+    tag = args.tag or f"{model}_{fmt}_{'rr' if app.reranker else 'emb'}" + ('_val' if args.split == 'val' else '')
     sample = answer_sample(test, args.n)
     print(f'[eval_v4] tag {tag} · 모델 {model} · 형식 {fmt} · 리랭커 {"켜짐" if app.reranker else "꺼짐"} · '
-          f'test {len(test)} · 표본 {len(sample)}')
+          f'{args.split} {len(test)} · 표본 {len(sample)}')
     stages = ['retrieval', 'answers', 'oos', 'refusal'] if args.stage == 'all' else [args.stage]
+    if args.split == 'val':
+        stages = [s for s in stages if s != 'oos']
+    write_run_meta(tag, run_meta(app, model, fmt, args.split, args.n, stages))
     t0 = time.perf_counter()
     for s in stages:
         if s == 'retrieval':
@@ -324,6 +542,7 @@ def main():
         elif s == 'refusal':
             run_refusal(app, model, fmt, sample, OUT / f'refusal_{tag}.csv')
     summarize(tag, test)
+    classify(tag)
     print(f'[eval_v4] {", ".join(stages)} 완료 · {(time.perf_counter() - t0) / 60:.1f}분 · 결과 {OUT}/*_{tag}.csv')
 
 if __name__ == '__main__':

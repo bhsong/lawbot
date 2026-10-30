@@ -1,5 +1,6 @@
 # tests/test_eval_v4.py  →  v4 재평가 스크립트 (eval_v4): 인용 판정·문항 구성·단계별 실행·요약
 # 실제 모델 대신 가짜 검색기·리랭커·sLLM으로 모든 단계를 끝까지 돌린다 (data/는 읽기만)
+import json
 import types
 import numpy as np
 import pandas as pd
@@ -213,3 +214,128 @@ def test_rescore_keeps_measured_floats(tmp_path, env):
     ev.rescore('t')
     assert (tmp_path / 'refusal_t.csv').read_bytes() == before
     assert '0.025005457981023937' in (tmp_path / 'refusal_t.csv').read_text(encoding='utf-8-sig')
+
+# ---- 실패 유형 (fail_<tag>.csv) ----
+def failed_independent(stage, d):
+    """실패 문항 수를 실패 유형과 따로 센다: 지표 정의 그대로"""
+    if stage == 'answers':
+        kw = d['total_v4'].notna() & (d['eval_cat'] == 'A_lsa')
+        return int(((d['cite_v4'] == 0) | (kw & (d['total_v4'] < 1))).sum())
+    if stage == 'oos':
+        return int(((d['scope'] == 'out') & ~d['refusal']).sum() + ((d['scope'] == 'in_reclassified') & ~d['cites_law']).sum()
+                   + ((d['scope'] == 'in_control') & (d['cite_gold'] == 0)).sum())
+    return int((~d['refusal']).sum())
+
+def test_classify_saved_test_results(tmp_path, env):
+    """10-25 test 결과 재채점: 실패 유형 합계 = 실패 문항 수, 결과 CSV는 바뀌지 않음"""
+    import shutil
+    src = ev.RESULTS / 'v4'
+    for f in src.glob('*_pro_concise_rr.csv'):
+        shutil.copy(f, tmp_path / f.name)
+    before = {f.name: f.read_bytes() for f in tmp_path.iterdir()}
+    env.setattr(ev, 'OUT', tmp_path)
+    f = ev.classify('pro_concise_rr')
+    assert {p.name: p.read_bytes() for p in tmp_path.iterdir() if p.name in before} == before
+    assert set(f['fail_type']) - {''} <= set(ev.FAIL_TYPES)
+    for stage in ('answers', 'oos', 'refusal'):
+        d = pd.read_csv(tmp_path / f'{stage}_pro_concise_rr.csv', **E)
+        got = f[(f['stage'] == stage) & (f['fail_type'] != '')]
+        assert len(f[f['stage'] == stage]) == len(d) and len(got) == failed_independent(stage, d)
+    counts = f[f['fail_type'] != ''].groupby(['stage', 'fail_type']).size().to_dict()
+    assert counts == {('answers', 'retrieval_miss'): 7, ('answers', 'rerank_drop'): 10, ('answers', 'false_refusal'): 2,
+                      ('answers', 'missing_keyword'): 16, ('answers', 'forbidden_phrase'): 1,
+                      ('oos', 'answered_without_basis'): 3, ('oos', 'false_refusal'): 4, ('oos', 'not_retrieved'): 1,
+                      ('oos', 'cite_missing'): 2, ('refusal', 'answered_without_basis'): 31}
+    assert (tmp_path / 'fail_pro_concise_rr.csv').exists()
+
+def row(**kw):
+    base = {'id': 'Q1', 'eval_cat': 'B_newlaw', 'gold': '근로기준법 제26조', 'retrieved': True, 'refusal': False,
+            'cite_v4': 0, 'total_v4': float('nan'), 'group_score': float('nan'), 'missing_groups': '', 'must_not_hits': '',
+            'top3': '근로기준법 제26조|최저임금법 제6조|근로기준법 제43조', 'cited': '', 'finish': 'stop',
+            'answer': '【결론】\n답입니다.\n\n【근거 조문】\n근로기준법 제43조'}
+    return pd.Series(base | kw)
+
+@pytest.mark.parametrize('kw,ranks,expected', [
+    ({'cite_v4': 1}, {}, ''),                                                                   # 통과
+    ({'retrieved': False}, {'Q1': (16, 999)}, 'retrieval_miss'),
+    ({'retrieved': False}, {'Q1': (4, 5)}, 'rerank_drop'),
+    ({'retrieved': False}, {}, 'not_retrieved'),                                               # retrieval 결과 없음
+    ({'refusal': True}, {}, 'false_refusal'),
+    ({'answer': '【결론】\n답\n【근거 조문】\n최저임금법 제26조'}, {}, 'cite_wrong_law'),
+    ({'answer': '【결론】\n답\n【근거 조문】\n근로기준법 제36조'}, {}, 'cite_outside'),
+    ({'answer': '【결론】\n답\n【근거 조문】\n근로기준법 제35조'}, {}, 'cite_nonexistent'),     # 삭제 조문
+    ({'eval_cat': 'A_lsa', 'cite_v4': 1, 'total_v4': 0.5, 'group_score': 0.5}, {}, 'missing_keyword'),
+    ({'eval_cat': 'A_lsa', 'cite_v4': 1, 'total_v4': 0.5, 'group_score': 1.0}, {}, 'forbidden_phrase'),
+    ({'eval_cat': 'A_lsa', 'cite_v4': 1}, {}, ''),                                             # val A_lsa: 키워드 기준 없음
+    ({'answer': '답만 씀'}, {}, 'format'),
+    ({'answer': '【결론】\n답이', 'finish': 'length'}, {}, 'truncated'),
+    ({}, {}, 'cite_missing'),                                                                  # 검색 결과의 다른 조문만 인용
+])
+def test_fail_answer_rules(kw, ranks, expected):
+    assert ev.fail_answers(row(**kw), ranks, ev.article_keys())[0] == expected
+
+# ---- val 분할 ----
+def test_val_split_and_sample():
+    v = ev.load_test('val')
+    assert len(v) == 1110 and v['eval_cat'].value_counts().to_dict() == {'B_newlaw': 719, 'A_lsa': 391}
+    assert not set(v['id']) & set(ev.load_test()['id'])
+    s = ev.answer_sample(v, 200)
+    assert set(s['id']) == set(pd.read_csv(DATA / 'v4' / 'decree_ctx_val200.csv', **E)['id'])   # 시행령 실험과 같은 표본
+    a = s[s.eval_cat == 'A_lsa'].iloc[0]
+    sc = ev.score_answer(a['id'], 'A_lsa', a['article_id'], f"【결론】답\n【근거 조문】{a['article_id']}", ev.keywords())
+    assert sc['cite_v4'] == 1 and sc['total_v4'] is None                                       # val에는 키워드 기준이 없음
+
+def test_val_skips_oos_and_records_run(env, monkeypatch, tmp_path):
+    calls = []
+    env.setenv('LAWBOT_MODELS', 'pro')
+    monkeypatch.setattr(ev, 'OUT', tmp_path)
+    monkeypatch.setattr(service, 'load_app', fake_app)
+    for name in ('run_retrieval', 'run_answers', 'run_oos', 'run_refusal'):
+        monkeypatch.setattr(ev, name, lambda *a, n=name, **k: calls.append((n,)))
+    monkeypatch.setattr(ev, 'summarize', lambda tag, test: calls.append(('summary', tag, len(test))))
+    monkeypatch.setattr('sys.argv', ['lawbot-eval-v4', '--split', 'val'])
+    ev.main()
+    assert [c[0] for c in calls] == ['run_retrieval', 'run_answers', 'run_refusal', 'summary']   # 범위 밖은 평가 전용
+    assert calls[-1] == ('summary', 'pro_concise_rr_val', 1110)
+    meta = json.loads((tmp_path / 'run_pro_concise_rr_val.json').read_text(encoding='utf-8'))
+    run = meta['runs'][0]
+    assert (run['mode'], run['split'], run['model'], run['fmt']) == ('local', 'val', 'pro', 'concise')
+    assert run['model_dir'] == deploy.get_profile('v4').models[0].path.name
+    assert run['info']['api_version'] == 1 and run['info']['reranker'] == {'candidates': 6}
+    assert run['dataset']['dataset_version'] == 'v4' and 'commit' in run
+    ev.main()                                                    # 이어서 실행하면 실행 기록이 하나 더
+    assert len(json.loads((tmp_path / 'run_pro_concise_rr_val.json').read_text(encoding='utf-8'))['runs']) == 2
+    monkeypatch.setattr('sys.argv', ['lawbot-eval-v4', 'oos', '--split', 'val'])
+    with pytest.raises(SystemExit, match='평가 전용'):
+        ev.main()
+
+# ---- compare ----
+def write_summary(path, cite, n=200, refusal_hit=0.01):
+    pd.DataFrame([{'section': '답변', 'group': '전체', 'metric': '조문 인용 정확도(법령명 포함)', 'value': cite, 'n': n},
+                  {'section': '답변', 'group': '전체', 'metric': '거짓 거절률(검색 적중)', 'value': refusal_hit, 'n': n},
+                  {'section': '검색', 'group': '전체', 'metric': '리랭킹 Recall@3', 'value': 0.94, 'n': 1110}]
+                 ).to_csv(path, index=False, **E)
+
+def test_compare_warns(tmp_path, env, capsys):
+    env.setattr(ev, 'OUT', tmp_path)
+    write_summary(tmp_path / 'summary_a.csv', 0.90)
+    write_summary(tmp_path / 'summary_b.csv', 0.89)               # 0.01 하락: 기준(0.02) 안
+    assert ev.compare('a', 'b') == []
+    write_summary(tmp_path / 'summary_c.csv', 0.85, refusal_hit=0.03)
+    warn = ev.compare('a', 'c')
+    assert any('조문 인용 정확도' in w for w in warn) and any('거짓 거절률(검색 적중)' in w for w in warn)
+    write_summary(tmp_path / 'summary_d.csv', 0.90, n=100)
+    assert any('문항 수가 다름' in w for w in ev.compare('a', 'd'))
+    for t, ft in (('a', 'cite_missing'), ('c', 'false_refusal')):
+        pd.DataFrame([{'stage': 'answers', 'id': 'Q9', 'group': 'A_lsa', 'fail_type': ft, 'detail': ''}]
+                     ).to_csv(tmp_path / f'fail_{t}.csv', index=False, **E)
+    capsys.readouterr()
+    ev.compare('a', 'c')
+    out = capsys.readouterr().out
+    assert '[실패 유형별 건수]' in out and 'c answers false_refusal: Q9' in out
+    with pytest.raises(SystemExit, match='summary_x.csv이 없습니다'):
+        ev.compare('a', 'x')
+    env.setattr('sys.argv', ['lawbot-eval-v4', 'compare', '--base', 'a', '--new', 'c', '--strict'])
+    with pytest.raises(SystemExit) as e:
+        ev.main()
+    assert e.value.code == 1
