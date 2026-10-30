@@ -112,3 +112,18 @@ def test_no_model_imports():
             "print(sorted(m for m in ('torch', 'mlx', 'mlx_lm', 'sentence_transformers', 'gradio') if m in sys.modules))")
     out = subprocess.run([sys.executable, '-c', code], capture_output=True, text=True, check=True).stdout
     assert out.strip() == '[]'
+
+@pytest.mark.parametrize('answer,expected', [
+    # val Q0110: 답한 뒤 단서 문장에서 한계를 밝힘 → 거절 아님
+    ('【결론】\n국적을 이유로 차별하는 것은 근로기준법에 따라 금지됩니다. 다만, 제공된 조문에는 신고 절차가 포함되어 있지 않아, '
+     '구제 절차는 확인할 수 없습니다.\n\n【근거 조문】\n근로기준법 제6조', False),
+    ('【결론】\n금지됩니다.\n단, 구제 절차는 확인할 수 없습니다.', False),
+    # 첫 문장이 거절이면 뒤에 '다만'이 있어도 거절 (val Q4935·Q0023 형식)
+    ('【결론】\n참고 조문만으로는 차별에 해당하는지 판단할 수 없습니다.\n다만, 고용형태에 따른 차별 금지 규정은 있습니다.', True),
+    # 맥락 문장 뒤 '따라서 …'로 거절 (범위 밖 답변 형식)
+    ('【결론】\n제공된 [참고 조문]은 노동관계 내용만 다룹니다.\n따라서 월세 인상 한도에 대해 답변할 수 없습니다.', True),
+    ('【결론】\n제공된 조문에는 처벌 규정이 포함되어 있지 않아 확인할 수 없습니다.', True),
+    ('【결론】\n단순히 지각했다는 이유만으로는 해고할 수 없습니다.', False),     # '단순히'는 단서가 아님 (거절 표현도 없음)
+])
+def test_refused_caveat_sentence(answer, expected):
+    assert ci.refused(answer) is expected
