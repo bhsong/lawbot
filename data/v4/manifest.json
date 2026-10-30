@@ -1,0 +1,29 @@
+{
+  "dataset_version": "v4",
+  "reference_date": "2026-10-20",
+  "collected_date": "2026-10-20",
+  "source": {
+    "name": "Legalize KR",
+    "url": "https://github.com/legalize-kr/legalize-kr",
+    "ref": null
+  },
+  "articles_file": "articles_v4.csv",
+  "articles_sha256": "6ff85d6d6c8ecafb2e62b2350ee723ee285c5ea22b062f0614b612ba2f21ec46",
+  "articles_total": 415,
+  "articles_by_law": {
+    "근로기준법": 130,
+    "남녀고용평등과 일ㆍ가정 양립 지원에 관한 법률": 72,
+    "근로자퇴직급여 보장법": 68,
+    "파견근로자 보호 등에 관한 법률": 50,
+    "임금채권보장법": 37,
+    "최저임금법": 32,
+    "기간제 및 단시간근로자 보호 등에 관한 법률": 26
+  },
+  "articles_by_kind": {
+    "법률": 415
+  },
+  "trained_on": {
+    "embedding": "v4",
+    "fast_lora": "v4"
+  }
+}
