@@ -136,3 +136,18 @@ def test_dataset_version_difference_warns():
     info['dataset'] = info['dataset'] | {'dataset_version': 'v4.1'}
     assert remote.check_info(info, p) == []           # 시작은 막지 않음
     assert remote.dataset_warnings(info, p) == ['dataset_version: 서버 v4.1 / 웹앱 v4 (모델 서버와 웹앱의 레포 버전을 맞추세요)']
+
+def test_decree_csv_kinds():
+    """로드맵 2.8 실험 CSV(kind 열: 법률·시행령·시행규칙): 지금 매니페스트는 articles_v4.csv만 설명하므로 적용하지 않고,
+    채택할 때 새 dataset_version으로 만들 매니페스트의 종류별 조문 수는 그대로 검사된다"""
+    import pandas as pd
+    decree = V4_ARTICLES.with_name('law_articles_v4_decree.csv')
+    assert manifest.load(decree) is None
+    live = pd.read_csv(decree, encoding='utf-8-sig').query('deleted == 0')
+    by_kind = live['kind'].value_counts().to_dict()
+    assert by_kind == {'법률': 415, '시행령': 273, '시행규칙': 124}
+    m = {'articles_sha256': manifest.sha256(decree), 'articles_total': len(live), 'collected_date': '2026-10-20',
+         'articles_by_law': live['law'].value_counts().to_dict(), 'articles_by_kind': by_kind}
+    assert levels(manifest.verify(decree, m)) == {'OK'}
+    m['articles_by_kind'] = {'법률': 812}                 # v4 매니페스트를 그대로 복사한 경우
+    assert any('종류별' in msg for lv, msg in manifest.verify(decree, m) if lv == 'FAIL')
