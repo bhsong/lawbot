@@ -107,7 +107,7 @@ v1:
 - 범위 밖 102문항 중 출처가 7개 법률인 27문항은 이제 범위 안이므로 따로 셉니다. 그래서 v1의 범위 밖 거절률(82문항, 0.707)과 같은 문항이 아닙니다. 억지 적용 3건은 산재 신청(→ 근로기준법 제88조), 미성년자 계약 취소(→ 제67조), 직장폐쇄 임금(→ 제46조)입니다.
 - 범위 안 27문항의 거짓 거절 3건 중 2건(올해 최저시급 금액, 육아기 근로시간 단축 신청 방법)은 그 내용이 조문이 아니라 고시·시행령에 있어 거절이 타당한 쪽입니다. 나머지 1건(1년 미만 퇴직금)은 검색이 근퇴법 제4조를 찾지 못했습니다.
 - 비슷한 조문 중에는 실제로 답이 되는 조문이 섞일 수 있어 1.0이 목표는 아닙니다(v1 4B는 0.20, 맥 4비트 0.24).
-- 튜닝하지 않은 27B는 v1 학습 문구("확인할 수 없") 대신 "근거를 찾을 수 없습니다", "답변할 수 없습니다"처럼 거절해, v4 평가는 이런 표현도 거절로 봅니다(`eval_v4.REFUSAL`). 범위 안 답변 200문항에서는 이 확장으로 새로 거절로 잡힌 답변이 없었습니다.
+- 튜닝하지 않은 27B는 v1 학습 문구("확인할 수 없") 대신 "근거를 찾을 수 없습니다", "답변할 수 없습니다"처럼 거절해, v4 평가는 이런 표현도 거절로 봅니다(`citation.REFUSAL`). 범위 안 답변 200문항에서는 이 확장으로 새로 거절로 잡힌 답변이 없었습니다. 웹앱 간결형 화면도 같은 판정을 써서, 이런 거절에는 근거 줄이나 경고를 붙이지 않습니다.
 
 *속도·메모리 (답변 200문항, 맥 미니 32GB)*
 
@@ -120,6 +120,10 @@ v1:
 | 생성 속도 | 9.7 토큰/초 |
 | 답변 길이 | 평균 165자 (96토큰) |
 | MLX 최대 메모리 (27B + 리랭커) | 20.4GB |
+
+*운영 구성(원격 모드)에서의 재확인 (2026-10-29)*
+
+웹앱이 모델 서버에 접속하는 운영 구성으로 answers·oos·refusal을 다시 돌려 `lawbot.diff_answers`로 위 결과와 비교했습니다. 답변 522개가 글자 단위로 모두 같아(answers 200 · oos 122 · refusal 200) 위 정확도 수치를 그대로 씁니다. 질문당 완료 평균 14.9초, 첫 토큰 중앙값 2.78초, MLX 최대 메모리 20.4GB로 HTTP 왕복에 따른 지연은 보이지 않았습니다(`results/v4/*_pro_concise_rr_remote.csv`).
 
 **v1 (근로기준법 130조문 · Qwen3-4B LoRA)**
 
@@ -306,6 +310,7 @@ LAWBOT_PROFILE=v1 LAWBOT_MODELS= LAWBOT_RERANKER_ENABLED=0 uv run lawbot-app
 | `LAWBOT_MODEL_SERVER_PORT` | 모델 서버 필수 | 모델 서버 포트 (1024–65535, 기본값 없음) |
 | `LAWBOT_MODEL_TOKEN` | 모델 서버·원격 모드 필수 | 모델 서버 토큰 (16자 이상, `openssl rand -hex 32`). 웹앱과 모델 서버가 같은 값 |
 | `LAWBOT_MODEL_SERVER_WAIT` | 아니요 | 원격 모드 웹앱이 시작할 때 모델 서버 준비를 기다리는 최대 초 (기본 `300`) |
+| `LAWBOT_REQUEST_LOG` | 아니요 | 요청 로그 파일 (기본 레포 최상위 `logs/requests.jsonl`). 빈 값이면 기록하지 않음 |
 
 `LAWBOT_USER`와 `LAWBOT_PW`가 하나라도 없거나 비어 있으면 모델을 불러오기 전에 `RuntimeError`로 실행을 거부합니다. 인증 없이 서버를 띄우는 방법은 없습니다.
 
@@ -404,6 +409,26 @@ LAWBOT_RERANKER_ENABLED=0 uv run python -m lawbot.bench_models --tag m32_v4     
 - 같은 브라우저에서 운영·개발 화면에 번갈아 로그인할 때 로그인 쿠키가 겹치면, 개발 화면은 `http://localhost:<개발 포트>`로 접속합니다(호스트가 다르면 쿠키가 분리됨).
 - `eval_v4`, `eval_concise`, `bench_models`는 원격 모드로도 돌아갑니다. 결과의 `peak_gb`·MLX 메모리는 모델 서버 프로세스 값입니다. `verify_reranker`, `eval_dev`, `eval_refusal`, `eval_oos`, `diag_*`는 모델을 직접 올리는 로컬 모드 전용이므로 실행 전에 모델 서버를 멈춥니다.
 
+**법령 데이터 버전 (매니페스트)**
+
+조문 CSV 옆의 `manifest.json`(v4 `data/v4/manifest.json`, v1 `data/manifest.json`)에 데이터 버전·기준일·수집일·출처·조문 수(법령별·종류별)·sha256과, 임베딩·4B LoRA가 학습한 데이터 버전을 적어 둡니다. 검색 인덱스는 파일이 아니라 모델 서버가 시작할 때 만들므로, 대신 이 값으로 데이터와 모델이 맞는지 확인합니다.
+
+- 모델 서버(로컬 모드 웹앱 포함)는 시작할 때 CSV를 검사해, 조문 수나 sha256이 다르면 모델을 올리기 전에 실행을 거부합니다. 매니페스트가 없으면 경고만 합니다.
+- `uv run python -m lawbot.check_deploy`가 같은 검사를 OK/FAIL로 보여 줍니다. 시행일이 수집일보다 늦은 조문은 WARN입니다.
+- 모델 서버 `/info`가 `dataset`(버전·기준일·sha256)을 보내고, 원격 모드 웹앱은 자기 레포의 매니페스트와 다르면 경고합니다(시작은 막지 않음).
+- 조문 CSV를 바꾸면 매니페스트도 새 데이터 버전으로 함께 바꾸고, 모델 서버와 웹앱을 모두 재시작합니다.
+
+**요청 로그와 오류 안내**
+
+웹앱은 질문마다 `logs/requests.jsonl`(Git 제외)에 한 줄을 남깁니다. 단계별 시간(검색·리랭킹·모델 전환·첫 토큰·완료), 토큰 수, `peak_gb`, 상태(`ok`/`error`/`cancelled`), 오류 유형이 들어가고, 질문 원문·답변·조문 내용은 남기지 않습니다. 평가 스크립트도 같은 경로를 쓰므로 `caller`로 구분합니다.
+
+```zsh
+uv run python -m lawbot.log_summary                      # 상태별 건수, 단계별 중앙값·p95, 오류 유형별 건수
+uv run python -m lawbot.log_summary --caller lawbot-app  # 평가 실행 제외
+```
+
+오류 유형은 화면 안내와 같습니다. `model_server`(서버 연결 실패·토큰 불일치·로딩 중)는 "모델 서버가 준비되지 않았습니다", `model_load`(모델 폴더·system 파일 없음)는 기존 "모델을 불러오지 못했습니다"로 안내합니다. 리랭킹·생성 오류는 임베딩 순위로 되돌리지 않고 그대로 오류로 표시합니다.
+
 > 주의: 비밀번호를 소스 코드, 셸 설정 파일, 스크립트, `.env.example` 등 Git에 올라가는 파일에 적지 마세요. 파일에 둘 때는 Git에서 제외된 `.env`(권한 600)에만 두고, 더 안전하게는 실행할 때 입력하거나 macOS 키체인을 쓰세요.
 
 **테스트 실행**
@@ -431,7 +456,10 @@ uv run lawbot-eval-v4 summary --tag pro_concise_rr   # 결과 파일로 지표 �
 ```
 
 - tag 기본값은 `<모델>_<형식>_<rr|emb>`입니다(예: `pro_concise_rr`). `--fmt full`이면 4항목 system으로 생성합니다.
-- 인용은 법령명까지 맞아야 정답입니다(`근로기준법 제26조`와 `최저임금법 제26조`를 구분). 법령명 없이 이어 쓴 번호(`근로기준법 제26조, 제27조`)는 앞 법령으로 봅니다.
+- 인용은 법령명까지 맞아야 정답입니다(`근로기준법 제26조`와 `최저임금법 제26조`를 구분). 법령명 없이 이어 쓴 번호(`근로기준법 제26조, 제27조`)는 앞 법령으로 봅니다. 줄임말(`퇴직급여법`, `고평법` 등)도 인정하고, `근로기준법 시행령 제5조`는 법률 조문과 다른 조문으로 봅니다.
+- 인용·거절 판정은 웹앱 화면과 같은 `lawbot.citation` 하나를 씁니다. `citation.check`는 인용마다 `ok`(검색 결과 안) / `outside`(존재하지만 검색 결과 밖) / `wrong_law`(같은 번호, 다른 법령) / `nonexistent`(415조문에 없음) / `ambiguous`(법령명 없이 번호가 겹침)를 돌려줍니다.
+- `summary`는 저장된 답변 원문으로 채점 열만 다시 계산합니다. 채점 규칙이 같으면 결과 파일은 바뀌지 않습니다.
+- 두 실행의 답변 원문이 같은지는 `uv run python -m lawbot.diff_answers <기준.csv> <비교.csv>`로 봅니다(id로 맞춰 글자 단위 비교, 다르면 첫 차이 위치 출력, 모두 같으면 종료 코드 0).
 - 2026.4.7 근로기준법 개정으로 임금체불 벌칙이 제109조(3년·3천만원)에서 제107조(5년·5천만원)로 옮겨졌습니다. v4 정답은 개정 후 기준이고, 키워드가 개정 전 형량인 2문항(Q2443·Q2453)만 평가 때 개정 후 형량으로 바꿉니다(`eval_v4.KEYWORD_FIX`, 평가 파일은 그대로).
 - 범위 밖 질문 중 남녀고용평등법·최저임금법·퇴직급여법·기간제법·임금채권보장법·파견법이 출처인 27문항은 이제 범위 안이므로 거절하면 오답, 그 법을 인용하면 정답으로 봅니다. 나머지 75문항만 거절률을 잽니다.
 
@@ -499,6 +527,11 @@ src/lawbot/
 ├── prompts.py         # v1 기본 system 문구 (모델 라이브러리 없이 읽음)
 ├── model_server.py    # 내부 모델 서버: 임베딩·리랭커·답변 모델을 한 번만 올려 웹앱들이 공유 (127.0.0.1, 토큰)
 ├── remote.py          # 원격 모드 웹앱의 모델 서버 클라이언트 (LAWBOT_MODEL_SERVER)
+├── citation.py        # 인용 파싱·형식 검증·거절 판정 (웹앱 화면과 eval_v4 채점이 같이 씀)
+├── manifest.py        # 법령 데이터 매니페스트 검사 (조문 수·sha256·기준일)
+├── log_summary.py     # 요청 로그(logs/requests.jsonl) 요약
+├── eval_v4.py         # v4 웹앱 구성 평가 (lawbot-eval-v4)
+├── diff_answers.py    # 두 평가 결과의 답변 원문 글자 단위 비교
 ├── eval_dev.py        # 검색·답변 평가
 ├── score_answers.py   # 키워드 기반 채점기
 ├── refusal.py         # 거절 판정 (【결론】에 '확인할 수 없'), 범위 밖 답변 판정 (거절·안내·억지적용·미인용)
@@ -515,6 +548,7 @@ deploy/launchd/        # 상시 운영용 launchd 템플릿 (모델 서버·웹�
 ### 데이터와 평가 방법
 
 - **조문**: 근로기준법 현행 130개 조문. 삭제 조문 2개는 제외했고, 기준일은 2026-10-01입니다.
+- **v4 조문**: 근로기준법 등 7개 법률의 비삭제 415개 조문(`data/v4/articles_v4.csv`). [Legalize KR](https://github.com/legalize-kr/legalize-kr)에서 2026-10-20에 수집했고, 버전·기준일·sha256은 `data/v4/manifest.json`에 있습니다. 시행령·시행규칙을 더한 실험용 812조문(`data/v4/law_articles_v4_decree.csv`)은 아직 웹앱에 쓰지 않습니다.
 - **질문**: 총 2,602개(130조문 × 질문 유형 5종 × 약 4개)입니다.
   - 질문 유형: 구어체, 사용자(사업주) 관점, 간접 질문, 키워드, 상황 설명
   - 테스트: 650개(조문 × 유형마다 1개)
@@ -639,9 +673,11 @@ These match the Colab (L4, fp16) run on the same test set within 0.002. On the s
 | Former out-of-scope questions now in scope: false refusal / cites that law | 0.111 / 0.889 | 27 |
 | In-scope controls: false refusal / gold citation | 0.10 / 0.80 | 20 |
 
-The 27 questions whose source is one of the seven laws are now in scope, so the out-of-scope set differs from v1 (82 questions, 0.707). Two of the three false refusals there (this year's minimum wage amount, how to apply for reduced hours during childcare) concern details set by notice or decree rather than the statute text. The untuned 27B refuses in its own words ("근거를 찾을 수 없습니다", "답변할 수 없습니다"), so the v4 evaluation also counts those phrases (`eval_v4.REFUSAL`); this added no refusals among the 200 in-scope answers. Keyword scoring uses the existing 650-question keyword set, with two rows updated for the 2026-04-07 amendment. Scores are not directly comparable with v1 (4B, four-part answers, 130 articles, different sample).
+The 27 questions whose source is one of the seven laws are now in scope, so the out-of-scope set differs from v1 (82 questions, 0.707). Two of the three false refusals there (this year's minimum wage amount, how to apply for reduced hours during childcare) concern details set by notice or decree rather than the statute text. The untuned 27B refuses in its own words ("근거를 찾을 수 없습니다", "답변할 수 없습니다"), so the v4 evaluation also counts those phrases (`citation.REFUSAL`); this added no refusals among the 200 in-scope answers. The concise web view uses the same check, so such refusals show no citation line or warning. Keyword scoring uses the existing 650-question keyword set, with two rows updated for the 2026-04-07 amendment. Scores are not directly comparable with v1 (4B, four-part answers, 130 articles, different sample).
 
 Speed and memory (200 answers): embedding search 0.03 s, reranking 1.95 s (p95 3.1 s), first token 2.8 s (median, from generation start), 15.1 s per question end to end (p95 20.9 s), 9.7 tokens/s, 165 characters (96 tokens) per answer, MLX peak memory 20.4GB (27B + reranker).
+
+Rechecked in the production setup (remote mode, 2026-10-29): the web app talking to the model server reran answers, out-of-scope and refusal, and `lawbot.diff_answers` found all 522 answers identical character for character (200 · 122 · 200), so the accuracy numbers above stand. End-to-end time averaged 14.9 s, first token 2.78 s (median) and MLX peak memory 20.4GB, with no visible HTTP overhead (`results/v4/*_pro_concise_rr_remote.csv`).
 
 **v1 (130 Labor Standards Act articles · Qwen3-4B LoRA)**
 
@@ -813,6 +849,7 @@ The web app is local-only, for use on this Mac. The address is fixed to `127.0.0
 | `LAWBOT_MODEL_SERVER_PORT` | Model server | Model server port (1024–65535, no default) |
 | `LAWBOT_MODEL_TOKEN` | Model server, remote mode | Model server token (16+ characters, `openssl rand -hex 32`); same value for web apps and server |
 | `LAWBOT_MODEL_SERVER_WAIT` | No | Seconds a remote-mode web app waits at startup for the model server to be ready (default `300`) |
+| `LAWBOT_REQUEST_LOG` | No | Request log file (default `logs/requests.jsonl` at the repo root). Empty disables it |
 
 If either `LAWBOT_USER` or `LAWBOT_PW` is missing or empty, the app refuses to start with a `RuntimeError` before loading any model. There is no way to run the server without a login.
 
@@ -878,6 +915,26 @@ Constraints:
 - If login cookies clash when switching between production and development in one browser, open development at `http://localhost:<dev port>` (a different host keeps separate cookies).
 - `eval_v4`, `eval_concise` and `bench_models` also run in remote mode; their `peak_gb` and MLX memory are the model server's. `verify_reranker`, `eval_dev`, `eval_refusal`, `eval_oos` and `diag_*` load models directly (local mode only), so stop the model server first.
 
+**Law data version (manifest)**
+
+A `manifest.json` next to each article CSV (`data/v4/manifest.json`, `data/manifest.json` for v1) records the data version, reference and collection dates, source, article counts (per law and per kind), the CSV's SHA-256, and the data version the embedding and 4B LoRA were trained on. The search index is built when the model server starts rather than stored, so these values are what tie the data to the models.
+
+- The model server (and a local-mode web app) checks the CSV at startup and refuses to start, before loading any model, if the count or SHA-256 differs. A missing manifest only warns.
+- `uv run python -m lawbot.check_deploy` shows the same check as OK/FAIL; articles effective after the collection date are a WARN.
+- The model server's `/info` reports `dataset` (version, reference date, SHA-256); a remote-mode web app warns, without refusing, when it differs from its own repo's manifest.
+- When the article CSV changes, update the manifest with a new data version and restart both the model server and the web app.
+
+**Request log and error messages**
+
+The web app appends one line per question to `logs/requests.jsonl` (git-ignored): stage timings (search, rerank, model switch, first token, total), token counts, `peak_gb`, status (`ok`/`error`/`cancelled`) and error type. It never stores the question, the answer or article text. Evaluation scripts go through the same path and are told apart by `caller`.
+
+```zsh
+uv run python -m lawbot.log_summary                      # counts by status, per-stage median and p95, error types
+uv run python -m lawbot.log_summary --caller lawbot-app  # exclude evaluation runs
+```
+
+Error types match the on-screen messages: `model_server` (unreachable server, token mismatch, still loading) shows "the model server is not ready", `model_load` (missing model folder or system file) keeps the existing load-failure message. Reranking and generation errors are shown as errors, never silently replaced by the embedding order.
+
 > Warning: never put the password in source code, shell profiles, scripts, `.env.example` or any other file that goes into Git. If you keep it in a file, use only the git-ignored `.env` (mode 600); typing it at launch or the macOS Keychain is safer.
 
 **Run the tests**
@@ -904,7 +961,7 @@ uv run lawbot-eval-v4 refusal               # 100 sampled questions with only ot
 uv run lawbot-eval-v4 summary --tag pro_concise_rr
 ```
 
-Citations count only with the right law name. The 2026-04-07 amendment moved the wage-arrears penalty from Art. 109 (3 years / 30M won) to Art. 107 (5 years / 50M won); the v4 gold labels follow the amended law, and the two keyword rows that still expected the old penalty (Q2443, Q2453) are updated at scoring time (`eval_v4.KEYWORD_FIX`; the data file is unchanged).
+Citations count only with the right law name; abbreviations (`퇴직급여법`, `고평법`, …) are accepted, and `근로기준법 시행령 제5조` (Enforcement Decree) is a different article from the Act's Art. 5. Citation parsing, refusal detection and per-citation checks (`ok` / `outside` / `wrong_law` / `nonexistent` / `ambiguous`) live in `lawbot.citation`, shared with the web view. `summary` rescores saved answers only, so files stay unchanged when the rules do. `uv run python -m lawbot.diff_answers <base.csv> <new.csv>` checks that two runs produced the same answers (exit code 0 when identical). The 2026-04-07 amendment moved the wage-arrears penalty from Art. 109 (3 years / 30M won) to Art. 107 (5 years / 50M won); the v4 gold labels follow the amended law, and the two keyword rows that still expected the old penalty (Q2443, Q2453) are updated at scoring time (`eval_v4.KEYWORD_FIX`; the data file is unchanged).
 
 The previous v1 evaluation scripts (130 articles, 4B), which produced the README numbers and the baselines in `results/`:
 
@@ -950,6 +1007,11 @@ src/lawbot/
 ├── prompts.py         # v1 default system prompt (readable without model libraries)
 ├── model_server.py    # internal model server: loads embedding, reranker and answer models once for all web apps (127.0.0.1, token)
 ├── remote.py          # model server client for remote-mode web apps (LAWBOT_MODEL_SERVER)
+├── citation.py        # citation parsing, per-citation checks, refusal detection (shared by the web view and eval_v4)
+├── manifest.py        # law data manifest checks (article counts, SHA-256, reference date)
+├── log_summary.py     # summary of the request log (logs/requests.jsonl)
+├── eval_v4.py         # v4 web app evaluation (lawbot-eval-v4)
+├── diff_answers.py    # character-level comparison of answers from two evaluation runs
 ├── eval_dev.py        # retrieval and answer evaluation
 ├── score_answers.py   # keyword-based answer scorer
 ├── refusal.py         # refusal detection ('확인할 수 없' in the conclusion), out-of-scope verdicts (refusal, referral, forced, uncited)
@@ -966,6 +1028,7 @@ deploy/launchd/        # launchd templates for the always-on setup (model server
 ### Data and evaluation
 
 - **Articles**: The 130 current articles of the Labor Standards Act. Two repealed articles are excluded. The text is as of 2026-10-01.
+- **v4 articles**: 415 current articles from seven labor laws (`data/v4/articles_v4.csv`), collected from [Legalize KR](https://github.com/legalize-kr/legalize-kr) on 2026-10-20; version, dates and SHA-256 are in `data/v4/manifest.json`. The experimental 812-article set with enforcement decrees and rules (`data/v4/law_articles_v4_decree.csv`) is not used by the web app yet.
 - **Questions**: 2,602 in total (130 articles × 5 question types × about 4 each).
   - Question types: colloquial, employer perspective, indirect, keyword, situational
   - Test: 650 questions (one per article and type)
