@@ -7,7 +7,7 @@ import threading
 import time
 from collections import OrderedDict
 from dataclasses import dataclass
-from lawbot import deploy, security
+from lawbot import deploy, manifest, security
 from lawbot.paths import LLM_4BIT
 
 TOP_K = 3                            # 답변 근거로 넘기는 조문 수 (Fast·Pro 공통)
@@ -86,12 +86,14 @@ def system_text(profile, spec):
     return f.read_text(encoding='utf-8').strip() if f else None
 
 def check_profile_files(p):
-    """프로필의 조문 CSV·기본 system 파일이 있는지 모델 로딩 전에 확인 (v4 자산 준비 전 실행을 알기 쉽게 거부)"""
+    """프로필의 조문 CSV·기본 system 파일이 있는지 모델 로딩 전에 확인 (v4 자산 준비 전 실행을 알기 쉽게 거부)
+    조문 CSV가 매니페스트(조문 수·sha256)와 다르면 거부, 매니페스트가 없으면 경고만 (manifest.check)"""
     missing = [str(f) for f in (p.articles, p.system_file) if f is not None and not f.is_file()]
     if missing:
         raise RuntimeError(f"프로필 {p.name}에 필요한 파일이 없습니다: {', '.join(missing)}. "
                            'uv run python -m lawbot.check_deploy로 확인하거나, '
                            'v4 자산 준비 전에는 LAWBOT_PROFILE=v1로 실행하세요.')
+    manifest.check(p.articles)
 
 def check_reranker(rr):
     """켜진 리랭커의 후보 수·폴더를 모델 로딩 전에 확인"""
@@ -156,6 +158,8 @@ def load_remote(p, url):
     diff = remote.check_info(info, p)
     if diff:
         raise RuntimeError('모델 서버와 웹앱 설정이 다릅니다:\n- ' + '\n- '.join(diff))
+    for w in remote.dataset_warnings(info, p):    # 데이터 버전 차이는 경고만 (이전 서버는 dataset 없음)
+        print(f'[lawbot] 경고: {w}')
     rr = info['reranker']
     retriever = remote.RemoteRetriever(client)
     reranker = remote.RemoteReranker(client, rr['candidates']) if rr else None

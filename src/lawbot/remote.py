@@ -7,6 +7,7 @@ import types
 import urllib.error
 import urllib.request
 import numpy as np
+from lawbot import manifest
 
 API_VERSION = 1                      # model_server.API_VERSION과 같아야 함 (모델 서버 모듈은 import하지 않음)
 GEN_FIELDS = ('text', 'generation_tps', 'prompt_tokens', 'prompt_tps', 'generation_tokens', 'peak_memory',
@@ -175,3 +176,12 @@ def check_info(info, profile):
     if missing:
         diff.append(f"웹앱 모델 {missing}이 서버 모델 {info.get('models')}에 없음 (LAWBOT_MODELS)")
     return diff
+
+def dataset_warnings(info, profile):
+    """서버 /info의 dataset과 웹앱 레포의 매니페스트가 다른 항목 (경고용, 시작은 막지 않음)
+    dataset이 없는 이전 서버나, 웹앱 쪽 매니페스트가 없으면 빈 목록"""
+    server, web = info.get('dataset'), manifest.summary(manifest.load(profile.articles))
+    if not server or not web:
+        return []
+    return [f'{k}: 서버 {server.get(k)} / 웹앱 {web[k]} (모델 서버와 웹앱의 레포 버전을 맞추세요)'
+            for k in web if server.get(k) != web[k]]

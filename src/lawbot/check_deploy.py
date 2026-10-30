@@ -10,7 +10,7 @@ import sys
 from collections import Counter
 from pathlib import Path
 import pandas as pd
-from lawbot import deploy, envfile, remote, security
+from lawbot import deploy, envfile, manifest, remote, security
 from lawbot.deploy import get_profile
 
 EXPECTED_ARTICLES = {'v1': 130, 'v4': 415}
@@ -55,6 +55,16 @@ def check_articles(p, out):
                             '(법령명이 들어 있으면 번호만 담은 article_no 열 추가)'))
     if p.doc_style == 'v4':
         out.append(('INFO', f"법령별 조문 수: {live['law'].value_counts().to_dict()}"))
+
+def check_manifest(p, out):
+    """조문 CSV가 매니페스트(조문 수·sha256)와 같은지. 모델 서버(로컬 모드 load_app)는 FAIL이면 시작을 거부한다"""
+    if not p.articles.is_file():
+        return                           # check_articles가 FAIL
+    m = manifest.load(p.articles)
+    if m is None:
+        return out.append(('WARN', f'매니페스트 없음: {manifest.path_for(p.articles)} (데이터 버전을 확인하지 않음)'))
+    out.append(('INFO', f'매니페스트: {manifest.describe(m)}'))
+    out.extend(manifest.verify(p.articles, m))
 
 def check_system_file(name, f, out):
     if not f.is_file():
@@ -159,6 +169,9 @@ def check_model_server(p, out):
     out.extend(('FAIL', f'모델 서버 설정 불일치: {d}') for d in diff)
     if not diff:
         out.append(('OK', f"모델 서버 api_version {info['api_version']} · 프로필 {info['profile']['name']} 일치"))
+    out.extend(('WARN', f'모델 서버 데이터 버전 차이: {w}') for w in remote.dataset_warnings(info, p))
+    if not info.get('dataset'):
+        out.append(('INFO', '모델 서버가 데이터 버전(dataset)을 보내지 않음: 이전 버전 서버이거나 서버 쪽 매니페스트 없음'))
     rr = info['reranker']
     out.append(('INFO', f"모델 서버: 조문 {info['n_articles']}개 · 리랭커 "
                         f"{'후보 ' + str(rr['candidates']) + '개' if rr else '꺼짐'} · 모델 {info['models']} · "
@@ -168,6 +181,7 @@ def run(name=None):
     p = get_profile(name)
     out = [('INFO', f'프로필 {p.name}: {p.title}')]
     check_articles(p, out)
+    check_manifest(p, out)
     check_system(p, out)
     check_emb(p, out)
     for spec in p.models:
