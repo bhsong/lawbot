@@ -157,9 +157,9 @@ def test_fast_and_pro_get_same_context(env):
 
 def test_switch_shows_loading_then_answer(env):
     chat = app_mod.make_chat(make_app(env, resident=1))
-    steps = list(chat('질문', [], 'pro', 'concise'))
+    steps = list(chat('질문', [], 'pro', 'concise'))[1:]   # 첫 단계는 처리 중 문구 (test_status_steps)
     assert steps[0][0] == '⏳ Lawbot Pro 불러오는 중…' and '모델 전환 대기' in steps[0][2]
-    assert steps[0][1] == steps[-1][1] != ''            # 조문 카드는 로딩 중에도 먼저 보임
+    assert steps[0][1] == app_mod.fmt_sources(HITS[:3]) != ''   # 조문 카드는 로딩 중에도 먼저 보임
     assert '모델 전환' in steps[-1][2]
     assert '모델 전환' not in list(chat('질문', [], 'pro', 'concise'))[-1][2]   # 이미 올라 있으면 전환 없음
 
@@ -436,3 +436,113 @@ def test_full_system_v4_profile(env):
     a = make_app(env, resident=1)
     assert a.full_system == paths.V4_SYSTEM.read_text(encoding='utf-8').strip()
     assert '【설명】' in a.full_system and '【설명】' not in paths.V4_SYSTEM_CONCISE.read_text(encoding='utf-8')
+
+# ---- 근거 조문 표시 (B5) ----
+H3 = [{'law': '근로기준법', 'article_id': a, 'title': t, 'score': 0.9 - i / 10, 'doc': f'근로기준법 {a}({t})\n{t} 본문 <개정 2021.1.5>'}
+      for i, (a, t) in enumerate((('제26조', '해고의 예고'), ('제27조', '해고사유 등의 서면통지'), ('제28조', '부당해고등의 구제신청')))]
+
+def v4_chat(env, text):
+    """검색 결과 H3과 고정 답변으로 v4 chat (가짜 모델)"""
+    class Ret(FakeRetriever):
+        def search(self, query, k=3):
+            return H3[:k]
+    class Bot(FakeLLM):
+        def stream(self, question, hits, system=None):
+            for c in (text[:4], text[4:]):
+                yield types.SimpleNamespace(text=c, generation_tps=10.0, finish_reason='stop')
+    env.setattr(service, 'Retriever', Ret)
+    env.setattr(service, 'LLM', Bot)
+    env.setattr(service.manifest, 'check', lambda articles: None)   # tmp 조문 CSV
+    env.setenv('LAWBOT_PROFILE', 'v4')
+    return app_mod.make_chat(service.load_app())
+
+@pytest.fixture
+def v4_files(env, tmp_path):
+    (tmp_path / 'v4.csv').write_text('law,article_id,title,deleted,text\n', encoding='utf-8')
+    (tmp_path / 's.txt').write_text('S', encoding='utf-8')
+    env.setenv('LAWBOT_V4_ARTICLES', str(tmp_path / 'v4.csv'))
+    env.setenv('LAWBOT_V4_SYSTEM', str(tmp_path / 's.txt'))
+    env.setenv('LAWBOT_PRO_SYSTEM', str(tmp_path / 's.txt'))
+    env.setenv('LAWBOT_MODELS', 'pro')
+    return env
+
+def test_sources_split_cited_and_retrieved(v4_files):
+    chat = v4_chat(v4_files, '【결론】\n30일 전에 예고해야 합니다.\n\n【근거 조문】\n근로기준법 제27조(해고사유 등의 서면통지), 제26조')
+    steps = list(chat('해고 예고?', [], 'pro', 'concise'))
+    assert all(s == app_mod.fmt_sources(H3) for _, s, _ in steps[1:-1])     # 생성 중에는 세 개 모두 펼침
+    src = steps[-1][1]
+    cited, rest = src.split('**검색만 된 조문**')
+    assert cited.startswith('**✅ 답변에서 인용한 조문**')
+    assert '**근로기준법 제26조 해고의 예고**' in cited and '**근로기준법 제27조 해고사유 등의 서면통지**' in cited
+    assert '<details>' not in cited and '<개정 2021.1.5>' in cited
+    assert rest.count('<details>') == 1 and '<b>근로기준법 제28조 부당해고등의 구제신청</b>' in rest   # 접힌 카드
+    assert '부당해고등의 구제신청 본문' in rest                                    # 펼치면 본문
+
+def test_sources_for_refusal_and_uncited(v4_files):
+    chat = v4_chat(v4_files, '【결론】\n제공된 조문에서 근거를 찾을 수 없습니다.\n\n【근거 조문】\n근로기준법 제26조')
+    text, src, _ = list(chat('제주도 여행 코스?', [], 'pro', 'concise'))[-1]
+    assert text == '제공된 조문에서 근거를 찾을 수 없습니다.'                     # 거절: 결론만
+    assert '답변에서 인용한 조문' not in src and src.count('<details>') == 3
+    assert src.startswith('**검색됐지만 답변에 쓰지 않은 조문**')
+    chat = v4_chat(v4_files, '【결론】\n예고해야 합니다.')
+    assert list(chat('해고?', [], 'pro', 'concise'))[-1][1] == app_mod.fmt_sources(H3)   # 인용이 없으면 모두 펼침
+
+def test_full_format_warns_outside_citation(v4_files):
+    raw = '【결론】\n예고해야 합니다.\n\n【근거 조문】\n근로기준법 제26조, 근로기준법 제109조\n\n【설명】\n- 설명'
+    text, src, _ = list(v4_chat(v4_files, raw)('해고?', [], 'pro', 'full'))[-1]
+    assert text == raw + '\n\n⚠ 검색된 조문에서 확인되지 않은 인용: 제109조'           # 원문은 그대로, 아래에 경고
+    assert '**✅ 답변에서 인용한 조문**' in src
+    assert render_full(raw.replace(', 근로기준법 제109조', '')) == raw.replace(', 근로기준법 제109조', '')
+    assert render_full(raw, done=False) == raw                                  # 생성 중에는 경고하지 않음
+
+def render_full(raw, done=True):
+    from lawbot.answer_format import render
+    return render(raw, H3, 'full', done)
+
+def test_status_steps(env):
+    chat = app_mod.make_chat(make_app(env))
+    steps = list(chat('질문', [], 'fast', 'concise'))
+    assert steps[0] == (app_mod.SEARCHING, '', '⏳ 조문 검색 중…')                  # 검색 결과가 오기 전
+    assert all(s[0].startswith('⏳') or s[0] for s in steps)
+    assert '✍️ 답변 생성 중…' in steps[1][2] and '✍️' not in steps[-1][2]         # 생성 중 / 완료
+    a = make_app(env)
+    a.reranker = types.SimpleNamespace(candidates=3)
+    assert app_mod.searching_stats(a) == '⏳ 조문 검색 → 리랭킹 중…'
+
+def test_writing_placeholder_while_marker():
+    """간결형은 표시 기호를 쓰는 동안 빈 화면 대신 처리 중 문구 ('⏳': bench_ui가 첫 글자로 세지 않음)"""
+    assert app_mod.WRITING.startswith('⏳') and app_mod.SEARCHING.startswith('⏳')
+
+def test_data_notice(env):
+    a = make_app(env)                                                        # v1: data/manifest.json
+    assert app_mod.data_notice(a) == '법령 기준일 2026-10-01 (데이터 v1)'
+    demo = app_mod.build_demo(a)
+    assert any('법령 기준일 2026-10-01' in str(getattr(b, 'value', '')) for b in demo.blocks.values())
+    class Client:
+        def __init__(self, dataset):
+            self.dataset = dataset
+        def get_json(self, path):
+            return {'dataset': self.dataset}
+    a.retriever.client = Client({'dataset_version': 'v0', 'reference_date': '2026-10-01',
+                                 'articles_sha256': service.manifest.load(a.profile.articles)['articles_sha256']})
+    assert app_mod.data_notice(a) == ('법령 기준일 2026-10-01 (데이터 v1) · ⚠ 모델 서버의 법령 데이터가 이 웹앱과 다릅니다 '
+                                      '(dataset_version: 서버 v0 / 웹앱 v1)')
+    a.retriever.client = Client(None)                                         # 이전 서버: 경고 없음
+    assert app_mod.data_notice(a) == '법령 기준일 2026-10-01 (데이터 v1)'
+    del a.retriever.client
+
+def test_chat_api_unchanged(env):
+    """bench_ui 호환: API 이름 chat, 입력 [질문, 모델, 형식]"""
+    demo = app_mod.build_demo(make_app(env))
+    cfg = demo.get_config_file()
+    deps = [d for d in cfg['dependencies'] if d.get('api_name') == 'chat']
+    assert len(deps) == 1
+    comps = {c['id']: c for c in cfg['components']}
+    types_ = [comps[i]['type'] for i in deps[0]['inputs'] if comps[i]['type'] != 'state']   # 대화 상태는 API 입력이 아님
+    assert types_ == ['textbox', 'radio', 'radio']
+
+def test_chatbot_buttons(env):
+    """메시지 복사·재시도는 Gradio 기본 제공, 공유(Hugging Face 업로드) 버튼은 없음"""
+    demo = app_mod.build_demo(make_app(env))
+    bot = next(b for b in demo.blocks.values() if isinstance(b, app_mod.gr.Chatbot))
+    assert 'share' not in bot.buttons and 'copy' in bot.buttons

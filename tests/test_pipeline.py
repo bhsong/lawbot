@@ -251,10 +251,12 @@ def test_chat_streams_answer_with_sources(app):
     chat = app.make_chat(lawbot)
     assert chat.__name__ == 'chat'                  # Gradio API 이름(/gradio_api/call/chat)
     steps = list(chat('수습 기간에도 해고 예고?', [], 'fast', 'full'))
-    # 토큰마다 누적 답변, 마지막은 생성 완료 후 측정값(완료 시간·tok/s)을 채운 같은 답변
+    # 먼저 처리 중 문구(조문 없음), 그다음 토큰마다 누적 답변, 마지막은 생성 완료 후 측정값(완료 시간·tok/s)을 채운 같은 답변
+    assert steps[0] == (app.SEARCHING, '', '⏳ 조문 검색 중…')
+    steps = steps[1:]
     assert [t for t, _, _ in steps] == ['【결론】', '【결론】예고해야', '【결론】예고해야 합니다.', '【결론】예고해야 합니다.']
     src = steps[-1][1]
-    assert all(s == src for _, s, _ in steps)       # 근거 조문 칸은 답변 내내 같음
+    assert all(s == src for _, s, _ in steps)       # 근거 조문 칸은 답변 내내 같음 (인용이 없으면 끝나도 세 개 모두 펼침)
     assert '**제26조 해고의 예고** · 유사도 0.912' in src
     assert '30일 전에 예고' in src
     assert src.count('제26조 해고의 예고') == 1     # 조문 본문 첫 줄(제목 줄)은 중복 표시 안 함

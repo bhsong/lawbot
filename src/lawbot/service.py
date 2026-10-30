@@ -237,7 +237,22 @@ def request_record(app, st, fmt, status, error):
            'fmt': fmt or (spec.fmt if spec else None), 'reranker': app.reranker is not None}
     rec |= {f'{k}_ms': None if st.get(k) is None else round(st[k] * 1000) for k in MS_FIELDS}
     rec |= {k: st.get(k) for k in ('prompt_tokens', 'gen_tokens', 'peak_gb', 'finish')}
+    rec |= {k: st.get(k) for k in ('refused', 'n_cited', *CITE_FIELDS)}
     return rec | {'status': status, 'error_type': error}
+
+CITE_FIELDS = ('cite_ok', 'cite_outside', 'cite_wrong_law', 'cite_nonexistent', 'cite_ambiguous')
+
+def answer_check(app, raw, hits):
+    """요청 로그용 답변 요약 (내용 없이 수만): 거절 여부, 인용 수, citation.check 판정별 인용 수
+    전체 조문은 검색기(원격 모드는 서버 /articles) 기준. 판정에 실패해도 답변은 막지 않는다 (값 없음)"""
+    try:
+        from lawbot import citation
+        cites = citation.check(citation.citations(raw), hits, citation.article_keys(app.retriever))
+        verdicts = [v for _, _, v, _ in cites]
+        return ({'refused': citation.refused(raw), 'n_cited': len(cites)}
+                | {f: verdicts.count(f.removeprefix('cite_')) for f in CITE_FIELDS})
+    except Exception:
+        return {}
 
 def log_request(app, st, fmt, status, error=None):
     """JSONL 한 줄. 기록 실패는 답변을 막지 않고 콘솔에 경고만"""
@@ -287,6 +302,7 @@ def ask(app, question, model_key, k=TOP_K, early_stop=False, fmt=None):
                            ('gen_tokens', 'generation_tokens'), ('peak_gb', 'peak_memory'),
                            ('finish', 'finish_reason')):
             st[name] = getattr(last, attr, None)
+        st |= answer_check(app, raw, hits)
         log_timing(st)
         log_request(app, st, fmt, 'ok')
         logged = True
