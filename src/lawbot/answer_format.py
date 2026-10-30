@@ -47,6 +47,22 @@ def concise(raw, hits, done=True):
             out += '\n\n⚠ 인용 조문 없음: 오른쪽 조문을 직접 확인하세요.'
     return out
 
+def answer_citations(raw, hits):
+    """생성이 끝난 답변의 (인용한 검색 결과 조문, 검색 결과에서 확인되지 않은 번호, 거절 여부). 화면의 조문 카드 구분에 씀
+    【결론】 형식이면 【근거 조문】만, 형식을 벗어난 답변은 전체에서 인용을 찾는다 (간결형과 같은 기준)"""
+    if refused(raw):
+        return [], [], True
+    sec = sections(raw)
+    used, unknown = cited_hits(sec.get('근거 조문', '') if '결론' in sec else raw, hits)
+    return used, unknown, False
+
 def render(raw, hits, fmt, done=True):
-    """fmt: 'concise'(간결형) / 'full'(모델 원문 4섹션)"""
-    return concise(raw, hits, done) if fmt == 'concise' else raw
+    """fmt: 'concise'(간결형) / 'full'(모델 원문 4섹션)
+    전체 형식도 생성이 끝나면 검색 결과에서 확인되지 않은 인용을 원문 아래에 경고한다 (간결형과 같은 문구)"""
+    if fmt == 'concise':
+        return concise(raw, hits, done)
+    if done and not refused(raw):
+        _, unknown, _ = answer_citations(raw, hits)
+        if unknown:
+            return raw + f"\n\n⚠ 검색된 조문에서 확인되지 않은 인용: {', '.join(unknown)}"
+    return raw

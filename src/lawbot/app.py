@@ -1,7 +1,8 @@
 # src/lawbot/app.py  →  uv run lawbot-app
+import html
 import gradio as gr
-from lawbot import envfile
-from lawbot.answer_format import render
+from lawbot import envfile, manifest
+from lawbot.answer_format import answer_citations, render
 from lawbot.service import ask, load_app
 from lawbot.security import get_local_launch_config, instance_name
 
@@ -10,13 +11,58 @@ EXAMPLES = ['해고 예고 없이 갑자기 해고되면 어떻게 하나요?',
             '최저임금보다 적게 주기로 한 근로계약은 효력이 있나요?',
             '육아휴직을 썼다고 불이익을 줘도 되나요?']
 EMPTY = '답변을 생성하지 못했습니다. 다시 질문해 주세요.'
+SEARCHING = '⏳ 조문을 찾는 중…'         # '⏳'로 시작하는 문구는 bench_ui가 첫 글자로 세지 않음
+WRITING = '⏳ 답변을 쓰는 중…'
 
-def fmt_sources(hits):
-    return '\n\n---\n\n'.join(
-        f"**{h['law'] + ' ' if 'law' in h else ''}{h['article_id']} {h['title']}** · 유사도 {h['score']:.3f}"
-        + (f" · 리랭커 {h['rerank_score']:.3f} (임베딩 {h['emb_rank']}위)" if 'rerank_score' in h else '')
-        + f"\n\n{h['doc'].split(chr(10), 1)[1]}"
-        for h in hits)
+def source_title(h):
+    return f"{h['law'] + ' ' if 'law' in h else ''}{h['article_id']} {h['title']}"
+
+def source_scores(h):
+    return (f"유사도 {h['score']:.3f}"
+            + (f" · 리랭커 {h['rerank_score']:.3f} (임베딩 {h['emb_rank']}위)" if 'rerank_score' in h else ''))
+
+def source_card(h):
+    return f"**{source_title(h)}** · {source_scores(h)}\n\n{h['doc'].split(chr(10), 1)[1]}"
+
+def folded_card(h):
+    """접힌 조문 카드 (펼치면 본문). 본문은 빈 줄 뒤에 두어 Markdown으로 그린다"""
+    return (f"<details><summary><b>{html.escape(source_title(h))}</b> · {source_scores(h)}</summary>\n\n"
+            f"{h['doc'].split(chr(10), 1)[1]}\n\n</details>")
+
+def fmt_sources(hits, cited=None, refused=False):
+    """오른쪽 조문 카드. cited(답변에서 인용한 검색 결과 조문)를 주면 인용한 조문은 펼쳐서 먼저, 나머지는 접어서 뒤에
+    생성 중이거나(cited=None) 인용을 찾지 못한 답변은 세 개를 모두 펼친다 (사용자가 직접 확인할 수 있게)"""
+    if not refused and not cited:
+        return '\n\n---\n\n'.join(source_card(h) for h in hits)
+    used = [h for h in hits if h in (cited or [])]
+    rest = [h for h in hits if h not in used]
+    parts = []
+    if used:
+        parts.append('**✅ 답변에서 인용한 조문**\n\n' + '\n\n---\n\n'.join(source_card(h) for h in used))
+    if rest:
+        parts.append(('**검색됐지만 답변에 쓰지 않은 조문**' if refused else '**검색만 된 조문**') + ' (눌러서 펼치기)\n\n'
+                     + '\n\n'.join(folded_card(h) for h in rest))
+    return '\n\n---\n\n'.join(parts)
+
+def data_notice(app):
+    """제목 아래 한 줄: 법령 기준일 (웹앱 레포의 매니페스트). 원격 모드에서 모델 서버의 데이터 버전이 다르면 경고"""
+    m = manifest.load(app.profile.articles)
+    line = (f"법령 기준일 {m['reference_date']} (데이터 {m['dataset_version']})" if m else
+            '법령 기준일: 확인되지 않음 (데이터 매니페스트 없음)')
+    client = getattr(app.retriever, 'client', None)
+    if client is not None:
+        from lawbot.remote import dataset_warnings
+        try:
+            warn = dataset_warnings(client.get_json('/info'), app.profile)
+        except Exception:                # 화면은 그대로 띄운다 (서버 문제는 질문할 때 안내)
+            warn = []
+        if warn:
+            line += ' · ⚠ 모델 서버의 법령 데이터가 이 웹앱과 다릅니다 (' + '; '.join(w.split(' (')[0] for w in warn) + ')'
+    return line
+
+def searching_stats(app):
+    """질문 직후 처리 단계 (검색 → 리랭킹 → 생성)"""
+    return '⏳ 조문 검색' + (' → 리랭킹' if app.reranker else '') + ' 중…'
 
 def fmt_stats(label, stage, st):
     """측정 칸: 서버 기준 시간. 브라우저 표시 지연은 lawbot.bench_ui로 따로 잰다"""
@@ -39,6 +85,8 @@ def fmt_stats(label, stage, st):
             parts.append('간결형 조기 종료')
         if st.get('finish') == 'length':
             parts.append('⚠ 최대 길이에서 잘림')
+    else:
+        parts.append('✍️ 답변 생성 중…')
     return ' · '.join(parts)
 
 def make_chat(app):
@@ -54,15 +102,22 @@ def make_chat(app):
         if spec is None or fmt not in ('concise', 'full'):
             raise gr.Error(f'알 수 없는 선택: {model_key!r}, {fmt!r}')
         early = fmt == 'concise' and app.early_stop
+        yield SEARCHING, '', searching_stats(app)
         try:
             for stage, hits, raw, st in ask(app, message, model_key, early_stop=early, fmt=fmt):
-                src = fmt_sources(hits)          # 오른쪽 조문 3개는 생성 내내 같음
+                src = fmt_sources(hits)          # 생성 중에는 조문 3개를 모두 펼쳐 둔다
                 if stage == 'load':
                     yield f'⏳ {spec.label} 불러오는 중…', src, fmt_stats(spec.label, stage, st)
                     continue
-                text = render(raw, hits, fmt, done=stage == 'done')
-                if stage == 'done' and not raw.strip():
-                    text = EMPTY
+                done = stage == 'done'
+                text = render(raw, hits, fmt, done=done)
+                if done:                         # 끝나면 인용한 조문과 검색만 된 조문을 나눈다
+                    used, _, no = answer_citations(raw, hits)
+                    src = fmt_sources(hits, used, no)
+                    if not raw.strip():
+                        text = EMPTY
+                elif not text.strip():           # 표시 기호를 쓰는 중 (간결형)
+                    text = WRITING
                 yield text, src, fmt_stats(spec.label, stage, st)
         except Exception as e:                   # 유형은 service.ask가 붙임 (요청 로그의 error_type과 같음)
             kind = getattr(e, 'lawbot_error', None)
@@ -102,7 +157,7 @@ def build_demo(app):                 # 화면만 만든다: 인증 검사·모�
     p, title = app.profile, page_title(app)
     with gr.Blocks(title=title) as demo:
         gr.Markdown(f'# {title}\n질문과 관련된 조문 3개를 찾아 그 조문을 근거로 답합니다. '
-                    '법률 자문이 아닌 참고용 답변입니다.')
+                    f'법률 자문이 아닌 참고용 답변입니다.\n\n{data_notice(app)}')
         sources = gr.Markdown(render=False)
         stats = gr.Markdown(render=False)
         with gr.Row():
@@ -116,6 +171,8 @@ def build_demo(app):                 # 화면만 만든다: 인증 검사·모�
                 model.change(default_fmt(app), model, [model, fmt], queue=False, api_visibility='private')
                 gr.ChatInterface(
                     fn=make_chat(app),
+                    # 메시지 복사·재시도는 기본 제공. 공유(Hugging Face 업로드) 버튼은 상담 내용이 나가지 않게 뺀다
+                    chatbot=gr.Chatbot(buttons=['copy', 'copy_all'], height=480),
                     additional_inputs=[model, fmt],
                     additional_outputs=[sources, stats],
                     examples=[[q, None, None] for q in EXAMPLES],   # None: 예시를 눌러도 현재 모델·형식 선택 유지

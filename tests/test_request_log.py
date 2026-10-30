@@ -137,3 +137,15 @@ def test_log_summary(env, log, capsys):
     assert '요청 1건' in out
     with pytest.raises(SystemExit, match='요청 로그가 없습니다'):
         log_summary.main([str(log.with_name('없음.jsonl'))])
+
+def test_log_has_citation_summary_without_text(env, log):
+    """B5: 거절 여부·인용 판정별 수만 남는다 (조문 번호·내용은 없음)"""
+    a = local_app(env)
+    env.setattr(FakeLLM, 'chunks', ['【결론】예고해야 합니다.\n【근거 조문】\n근로기준법 제26조, 제99조'])
+    list(service.ask(a, QUESTION, 'fast'))
+    r = lines(log)[-1]
+    assert (r['refused'], r['n_cited'], r['cite_ok'], r['cite_nonexistent'], r['cite_outside']) == (False, 2, 1, 1, 0)
+    assert '제99조' not in log.read_text(encoding='utf-8')
+    env.setattr(FakeLLM, 'chunks', ['【결론】제공된 조문에서 근거를 찾을 수 없습니다.'])
+    list(service.ask(a, QUESTION, 'fast'))
+    assert lines(log)[-1]['refused'] is True and lines(log)[-1]['n_cited'] == 0

@@ -41,7 +41,8 @@ def hit_key(h):
 
 def article_keys(retriever):
     """검색기(로컬 Retriever·RemoteRetriever)의 전체 조문 → {(법령, 제N조)}. 삭제 조문은 검색기에 없다"""
-    laws = retriever.laws if retriever.laws is not None else [DEFAULT_LAW] * len(retriever.ids)
+    laws = getattr(retriever, 'laws', None)
+    laws = laws if laws is not None else [DEFAULT_LAW] * len(retriever.ids)
     return set(zip(map(str, laws), map(str, retriever.ids)))
 
 # ---- 인용 파싱 ----
