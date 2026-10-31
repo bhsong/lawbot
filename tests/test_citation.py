@@ -37,7 +37,6 @@ def test_parse(text, expected):
 def test_citations_reads_cite_section():
     ans = '【결론】근로기준법 제1조\n【근거 조문】근로기준법 시행령 제5조\n【설명】근로기준법 제99조'
     assert ci.citations(ans) == [('근로기준법 시행령', '제5조')]
-    assert ev.citations(ans) == ci.citations(ans)                         # eval_v4는 같은 함수
     assert not ev.cite_gold(ans, '근로기준법 제5조')                       # 시행령 조문은 법률 조문의 정답이 아님
 
 def test_eval_v4_uses_citation_module():
@@ -50,6 +49,8 @@ def test_eval_v4_uses_citation_module():
     ('【결론】\n제공된 조문만으로는 확인할 수 없습니다.', True),                                    # v1 학습 문구
     ('【결론】\n노동법 내용이라 날씨에 대한 근거를 찾을 수 없습니다.\n【근거 조문】\n근거 조문 없음', True),   # 27B
     ('【결론】\n해당 질문에 대해 답변할 수 없습니다.', True),
+    ('【결론】\n제공된 [참고 조문]은 근로기준법 관련 내용으로, 김치찌개 조리법에 대한 근거를 찾을 수 없습니다.\n【근거 조문】\n근거 조문 없음', True),  # 27B (튜닝 전)
+    ('【결론】\n노동법 관련 내용만 포함되어 있어 해당 질문에 대해 답변할 수 없습니다.', True),            # 27B (튜닝 전)
     ('【결론】\n사용자는 정당한 이유 없이 해고할 수 없습니다.', False),                             # 법 내용의 '할 수 없'
     ('【결론】\n예고해야 합니다.\n【설명】\n- 확인할 수 없는 경우도 있음', False),                   # 결론 밖
 ])

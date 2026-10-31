@@ -20,9 +20,6 @@ COLUMNS = {'v1': {'article_id', 'title', 'deleted', 'text'}, 'v4': {'law', 'arti
 ADAPTER_FILES = ('adapters.safetensors', 'adapter_config.json', 'adapter_model.safetensors')
 HIDDEN_SIZE = {2560: 'Qwen3-4B', 5120: 'Qwen3-14B'}       # config.json hidden_size로 크기 확인
 
-def sha256(path):
-    return hashlib.sha256(Path(path).read_bytes()).hexdigest()
-
 def safetensors_dtypes(folder):
     """폴더 안 safetensors 텐서의 dtype별 개수 (헤더만 읽음)"""
     n = Counter()
@@ -50,10 +47,10 @@ def check_articles(p, out):
     n_ok = n_law == EXPECTED_ARTICLES[p.name]
     if 'kind' in live:                   # 812조문 CSV (하위법령 첨부)
         out.append(('OK' if n_ok else 'FAIL', f'비삭제 법률 조문 {n_law}개 (기대 {EXPECTED_ARTICLES[p.name]}) · '
-                                              f'전체 {len(live)}개 · sha256 {sha256(p.articles)[:12]}'))
+                                              f'전체 {len(live)}개 · sha256 {manifest.sha256(p.articles)[:12]}'))
     else:
         out.append(('OK' if n_ok else 'FAIL', f'비삭제 조문 {len(live)}개 (기대 {EXPECTED_ARTICLES[p.name]}) · '
-                                              f'sha256 {sha256(p.articles)[:12]}'))
+                                              f'sha256 {manifest.sha256(p.articles)[:12]}'))
     if len(dup):
         out.append(('FAIL', f'중복 조문 {len(dup)}행: {dup[key].head().values.tolist()}'))
     nums = live['article_no'] if 'article_no' in live else live['article_id']   # retriever와 같은 규칙

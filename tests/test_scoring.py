@@ -149,6 +149,8 @@ def test_scorer_reproduces_recorded_scores(ev, name):
     ('scored_oracle_4bit.csv', 'Q0818', 0, 0, 0.0),      # 거절 + 제공 조문 목록에 정답 (수정 전 0.5)
     ('scored_oracle_4bit.csv', 'Q2464', 1, 0, 1.0),      # 정답 제110조 + 헷갈리는 제53조 함께 인용
 ])
-def test_recorded_citation_edge_cases(name, qid, cite, strict, total):
-    r = results(name).set_index('id').loc[qid]
-    assert (r['cite_ok'], r['cite_strict'], r['total']) == (cite, strict, total)
+def test_recorded_citation_edge_cases(ev, name, qid, cite, strict, total):
+    # 저장된 답변을 지금 채점 코드로 다시 채점해 경계 사례의 점수를 고정한다
+    answer = results(name).fillna({'answer': ''}).set_index('id').loc[qid, 'answer']
+    s = score_one(ev.set_index('id').loc[qid], answer)
+    assert (s['cite_ok'], s['cite_strict'], s['total']) == (cite, strict, total)

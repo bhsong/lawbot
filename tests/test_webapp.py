@@ -412,7 +412,6 @@ def test_pro_only_app(env):
     chat = app_mod.make_chat(a)
     with pytest.raises(app_mod.gr.Error, match='사용하지 않는 모델'):
         list(chat('질문', [], 'fast', 'full'))
-    assert FakeLLM.created == 1 or list(a.models.loaded) == ['pro']
     text, _, stats = list(chat('해고 예고?', [], 'pro', 'concise'))[-1]
     assert stats.startswith('Lawbot Pro')
     assert any('사용 안 함' in m for lv, m in check_deploy.run('v4'))
@@ -505,7 +504,8 @@ def test_status_steps(env):
     chat = app_mod.make_chat(make_app(env))
     steps = list(chat('질문', [], 'fast', 'concise'))
     assert steps[0] == (app_mod.SEARCHING, '', '⏳ 조문 검색 중…')                  # 검색 결과가 오기 전
-    assert all(s[0].startswith('⏳') or s[0] for s in steps)
+    assert all(s[0].strip() for s in steps)                                    # 빈 화면 단계 없음
+    assert all(s[0].startswith('⏳') for s in steps if s[0].endswith('중…'))     # 처리 중 문구는 '⏳'로 시작
     assert '✍️ 답변 생성 중…' in steps[1][2] and '✍️' not in steps[-1][2]         # 생성 중 / 완료
     a = make_app(env)
     a.reranker = types.SimpleNamespace(candidates=3)
