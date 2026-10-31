@@ -1,7 +1,8 @@
 # src/lawbot/feedback_review.py  →  uv run python -m lawbot.feedback_review <피드백 폴더·파일>... [--out 검수.csv] [--keep 이전 검수.csv]
 # 피드백 JSONL(lawbot.feedback)을 모아 사람이 검수할 CSV를 만든다 (B6 저장 → 검수 → 내보내기의 두 번째 단계)
 # 1. 같은 turn_id는 마지막 줄만, 'cleared'(선택 해제)는 뺀다
-# 2. 평가 데이터(v4 test 2,075·oos·scope_controls·refusal_hard_cases·labor_eval_keywords)와 겹치는 질문을 뺀다:
+# 2. 평가 데이터(v4 test 2,075·val 1,110, 하위법령 질문 val 444·test 1,880, oos·scope_controls·refusal_hard_cases·
+#    labor_eval_keywords)와 겹치는 질문을 뺀다. val도 빼는 이유: 피드백으로 학습한 모델을 val로 조정·선택한다:
 #    공백·문장부호를 지운 완전 일치, difflib 유사도 0.9 이상. 뺀 건수와 id는 출력한다 (질문 원문은 출력하지 않음)
 # 3. 검수 CSV(엑셀·Numbers용 utf-8-sig) + 같은 이름의 .jsonl(내보내기가 읽는 전체 기록)을 쓴다. 둘 다 권한 600
 #    사람이 채울 열: h_ok(맞음/틀림/모름), h_gold(정답 조문 '법령명 제N조', 여러 개면 ;), h_scope(범위 안/범위 밖), h_note
@@ -17,6 +18,8 @@ import pandas as pd
 from lawbot.feedback import check_private
 from lawbot.paths import DATA, EVAL, V4_QA, V4_SPLIT
 
+DECREE_QA, DECREE_SPLIT = DATA / 'v4' / 'qa_decree_v4.csv', DATA / 'v4' / 'split_decree_v4.csv'   # 하위법령 질문 (build_decree_ctx)
+
 E = dict(encoding='utf-8-sig')
 THRESHOLD = 0.9
 HUMAN = ('h_ok', 'h_gold', 'h_scope', 'h_note')
@@ -28,8 +31,11 @@ def eval_sets():
     """(출처, id, 질문) 목록: 피드백에서 빼야 할 평가 문항"""
     qa, sp = pd.read_csv(V4_QA, **E), pd.read_csv(V4_SPLIT, **E)
     t = qa.merge(sp[['id', 'split_emb']], on='id', validate='one_to_one')
-    t = t[(t.split_emb == 'test') & t.eval_cat.isin(['A_lsa', 'B_newlaw'])]   # eval_v4.load_test('test')와 같은 2,075문항
-    out = [('v4_test', i, q) for i, q in zip(t['id'], t['question'])]
+    t = t[t.eval_cat.isin(['A_lsa', 'B_newlaw'])]       # eval_v4.load_test: test 2,075·val 1,110
+    out = [(f'v4_{s}', i, q) for s in ('test', 'val') for i, q in zip(*t.loc[t.split_emb == s, ['id', 'question']].T.values)]
+    qa, sp = pd.read_csv(DECREE_QA, **E), pd.read_csv(DECREE_SPLIT, **E)
+    t = qa.merge(sp[['id', 'split_emb']], on='id', validate='one_to_one')   # 하위법령 질문: τ를 고른 val 444, 평가용 test 1,880
+    out += [(f'decree_{s}', i, q) for s in ('val', 'test') for i, q in zip(*t.loc[t.split_emb == s, ['id', 'question']].T.values)]
     for name, path in (('oos', DATA / 'oos_eval.csv'), ('scope', DATA / 'scope_controls.csv'),
                        ('refusal_hard', DATA / 'refusal_hard_cases.csv'), ('labor_eval', EVAL)):
         d = pd.read_csv(path, **E)

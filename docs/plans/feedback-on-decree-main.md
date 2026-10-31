@@ -24,7 +24,18 @@ main에서는 첨부 모델(기본 Pro)의 `hits`가 법률 3개 + 시행령·�
 | 내보내기의 조문 본문 대조(`stale`)가 법률 CSV(`articles_v4.csv`)만 봐서 하위법령 hit를 모두 "바뀜"으로 셈. h_gold에 하위법령 조문을 쓸 수 없음 | 기본 조문 CSV를 `articles_v4.csv` + `law_articles_v4_decree.csv` 둘 다로 (`--articles`는 여러 개 받음) |
 
 프롬프트 재구성(`build_prompt_v4(hits, question)`)은 그대로 맞다: main의 `service.ask`도 하위법령을 포함한 `hits` 전체로 같은 함수를 부른다.
-검수의 평가 데이터 중복 제거 대상은 바꾸지 않는다 (v4 test 2,075 등). val 제외 여부는 사용자 결정 대기.
+### 2-1. 검수의 평가 데이터 중복 제거에 val 추가 (사용자 결정, 2026-11-01)
+
+피드백으로 학습한 모델을 val로 조정·선택하면 val이 학습 데이터에 섞이면 안 된다. 하위법령 첨부 규칙(τ=0.9)도 val로 골랐다.
+
+| 출처 이름 | 문항 | 기준 |
+|---|---|---|
+| `v4_test` (기존) | 2,075 | `split_v4.csv` split_emb=test, A_lsa·B_newlaw (`eval_v4.load_test('test')`) |
+| `v4_val` (추가) | 1,110 | 같은 기준의 split_emb=val (`eval_v4.load_test('val')`) |
+| `decree_val` (추가) | 444 | `qa_decree_v4.csv` + `split_decree_v4.csv` split_emb=val (τ를 고른 하위법령 질문) |
+| `decree_test` (추가) | 1,880 | 같은 파일 split_emb=test (하위법령 평가용으로 남긴 문항) |
+
+oos·scope_controls·refusal_hard_cases·labor_eval_keywords는 그대로.
 
 ## 3. 테스트 (먼저 작성)
 
@@ -32,6 +43,8 @@ main에서는 첨부 모델(기본 Pro)의 `hits`가 법률 3개 + 시행령·�
 
 - **T11** 첨부 모델(Pro) 턴: 저장된 `hits`가 `service.ask`의 hits와 같고(하위법령 `kind`·`parent_law`·`rerank_score` 포함), `decree == {'tau': 0.9, 'k': 2}`, `n_decree`가 hits 수와 맞고, `timing`에 `decree_rerank`가 있음. 같은 앱의 Fast 턴은 `decree is None`
 - **T12** 내보내기: 하위법령 hit가 있는 기록을 법률+하위법령 CSV로 내보내면 `stale` 경고 없음, SFT 프롬프트 = `build_prompt_v4(hits, 질문)`(하위법령 블록 포함), `h_gold`에 하위법령 조문을 쓰면 positive가 그 본문
+
+- **T13** 실제 평가 파일: `v4_val` 1,110, `decree_val` 444, `decree_test` 1,880. val 문항과 하위법령 문항이 완전 일치로 걸림
 
 ## 4. 바꾸지 않는 것
 

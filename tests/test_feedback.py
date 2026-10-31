@@ -293,6 +293,23 @@ def test_review_real_eval_sets():
     assert ov.match(test_q.question + ' ') == (f'v4_test:{test_q.id}', 'exact')
     assert sum(src == 'v4_test' for src, _, _ in feedback_review.eval_sets()) == 2075
 
+def test_review_excludes_val_and_decree_sets():
+    """T13: v4 val 1,110·하위법령 질문 val 444·test 1,880도 뺀다 (하위법령 train은 빼지 않음)"""
+    evals = feedback_review.eval_sets()
+    count = lambda s: sum(src == s for src, _, _ in evals)
+    assert (count('v4_val'), count('decree_val'), count('decree_test')) == (1110, 444, 1880)
+    ov = feedback_review.Overlap(evals)
+    from lawbot.eval_v4 import load_test
+    v = load_test('val').iloc[0]
+    assert ov.match(v.question) == (f'v4_val:{v.id}', 'exact')
+    qa = pd.read_csv(ROOT / 'data/v4/qa_decree_v4.csv', encoding='utf-8-sig').merge(
+        pd.read_csv(ROOT / 'data/v4/split_decree_v4.csv', encoding='utf-8-sig')[['id', 'split_emb']], on='id')
+    for split in ('val', 'test'):
+        q = qa[qa.split_emb == split].iloc[0]
+        assert ov.match(q.question)[0].startswith('decree_')
+    ids = {i for src, i, _ in evals if src.startswith('decree_')}
+    assert not ids & set(qa.loc[qa.split_emb == 'train', 'id'])
+
 # ---- 내보내기 ----
 def test_export(env, tmp_path):
     hits = [{'law': '근로기준법', 'article_id': '제27조', 'title': '해고사유 등의 서면통지', 'score': 0.9,
