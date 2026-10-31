@@ -40,3 +40,5 @@
 
 ## 5. 병합 뒤
 PR #26·#27을 병합하면 main이 6eda75b와 같은 내용이 된다. 운영 worktree는 그때 main 커밋(또는 태그)으로 다시 옮긴다 (코드 차이 없음, 재시작만).
+
+**정정 (2026-11-01, 병합 후)**: 위 가정은 틀렸다. main에는 #26 브랜치에 없던 #24(`citation.refused` 단서 문장 처리)가 먼저 들어가 있어, main(3e1f427)과 6eda75b는 `src/lawbot/citation.py`가 다르다. 운영 웹앱을 재시작해야 반영된다. 결과는 `docs/evals/2026-11-01-deploy-decree-prod.md` 7·8행.
