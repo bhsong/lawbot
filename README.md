@@ -125,6 +125,40 @@ v1:
 
 웹앱이 모델 서버에 접속하는 운영 구성으로 answers·oos·refusal을 다시 돌려 `lawbot.diff_answers`로 위 결과와 비교했습니다. 답변 522개가 글자 단위로 모두 같아(answers 200 · oos 122 · refusal 200) 위 정확도 수치를 그대로 씁니다. 질문당 완료 평균 14.9초, 첫 토큰 중앙값 2.78초, MLX 최대 메모리 20.4GB로 HTTP 왕복에 따른 지연은 보이지 않았습니다(`results/v4/*_pro_concise_rr_remote.csv`).
 
+*시행령·시행규칙 첨부 실험 (val, 웹앱 반영 전, 2026-10-29~31)*
+
+고시·시행령에 있는 내용(예: 평균임금 계산에서 빼는 기간, 융자 이자율)은 법률 조문만으로 답할 수 없어서, 7개 법률의 시행령·시행규칙 397개 조문을 더하는 실험을 했습니다. 812개를 한 번에 검색하면 법률 정답 Recall@3이 0.950 → 0.927로 떨어져, 법률 검색은 그대로 두고 하위법령을 따로 찾아 붙이는 방식(구성 B)을 골랐습니다.
+
+```
+법률 415개: 임베딩 상위 10개 → 리랭커 → 상위 3개 (지금과 같음)
+하위법령 397개: 임베딩 상위 10개 → 리랭커 → 필터 → 상위 2개 첨부
+  필터: 법률 1위와 같은 법의 하위법령은 그대로, 다른 법의 하위법령은 리랭커 점수 0.9 이상일 때만
+```
+
+필터 규칙은 저장된 리랭커 점수로 비교해 골랐습니다(`lawbot.decree_filter`). 하위법령 정답 val 444문항의 정답 포함률과, 법률 정답 val 1,110문항에 다른 법 하위법령이 붙는 비율을 함께 봤습니다.
+
+| 필터 (첨부 2개) | 하위법령 정답 포함 (fp16 / 맥 MLX 4비트) | 법률 질문에 붙은 다른 법 하위법령 비율 (fp16 / MLX) | 프롬프트 토큰 |
+| --- | --- | --- | --- |
+| 없음 | 0.928 / 0.923 | 0.238 / 0.236 | 1,406 |
+| 법률 1위와 같은 법만 | 0.824 / 0.820 | 0.031 / 0.044 | 1,366 |
+| **같은 법 + 다른 법은 점수 0.9 이상 (채택)** | **0.921 / 0.912** | **0.055 / 0.064** | **1,376** |
+
+답변은 Qwen3.8-27B(맥 미니, 참고 조문 고정)로 val 표본을 평가했습니다(`lawbot.eval_decree`, `results/v4/decree_answers_pro*.csv`).
+
+| 문항 (val 200) | 지표 | 법률만 | 같은 법만 | 채택 규칙 |
+| --- | --- | --- | --- | --- |
+| 하위법령이 정답인 질문 | 정답 하위법령 인용 | 0.000 | 0.820 | **0.900** |
+| | 참고 조문 밖 인용 | 0.010 | 0.005 | 0.000 |
+| | 완료 시간 (초) | 14.1 | 17.1 | 17.1 |
+| 법률이 정답인 질문 | 정답 인용 (검색 적중) | 0.947 | 0.947 | 0.947 |
+| | 거짓 거절 (검색 적중) | 0.048 | 0.043 | 0.043 |
+| | 종합 점수 (검색 적중) | 0.894 | 0.896 | 0.896 |
+
+- 법률 조문만 주면 하위법령 질문의 62%를 거절합니다. 하위법령을 붙이면 법률 질문 답변은 그대로이고, 하위법령 질문의 정답 인용이 0.900이 됩니다.
+- 구어체 질문은 같은 법 필터에서 0.647로 가장 낮았습니다. '체불'·'이자'처럼 법령명 없는 질문에서 법률 리랭커 1위가 근로기준법으로 쏠렸기 때문입니다. 채택 규칙에서는 0.765입니다.
+- 임베딩은 다시 학습하지 않았습니다(하위법령 397개 중 상위 10개에 정답 0.964).
+- 아직 웹앱에는 넣지 않았습니다. 웹앱 반영 뒤 `lawbot-eval-v4`로 실제 경로를 다시 잽니다.
+
 **v1 (근로기준법 130조문 · Qwen3-4B LoRA)**
 
 모든 수치는 학습·검증에 사용하지 않은 테스트 650문항 기준입니다(별도 표기 제외). 측정일은 2026-10-16부터 10-18까지입니다.
@@ -463,6 +497,22 @@ uv run lawbot-eval-v4 summary --tag pro_concise_rr   # 결과 파일로 지표 �
 - 2026.4.7 근로기준법 개정으로 임금체불 벌칙이 제109조(3년·3천만원)에서 제107조(5년·5천만원)로 옮겨졌습니다. v4 정답은 개정 후 기준이고, 키워드가 개정 전 형량인 2문항(Q2443·Q2453)만 평가 때 개정 후 형량으로 바꿉니다(`eval_v4.KEYWORD_FIX`, 평가 파일은 그대로).
 - 범위 밖 질문 중 남녀고용평등법·최저임금법·퇴직급여법·기간제법·임금채권보장법·파견법이 출처인 27문항은 이제 범위 안이므로 거절하면 오답, 그 법을 인용하면 정답으로 봅니다. 나머지 75문항만 거절률을 잽니다.
 
+**시행령·시행규칙 첨부 실험 (val)**
+
+Colab에서 저장한 리랭커 점수와 후보(`data/decree_exp/`)로 필터 규칙을 비교하고, 고정한 참고 조문으로 답변을 평가합니다. test 문항(`split_v4.csv`·`split_decree_v4.csv`)은 쓰지 않습니다.
+
+```zsh
+uv run python -m lawbot.decree_filter                 # 필터 규칙 비교 (CPU, 수 초) → data/decree_exp/filter_rules.csv
+uv run python -m lawbot.mlx_decree_scores             # 같은 후보를 맥 MLX 4비트 리랭커로 다시 채점 (약 1.5시간, 이어서 실행)
+uv run python -m lawbot.decree_filter --scores mlx    # MLX 점수로 같은 비교 + fp16과 일치율
+uv run python -m lawbot.build_decree_ctx              # 답변 평가용 참고 조문 고정 → data/v4/decree_ctx_*.csv
+uv run python -m lawbot.eval_decree --ctx data/v4/decree_ctx_val200_rules.csv --tag pro --keys <answer_key_v4.csv>
+uv run python -m lawbot.eval_decree --ctx data/v4/decree_ctx_dq_val200.csv --tag pro_dq
+```
+
+- `eval_decree`는 답변 모델만 올립니다. `.env`에 `LAWBOT_MODEL_SERVER`가 있으면 그 서버로 생성하므로, 모델 서버를 내린 상태에서는 `LAWBOT_MODEL_SERVER= uv run …`으로 로컬 모드로 실행합니다.
+- 같은 참고 조문이면 저장된 답을 다시 씁니다(탐욕 디코딩). 결과 파일에 이어 쓰며 열 순서를 기존 파일에 맞춥니다.
+
 아래는 이전 v1(근로기준법 130조문, 4B) 평가 스크립트입니다. README 성능 수치와 `results/`의 기준선이 이 결과입니다.
 
 ```bash
@@ -532,6 +582,10 @@ src/lawbot/
 ├── log_summary.py     # 요청 로그(logs/requests.jsonl) 요약
 ├── eval_v4.py         # v4 웹앱 구성 평가 (lawbot-eval-v4)
 ├── diff_answers.py    # 두 평가 결과의 답변 원문 글자 단위 비교
+├── decree_filter.py   # 하위법령 첨부 필터 규칙 비교 (저장된 리랭커 점수, CPU)
+├── mlx_decree_scores.py # 하위법령 실험 후보를 맥 MLX 4비트 리랭커로 다시 채점
+├── build_decree_ctx.py  # 하위법령 답변 평가용 참고 조문 고정
+├── eval_decree.py     # 하위법령 첨부 답변 평가 (참고 조문 고정, 답변 모델만)
 ├── eval_dev.py        # 검색·답변 평가
 ├── score_answers.py   # 키워드 기반 채점기
 ├── refusal.py         # 거절 판정 (【결론】에 '확인할 수 없'), 범위 밖 답변 판정 (거절·안내·억지적용·미인용)
@@ -548,7 +602,8 @@ deploy/launchd/        # 상시 운영용 launchd 템플릿 (모델 서버·웹�
 ### 데이터와 평가 방법
 
 - **조문**: 근로기준법 현행 130개 조문. 삭제 조문 2개는 제외했고, 기준일은 2026-10-01입니다.
-- **v4 조문**: 근로기준법 등 7개 법률의 비삭제 415개 조문(`data/v4/articles_v4.csv`). [Legalize KR](https://github.com/legalize-kr/legalize-kr)에서 2026-10-20에 수집했고, 버전·기준일·sha256은 `data/v4/manifest.json`에 있습니다. 시행령·시행규칙을 더한 실험용 812조문(`data/v4/law_articles_v4_decree.csv`)은 아직 웹앱에 쓰지 않습니다.
+- **v4 조문**: 근로기준법 등 7개 법률의 비삭제 415개 조문(`data/v4/articles_v4.csv`). [Legalize KR](https://github.com/legalize-kr/legalize-kr)에서 2026-10-20에 수집했고, 버전·기준일·sha256은 `data/v4/manifest.json`에 있습니다. 시행령·시행규칙 397개를 더한 812조문(`data/v4/law_articles_v4_decree.csv`, 열 `kind`·`parent_law`·`parent_ids`·`child_ids`)은 실험에만 쓰고 아직 웹앱에는 쓰지 않습니다.
+- **하위법령 질문**: 시행령·시행규칙이 정답인 4,096문항(`data/decree_exp/qa_decree_v4.csv`, 분할 `split_decree_v4.csv`: 임베딩 기준 train 1,772 / val 444 / test 1,880, 시드 42). `data/decree_exp/`에는 Colab 실험의 후보·리랭커 점수(fp16)와 맥 MLX 점수, 규칙 비교 결과가 함께 있습니다.
 - **질문**: 총 2,602개(130조문 × 질문 유형 5종 × 약 4개)입니다.
   - 질문 유형: 구어체, 사용자(사업주) 관점, 간접 질문, 키워드, 상황 설명
   - 테스트: 650개(조문 × 유형마다 1개)
@@ -560,7 +615,7 @@ deploy/launchd/        # 상시 운영용 launchd 템플릿 (모델 서버·웹�
   - 답변은 거절, 안내(`refer_lsa`에 적힌, 다른 법에 맡기는 조문만 인용), 억지적용(그 밖의 근로기준법 조문으로 답함), 미인용(거절 문구도 인용도 없음)으로 판정합니다. `near_lsa`는 README 수치의 기준이고, `near_lsa_v2`는 누락을 보완한 표시입니다.
 - **범위 안 대조군**: 다른 노동법 질문과 닮았지만 근로기준법으로 답해야 하는 테스트 문항 20개입니다(`data/scope_controls.csv`, `twin_oos`에 짝 문항). 범위 밖 거절을 늘리는 개선이 이 문항들까지 거절하게 만들지 않는지 확인합니다.
 - **근거 없는 주장 사례**: `refusal_v1_4bit.csv`에서 거절하지 않은 86건을 억지적용 77, 지어냄 4, 근거밖_정답 2, 결론타당 3으로 분류했습니다(`data/refusal_hard_cases.csv`). 억지적용·지어냄 81건은 `eval_refusal --hard`로 다시 평가합니다.
-- **평가 데이터 사용 제한**: `data/labor_eval_keywords.csv`, `data/oos_eval.csv`, `data/scope_controls.csv`, `data/refusal_hard_cases.csv`와 `data/v4/split_v4.csv`의 test 문항은 평가 전용입니다. 모델 학습이나 설정 선택에 쓰지 마세요.
+- **평가 데이터 사용 제한**: `data/labor_eval_keywords.csv`, `data/oos_eval.csv`, `data/scope_controls.csv`, `data/refusal_hard_cases.csv`와 `data/v4/split_v4.csv`·`data/decree_exp/split_decree_v4.csv`의 test 문항은 평가 전용입니다. 모델 학습이나 설정 선택에 쓰지 마세요.
 - **`results/` 안내**: 채점 전 모델 원본 출력과 문항별 점수이며, 점수가 낮은 답변은 법적으로 틀린 내용을 포함합니다.
 
 ### 실패한 실험
@@ -576,7 +631,9 @@ deploy/launchd/        # 상시 운영용 launchd 템플릿 (모델 서버·웹�
 - **검색 실패**: 상위 3개에 정답 조문이 없는 경우가 약 6%이고, 이 경우 답변 품질이 크게 떨어집니다.
 - **위치 편향**: 정답 조문이 두 번째·세 번째로 주어질 때 인용 정확도가 0.68·0.50으로 낮습니다. 첫 번째일 때는 0.975입니다.
 - **범위**: 근로기준법만 다룹니다. 범위 밖 질문 거절률은 0.707(bf16)이고, 특히 근로기준법에 비슷한 조문이 있는 다른 노동법 질문(예: 퇴직금 계산, 산재 휴업급여)에 비슷한 조문으로 답하는 경우가 남아 있습니다.
+- **시행령·시행규칙**: 첨부 방식과 필터는 val로 정했지만(위 "시행령·시행규칙 첨부 실험") 아직 웹앱에 넣지 않았습니다. 별표·서식·고시(최저임금액 등)는 들어 있지 않습니다.
 - **향후 계획**:
+  - 시행령·시행규칙 웹앱 반영
   - LLM 기반 평가
   - FastAPI 백엔드 분리
   - 계산기 도구 호출
@@ -678,6 +735,37 @@ The 27 questions whose source is one of the seven laws are now in scope, so the 
 Speed and memory (200 answers): embedding search 0.03 s, reranking 1.95 s (p95 3.1 s), first token 2.8 s (median, from generation start), 15.1 s per question end to end (p95 20.9 s), 9.7 tokens/s, 165 characters (96 tokens) per answer, MLX peak memory 20.4GB (27B + reranker).
 
 Rechecked in the production setup (remote mode, 2026-10-29): the web app talking to the model server reran answers, out-of-scope and refusal, and `lawbot.diff_answers` found all 522 answers identical character for character (200 · 122 · 200), so the accuracy numbers above stand. End-to-end time averaged 14.9 s, first token 2.78 s (median) and MLX peak memory 20.4GB, with no visible HTTP overhead (`results/v4/*_pro_concise_rr_remote.csv`).
+
+*Enforcement decrees and rules (validation, not yet in the web app, 2026-10-29 to 31)*
+
+Some answers live in enforcement decrees and rules rather than the Acts (e.g. periods excluded from average wages, loan interest rates), so the 397 decree and rule articles of the seven laws were added as an experiment. Searching all 812 articles together lowered Act Recall@3 from 0.950 to 0.927, so Act retrieval stays as it is and decree articles are retrieved separately and attached (setup B):
+
+```
+415 Act articles: embedding top 10 → reranker → top 3 (unchanged)
+397 decree/rule articles: embedding top 10 → reranker → filter → attach top 2
+  filter: keep decrees of the same law as the top Act article; decrees of other laws only with reranker score ≥ 0.9
+```
+
+The filter was chosen from saved reranker scores (`lawbot.decree_filter`), weighing the gold-decree hit rate on 444 decree-answer validation questions against how often decrees of another law get attached to the 1,110 Act-answer validation questions.
+
+| Filter (attach 2) | Gold decree attached (fp16 / Mac MLX 4-bit) | Other-law decrees on Act questions (fp16 / MLX) | Prompt tokens |
+| --- | --- | --- | --- |
+| None | 0.928 / 0.923 | 0.238 / 0.236 | 1,406 |
+| Same law as the top Act article only | 0.824 / 0.820 | 0.031 / 0.044 | 1,366 |
+| **Same law + other laws at score ≥ 0.9 (chosen)** | **0.921 / 0.912** | **0.055 / 0.064** | **1,376** |
+
+Answers were evaluated with Qwen3.8-27B on the Mac mini with fixed contexts (`lawbot.eval_decree`, `results/v4/decree_answers_pro*.csv`):
+
+| Questions (val 200) | Metric | Acts only | Same law only | Chosen rule |
+| --- | --- | --- | --- | --- |
+| Decree is the answer | Gold decree cited | 0.000 | 0.820 | **0.900** |
+| | Citations outside the context | 0.010 | 0.005 | 0.000 |
+| | Time to completion (s) | 14.1 | 17.1 | 17.1 |
+| Act is the answer | Gold cited (retrieval hit) | 0.947 | 0.947 | 0.947 |
+| | False refusal (retrieval hit) | 0.048 | 0.043 | 0.043 |
+| | Total score (retrieval hit) | 0.894 | 0.896 | 0.896 |
+
+With Act articles only, the model refuses 62% of decree questions. Attaching decrees leaves Act answers unchanged and brings gold-decree citation to 0.900. Colloquial questions were lowest under the same-law filter (0.647) because the Act reranker leaned toward the Labor Standards Act on questions without a law name; the chosen rule reaches 0.765. The embedding model was not retrained (gold decree in the top 10 of 397: 0.964). The web app does not use this yet; the full pipeline will be re-measured with `lawbot-eval-v4` after integration.
 
 **v1 (130 Labor Standards Act articles · Qwen3-4B LoRA)**
 
@@ -963,6 +1051,19 @@ uv run lawbot-eval-v4 summary --tag pro_concise_rr
 
 Citations count only with the right law name; abbreviations (`퇴직급여법`, `고평법`, …) are accepted, and `근로기준법 시행령 제5조` (Enforcement Decree) is a different article from the Act's Art. 5. Citation parsing, refusal detection and per-citation checks (`ok` / `outside` / `wrong_law` / `nonexistent` / `ambiguous`) live in `lawbot.citation`, shared with the web view. `summary` rescores saved answers only, so files stay unchanged when the rules do. `uv run python -m lawbot.diff_answers <base.csv> <new.csv>` checks that two runs produced the same answers (exit code 0 when identical). The 2026-04-07 amendment moved the wage-arrears penalty from Art. 109 (3 years / 30M won) to Art. 107 (5 years / 50M won); the v4 gold labels follow the amended law, and the two keyword rows that still expected the old penalty (Q2443, Q2453) are updated at scoring time (`eval_v4.KEYWORD_FIX`; the data file is unchanged).
 
+Enforcement-decree experiment (validation only; test questions in `split_v4.csv` and `split_decree_v4.csv` are not used):
+
+```zsh
+uv run python -m lawbot.decree_filter                 # compare filter rules from saved scores (CPU) → data/decree_exp/filter_rules.csv
+uv run python -m lawbot.mlx_decree_scores             # rescore the same candidates with the Mac MLX 4-bit reranker (~1.5 h, resumable)
+uv run python -m lawbot.decree_filter --scores mlx    # same comparison on MLX scores + agreement with fp16
+uv run python -m lawbot.build_decree_ctx              # fix contexts for answer evaluation → data/v4/decree_ctx_*.csv
+uv run python -m lawbot.eval_decree --ctx data/v4/decree_ctx_val200_rules.csv --tag pro --keys <answer_key_v4.csv>
+uv run python -m lawbot.eval_decree --ctx data/v4/decree_ctx_dq_val200.csv --tag pro_dq
+```
+
+`eval_decree` loads only the answer model. If `.env` sets `LAWBOT_MODEL_SERVER`, it generates through that server; with the server stopped, run `LAWBOT_MODEL_SERVER= uv run …` for local mode. Identical contexts reuse saved answers (greedy decoding), and appended rows follow the existing file's column order.
+
 The previous v1 evaluation scripts (130 articles, 4B), which produced the README numbers and the baselines in `results/`:
 
 ```bash
@@ -1012,6 +1113,10 @@ src/lawbot/
 ├── log_summary.py     # summary of the request log (logs/requests.jsonl)
 ├── eval_v4.py         # v4 web app evaluation (lawbot-eval-v4)
 ├── diff_answers.py    # character-level comparison of answers from two evaluation runs
+├── decree_filter.py   # compare decree-attachment filter rules (saved reranker scores, CPU)
+├── mlx_decree_scores.py # rescore decree-experiment candidates with the Mac MLX 4-bit reranker
+├── build_decree_ctx.py  # fix contexts for the decree answer evaluation
+├── eval_decree.py     # answer evaluation with decrees attached (fixed contexts, answer model only)
 ├── eval_dev.py        # retrieval and answer evaluation
 ├── score_answers.py   # keyword-based answer scorer
 ├── refusal.py         # refusal detection ('확인할 수 없' in the conclusion), out-of-scope verdicts (refusal, referral, forced, uncited)
@@ -1028,7 +1133,8 @@ deploy/launchd/        # launchd templates for the always-on setup (model server
 ### Data and evaluation
 
 - **Articles**: The 130 current articles of the Labor Standards Act. Two repealed articles are excluded. The text is as of 2026-10-01.
-- **v4 articles**: 415 current articles from seven labor laws (`data/v4/articles_v4.csv`), collected from [Legalize KR](https://github.com/legalize-kr/legalize-kr) on 2026-10-20; version, dates and SHA-256 are in `data/v4/manifest.json`. The experimental 812-article set with enforcement decrees and rules (`data/v4/law_articles_v4_decree.csv`) is not used by the web app yet.
+- **v4 articles**: 415 current articles from seven labor laws (`data/v4/articles_v4.csv`), collected from [Legalize KR](https://github.com/legalize-kr/legalize-kr) on 2026-10-20; version, dates and SHA-256 are in `data/v4/manifest.json`. The 812-article set that adds 397 enforcement-decree and rule articles (`data/v4/law_articles_v4_decree.csv`, columns `kind`, `parent_law`, `parent_ids`, `child_ids`) is used only in experiments, not by the web app yet.
+- **Decree questions**: 4,096 questions answered by a decree or rule article (`data/decree_exp/qa_decree_v4.csv`; split `split_decree_v4.csv`: embedding train 1,772 / val 444 / test 1,880, seed 42). `data/decree_exp/` also holds the Colab candidates and fp16 reranker scores, the Mac MLX scores and the rule comparison.
 - **Questions**: 2,602 in total (130 articles × 5 question types × about 4 each).
   - Question types: colloquial, employer perspective, indirect, keyword, situational
   - Test: 650 questions (one per article and type)
@@ -1040,7 +1146,7 @@ deploy/launchd/        # launchd templates for the always-on setup (model server
   - Answers are classified as refusal, referral (cites only an article in `refer_lsa` that delegates to another law), forced (answers with any other Labor Standards Act article), or uncited (neither a refusal phrase nor a citation). `near_lsa` is the basis of the README numbers; `near_lsa_v2` fills in missing labels.
 - **In-scope controls**: 20 test questions that resemble other-labor-law questions but must be answered under the Labor Standards Act (`data/scope_controls.csv`, paired via `twin_oos`). They check that raising out-of-scope refusal does not make the model refuse these too.
 - **Unsupported-claim cases**: The 86 non-refusals in `refusal_v1_4bit.csv` are labeled forced 77, fabricated 4, correct-but-unsupported 2 and reasonable 3 (`data/refusal_hard_cases.csv`). The 81 forced and fabricated cases are re-evaluated with `eval_refusal --hard`.
-- **Evaluation-only data**: `data/labor_eval_keywords.csv`, `data/oos_eval.csv`, `data/scope_controls.csv`, `data/refusal_hard_cases.csv` and the test questions in `data/v4/split_v4.csv` are for evaluation only. Do not use them for training or model selection.
+- **Evaluation-only data**: `data/labor_eval_keywords.csv`, `data/oos_eval.csv`, `data/scope_controls.csv`, `data/refusal_hard_cases.csv` and the test questions in `data/v4/split_v4.csv` and `data/decree_exp/split_decree_v4.csv` are for evaluation only. Do not use them for training or model selection.
 - **About `results/`**: These are raw model outputs with per-question scores. Low-scoring answers contain legally incorrect statements.
 
 ### Failed experiments
@@ -1056,7 +1162,9 @@ deploy/launchd/        # launchd templates for the always-on setup (model server
 - **Retrieval misses**: For about 6% of questions, the gold article is not in the top 3, and answer quality drops sharply on those.
 - **Position bias**: When the gold article is given second or third, citation accuracy falls to 0.68 and 0.50 respectively, against 0.975 when it is first.
 - **Scope**: Only the Labor Standards Act is covered. The out-of-scope refusal rate is 0.707 (bf16). Questions under other labor laws that resemble a Labor Standards Act article (e.g. severance pay calculation, industrial-accident leave benefits) are still often answered with the similar article.
+- **Enforcement decrees**: The attachment setup and filter were chosen on validation data (see "Enforcement decrees and rules" above) but are not in the web app yet. Appendices, forms and notices (such as the minimum wage amount) are not included.
 - **Planned work**:
+  - Enforcement decrees in the web app
   - LLM-as-judge evaluation
   - FastAPI backend
   - Calculator tool calling
