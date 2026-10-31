@@ -32,7 +32,8 @@ v4 (현재 기본, `.env.example`):
 질문
  └─ 검색: 튜닝 임베딩 (Qwen3-Embedding-0.6B, fp16, MPS) → 415개 조문 중 상위 10개
      └─ 리랭커: Qwen3-Reranker-4B (튜닝 없음, MLX 4비트) → 상위 3개
-         └─ 답변: Qwen3.8-27B (튜닝 없음, MLX 4비트, 간결형) / 소형 맥은 Qwen3-4B + v4 LoRA
+         ├─ (Pro만) 시행령·시행규칙 397개 중 임베딩 상위 10개 → 같은 리랭커 → 필터 → 최대 2개를 법률 3개 뒤에 첨부
+         └─ 답변: Qwen3.8-27B (튜닝 없음, MLX 4비트, 간결형) / 소형 맥은 Qwen3-4B + v4 LoRA (법률 3개만)
              └─ 답변 + 근거 조문 표시 (Gradio)
 ```
 
@@ -157,7 +158,7 @@ v1:
 - 법률 조문만 주면 하위법령 질문의 62%를 거절합니다. 하위법령을 붙이면 법률 질문 답변은 그대로이고, 하위법령 질문의 정답 인용이 0.900이 됩니다.
 - 구어체 질문은 같은 법 필터에서 0.647로 가장 낮았습니다. '체불'·'이자'처럼 법령명 없는 질문에서 법률 리랭커 1위가 근로기준법으로 쏠렸기 때문입니다. 채택 규칙에서는 0.765입니다.
 - 임베딩은 다시 학습하지 않았습니다(하위법령 397개 중 상위 10개에 정답 0.964).
-- 아직 웹앱에는 넣지 않았습니다. 웹앱 반영 뒤 `lawbot-eval-v4`로 실제 경로를 다시 잽니다.
+- 이 방식과 규칙을 그대로 웹앱에 넣었습니다(아래 "시행령·시행규칙 첨부"). 위 수치는 참고 조문을 고정한 실험 값이고, 웹앱 경로(MLX 4비트 리랭커 점수로 고른 첨부)로 `lawbot-eval-v4 --split val`을 다시 잰 값은 맥 미니 수동 검증 뒤 이 절에 더합니다. MLX 점수는 fp16과 첨부 집합이 일부 문항에서 달라 정확히 같지는 않습니다.
 
 **v1 (근로기준법 130조문 · Qwen3-4B LoRA)**
 
@@ -337,6 +338,11 @@ LAWBOT_PROFILE=v1 LAWBOT_MODELS= LAWBOT_RERANKER_ENABLED=0 uv run lawbot-app
 | `LAWBOT_RERANKER_ENABLED` | 아니요 | `1`이면 임베딩 상위 후보를 Qwen3-Reranker-4B로 다시 정렬해 상위 3개를 씀 (기본 `0`: 리랭커를 올리지 않고 기존 임베딩 상위 3개). v4 프로필 전용 |
 | `LAWBOT_RERANKER_MODEL_PATH` | 아니요 | 리랭커 MLX 폴더 (기본 `models/v4/reranker_4b_mlx_4bit`) |
 | `LAWBOT_RERANKER_CANDIDATES` | 아니요 | 리랭커에 넘길 임베딩 후보 수 (기본 `10`, 실험값. 3 이상) |
+| `LAWBOT_DECREE_ENABLED` | 아니요 | `1`이면 시행령·시행규칙을 따로 찾아 법률 3개 뒤에 붙임 (기본 `0`: 법률 3개만). 리랭커 필요, v4 프로필 전용 |
+| `LAWBOT_DECREE_TAU` | 아니요 | 법률 1위와 다른 법의 하위법령이 붙을 리랭커 점수 (기본 `0.9`, val로 고른 값) |
+| `LAWBOT_DECREE_K` | 아니요 | 붙일 하위법령 최대 수 (기본 `2`) |
+| `LAWBOT_DECREE_MODELS` | 아니요 | 하위법령을 붙일 답변 모델 key (기본 `pro`. Fast는 참고 조문 3개로 학습했고 첨부를 평가하지 않음) |
+| `LAWBOT_V4_DECREE_ARTICLES` | 아니요 | 하위법령을 켰을 때 쓰는 812조문 CSV (기본 `data/v4/law_articles_v4_decree.csv`). 켜면 `LAWBOT_V4_ARTICLES` 대신 이 파일 |
 | `LLM_PATH` | 아니요 | 평가 스크립트(`eval_oos`·`eval_refusal`)가 쓸 sLLM 폴더 (예: `models/sllm_mlx_8bit`). 웹앱은 쓰지 않음 |
 | `LAWBOT_PORT` | 아니요 | 웹앱 포트 (1024–65535). 없으면 기존 기본값. 운영·개발을 함께 띄울 때는 서로 다른 값 |
 | `LAWBOT_INSTANCE` | 아니요 | 화면·탭 제목에 붙일 이름 (예: `운영`, `개발`, 40자 이하) |
@@ -361,6 +367,24 @@ LAWBOT_RERANKER_ENABLED=0 uv run lawbot-app    # 한 번만 끄고 실행
 ```
 
 리랭커 오류(점수가 NaN 등)는 임베딩 순위로 몰래 되돌리지 않고 화면에 오류로 표시합니다. 폴더가 없거나 v1 프로필에서 켜면 모델을 올리기 전에 실행을 거부합니다. 화면의 조문 카드에는 리랭커 점수와 원래 임베딩 순위가, 측정 줄에는 리랭킹 시간이 나오고, 터미널에는 질문마다 검색·리랭킹·첫 토큰·완료 시간이 한 줄씩 남습니다.
+
+**시행령·시행규칙 첨부 (선택, v4)**
+
+켜면(`LAWBOT_DECREE_ENABLED=1`, `.env.example`은 켜짐) 법률 검색은 그대로 두고 하위법령 397개를 따로 찾아 붙입니다.
+
+```
+법률 415개: 임베딩 상위 10개 → 리랭커 → 상위 3개 (꺼짐과 같은 순위·점수·프롬프트)
+하위법령 397개: 임베딩 상위 10개 → 같은 리랭커 → 필터 → 최대 2개 첨부 ([4]·[5])
+  필터: 법률 1위와 같은 법의 하위법령은 그대로, 다른 법은 리랭커 점수 ≥ 0.9일 때만 (lawbot.decree)
+```
+
+- 통과한 하위법령이 없으면 붙이지 않고, 프롬프트는 꺼짐과 글자 단위로 같습니다. 참고 조문 형식은 법률과 같은 `[n] 법령명 제N조(제목)`입니다(예: `[4] 근로기준법 시행령 제2조(…)`).
+- 첨부는 `LAWBOT_DECREE_MODELS`의 모델만(기본 Pro) 받습니다. Fast는 하위법령을 찾지도 않으므로 지금과 같습니다.
+- 법률 415개는 지금과 같은 호출(max_seq 2,304)로 따로 인코딩하고, 하위법령은 3,072토큰으로 따로 인코딩합니다(최장 3,017토큰). `uv run python -m lawbot.verify_decree_emb`가 법률 임베딩이 비트 단위로 같은지와 인코딩 시간을 확인합니다.
+- 리랭커가 꺼져 있거나 v1 프로필이면 모델을 올리기 전에 실행을 거부합니다. 하위법령 리랭킹 오류도 법률과 같이 화면에 오류로 표시합니다(되돌리지 않음).
+- 화면: 하위법령 카드는 `〔시행령〕`·`〔시행규칙〕` 표시와 함께 법률 카드 뒤에 놓이고, 인용한 조문은 펼치고 나머지는 접습니다. 간결형 근거 줄·경고는 법률과 같은 규칙입니다. 측정 줄에 하위법령 시간과 첨부 수, 요청 로그에 `decree_search_ms`·`decree_rerank_ms`·`decree`·`n_decree`가 남습니다.
+- 원격 모드: 웹앱의 켜짐·τ·k가 모델 서버 `/info`의 `decree`와 다르면 시작을 거부합니다(첨부할 모델은 웹앱이 정함). 모델 서버 API는 2입니다.
+- 812조문 매니페스트는 `data/v4/manifest_decree.json`(데이터 `v4-decree`)입니다. 기존 `data/v4/manifest.json`은 415조문 그대로입니다.
 
 Colab 실험(transformers fp16)과의 순위 일치는 같은 질문·임베딩 Top 10으로 따로 대조합니다. 실험 폴더(Drive `labor_law/v4`)를 내려받아 지정합니다. 기본은 val이며, test는 기록된 수치와 대조할 때만 쓰고 설정 조정에 쓰지 않습니다.
 
@@ -451,6 +475,7 @@ LAWBOT_RERANKER_ENABLED=0 uv run python -m lawbot.bench_models --tag m32_v4     
 - `uv run python -m lawbot.check_deploy`가 같은 검사를 OK/FAIL로 보여 줍니다. 시행일이 수집일보다 늦은 조문은 WARN입니다.
 - 모델 서버 `/info`가 `dataset`(버전·기준일·sha256)을 보내고, 원격 모드 웹앱은 자기 레포의 매니페스트와 다르면 경고합니다(시작은 막지 않음).
 - 조문 CSV를 바꾸면 매니페스트도 새 데이터 버전으로 함께 바꾸고, 모델 서버와 웹앱을 모두 재시작합니다.
+- 한 폴더에 조문 CSV가 여럿이면 `manifest_<이름>.json`을 더 둡니다. `articles_file`이 그 CSV인 매니페스트를 고릅니다(812조문: `data/v4/manifest_decree.json`).
 
 **요청 로그와 오류 안내**
 
@@ -487,11 +512,15 @@ uv run lawbot-eval-v4 answers               # 고정 시드 표본 200 (A_lsa·B
 uv run lawbot-eval-v4 oos                   # 범위 밖 102 (7개 법률 출처 27문항은 범위 안으로 재분류) + 대조군 20
 uv run lawbot-eval-v4 refusal               # 표본 중 100문항에 다른 법률 조문 / 비슷한 조문만 줄 때 거절률
 uv run lawbot-eval-v4 summary --tag pro_concise_rr   # 결과 파일로 지표 표만 다시 → results/v4/summary_<tag>.csv
+uv run lawbot-eval-v4 --split val            # 하위법령 첨부 구성이면 retrieval·answers·refusal + decree (tag 끝 _dec_val)
+uv run lawbot-eval-v4 decree --split val     # 하위법령 정답 val 444 첨부 포함률 + 표본 200 답변 (val만)
 ```
 
 - tag 기본값은 `<모델>_<형식>_<rr|emb>`입니다(예: `pro_concise_rr`). `--fmt full`이면 4항목 system으로 생성합니다.
+- 하위법령 첨부 구성(그 모델이 `LAWBOT_DECREE_MODELS`에 있음)이면 tag에 `_dec`가 붙습니다(예: `pro_concise_rr_dec_val`). retrieval에 법률 질문에 붙은 하위법령(첨부 수, 첨부 중 다른 법 비율), answers에 `decrees` 열이 더해집니다. 열이 다른 기존 결과 파일에는 이어 쓰지 않고 멈춥니다. refusal의 정답 없는 참고 조문은 하위법령을 켜도 법률 415개에서 고릅니다(기준선과 같은 표본).
+- `decree` 단계: ① `data/decree_exp/qa_decree_v4.csv`·`split_decree_v4.csv`의 val 444에서 정답 하위법령이 후보 10개·첨부에 들었는지(`dqretrieval_<tag>.csv`) ② `data/v4/decree_ctx_dq_val200.csv`의 id 200개를 웹앱 경로로 답하고 정답 하위법령 인용·거짓 거절·참고 조문 밖 인용을 채점(`dqanswers_<tag>.csv`). summary·compare에 '하위법령 검색'·'하위법령 답변' 절이 생깁니다.
 - 인용은 법령명까지 맞아야 정답입니다(`근로기준법 제26조`와 `최저임금법 제26조`를 구분). 법령명 없이 이어 쓴 번호(`근로기준법 제26조, 제27조`)는 앞 법령으로 봅니다. 줄임말(`퇴직급여법`, `고평법` 등)도 인정하고, `근로기준법 시행령 제5조`는 법률 조문과 다른 조문으로 봅니다.
-- 인용·거절 판정은 웹앱 화면과 같은 `lawbot.citation` 하나를 씁니다. `citation.check`는 인용마다 `ok`(검색 결과 안) / `outside`(존재하지만 검색 결과 밖) / `wrong_law`(같은 번호, 다른 법령) / `nonexistent`(415조문에 없음) / `ambiguous`(법령명 없이 번호가 겹침)를 돌려줍니다.
+- 인용·거절 판정은 웹앱 화면과 같은 `lawbot.citation` 하나를 씁니다. `citation.check`는 인용마다 `ok`(검색 결과 안) / `outside`(존재하지만 검색 결과 밖) / `wrong_law`(같은 번호, 다른 법령) / `nonexistent`(전체 조문에 없음: 하위법령을 끄면 415조문, 켜면 812조문 기준) / `ambiguous`(법령명 없이 번호가 겹침)를 돌려줍니다.
 - `summary`는 저장된 답변 원문으로 채점 열만 다시 계산합니다. 채점 규칙이 같으면 결과 파일은 바뀌지 않습니다.
 - 두 실행의 답변 원문이 같은지는 `uv run python -m lawbot.diff_answers <기준.csv> <비교.csv>`로 봅니다(id로 맞춰 글자 단위 비교, 다르면 첫 차이 위치 출력, 모두 같으면 종료 코드 0).
 - 2026.4.7 근로기준법 개정으로 임금체불 벌칙이 제109조(3년·3천만원)에서 제107조(5년·5천만원)로 옮겨졌습니다. v4 정답은 개정 후 기준이고, 키워드가 개정 전 형량인 2문항(Q2443·Q2453)만 평가 때 개정 후 형량으로 바꿉니다(`eval_v4.KEYWORD_FIX`, 평가 파일은 그대로).
@@ -569,7 +598,8 @@ uv run python -m lawbot.report --tag v3_4bit --retrieval retrieval_emb_final_v3_
 ```
 src/lawbot/
 ├── paths.py           # 데이터·모델 경로
-├── retriever.py       # 임베딩 검색
+├── retriever.py       # 임베딩 검색 (법률, 켜면 하위법령 인덱스 따로)
+├── decree.py          # 시행령·시행규칙 첨부 필터 (same1+other0.9, 웹앱·평가 공통)
 ├── llm.py             # 프롬프트 구성, MLX 생성
 ├── service.py         # UI와 무관한 질의응답 흐름 (모델 로딩, 검색 → 답변 스트리밍)
 ├── app.py             # Gradio 웹앱
@@ -586,6 +616,7 @@ src/lawbot/
 ├── mlx_decree_scores.py # 하위법령 실험 후보를 맥 MLX 4비트 리랭커로 다시 채점
 ├── build_decree_ctx.py  # 하위법령 답변 평가용 참고 조문 고정
 ├── eval_decree.py     # 하위법령 첨부 답변 평가 (참고 조문 고정, 답변 모델만)
+├── verify_decree_emb.py # 하위법령을 켜도 법률 임베딩이 같은지 확인 (맥, 임베딩만)
 ├── eval_dev.py        # 검색·답변 평가
 ├── score_answers.py   # 키워드 기반 채점기
 ├── refusal.py         # 거절 판정 (【결론】에 '확인할 수 없'), 범위 밖 답변 판정 (거절·안내·억지적용·미인용)
@@ -602,7 +633,7 @@ deploy/launchd/        # 상시 운영용 launchd 템플릿 (모델 서버·웹�
 ### 데이터와 평가 방법
 
 - **조문**: 근로기준법 현행 130개 조문. 삭제 조문 2개는 제외했고, 기준일은 2026-10-01입니다.
-- **v4 조문**: 근로기준법 등 7개 법률의 비삭제 415개 조문(`data/v4/articles_v4.csv`). [Legalize KR](https://github.com/legalize-kr/legalize-kr)에서 2026-10-20에 수집했고, 버전·기준일·sha256은 `data/v4/manifest.json`에 있습니다. 시행령·시행규칙 397개를 더한 812조문(`data/v4/law_articles_v4_decree.csv`, 열 `kind`·`parent_law`·`parent_ids`·`child_ids`)은 실험에만 쓰고 아직 웹앱에는 쓰지 않습니다.
+- **v4 조문**: 근로기준법 등 7개 법률의 비삭제 415개 조문(`data/v4/articles_v4.csv`). [Legalize KR](https://github.com/legalize-kr/legalize-kr)에서 2026-10-20에 수집했고, 버전·기준일·sha256은 `data/v4/manifest.json`에 있습니다. 시행령·시행규칙 397개를 더한 812조문(`data/v4/law_articles_v4_decree.csv`, 열 `kind`·`parent_law`·`parent_ids`·`child_ids`)은 `LAWBOT_DECREE_ENABLED=1`일 때 웹앱이 씁니다(매니페스트 `data/v4/manifest_decree.json`, 같은 2026-10-20 수집).
 - **하위법령 질문**: 시행령·시행규칙이 정답인 4,096문항(`data/decree_exp/qa_decree_v4.csv`, 분할 `split_decree_v4.csv`: 임베딩 기준 train 1,772 / val 444 / test 1,880, 시드 42). `data/decree_exp/`에는 Colab 실험의 후보·리랭커 점수(fp16)와 맥 MLX 점수, 규칙 비교 결과가 함께 있습니다.
 - **질문**: 총 2,602개(130조문 × 질문 유형 5종 × 약 4개)입니다.
   - 질문 유형: 구어체, 사용자(사업주) 관점, 간접 질문, 키워드, 상황 설명
@@ -631,9 +662,9 @@ deploy/launchd/        # 상시 운영용 launchd 템플릿 (모델 서버·웹�
 - **검색 실패**: 상위 3개에 정답 조문이 없는 경우가 약 6%이고, 이 경우 답변 품질이 크게 떨어집니다.
 - **위치 편향**: 정답 조문이 두 번째·세 번째로 주어질 때 인용 정확도가 0.68·0.50으로 낮습니다. 첫 번째일 때는 0.975입니다.
 - **범위**: 근로기준법만 다룹니다. 범위 밖 질문 거절률은 0.707(bf16)이고, 특히 근로기준법에 비슷한 조문이 있는 다른 노동법 질문(예: 퇴직금 계산, 산재 휴업급여)에 비슷한 조문으로 답하는 경우가 남아 있습니다.
-- **시행령·시행규칙**: 첨부 방식과 필터는 val로 정했지만(위 "시행령·시행규칙 첨부 실험") 아직 웹앱에 넣지 않았습니다. 별표·서식·고시(최저임금액 등)는 들어 있지 않습니다.
+- **시행령·시행규칙**: val로 정한 첨부 방식과 필터를 웹앱에 넣었습니다(Pro만). Fast(4B LoRA)는 첨부를 평가하지 않아 법률 3개만 받습니다. 웹앱 경로 val 수치는 맥 미니 수동 검증 뒤 적습니다. 별표·서식·고시(최저임금액 등)는 들어 있지 않습니다.
 - **향후 계획**:
-  - 시행령·시행규칙 웹앱 반영
+  - Fast 모델의 시행령·시행규칙 첨부 평가
   - LLM 기반 평가
   - FastAPI 백엔드 분리
   - 계산기 도구 호출
@@ -678,7 +709,8 @@ v4 (current default, `.env.example`):
 Question
  └─ Retrieval: fine-tuned embedding (Qwen3-Embedding-0.6B, fp16, MPS) → top 10 of 415 articles
      └─ Reranker: Qwen3-Reranker-4B (not fine-tuned, MLX 4-bit) → top 3
-         └─ Answer: Qwen3.8-27B (not fine-tuned, MLX 4-bit, concise) / small Macs: Qwen3-4B + v4 LoRA
+         ├─ (Pro only) embedding top 10 of 397 decree/rule articles → same reranker → filter → up to 2 attached after the 3 Act articles
+         └─ Answer: Qwen3.8-27B (not fine-tuned, MLX 4-bit, concise) / small Macs: Qwen3-4B + v4 LoRA (Act articles only)
              └─ Answer + source article panel (Gradio)
 ```
 
@@ -736,7 +768,7 @@ Speed and memory (200 answers): embedding search 0.03 s, reranking 1.95 s (p95 3
 
 Rechecked in the production setup (remote mode, 2026-10-29): the web app talking to the model server reran answers, out-of-scope and refusal, and `lawbot.diff_answers` found all 522 answers identical character for character (200 · 122 · 200), so the accuracy numbers above stand. End-to-end time averaged 14.9 s, first token 2.78 s (median) and MLX peak memory 20.4GB, with no visible HTTP overhead (`results/v4/*_pro_concise_rr_remote.csv`).
 
-*Enforcement decrees and rules (validation, not yet in the web app, 2026-10-29 to 31)*
+*Enforcement decrees and rules (validation before web integration, 2026-10-29 to 31)*
 
 Some answers live in enforcement decrees and rules rather than the Acts (e.g. periods excluded from average wages, loan interest rates), so the 397 decree and rule articles of the seven laws were added as an experiment. Searching all 812 articles together lowered Act Recall@3 from 0.950 to 0.927, so Act retrieval stays as it is and decree articles are retrieved separately and attached (setup B):
 
@@ -765,7 +797,7 @@ Answers were evaluated with Qwen3.8-27B on the Mac mini with fixed contexts (`la
 | | False refusal (retrieval hit) | 0.048 | 0.043 | 0.043 |
 | | Total score (retrieval hit) | 0.894 | 0.896 | 0.896 |
 
-With Act articles only, the model refuses 62% of decree questions. Attaching decrees leaves Act answers unchanged and brings gold-decree citation to 0.900. Colloquial questions were lowest under the same-law filter (0.647) because the Act reranker leaned toward the Labor Standards Act on questions without a law name; the chosen rule reaches 0.765. The embedding model was not retrained (gold decree in the top 10 of 397: 0.964). The web app does not use this yet; the full pipeline will be re-measured with `lawbot-eval-v4` after integration.
+With Act articles only, the model refuses 62% of decree questions. Attaching decrees leaves Act answers unchanged and brings gold-decree citation to 0.900. Colloquial questions were lowest under the same-law filter (0.647) because the Act reranker leaned toward the Labor Standards Act on questions without a law name; the chosen rule reaches 0.765. The embedding model was not retrained (gold decree in the top 10 of 397: 0.964). The web app now uses this setup and rule (see "Enforcement decrees and rules (optional, v4)" below). The numbers above come from fixed contexts; web-app-path numbers from `lawbot-eval-v4 --split val` (attachments chosen with MLX 4-bit reranker scores) will be added here after manual verification on the Mac mini. MLX scores pick a different attachment set than fp16 on some questions, so they will not match exactly.
 
 **v1 (130 Labor Standards Act articles · Qwen3-4B LoRA)**
 
@@ -930,6 +962,11 @@ The web app is local-only, for use on this Mac. The address is fixed to `127.0.0
 | `LAWBOT_RERANKER_ENABLED` | No | `1` re-ranks the embedding candidates with Qwen3-Reranker-4B and keeps the top 3 (default `0`: no reranker is loaded, plain embedding top 3). v4 profile only |
 | `LAWBOT_RERANKER_MODEL_PATH` | No | Reranker MLX folder (default `models/v4/reranker_4b_mlx_4bit`) |
 | `LAWBOT_RERANKER_CANDIDATES` | No | Embedding candidates passed to the reranker (default `10`, the experiment value; at least 3) |
+| `LAWBOT_DECREE_ENABLED` | No | `1` retrieves enforcement decree/rule articles separately and attaches them after the 3 Act articles (default `0`: Act articles only). Needs the reranker; v4 profile only |
+| `LAWBOT_DECREE_TAU` | No | Reranker score a decree of a different law than the top Act article needs to be attached (default `0.9`, chosen on validation) |
+| `LAWBOT_DECREE_K` | No | Maximum decree articles attached (default `2`) |
+| `LAWBOT_DECREE_MODELS` | No | Answer model keys that get decrees (default `pro`; Fast was trained with 3 articles and attachment was not evaluated for it) |
+| `LAWBOT_V4_DECREE_ARTICLES` | No | 812-article CSV used when decrees are on (default `data/v4/law_articles_v4_decree.csv`); replaces `LAWBOT_V4_ARTICLES` while on |
 | `LLM_PATH` | No | SLM folder used by the evaluation scripts (`eval_oos`, `eval_refusal`), e.g. `models/sllm_mlx_8bit`. Not used by the web app |
 | `LAWBOT_PORT` | No | Web app port (1024–65535). Previous default if unset. Use different values when running production and development together |
 | `LAWBOT_INSTANCE` | No | Name appended to the page and tab title (e.g. `운영`, `개발`; at most 40 characters) |
@@ -954,6 +991,24 @@ LAWBOT_RERANKER_ENABLED=0 uv run lawbot-app    # one-off run without it
 ```
 
 Reranker errors (e.g. NaN scores) are shown as errors instead of silently falling back to the embedding order. A missing folder, or enabling it with the v1 profile, stops the app before any model is loaded. Agreement with the Colab run (transformers fp16) is checked separately on the same questions and embedding top 10 with `uv run python -m lawbot.verify_reranker --colab <v4 folder> --split val`; latency and memory with `lawbot.bench_models` run once with the reranker on and once off.
+
+**Enforcement decrees and rules (optional, v4)**
+
+When enabled (`LAWBOT_DECREE_ENABLED=1`; on in `.env.example`), Act retrieval is unchanged and the 397 decree/rule articles are retrieved separately and attached:
+
+```
+415 Act articles: embedding top 10 → reranker → top 3 (same ranks, scores and prompt as when off)
+397 decree/rule articles: embedding top 10 → same reranker → filter → attach up to 2 ([4], [5])
+  filter: keep decrees of the same law as the top Act article; other laws only with reranker score ≥ 0.9 (lawbot.decree)
+```
+
+- When nothing passes, nothing is attached and the prompt is identical, character for character, to the decree-off prompt. Attached articles use the same `[n] law Art. N(title)` format (e.g. `[4] 근로기준법 시행령 제2조(…)`).
+- Only models in `LAWBOT_DECREE_MODELS` (default Pro) get decrees. Fast does not even search them, so it behaves as before.
+- The 415 Act articles are encoded exactly as before (max_seq 2,304) and the decrees separately at 3,072 tokens (longest 3,017). `uv run python -m lawbot.verify_decree_emb` checks that the Act embeddings are bit-identical and reports encoding time.
+- Enabling it without the reranker, or with the v1 profile, stops the app before any model is loaded. Decree reranking errors are shown as errors, like Act reranking.
+- Screen: decree cards carry a `〔시행령〕`/`〔시행규칙〕` tag and come after the Act cards; cited articles are expanded and the rest folded. The concise citation line and warnings follow the same rules as for Acts. The stats line shows decree time and count; the request log adds `decree_search_ms`, `decree_rerank_ms`, `decree` and `n_decree`.
+- Remote mode: the web app refuses to start if its on/off, τ or k differ from the model server's `/info` `decree` (which models get decrees is the web app's choice). The model server API is version 2.
+- The 812-article manifest is `data/v4/manifest_decree.json` (data `v4-decree`); `data/v4/manifest.json` still describes the 415-article CSV.
 
 **Always-on production plus development (model server)**
 
@@ -1005,7 +1060,7 @@ Constraints:
 
 **Law data version (manifest)**
 
-A `manifest.json` next to each article CSV (`data/v4/manifest.json`, `data/manifest.json` for v1) records the data version, reference and collection dates, source, article counts (per law and per kind), the CSV's SHA-256, and the data version the embedding and 4B LoRA were trained on. The search index is built when the model server starts rather than stored, so these values are what tie the data to the models.
+A `manifest.json` next to each article CSV (`data/v4/manifest.json`, `data/manifest.json` for v1; extra CSVs in the same folder get `manifest_<name>.json`, picked by `articles_file`, e.g. `data/v4/manifest_decree.json` for the 812 articles) records the data version, reference and collection dates, source, article counts (per law and per kind), the CSV's SHA-256, and the data version the embedding and 4B LoRA were trained on. The search index is built when the model server starts rather than stored, so these values are what tie the data to the models.
 
 - The model server (and a local-mode web app) checks the CSV at startup and refuses to start, before loading any model, if the count or SHA-256 differs. A missing manifest only warns.
 - `uv run python -m lawbot.check_deploy` shows the same check as OK/FAIL; articles effective after the collection date are a WARN.
@@ -1047,9 +1102,13 @@ uv run lawbot-eval-v4 answers               # fixed-seed sample of 200 (100 per 
 uv run lawbot-eval-v4 oos                   # 102 out-of-scope (27 from the seven laws reclassified as in scope) + 20 controls
 uv run lawbot-eval-v4 refusal               # 100 sampled questions with only other-law / similar articles: refusal rate
 uv run lawbot-eval-v4 summary --tag pro_concise_rr
+uv run lawbot-eval-v4 --split val            # with decrees on: retrieval, answers, refusal + decree (tag ends in _dec_val)
+uv run lawbot-eval-v4 decree --split val     # decree-answer val 444 attachment rate + 200-question answer sample (val only)
 ```
 
-Citations count only with the right law name; abbreviations (`퇴직급여법`, `고평법`, …) are accepted, and `근로기준법 시행령 제5조` (Enforcement Decree) is a different article from the Act's Art. 5. Citation parsing, refusal detection and per-citation checks (`ok` / `outside` / `wrong_law` / `nonexistent` / `ambiguous`) live in `lawbot.citation`, shared with the web view. `summary` rescores saved answers only, so files stay unchanged when the rules do. `uv run python -m lawbot.diff_answers <base.csv> <new.csv>` checks that two runs produced the same answers (exit code 0 when identical). The 2026-04-07 amendment moved the wage-arrears penalty from Art. 109 (3 years / 30M won) to Art. 107 (5 years / 50M won); the v4 gold labels follow the amended law, and the two keyword rows that still expected the old penalty (Q2443, Q2453) are updated at scoring time (`eval_v4.KEYWORD_FIX`; the data file is unchanged).
+With decrees attached for the model, the default tag gets `_dec` (e.g. `pro_concise_rr_dec_val`); retrieval adds the decrees attached to Act questions (count, share from another law) and answers adds a `decrees` column. Runs refuse to append to an existing file with different columns. Refusal contexts are still drawn from the 415 Act articles, so the sample matches the baseline. The `decree` stage writes `dqretrieval_<tag>.csv` (gold decree among the 10 candidates / attached, val 444) and `dqanswers_<tag>.csv` (the 200 ids in `data/v4/decree_ctx_dq_val200.csv` answered through the web-app path, scored for gold-decree citation, false refusal and citations outside the context); summary and compare get decree sections.
+
+Citations count only with the right law name; abbreviations (`퇴직급여법`, `고평법`, …) are accepted, and `근로기준법 시행령 제5조` (Enforcement Decree) is a different article from the Act's Art. 5. Citation parsing, refusal detection and per-citation checks (`ok` / `outside` / `wrong_law` / `nonexistent` / `ambiguous`; `nonexistent` means not among all articles of the active setup: 415, or 812 with decrees on) live in `lawbot.citation`, shared with the web view. `summary` rescores saved answers only, so files stay unchanged when the rules do. `uv run python -m lawbot.diff_answers <base.csv> <new.csv>` checks that two runs produced the same answers (exit code 0 when identical). The 2026-04-07 amendment moved the wage-arrears penalty from Art. 109 (3 years / 30M won) to Art. 107 (5 years / 50M won); the v4 gold labels follow the amended law, and the two keyword rows that still expected the old penalty (Q2443, Q2453) are updated at scoring time (`eval_v4.KEYWORD_FIX`; the data file is unchanged).
 
 Enforcement-decree experiment (validation only; test questions in `split_v4.csv` and `split_decree_v4.csv` are not used):
 
@@ -1100,7 +1159,8 @@ See the Korean section above for the full command sequence: first complete the b
 ```
 src/lawbot/
 ├── paths.py           # data and model paths
-├── retriever.py       # embedding retrieval
+├── retriever.py       # embedding retrieval (Acts; separate decree index when enabled)
+├── decree.py          # enforcement-decree attachment filter (same1+other0.9, shared by web app and eval)
 ├── llm.py             # prompt construction, MLX generation
 ├── service.py         # UI-independent Q&A flow (model loading, retrieval → streamed answer)
 ├── app.py             # Gradio web app
@@ -1117,6 +1177,7 @@ src/lawbot/
 ├── mlx_decree_scores.py # rescore decree-experiment candidates with the Mac MLX 4-bit reranker
 ├── build_decree_ctx.py  # fix contexts for the decree answer evaluation
 ├── eval_decree.py     # answer evaluation with decrees attached (fixed contexts, answer model only)
+├── verify_decree_emb.py # check that Act embeddings are unchanged with decrees on (Mac, embedding only)
 ├── eval_dev.py        # retrieval and answer evaluation
 ├── score_answers.py   # keyword-based answer scorer
 ├── refusal.py         # refusal detection ('확인할 수 없' in the conclusion), out-of-scope verdicts (refusal, referral, forced, uncited)
@@ -1133,7 +1194,7 @@ deploy/launchd/        # launchd templates for the always-on setup (model server
 ### Data and evaluation
 
 - **Articles**: The 130 current articles of the Labor Standards Act. Two repealed articles are excluded. The text is as of 2026-10-01.
-- **v4 articles**: 415 current articles from seven labor laws (`data/v4/articles_v4.csv`), collected from [Legalize KR](https://github.com/legalize-kr/legalize-kr) on 2026-10-20; version, dates and SHA-256 are in `data/v4/manifest.json`. The 812-article set that adds 397 enforcement-decree and rule articles (`data/v4/law_articles_v4_decree.csv`, columns `kind`, `parent_law`, `parent_ids`, `child_ids`) is used only in experiments, not by the web app yet.
+- **v4 articles**: 415 current articles from seven labor laws (`data/v4/articles_v4.csv`), collected from [Legalize KR](https://github.com/legalize-kr/legalize-kr) on 2026-10-20; version, dates and SHA-256 are in `data/v4/manifest.json`. The 812-article set that adds 397 enforcement-decree and rule articles (`data/v4/law_articles_v4_decree.csv`, columns `kind`, `parent_law`, `parent_ids`, `child_ids`) is used by the web app when `LAWBOT_DECREE_ENABLED=1` (manifest `data/v4/manifest_decree.json`, same 2026-10-20 collection).
 - **Decree questions**: 4,096 questions answered by a decree or rule article (`data/decree_exp/qa_decree_v4.csv`; split `split_decree_v4.csv`: embedding train 1,772 / val 444 / test 1,880, seed 42). `data/decree_exp/` also holds the Colab candidates and fp16 reranker scores, the Mac MLX scores and the rule comparison.
 - **Questions**: 2,602 in total (130 articles × 5 question types × about 4 each).
   - Question types: colloquial, employer perspective, indirect, keyword, situational
@@ -1162,9 +1223,9 @@ deploy/launchd/        # launchd templates for the always-on setup (model server
 - **Retrieval misses**: For about 6% of questions, the gold article is not in the top 3, and answer quality drops sharply on those.
 - **Position bias**: When the gold article is given second or third, citation accuracy falls to 0.68 and 0.50 respectively, against 0.975 when it is first.
 - **Scope**: Only the Labor Standards Act is covered. The out-of-scope refusal rate is 0.707 (bf16). Questions under other labor laws that resemble a Labor Standards Act article (e.g. severance pay calculation, industrial-accident leave benefits) are still often answered with the similar article.
-- **Enforcement decrees**: The attachment setup and filter were chosen on validation data (see "Enforcement decrees and rules" above) but are not in the web app yet. Appendices, forms and notices (such as the minimum wage amount) are not included.
+- **Enforcement decrees**: The attachment setup and filter chosen on validation data are in the web app (Pro only). Fast (4B LoRA) was not evaluated with attachments and still gets the 3 Act articles only. Web-app-path validation numbers will be added after manual verification on the Mac mini. Appendices, forms and notices (such as the minimum wage amount) are not included.
 - **Planned work**:
-  - Enforcement decrees in the web app
+  - Evaluate decree attachment for the Fast model
   - LLM-as-judge evaluation
   - FastAPI backend
   - Calculator tool calling

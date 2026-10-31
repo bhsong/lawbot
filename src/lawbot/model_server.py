@@ -12,7 +12,8 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from lawbot import envfile, manifest, service
 from lawbot.security import SERVER_NAME, model_server_port, model_token
 
-API_VERSION = 1                      # 요청·응답 형식을 바꾸면 올린다 (remote.py가 다르면 시작을 거부)
+API_VERSION = 2                      # 요청·응답 형식을 바꾸면 올린다 (remote.py가 다르면 시작을 거부)
+                                     # 2: 하위법령 첨부 (/search kind, /articles kinds·parent_laws·n_law, /info decree)
 MAX_BODY = 2 * 1024 * 1024           # 요청 본문 최대 크기 (rank_all 질문 2,075개가 들어감)
 TOKEN_MIN = 16
 GEN_FIELDS = ('text', 'generation_tps', 'prompt_tokens', 'prompt_tps', 'generation_tokens', 'peak_memory',
@@ -78,14 +79,29 @@ def info(app):
             'models': list(app.models.specs), 'loaded': list(app.models.loaded),
             'max_resident': app.models.max_resident,
             'reranker': {'candidates': rr.candidates} if rr else None,
+            'decree': decree_info(app),
             'n_articles': len(app.retriever.ids), 'memory': mlx_memory(),
             'dataset': manifest.summary(manifest.load(app.profile.articles))}   # 선택 필드 (API_VERSION 그대로)
 
+def decree_info(app):
+    """하위법령 첨부 설정 (꺼짐 None). 웹앱은 시작할 때 자기 설정과 비교해 다르면 거부한다 (remote.check_info)
+    models(첨부 받는 답변 모델)는 웹앱이 정하는 값이라 비교하지 않고 기록만 한다"""
+    dc = getattr(app, 'decree', None)
+    if dc is None:
+        return None
+    R = app.retriever
+    return {'tau': dc.tau, 'k': dc.k, 'candidates': dc.candidates, 'max_seq': dc.max_seq, 'models': list(dc.models),
+            'n_articles': len(R.ids) - R.n_law}
+
 def articles(app):
+    """전체 조문 (법률 먼저, 하위법령 뒤). kinds·parent_laws·n_law가 없는 검색기는 모두 법률"""
     R = app.retriever
     laws = getattr(R, 'laws', None)
+    kinds, parents = getattr(R, 'kinds', None), getattr(R, 'parent_laws', None)
     return {'ids': list(R.ids), 'titles': list(R.titles), 'docs': list(R.docs),
-            'laws': None if laws is None else list(laws)}
+            'laws': None if laws is None else list(laws),
+            'kinds': None if kinds is None else list(kinds), 'parent_laws': None if parents is None else list(parents),
+            'n_law': getattr(R, 'n_law', len(R.ids))}
 
 def model_key(app, body):
     key = field(body, 'model', str)
@@ -192,8 +208,16 @@ class Handler(BaseHTTPRequestHandler):
         return 200
 
     def compute(self, app, body):
-        if self.path == '/search':
-            return {'hits': app.retriever.search(field(body, 'question', str), k=positive(body, 'k'))}
+        if self.path == '/search':          # kind: 'law'(기본, 법률) / 'decree'(하위법령)
+            kind = field(body, 'kind', str, 'law')
+            question, k = field(body, 'question', str), positive(body, 'k')
+            if kind == 'law':
+                return {'hits': app.retriever.search(question, k=k)}
+            if kind != 'decree':
+                raise BadRequest(f"kind는 'law' 또는 'decree': {kind!r}")
+            if getattr(app, 'decree', None) is None:
+                raise BadRequest('모델 서버의 하위법령 첨부가 꺼져 있습니다 (LAWBOT_DECREE_ENABLED)')
+            return {'hits': app.retriever.search_decrees(question, k=k)}
         if self.path == '/rank_all':
             return {'rank': app.retriever.rank_all(str_list(body, 'questions'))}
         if self.path == '/rerank':

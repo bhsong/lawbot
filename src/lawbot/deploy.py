@@ -55,7 +55,10 @@ def _profile(name):
                       _path('LAWBOT_PRO_PATH', paths.PRO_BASE), 'concise',
                       _path('LAWBOT_PRO_SYSTEM', paths.SYSTEM_V1_CONCISE))))
     if name == 'v4':         # 7개 법률 415조문, v4 검색 (MAX_SEQ 2304). Pro는 튜닝 전 Qwen3.8-27B 4비트
-        return Profile('v4', '노동법 챗봇', _path('LAWBOT_V4_ARTICLES', paths.V4_ARTICLES),
+        # 하위법령을 켜면(LAWBOT_DECREE_ENABLED=1) 법률 415 + 시행령·시행규칙 397 = 812조문 CSV. 법률 415행은 같음
+        articles = (_path('LAWBOT_V4_DECREE_ARTICLES', paths.V4_DECREE_ARTICLES) if decree_enabled()
+                    else _path('LAWBOT_V4_ARTICLES', paths.V4_ARTICLES))
+        return Profile('v4', '노동법 챗봇', articles,
                        _path('LAWBOT_V4_EMB', paths.V4_EMB), 2304, 'v4', _path('LAWBOT_V4_SYSTEM', paths.V4_SYSTEM), (
             ModelSpec('fast', 'Lawbot Fast', '4B · 빠른 응답, 4항목 답변', _path('LAWBOT_FAST_PATH', paths.V4_FAST), 'full'),
             ModelSpec('pro', 'Lawbot Pro', '27B · 큰 모델(튜닝 전), 간결한 답변, 응답이 더 느림',
@@ -91,6 +94,57 @@ def reranker(profile):
                          'LAWBOT_RERANKER_ENABLED=0으로 끄거나 LAWBOT_PROFILE=v4로 실행하세요.')
     n = int(os.environ.get('LAWBOT_RERANKER_CANDIDATES', '10'))
     return RerankerConfig(reranker_path(), n)
+
+# ---- 시행령·시행규칙(하위법령) 첨부 (docs/plans/decree-attach.md) ----
+# 법률 검색(임베딩 10 → 리랭커 → 3개)은 그대로 두고, 하위법령 397개를 따로 임베딩 10 → 같은 리랭커 → 필터 → 최대 k개 첨부
+# 필터(val로 고른 same1+other0.9): 법률 1위와 같은 법의 하위법령은 그대로, 다른 법은 리랭커 점수 ≥ τ일 때만 (lawbot.decree)
+DECREE_CANDIDATES = 10   # 하위법령 임베딩 후보 수 (실험과 같음)
+DECREE_MAX_SEQ = 3072    # 하위법령 인코딩 최대 토큰 (최장 3,017토큰 · 실험과 같음). 법률은 프로필 max_seq 그대로
+DECREE_TAU, DECREE_K, DECREE_MODELS = 0.9, 2, ('pro',)
+
+@dataclass(frozen=True)
+class DecreeConfig:
+    tau: float               # 다른 법 하위법령이 통과할 리랭커 점수
+    k: int                   # 최대 첨부 수
+    models: tuple            # 첨부를 받는 답변 모델 key. Fast(참고 조문 3개로 학습, 첨부 미평가)는 기본 제외
+    candidates: int = DECREE_CANDIDATES
+    max_seq: int = DECREE_MAX_SEQ
+
+def decree_enabled():
+    flag = os.environ.get('LAWBOT_DECREE_ENABLED', '0')
+    if flag not in ('0', '1'):
+        raise ValueError(f'LAWBOT_DECREE_ENABLED는 0 또는 1: {flag!r}')
+    return flag == '1'
+
+def decree(profile, require_reranker=True):
+    """LAWBOT_DECREE_ENABLED=1이면 하위법령 첨부 설정, 아니면 None (기본 꺼짐: 법률 3개만)
+    리랭커 점수로 거르므로 리랭커가 꺼져 있으면 거부. v4 실험으로만 검증했으므로 v1 프로필도 거부
+    require_reranker=False: 원격 모드 웹앱 (리랭커는 모델 서버 설정. 서버가 켜짐을 /info로 알려 줌)"""
+    if not decree_enabled():
+        return None
+    if profile.doc_style != 'v4':
+        raise ValueError(f'시행령·시행규칙 첨부는 v4 프로필에서만 쓸 수 있습니다 (현재 {profile.name}). '
+                         'LAWBOT_DECREE_ENABLED=0으로 끄거나 LAWBOT_PROFILE=v4로 실행하세요.')
+    if require_reranker and reranker(profile) is None:
+        raise ValueError('시행령·시행규칙 첨부는 리랭커 점수로 거르므로 리랭커가 필요합니다. '
+                         'LAWBOT_RERANKER_ENABLED=1로 켜거나 LAWBOT_DECREE_ENABLED=0으로 끄세요.')
+    raw = os.environ.get('LAWBOT_DECREE_TAU') or str(DECREE_TAU)
+    try:
+        tau = float(raw)
+    except ValueError:
+        raise ValueError(f'LAWBOT_DECREE_TAU는 0~1 숫자: {raw!r}') from None
+    if not 0.0 <= tau <= 1.0:
+        raise ValueError(f'LAWBOT_DECREE_TAU는 0~1 숫자: {raw!r}')
+    raw = os.environ.get('LAWBOT_DECREE_K') or str(DECREE_K)
+    if not raw.isdigit() or int(raw) < 1:
+        raise ValueError(f'LAWBOT_DECREE_K는 1 이상의 정수: {raw!r}')
+    value = os.environ.get('LAWBOT_DECREE_MODELS')
+    keys = tuple(k.strip() for k in (value if value is not None else ','.join(DECREE_MODELS)).split(',') if k.strip())
+    known = [m.key for m in profile.models + profile.disabled]
+    bad = [k for k in keys if k not in known]
+    if bad or len(set(keys)) != len(keys):
+        raise ValueError(f"LAWBOT_DECREE_MODELS는 {', '.join(known)} 중에서 쉼표로: {value!r}")
+    return DecreeConfig(tau, int(raw), keys)
 
 def early_stop():
     """간결형에서 【설명】이 시작되면 생성을 멈출지. val 실험(eval_concise)으로 확인하기 전에는 끈다"""
