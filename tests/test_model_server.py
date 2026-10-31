@@ -244,6 +244,9 @@ def test_env_examples_have_no_ports_or_secrets(env):
     for k in ('LAWBOT_PROFILE', 'LAWBOT_MODELS', 'LAWBOT_PRO_SYSTEM'):
         env.setenv(k, dev[k])
     assert deploy.get_profile().models[0].system_file.is_file()
+    for k in ('LAWBOT_DECREE_ENABLED', 'LAWBOT_DECREE_TAU', 'LAWBOT_DECREE_K', 'LAWBOT_DECREE_MODELS'):
+        env.setenv(k, dev[k])                    # 하위법령 설정은 서버와 같아야 함 (리랭커 변수 없이 원격 모드로 읽힘)
+    assert deploy.decree(deploy.get_profile(), require_reranker=False) == deploy.DecreeConfig(0.9, 2, ('pro',))
 
 @pytest.mark.parametrize('kind,prog', [('model-server', 'lawbot-model-server'), ('web', 'lawbot-app')])
 def test_launchd_templates(kind, prog):

@@ -11,7 +11,7 @@ import uuid
 from collections import OrderedDict
 from dataclasses import dataclass
 from pathlib import Path
-from lawbot import deploy, manifest, security
+from lawbot import decree as decree_filter, deploy, manifest, security
 from lawbot.paths import LLM_4BIT, ROOT
 
 TOP_K = 3                            # 답변 근거로 넘기는 조문 수 (Fast·Pro 공통)
@@ -83,6 +83,12 @@ class LawbotApp:
     early_stop: bool = False
     reranker: object = None          # None: 임베딩 상위 TOP_K개 그대로 (LAWBOT_RERANKER_ENABLED=0, 기본)
     full_system: str = None          # '전체(4항목)' system: 프로필 system 파일, 없으면 llm.SYSTEM (v1)
+    decree: object = None            # deploy.DecreeConfig: 시행령·시행규칙 첨부 (None: 법률 3개만, LAWBOT_DECREE_ENABLED=0 기본)
+
+def uses_decrees(app, model_key):
+    """이 답변 모델에 하위법령을 붙이는지 (LAWBOT_DECREE_MODELS, 기본 Pro만)"""
+    dc = getattr(app, 'decree', None)
+    return dc is not None and model_key in dc.models
 
 def system_text(profile, spec):
     """모델별 system 파일 → 프로필 system 파일 → None(llm.SYSTEM, v1 4섹션) 순서"""
@@ -119,8 +125,13 @@ def load_app(profile=None, local=False):
     rr = deploy.reranker(p)              # 꺼져 있으면 None: 리랭커 모델을 올리지 않음
     if rr:
         check_reranker(rr)
+    dc = deploy.decree(p)                # 꺼져 있으면 None. 켰는데 리랭커가 꺼져 있으면 ValueError
     Retriever, Reranker, LLM = _lazy('Retriever'), _lazy('Reranker') if rr else None, _lazy('LLM')
-    retriever = Retriever(p.emb, p.articles, max_seq_length=p.max_seq, doc_style=p.doc_style)
+    t0 = time.perf_counter()
+    retriever = Retriever(p.emb, p.articles, max_seq_length=p.max_seq, doc_style=p.doc_style,
+                          **({'decree_max_seq': dc.max_seq} if dc else {}))
+    print(f'[lawbot] 조문 인덱스 {time.perf_counter() - t0:.1f}초 · 법률 {getattr(retriever, "n_law", len(retriever.ids))}개'
+          + (f' + 하위법령 {len(retriever.ids) - retriever.n_law}개 (max_seq {dc.max_seq})' if dc else ''))
     reranker = None
     if rr:                               # 불러오기 실패는 그대로 올려 실행 중단 (Fast 모델과 같음)
         t0 = time.perf_counter()
@@ -139,9 +150,12 @@ def load_app(profile=None, local=False):
             except Exception as e:       # Pro 준비 전에도 Fast로는 실행 (선택하면 오류 안내)
                 print(f'[lawbot] {spec.label} 미리 불러오기 실패: {type(e).__name__}: {e}')
     print(f"[lawbot] 프로필 {p.name} · 조문 {len(retriever.ids)}개 · 리랭커 {'켜짐' if reranker else '꺼짐'} · "
-          f"상주 {list(models.loaded)}")
+          f"하위법령 {decree_text(dc)} · 상주 {list(models.loaded)}")
     full = p.system_file.read_text(encoding='utf-8').strip() if p.system_file else _lazy('SYSTEM')
-    return LawbotApp(p, retriever, models, deploy.early_stop(), reranker, full)
+    return LawbotApp(p, retriever, models, deploy.early_stop(), reranker, full, dc)
+
+def decree_text(dc):
+    return (f'켜짐 (τ {dc.tau:g} · 최대 {dc.k}개 · 모델 {",".join(dc.models) or "없음"})' if dc else '꺼짐')
 
 def load_remote(p, url):
     """원격 모드: 같은 LawbotApp을 모델 서버 클라이언트로 만든다 (ask·화면·평가 코드는 그대로)
@@ -159,7 +173,8 @@ def load_remote(p, url):
     print(f'[lawbot] 모델 서버 {url} 준비 대기 (최대 {wait:g}초)', flush=True)
     remote.wait_ready(client, wait)
     info = client.get_json('/info')
-    diff = remote.check_info(info, p)
+    dc = deploy.decree(p, require_reranker=False)   # 웹앱 쪽 설정. 서버 /info의 decree와 다르면 시작 거부
+    diff = remote.check_info(info, p, dc)
     if diff:
         raise RuntimeError('모델 서버와 웹앱 설정이 다릅니다:\n- ' + '\n- '.join(diff))
     for w in remote.dataset_warnings(info, p):    # 데이터 버전 차이는 경고만 (이전 서버는 dataset 없음)
@@ -170,9 +185,9 @@ def load_remote(p, url):
     models = remote.RemoteModelManager(p.models, client, lambda spec: system_text(p, spec) or SYSTEM)
     print(f"[lawbot] 원격 모드 {url} · 서버 프로필 {info['profile']['name']} · 조문 {info['n_articles']}개 · "
           f"리랭커 {'켜짐 (후보 ' + str(rr['candidates']) + '개, 서버 설정)' if rr else '꺼짐 (서버 설정)'} · "
-          f"상주 {info['loaded']} (최대 {info['max_resident']})")
+          f"하위법령 {decree_text(dc)} · 상주 {info['loaded']} (최대 {info['max_resident']})")
     full = p.system_file.read_text(encoding='utf-8').strip() if p.system_file else SYSTEM
-    return LawbotApp(p, retriever, models, deploy.early_stop(), reranker, full)
+    return LawbotApp(p, retriever, models, deploy.early_stop(), reranker, full, dc)
 
 def format_system(app, model_key, fmt):
     """화면 형식에 맞춘 이번 요청의 system (None이면 모델 기본 system)
@@ -182,26 +197,50 @@ def format_system(app, model_key, fmt):
         return app.full_system
     return None
 
-def retrieve(app, question, k, st):
-    """근거 조문 k개. 리랭커가 없으면 기존과 같은 임베딩 상위 k개,
+def retrieve(app, question, k, st, model_key=None):
+    """(법률 근거 조문 k개, 첨부할 하위법령 목록). 리랭커가 없으면 기존과 같은 임베딩 상위 k개,
     있으면 임베딩 상위 reranker.candidates개를 리랭킹해 점수순 k개. 측정값 search·rerank(초)를 st에 적는다
+    model_key가 하위법령 첨부 모델이면(uses_decrees) 하위법령 후보 decree.candidates개를 같은 리랭커로 채점하고
+    decree.attach로 거른다 (측정값 decree_search·decree_rerank, 첨부 수 n_decree, 후보 전체 decree_candidates)
+    법률 부분은 하위법령을 켜도 같은 호출이다: 순위·점수·프롬프트가 지금과 같음
     리랭커 오류는 임베딩 순위로 몰래 되돌리지 않고 그대로 올린다 (생성 오류와 같이 화면에 오류로 표시):
     되돌리면 화면의 조문이 어느 방식으로 고른 것인지 알 수 없고, 켜 둔 설정과 다른 결과가 섞인다"""
+    st['_stage'] = 'search'
     t0 = time.perf_counter()
     if app.reranker is None:
         hits = app.retriever.search(question, k=k)
         st['search'] = time.perf_counter() - t0
-        return hits
+        return hits, []
     candidates = app.retriever.search(question, k=app.reranker.candidates)
     st['search'] = time.perf_counter() - t0
+    st['_stage'] = 'rerank'
     t1 = time.perf_counter()
     hits = app.reranker.rerank(question, candidates, top_k=k)
     st['rerank'] = time.perf_counter() - t1
-    return hits
+    if not uses_decrees(app, model_key):
+        return hits, []
+    return hits, retrieve_decrees(app, question, hits[0]['law'], st)
+
+def retrieve_decrees(app, question, top1_law, st):
+    """하위법령 후보 검색 → 리랭킹(후보 전부 점수) → 필터. 첨부 목록 (평가는 st['decree_candidates']도 씀)"""
+    dc = app.decree
+    st['_stage'] = 'search'
+    t0 = time.perf_counter()
+    cands = app.retriever.search_decrees(question, k=dc.candidates)
+    st['decree_search'] = time.perf_counter() - t0
+    st['_stage'] = 'rerank'
+    t1 = time.perf_counter()
+    scored = app.reranker.rerank(question, cands, top_k=len(cands))
+    st['decree_rerank'] = time.perf_counter() - t1
+    att = decree_filter.attach(scored, top1_law, dc.tau, dc.k)
+    st['decree_candidates'], st['n_decree'] = scored, len(att)
+    return att
 
 def log_timing(st):
     """질문마다 단계별 시간 한 줄 (질문 내용은 남기지 않음)"""
-    parts = [f"{name} {st[key]:.2f}s" for name, key in (('검색', 'search'), ('리랭킹', 'rerank'), ('모델 전환', 'load'),
+    parts = [f"{name} {st[key]:.2f}s" for name, key in (('검색', 'search'), ('리랭킹', 'rerank'),
+                                                        ('하위법령 검색', 'decree_search'), ('하위법령 리랭킹', 'decree_rerank'),
+                                                        ('모델 전환', 'load'),
                                                         ('첫 토큰', 'ttft'), ('첫 글자', 'first_text'), ('완료', 'total'))
              if st.get(key) is not None]
     print(f"[lawbot] {st['model']} · " + ' · '.join(parts))
@@ -210,7 +249,7 @@ def log_timing(st):
 # 질문마다 한 줄: 단계별 시간·토큰·상태·오류 유형. 질문 원문과 답변은 남기지 않는다 (콘솔 로그·모델 서버 로그와 같은 정책)
 # 기본 logs/requests.jsonl (gitignore). LAWBOT_REQUEST_LOG로 경로를 바꾸고, 빈 값이면 기록하지 않음
 REQUEST_LOG = ROOT / 'logs' / 'requests.jsonl'
-MS_FIELDS = ('search', 'rerank', 'load', 'ttft', 'first_text', 'total')
+MS_FIELDS = ('search', 'rerank', 'decree_search', 'decree_rerank', 'load', 'ttft', 'first_text', 'total')
 
 def request_log_path():
     value = os.environ.get('LAWBOT_REQUEST_LOG')
@@ -234,7 +273,8 @@ def request_record(app, st, fmt, status, error):
     rec = {'ts': time.strftime('%Y-%m-%dT%H:%M:%S%z'), 'request_id': st['request_id'],
            'mode': 'remote' if getattr(app.retriever, 'client', None) is not None else 'local',
            'caller': Path(sys.argv[0]).name, 'profile': app.profile.name, 'model': st['model'],
-           'fmt': fmt or (spec.fmt if spec else None), 'reranker': app.reranker is not None}
+           'fmt': fmt or (spec.fmt if spec else None), 'reranker': app.reranker is not None,
+           'decree': uses_decrees(app, st['model']), 'n_decree': st.get('n_decree')}
     rec |= {f'{k}_ms': None if st.get(k) is None else round(st[k] * 1000) for k in MS_FIELDS}
     rec |= {k: st.get(k) for k in ('prompt_tokens', 'gen_tokens', 'peak_gb', 'finish')}
     rec |= {k: st.get(k) for k in ('refused', 'n_cited', *CITE_FIELDS)}
@@ -270,7 +310,8 @@ def ask(app, question, model_key, k=TOP_K, early_stop=False, fmt=None):
     """질문 하나: (단계, 검색 조문, 답변 원문, 측정값)을 차례로 돌려준다
     단계 'load'(모델 전환 대기) → 'generate'(토큰마다) → 'done'. 조문은 생성 전에 정해짐
     fmt: 화면 형식 ('full'/'concise'). 주면 format_system으로 system을 고름 (None이면 모델 기본, 평가 스크립트)
-    측정값(초): search, rerank(리랭커가 켜져 있을 때만), load(이번에 로딩했을 때만), ttft(생성 호출→첫 토큰, 프리필),
+    hits: 법률 k개 + 첨부한 하위법령 (하위법령 첨부 모델일 때만, 없으면 법률 k개만 = 지금과 같은 리스트)
+    측정값(초): search, rerank(리랭커가 켜져 있을 때만), decree_search·decree_rerank(하위법령 첨부 모델일 때만), load(이번에 로딩했을 때만), ttft(생성 호출→첫 토큰, 프리필),
     first_text(질문 수신→첫 글자), total, early_stop_at(간결형 조기 종료 시점) / tps, prompt_tokens, prompt_tps(프리필 속도), gen_tokens, peak_gb, finish
     질문마다 요청 로그 한 줄 (log_request): 성공 ok / 오류 error(유형은 예외의 lawbot_error에도 붙여 화면 안내에 씀) /
     중간에 멈춤 cancelled (정지 버튼 등으로 생성기를 닫음)"""
@@ -278,7 +319,8 @@ def ask(app, question, model_key, k=TOP_K, early_stop=False, fmt=None):
     st = {'model': model_key, 'load': None, 'request_id': uuid.uuid4().hex[:12]}
     stage, logged = 'search', False
     try:
-        hits = retrieve(app, question, k, st)
+        law_hits, decree_hits = retrieve(app, question, k, st, model_key)
+        hits = law_hits + decree_hits
         stage = 'load'
         if not app.models.is_loaded(model_key):
             yield 'load', hits, '', st
@@ -314,8 +356,8 @@ def ask(app, question, model_key, k=TOP_K, early_stop=False, fmt=None):
             logged = True
         raise
     except Exception as e:
-        if stage == 'search' and 'search' in st and app.reranker is not None:
-            stage = 'rerank'             # 검색은 끝났고 리랭킹에서 실패
+        if stage == 'search':
+            stage = st.get('_stage', 'search')   # 법률·하위법령 검색('search') 또는 리랭킹('rerank')에서 실패
         e.lawbot_error = error_type(e, stage)
         if not logged:
             st['total'] = time.perf_counter() - t0

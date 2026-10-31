@@ -8,6 +8,11 @@
 #   oos      : 범위 밖 102문항. 7개 법률이 출처인 문항은 범위 안으로 재분류 (답하고 그 법을 인용해야 함)
 #              + 범위 안 대조군 20문항(scope_controls). 평가 전용 문항이라 --split val에서는 돌리지 않는다
 #   refusal  : answers 표본 중 100문항에 정답이 없는 참고 조문 3개(다른 법률 조문 / 비슷한 조문)를 주고 거절하는지
+#   decree   : 시행령·시행규칙 첨부(LAWBOT_DECREE_ENABLED=1, 그 모델이 첨부 대상)를 켠 구성만, --split val만
+#              ① 하위법령 정답 val 444(data/decree_exp/qa_decree_v4.csv + split_decree_v4.csv): 정답 하위법령 후보·첨부 포함률
+#              ② 그중 고정 표본 200(data/v4/decree_ctx_dq_val200.csv의 id)을 service.ask로 답하고 정답 하위법령 인용·거절 채점
+#              하위법령을 켜면 retrieval에 '다른 법 하위법령 첨부 비율', answers에 첨부한 하위법령(decrees 열)이 더해지고
+#              기본 tag 끝에 _dec가 붙는다 (예: pro_concise_rr_dec_val). 기존 tag 파일과 열이 섞이지 않게
 #   summary  : 위 결과 파일로 지표 표 → results/v4/summary_<tag>.csv, 실패 유형 → results/v4/fail_<tag>.csv
 #   compare  : 두 tag의 summary·실패 유형을 나란히 놓고 report.py 경고 기준으로 나빠진 지표를 경고
 # 결과는 results/v4/<단계>_<tag>.csv에 문항마다 한 행씩 바로 쓴다: 중간에 멈추면 같은 명령으로 이어서 실행
@@ -22,6 +27,7 @@ import time
 import numpy as np
 import pandas as pd
 from lawbot import deploy, envfile, manifest
+from lawbot.decree import is_decree
 from lawbot.paths import DATA, EVAL, RESULTS, ROOT, V4_QA, V4_SPLIT
 # 인용·거절 판정은 웹앱 화면과 같은 citation 모듈 (ev.citations·ev.refused·ev.key 등 기존 이름은 그대로 둠)
 from lawbot.citation import LAW_ALIASES, REFUSAL, cite_section, citations, refused
@@ -47,6 +53,15 @@ def cite_gold(answer, gold):
     return (law, no) in citations(answer) and not refused(answer)
 
 SPLITS = ('test', 'val')
+
+DQ_QA, DQ_SPLIT = DATA / 'decree_exp' / 'qa_decree_v4.csv', DATA / 'decree_exp' / 'split_decree_v4.csv'
+DQ_SAMPLE = DATA / 'v4' / 'decree_ctx_dq_val200.csv'   # 하위법령 답변 표본 200 (실험 eval_decree와 같은 id)
+
+def load_decree_questions(split='val'):
+    """하위법령이 정답인 문항 (split_emb가 split). val 444"""
+    qa, sp = pd.read_csv(DQ_QA, **E), pd.read_csv(DQ_SPLIT, **E)
+    t = qa.merge(sp[['id', 'split_emb']], on='id', validate='one_to_one')
+    return t[t.split_emb == split].reset_index(drop=True)
 
 def load_test(split='test'):
     """split_emb가 split인 A_lsa·B_newlaw 문항 (test 2,075 / val 1,110)"""
@@ -100,12 +115,20 @@ def score_a(row, answer):
 def resume(path, items, fn, label):
     """items: (id, ...) 목록. path에 이미 있는 id는 건너뛰고 한 행씩 이어 쓴다"""
     done = set(pd.read_csv(path, **E)['id'].astype(str)) if path.exists() else set()
+    cols = pd.read_csv(path, nrows=0, **E).columns.tolist() if path.exists() else None
     todo = [x for x in items if str(x[0]) not in done]
     print(f'[{label}] {len(items) - len(todo)}/{len(items)} 완료 → 남은 {len(todo)}', flush=True)
     t0 = time.perf_counter()
     for j, x in enumerate(todo, 1):
         row = fn(*x)
-        pd.DataFrame([row]).to_csv(path, mode='a', index=False, header=not path.exists(), **E)
+        if cols is not None:             # 이어 쓰기: 기존 파일의 열 순서에 맞춘다 (열이 다르면 값이 밀리므로 멈춤)
+            extra = [c for c in row if c not in cols]
+            if extra:
+                raise SystemExit(f'{path.name}에 없는 열 {extra}: 다른 설정(예: 하위법령 켜짐)으로 만든 파일입니다. '
+                                 '다른 --tag로 실행하세요')
+            row = {c: row.get(c) for c in cols}
+        pd.DataFrame([row]).to_csv(path, mode='a', index=False, header=cols is None and not path.exists(), **E)
+        cols = cols or list(row)
         if j % 10 == 0 or j == len(todo):
             print(f'[{label}] {j}/{len(todo)} · 평균 {(time.perf_counter() - t0) / j:.1f}초', flush=True)
 
@@ -125,19 +148,38 @@ def answer_with(app, model, fmt, question, hits):
     raw = ''.join(r.text for r in llm.stream(question, hits, **({'system': system} if system else {})))
     return raw, time.perf_counter() - t0
 
-def hit_table(app):
-    """조문 키('근로기준법 제26조') → 검색 결과와 같은 형식의 dict"""
-    R = app.retriever
-    return {f'{l} {a}': {'article_id': a, 'title': t, 'doc': d, 'score': 0.0, 'law': l}
-            for l, a, t, d in zip(R.laws, R.ids, R.titles, R.docs)}
+def n_law(R):
+    """검색기 조문 배열 중 법률 수 (법률 먼저, 하위법령 뒤)"""
+    return getattr(R, 'n_law', None) or len(R.ids)
 
-def stats_cols(st):
-    return {k: st.get(k) for k in ('search', 'rerank', 'ttft', 'total', 'tps', 'gen_tokens', 'peak_gb', 'finish')}
+def hit_table(app):
+    """법률 조문 키('근로기준법 제26조') → 검색 결과와 같은 형식의 dict
+    법률만: refusal(정답 없는 법률 조문 3개)·retrieval 순위는 하위법령을 켜도 기준선과 같은 후보에서 고른다"""
+    R = app.retriever
+    m = n_law(R)
+    return {f'{l} {a}': {'article_id': a, 'title': t, 'doc': d, 'score': 0.0, 'law': l}
+            for l, a, t, d in zip(R.laws[:m], R.ids[:m], R.titles[:m], R.docs[:m])}
+
+DECREE_STATS = ('decree_search', 'decree_rerank', 'n_decree', 'prompt_tokens')
+
+def stats_cols(st, decree=False):
+    """측정값 열. decree: 하위법령 첨부 구성이면 하위법령 시간·첨부 수·프롬프트 토큰도 (기존 tag 파일 열은 그대로)"""
+    keys = ('search', 'rerank', 'ttft', 'total', 'tps', 'gen_tokens', 'peak_gb', 'finish') + (DECREE_STATS if decree else ())
+    return {k: st.get(k) for k in keys}
+
+def split_hits(hits):
+    """(법률 hit, 첨부한 하위법령 hit)"""
+    return [h for h in hits if not is_decree(h)], [h for h in hits if is_decree(h)]
+
+def uses_decrees(app, model):
+    from lawbot.service import uses_decrees as f
+    return f(app, model)
 
 # ---- 단계 ----
-def run_retrieval(app, test, path, rerank=True):
+def run_retrieval(app, test, path, rerank=True, decree=False):
+    """decree: 하위법령 첨부 구성. 법률 리랭킹 1위로 하위법령을 거른 첨부 목록과 다른 법(정답 법률과 parent_law가 다름) 수"""
     R = app.retriever
-    keys = np.array([f'{l} {a}' for l, a in zip(R.laws, R.ids)])
+    keys = np.array([f'{l} {a}' for l, a in zip(R.laws[:n_law(R)], R.ids[:n_law(R)])])
     rank = R.rank_all(test['question'])
     emb_pos = [int(np.where(keys[r] == g)[0][0]) + 1 for r, g in zip(rank, test['article_id'])]
     pos = dict(zip(test['id'], emb_pos))
@@ -153,17 +195,27 @@ def run_retrieval(app, test, path, rerank=True):
             row['rerank_sec'] = round(time.perf_counter() - t0, 3)
             row['rr_rank'] = next((i for i, h in enumerate(out, 1) if key(h) == gold), 999)
             row['rr_top3'] = '|'.join(key(h) for h in out[:3])
+            if decree:
+                from lawbot.service import retrieve_decrees
+                st = {}
+                att = retrieve_decrees(app, q, out[0]['law'], st)
+                gold_law = gold.rsplit(' ', 1)[0]
+                row |= {'dec_attached': '|'.join(key(h) for h in att), 'dec_n': len(att),
+                        'dec_other': sum(h['parent_law'] != gold_law for h in att),
+                        'dec_rerank_sec': round(st['decree_rerank'], 3)}
         return row
     resume(path, list(zip(test['id'], test['question'], test['article_id'])), one, 'retrieval')
 
 def run_answers(app, model, fmt, sample, path):
     kw = keywords()
+    decree = uses_decrees(app, model)
 
     def one(qid, q, gold, cat):
         hits, raw, st = answer(app, model, fmt, q)
-        return ({'id': qid, 'eval_cat': cat, 'gold': gold, 'retrieved': gold in [key(h) for h in hits],
-                 'top3': '|'.join(key(h) for h in hits)} | score_answer(qid, cat, gold, raw, kw)
-                | stats_cols(st) | {'answer': raw})
+        law, dec = split_hits(hits)          # top3·retrieved는 법률 3개 (하위법령을 켜도 같은 뜻)
+        return ({'id': qid, 'eval_cat': cat, 'gold': gold, 'retrieved': gold in [key(h) for h in law],
+                 'top3': '|'.join(key(h) for h in law)} | ({'decrees': '|'.join(key(h) for h in dec)} if decree else {})
+                | score_answer(qid, cat, gold, raw, kw) | stats_cols(st, decree) | {'answer': raw})
     resume(path, list(zip(sample['id'], sample['question'], sample['article_id'], sample['eval_cat'])), one, 'answers')
 
 def run_oos(app, model, fmt, path):
@@ -172,13 +224,17 @@ def run_oos(app, model, fmt, path):
     items = [(r.id, r.question, 'oos', r.category, r.source) for r in oos.itertuples()]
     items += [(r.id, r.question, 'control', 'control', f'근로기준법 {r.article_id}') for r in ctrl.itertuples()]
 
+    decree = uses_decrees(app, model)
+
     def one(qid, q, kind, category, source):
         hits, raw, st = answer(app, model, fmt, q)
+        hits, dec = split_hits(hits)
         scope = 'in_control' if kind == 'control' else ('in_reclassified' if source in OOS_IN_SCOPE else 'out')
         law = '근로기준법' if kind == 'control' else OOS_IN_SCOPE.get(source)
         return ({'id': qid, 'scope': scope, 'category': category, 'source': source} | score_oos(scope, source, raw)
                 | {'retrieved_law': bool(law) and any(h['law'] == law for h in hits),
-                   'top3': '|'.join(key(h) for h in hits)} | stats_cols(st) | {'answer': raw})
+                   'top3': '|'.join(key(h) for h in hits)} | ({'decrees': '|'.join(key(h) for h in dec)} if decree else {})
+                | stats_cols(st, decree) | {'answer': raw})
     resume(path, items, one, 'oos')
 
 def refusal_cases(app, sample, n=100):
@@ -206,12 +262,53 @@ def run_refusal(app, model, fmt, sample, path):
         return {'id': cid, 'test': test, 'context': '|'.join(ctx)} | score_refusal(raw) | {'sec': round(sec, 2), 'answer': raw}
     resume(path, refusal_cases(app, sample), one, 'refusal')
 
+def score_dq(gold, raw, ctx):
+    """하위법령 정답 문항 채점 (생성 때와 summary 재채점). ctx: 참고 조문 키 목록 (법률 3 + 첨부 하위법령)
+    cited_outside_ctx: 참고 조문에 없는 조문을 인용 (번호만 쓴 인용 포함, eval_decree와 같은 정의)"""
+    cited, no = citations(raw), refused(raw)
+    keys = [f'{l} {a}' if l else a for l, a in cited]
+    return {'refusal': no, 'cite_gold': int(cite_gold(raw, gold)), 'cited': '|'.join(keys), 'n_cited': len(keys),
+            'cites_decree': int(any(l and ' 시행' in l for l, _ in cited) and not no),
+            'cited_outside_ctx': int(any(k not in set(ctx) for k in keys)), 'answer_len': len(raw)}
+
+def run_decree_retrieval(app, model, dq, path):
+    """하위법령 정답 문항: 법률 검색·리랭킹(1위 법령) → 하위법령 후보 → 리랭킹 → 필터. 웹앱과 같은 service.retrieve"""
+    from lawbot.service import retrieve
+
+    def one(qid, q, gold, qtype):
+        st = {}
+        law, att = retrieve(app, q, 3, st, model)
+        order, att = [key(h) for h in st['decree_candidates']], [key(h) for h in att]
+        return {'id': qid, 'question_type': qtype, 'gold': gold, 'top1_law': law[0]['law'],
+                'in_cands': gold in order, 'cand_rank': order.index(gold) + 1 if gold in order else 999,
+                'attached': '|'.join(att), 'n_att': len(att), 'in_attached': gold in att,
+                'decree_rerank_sec': round(st['decree_rerank'], 3)}
+    resume(path, list(zip(dq['id'], dq['question'], dq['article_id'], dq['question_type'])), one, 'decree retrieval')
+
+def run_decree_answers(app, model, fmt, dq, path):
+    """하위법령 정답 표본 200 (decree_ctx_dq_val200.csv의 id)을 웹앱 경로(service.ask)로 답하고 채점"""
+    ids = set(pd.read_csv(DQ_SAMPLE, dtype=str, **E)['id'])
+    sample = dq[dq['id'].isin(ids)].sort_values('id')
+    assert len(sample) == len(ids), f'{DQ_SAMPLE.name}의 id가 하위법령 val 문항에 없음'
+
+    def one(qid, q, gold, qtype):
+        hits, raw, st = answer(app, model, fmt, q)
+        law, dec = split_hits(hits)
+        ctx = [key(h) for h in hits]
+        return ({'id': qid, 'question_type': qtype, 'gold': gold, 'retrieved': gold in ctx,
+                 'top3': '|'.join(key(h) for h in law), 'decrees': '|'.join(key(h) for h in dec), 'n_ctx': len(ctx)}
+                | score_dq(gold, raw, ctx) | stats_cols(st, True) | {'answer': raw})
+    resume(path, list(zip(sample['id'], sample['question'], sample['article_id'], sample['question_type'])), one,
+           'decree answers')
+
 def rescore(tag):
     """저장된 답변 원문으로 채점 열만 다시 계산해 덮어쓴다 (답변·측정값은 그대로). 채점 규칙을 고친 뒤 재생성 없이 반영"""
     kw = keywords()
     for stage, fn in (('answers', lambda r: score_answer(r['id'], r['eval_cat'], r['gold'], r['answer'], kw)),
                       ('oos', lambda r: score_oos(r['scope'], r['source'], r['answer'])),
-                      ('refusal', lambda r: score_refusal(r['answer']))):
+                      ('refusal', lambda r: score_refusal(r['answer'])),
+                      ('dqanswers', lambda r: score_dq(r['gold'], r['answer'],
+                                                       [k for k in (str(r['top3']) + '|' + str(r['decrees'])).split('|') if k]))):
         p = OUT / f'{stage}_{tag}.csv'
         if not p.exists():
             continue
@@ -265,6 +362,11 @@ def answer_failure(answer, finish, keys, articles):
         return 'truncated', ''
     return None
 
+def ctx_keys(r):
+    """답변에 준 참고 조문 키: top3(법률) + 첨부한 하위법령 (decrees 열이 있는 하위법령 구성)"""
+    dec = r.get('decrees')
+    return str(r['top3']) + ('|' + str(dec) if isinstance(dec, str) and dec else '')
+
 def fail_answers(r, ranks, articles):
     """answers 행 → (유형, 상세). ranks: id → (emb_rank, rr_rank 또는 None) (retrieval 결과)"""
     has_kw = r['eval_cat'] == 'A_lsa' and not pd.isna(r.get('total_v4'))
@@ -280,7 +382,7 @@ def fail_answers(r, ranks, articles):
         return 'false_refusal', ''
     if bool(r['cite_v4']):                # 정답은 인용, 키워드에서 실패
         return ('missing_keyword', r['missing_groups']) if float(r['group_score']) < 1 else ('forbidden_phrase', r['must_not_hits'])
-    return answer_failure(r['answer'], r.get('finish'), r['top3'], articles) or ('cite_missing', r['cited'])
+    return answer_failure(r['answer'], r.get('finish'), ctx_keys(r), articles) or ('cite_missing', r['cited'])
 
 def fail_oos(r, articles):
     if r['scope'] == 'out':
@@ -295,7 +397,19 @@ def fail_oos(r, articles):
         return 'not_retrieved', ''
     if r['refusal']:
         return 'false_refusal', ''
-    return answer_failure(r['answer'], r.get('finish'), r['top3'], articles) or ('cite_missing', r['cited'])
+    return answer_failure(r['answer'], r.get('finish'), ctx_keys(r), articles) or ('cite_missing', r['cited'])
+
+def fail_dq(r, dq_ranks, articles):
+    """하위법령 정답 문항 (dqanswers). dq_ranks: id → 후보 10개 안에 있었는지 (dqretrieval 결과)"""
+    if bool(r['cite_gold']):
+        return '', ''
+    if not r['retrieved']:
+        if r['id'] not in dq_ranks:
+            return 'not_retrieved', ''
+        return ('rerank_drop' if dq_ranks[r['id']] else 'retrieval_miss'), '하위법령 필터·리랭킹' if dq_ranks[r['id']] else ''
+    if r['refusal']:
+        return 'false_refusal', ''
+    return answer_failure(r['answer'], r.get('finish'), ctx_keys(r), articles) or ('cite_missing', r['cited'])
 
 def fail_refusal(r):
     return ('', '') if r['refusal'] else ('answered_without_basis', r['cited'])
@@ -309,9 +423,15 @@ def classify(tag):
         r = pd.read_csv(p, **E)
         ranks = {i: (int(e), int(x) if 'rr_rank' in r else None)
                  for i, e, x in zip(r['id'], r['emb_rank'], r['rr_rank'] if 'rr_rank' in r else r['emb_rank'])}
+    p = OUT / f'dqretrieval_{tag}.csv'
+    dq_ranks = {}
+    if p.exists():
+        r = pd.read_csv(p, **E)
+        dq_ranks = dict(zip(r['id'], r['in_cands'].astype(str) == 'True'))
     for stage, group, fn in (('answers', 'eval_cat', lambda r: fail_answers(r, ranks, articles)),
                              ('oos', 'scope', lambda r: fail_oos(r, articles)),
-                             ('refusal', 'test', fail_refusal)):
+                             ('refusal', 'test', fail_refusal),
+                             ('dqanswers', 'question_type', lambda r: fail_dq(r, dq_ranks, articles))):
         p = OUT / f'{stage}_{tag}.csv'
         if not p.exists():
             continue
@@ -346,7 +466,9 @@ def compare_rules():
             ('답변', 'A_lsa', '종합 점수', +1, METRICS['total'][2]),
             ('답변', 'A_lsa', '종합 점수(검색 적중)', +1, METRICS['total_retrieved'][2]),
             ('답변', '전체', '조문 인용 정확도(법령명 포함)', +1, METRICS['cite_ok'][2]),
-            ('답변', '전체', '거짓 거절률(검색 적중)', -1, METRICS['false_refusal'][2])]
+            ('답변', '전체', '거짓 거절률(검색 적중)', -1, METRICS['false_refusal'][2]),
+            ('하위법령 검색', '전체', '정답 하위법령 첨부율', +1, METRICS['recall@3'][2]),
+            ('하위법령 답변', '전체', '정답 하위법령 인용률', +1, METRICS['cite_ok'][2])]
 
 def compare(base, new, samples=5):
     """경고 목록. summary_<tag>.csv 두 개를 나란히 출력하고, fail_<tag>.csv가 있으면 실패 유형별 건수와 새 실행의 샘플 id"""
@@ -405,6 +527,8 @@ def run_meta(app, model, fmt, split, n, stages):
             'mode': 'remote' if client is not None else 'local', 'split': split, 'n': n, 'stages': stages,
             'model': model, 'fmt': fmt, 'model_dir': app.models.specs[model].path.name, 'info': info,
             'dataset': manifest.summary(manifest.load(app.profile.articles)), 'commit': head, 'dirty': dirty,
+            'decree': None if getattr(app, 'decree', None) is None else
+            {'tau': app.decree.tau, 'k': app.decree.k, 'models': list(app.decree.models), 'applied': uses_decrees(app, model)},
             'argv': sys.argv[1:]}
 
 def write_run_meta(tag, meta):
@@ -437,6 +561,11 @@ def summarize(tag, test):
                 add('검색', g, '리랭킹 MRR@3', mean(np.where(x <= 3, 1 / x, 0)), len(d))
                 add('검색', g, '리랭킹 초(평균)', mean(d['rerank_sec']), len(d))
                 add('검색', g, '리랭킹 초(p95)', round(float(d['rerank_sec'].quantile(.95)), 3), len(d))
+            if 'dec_n' in d:                  # 하위법령 첨부 구성: 법률 질문에 붙은 하위법령 (실험 law_other_ratio와 같은 정의)
+                add('검색', g, '하위법령 첨부 수(평균)', mean(d['dec_n']), len(d))
+                add('검색', g, '첨부 하위법령 중 다른 법 비율', round(float(d['dec_other'].sum() / max(d['dec_n'].sum(), 1)), 4), len(d))
+                add('검색', g, '다른 법 하위법령이 붙은 문항 비율', mean(d['dec_other'] > 0), len(d))
+                add('검색', g, '하위법령 리랭킹 초(평균)', mean(d['dec_rerank_sec']), len(d))
     p = OUT / f'answers_{tag}.csv'
     if p.exists():
         a = pd.read_csv(p, **E)
@@ -475,6 +604,27 @@ def summarize(tag, test):
         f = pd.read_csv(p, **E)
         for g, d in f.groupby('test'):
             add('정답 없는 참고 조문', g, '거절률', mean(d['refusal']), len(d))
+    p = OUT / f'dqretrieval_{tag}.csv'
+    if p.exists():
+        r = pd.read_csv(p, **E)
+        for g, d in [('전체', r)] + list(r.groupby('question_type')):
+            add('하위법령 검색', g, '정답 하위법령 후보 10개 안', mean(d['in_cands']), len(d))
+            add('하위법령 검색', g, '정답 하위법령 첨부율', mean(d['in_attached']), len(d))
+            add('하위법령 검색', g, '하위법령 첨부 수(평균)', mean(d['n_att']), len(d))
+        add('하위법령 검색', '전체', '하위법령 리랭킹 초(평균)', mean(r['decree_rerank_sec']), len(r))
+    p = OUT / f'dqanswers_{tag}.csv'
+    if p.exists():
+        a = pd.read_csv(p, **E)
+        for g, d in [('전체', a)] + list(a.groupby('question_type')):
+            hit = d[d['retrieved']]
+            add('하위법령 답변', g, '정답 하위법령이 참고 조문에 있음', mean(d['retrieved']), len(d))
+            add('하위법령 답변', g, '정답 하위법령 인용률', mean(d['cite_gold']), len(d))
+            add('하위법령 답변', g, '정답 하위법령 인용률(검색 적중)', mean(hit['cite_gold']), len(hit))
+            add('하위법령 답변', g, '거짓 거절률(검색 적중)', mean(hit['refusal']), len(hit))
+            add('하위법령 답변', g, '참고 조문 밖 인용', mean(d['cited_outside_ctx']), len(d))
+        add('하위법령 답변', '전체', '프롬프트 토큰(평균)', mean(a['prompt_tokens']), len(a))
+        add('하위법령 답변', '전체', '첫 토큰(초, 중앙값)', round(float(a['ttft'].median()), 2), len(a))
+        add('하위법령 답변', '전체', '완료(초, 평균)', mean(a['total']), len(a))
     s = pd.DataFrame(rows)
     if len(s):
         s.to_csv(OUT / f'summary_{tag}.csv', index=False, **E)
@@ -485,8 +635,8 @@ def summarize(tag, test):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('stage', nargs='?', default='all',
-                    choices=['retrieval', 'answers', 'oos', 'refusal', 'summary', 'compare', 'all'],
-                    help='생략하면 all (네 단계를 차례로 실행한 뒤 요약)')
+                    choices=['retrieval', 'answers', 'oos', 'refusal', 'decree', 'summary', 'compare', 'all'],
+                    help='생략하면 all (네 단계를 차례로 실행한 뒤 요약. 하위법령 구성 + val이면 decree도)')
     ap.add_argument('--tag', default=None, help='결과 파일 이름 (기본: <모델 key>_<형식>_rr 또는 _emb, val은 끝에 _val)')
     ap.add_argument('--split', choices=SPLITS, default='test',
                     help='문항 분할 (기본 test: 평가 전용. 설정·규칙 선택은 val로)')
@@ -509,6 +659,8 @@ def main():
         return
     if args.split == 'val' and args.stage == 'oos':
         raise SystemExit('범위 밖·대조군 문항은 평가 전용이라 val이 없습니다 (--split test로만 실행)')
+    if args.split != 'val' and args.stage == 'decree':
+        raise SystemExit('decree 단계는 --split val만 (고정 표본 decree_ctx_dq_val200.csv가 val 문항)')
     test = load_test(args.split)
     if args.stage == 'summary':
         if not args.tag:
@@ -523,24 +675,34 @@ def main():
         raise SystemExit('v4 프로필에서 실행하세요 (LAWBOT_PROFILE=v4)')
     model = args.model or app.profile.models[0].key
     fmt = args.fmt or app.models.specs[model].fmt
-    tag = args.tag or f"{model}_{fmt}_{'rr' if app.reranker else 'emb'}" + ('_val' if args.split == 'val' else '')
+    decree = uses_decrees(app, model)
+    if args.stage == 'decree' and not decree:
+        raise SystemExit(f'decree 단계는 하위법령 첨부 구성에서만: LAWBOT_DECREE_ENABLED=1, LAWBOT_DECREE_MODELS에 {model}')
+    tag = args.tag or (f"{model}_{fmt}_{'rr' if app.reranker else 'emb'}" + ('_dec' if decree else '')
+                       + ('_val' if args.split == 'val' else ''))
     sample = answer_sample(test, args.n)
     print(f'[eval_v4] tag {tag} · 모델 {model} · 형식 {fmt} · 리랭커 {"켜짐" if app.reranker else "꺼짐"} · '
+          f'하위법령 {"첨부" if decree else "없음"} · '
           f'{args.split} {len(test)} · 표본 {len(sample)}')
     stages = ['retrieval', 'answers', 'oos', 'refusal'] if args.stage == 'all' else [args.stage]
     if args.split == 'val':
-        stages = [s for s in stages if s != 'oos']
+        stages = [s for s in stages if s != 'oos'] + (['decree'] if args.stage == 'all' and decree else [])
     write_run_meta(tag, run_meta(app, model, fmt, args.split, args.n, stages))
     t0 = time.perf_counter()
     for s in stages:
         if s == 'retrieval':
-            run_retrieval(app, test, OUT / f'retrieval_{tag}.csv', rerank=not args.no_rerank)
+            run_retrieval(app, test, OUT / f'retrieval_{tag}.csv', rerank=not args.no_rerank,
+                          decree=decree and not args.no_rerank)
         elif s == 'answers':
             run_answers(app, model, fmt, sample, OUT / f'answers_{tag}.csv')
         elif s == 'oos':
             run_oos(app, model, fmt, OUT / f'oos_{tag}.csv')
         elif s == 'refusal':
             run_refusal(app, model, fmt, sample, OUT / f'refusal_{tag}.csv')
+        elif s == 'decree':
+            dq = load_decree_questions('val')
+            run_decree_retrieval(app, model, dq, OUT / f'dqretrieval_{tag}.csv')
+            run_decree_answers(app, model, fmt, dq, OUT / f'dqanswers_{tag}.csv')
     summarize(tag, test)
     classify(tag)
     print(f'[eval_v4] {", ".join(stages)} 완료 · {(time.perf_counter() - t0) / 60:.1f}분 · 결과 {OUT}/*_{tag}.csv')

@@ -9,7 +9,7 @@ import urllib.request
 import numpy as np
 from lawbot import manifest
 
-API_VERSION = 1                      # model_server.API_VERSION과 같아야 함 (모델 서버 모듈은 import하지 않음)
+API_VERSION = 2                      # model_server.API_VERSION과 같아야 함 (모델 서버 모듈은 import하지 않음)
 GEN_FIELDS = ('text', 'generation_tps', 'prompt_tokens', 'prompt_tps', 'generation_tokens', 'peak_memory',
               'finish_reason')
 
@@ -71,16 +71,22 @@ class ModelServerClient:
             r.close()
 
 class RemoteRetriever:
-    """Retriever와 같은 속성·메서드. 조문 목록(ids·titles·docs·laws)은 시작할 때 한 번 받아 numpy 배열로 둔다"""
+    """Retriever와 같은 속성·메서드. 조문 목록(ids·titles·docs·laws·kinds·parent_laws)은 시작할 때 한 번 받아 numpy 배열로 둔다
+    법률 먼저, 하위법령 뒤 (n_law개가 법률)"""
     def __init__(self, client):
         self.client = client
         a = client.get_json('/articles')
-        self.ids, self.titles = np.array(a['ids'], dtype=object), np.array(a['titles'], dtype=object)
+        arr = lambda v: None if v is None else np.array(v, dtype=object)
+        self.ids, self.titles = arr(a['ids']), arr(a['titles'])
         self.docs = list(a['docs'])
-        self.laws = None if a['laws'] is None else np.array(a['laws'], dtype=object)
+        self.laws, self.kinds, self.parent_laws = arr(a['laws']), arr(a['kinds']), arr(a['parent_laws'])
+        self.n_law = a['n_law']
 
     def search(self, query, k=3):
         return self.client.post_json('/search', {'question': query, 'k': int(k)})['hits']
+
+    def search_decrees(self, query, k=10):
+        return self.client.post_json('/search', {'question': query, 'k': int(k), 'kind': 'decree'})['hits']
 
     def rank_all(self, queries):
         return np.array(self.client.post_json('/rank_all', {'questions': [str(q) for q in queries]})['rank'],
@@ -162,8 +168,11 @@ def wait_ready(client, wait_s):
                                'LAWBOT_MODEL_SERVER_WAIT로 대기 시간을 늘리거나 모델 서버 로그를 확인하세요.')
         time.sleep(WAIT_INTERVAL)
 
-def check_info(info, profile):
-    """서버와 웹앱 설정이 맞는지. 다른 항목 목록 (비어 있으면 일치)"""
+DECREE_KEYS = ('tau', 'k', 'candidates', 'max_seq')   # 서버와 웹앱이 같아야 하는 하위법령 설정 (models는 웹앱이 정함)
+
+def check_info(info, profile, decree=None):
+    """서버와 웹앱 설정이 맞는지. 다른 항목 목록 (비어 있으면 일치)
+    decree: 웹앱의 deploy.DecreeConfig (None = 꺼짐). 켜짐 여부·τ·k·후보 수·max_seq가 서버 /info의 decree와 같아야 함"""
     diff = []
     if info.get('api_version') != API_VERSION:
         diff.append(f"api_version: 서버 {info.get('api_version')} / 웹앱 {API_VERSION} (두 쪽 코드 버전을 맞추세요)")
@@ -172,6 +181,15 @@ def check_info(info, profile):
         diff.append(f"프로필: 서버 {sp.get('name')} / 웹앱 {profile.name} (LAWBOT_PROFILE)")
     if sp.get('doc_style') != profile.doc_style:
         diff.append(f"doc_style: 서버 {sp.get('doc_style')} / 웹앱 {profile.doc_style}")
+    sd = info.get('decree')
+    if sd is not None and not info.get('reranker'):
+        diff.append('서버가 리랭커 없이 하위법령 첨부를 켰습니다 (모델 서버 설정 확인)')
+    if (sd is None) != (decree is None):
+        diff.append(f"하위법령 첨부: 서버 {'꺼짐' if sd is None else '켜짐'} / 웹앱 {'꺼짐' if decree is None else '켜짐'} "
+                    '(LAWBOT_DECREE_ENABLED를 같은 값으로)')
+    elif decree is not None:
+        diff += [f'하위법령 {k}: 서버 {sd.get(k)} / 웹앱 {getattr(decree, k)} (LAWBOT_DECREE_* 설정을 맞추세요)'
+                 for k in DECREE_KEYS if sd.get(k) != getattr(decree, k)]
     missing = [s.key for s in profile.models if s.key not in (info.get('models') or [])]
     if missing:
         diff.append(f"웹앱 모델 {missing}이 서버 모델 {info.get('models')}에 없음 (LAWBOT_MODELS)")

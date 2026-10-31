@@ -301,7 +301,7 @@ def test_val_skips_oos_and_records_run(env, monkeypatch, tmp_path):
     run = meta['runs'][0]
     assert (run['mode'], run['split'], run['model'], run['fmt']) == ('local', 'val', 'pro', 'concise')
     assert run['model_dir'] == deploy.get_profile('v4').models[0].path.name
-    assert run['info']['api_version'] == 1 and run['info']['reranker'] == {'candidates': 6}
+    assert run['info']['api_version'] == 2 and run['info']['reranker'] == {'candidates': 6}
     assert run['dataset']['dataset_version'] == 'v4' and 'commit' in run
     ev.main()                                                    # 이어서 실행하면 실행 기록이 하나 더
     assert len(json.loads((tmp_path / 'run_pro_concise_rr_val.json').read_text(encoding='utf-8'))['runs']) == 2

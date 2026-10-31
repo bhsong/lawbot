@@ -17,3 +17,6 @@ models/
 
 # 요청 로그 (lawbot.service.log_request, 질문 원문 없음)
 logs/
+
+# 드라이브
+data_gd/

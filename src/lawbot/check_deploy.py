@@ -10,10 +10,12 @@ import sys
 from collections import Counter
 from pathlib import Path
 import pandas as pd
-from lawbot import deploy, envfile, manifest, remote, security
+from lawbot import deploy, envfile, manifest, paths, remote, security
 from lawbot.deploy import get_profile
 
-EXPECTED_ARTICLES = {'v1': 130, 'v4': 415}
+EXPECTED_ARTICLES = {'v1': 130, 'v4': 415}   # 법률 조문 수
+EXPECTED_DECREE = {'시행령': 273, '시행규칙': 124}   # 하위법령을 켰을 때 812조문 CSV의 하위법령 수
+DECREE_COLUMNS = {'kind', 'parent_law', 'article_no'}
 COLUMNS = {'v1': {'article_id', 'title', 'deleted', 'text'}, 'v4': {'law', 'article_id', 'title', 'deleted', 'text'}}
 ADAPTER_FILES = ('adapters.safetensors', 'adapter_config.json', 'adapter_model.safetensors')
 HIDDEN_SIZE = {2560: 'Qwen3-4B', 5120: 'Qwen3-14B'}       # config.json hidden_size로 크기 확인
@@ -44,8 +46,14 @@ def check_articles(p, out):
     live = law[law['deleted'] == 0]
     key = ['law', 'article_id'] if p.doc_style == 'v4' else ['article_id']
     dup = live[live.duplicated(key, keep=False)]
-    n_ok = len(live) == EXPECTED_ARTICLES[p.name]
-    out.append(('OK' if n_ok else 'FAIL', f'비삭제 조문 {len(live)}개 (기대 {EXPECTED_ARTICLES[p.name]}) · sha256 {sha256(p.articles)[:12]}'))
+    n_law = int((live['kind'] == '법률').sum()) if 'kind' in live else len(live)   # 검색기는 kind로 법률만 법률 인덱스에
+    n_ok = n_law == EXPECTED_ARTICLES[p.name]
+    if 'kind' in live:                   # 812조문 CSV (하위법령 첨부)
+        out.append(('OK' if n_ok else 'FAIL', f'비삭제 법률 조문 {n_law}개 (기대 {EXPECTED_ARTICLES[p.name]}) · '
+                                              f'전체 {len(live)}개 · sha256 {sha256(p.articles)[:12]}'))
+    else:
+        out.append(('OK' if n_ok else 'FAIL', f'비삭제 조문 {len(live)}개 (기대 {EXPECTED_ARTICLES[p.name]}) · '
+                                              f'sha256 {sha256(p.articles)[:12]}'))
     if len(dup):
         out.append(('FAIL', f'중복 조문 {len(dup)}행: {dup[key].head().values.tolist()}'))
     nums = live['article_no'] if 'article_no' in live else live['article_id']   # retriever와 같은 규칙
@@ -55,6 +63,45 @@ def check_articles(p, out):
                             '(법령명이 들어 있으면 번호만 담은 article_no 열 추가)'))
     if p.doc_style == 'v4':
         out.append(('INFO', f"법령별 조문 수: {live['law'].value_counts().to_dict()}"))
+
+def check_decree(p, out):
+    """하위법령 첨부 설정과 812조문 CSV: 종류별 수, parent_law, 법률 415행이 415조문 CSV와 같은지(법률 검색이 같다는 전제)"""
+    try:
+        remote_mode = security.model_server_url() is not None
+    except ValueError:
+        remote_mode = False
+    try:
+        dc = deploy.decree(p, require_reranker=not remote_mode)   # 원격 모드는 리랭커를 서버가 정함
+    except ValueError as e:
+        return out.append(('FAIL', f'하위법령 설정: {e}'))
+    if dc is None:
+        return out.append(('INFO', '시행령·시행규칙 첨부 꺼짐 (LAWBOT_DECREE_ENABLED=1이면 812조문 CSV도 검사)'))
+    unknown = [k for k in dc.models if k not in {s.key for s in p.models}]
+    out.append(('OK', f'시행령·시행규칙 첨부 켜짐: τ {dc.tau:g} · 최대 {dc.k}개 · 후보 {dc.candidates}개 · '
+                      f'인코딩 max_seq {dc.max_seq} · 첨부 모델 {list(dc.models)} · 조문 CSV {p.articles.name}'))
+    if unknown:
+        out.append(('INFO', f'첨부 모델 {unknown}은 이 기기에서 쓰지 않음 (LAWBOT_MODELS)'))
+    if not p.articles.is_file():
+        return
+    law = pd.read_csv(p.articles, encoding='utf-8-sig')
+    missing = DECREE_COLUMNS - set(law.columns)
+    if missing:
+        return out.append(('FAIL', f'하위법령 CSV 열 없음 {sorted(missing)}: LAWBOT_V4_DECREE_ARTICLES가 812조문 CSV인지 확인'))
+    live = law[law['deleted'] == 0]
+    got = live.loc[live['kind'] != '법률', 'kind'].value_counts().to_dict()
+    out.append(('OK' if got == EXPECTED_DECREE else 'FAIL', f'하위법령 조문 {got} (기대 {EXPECTED_DECREE})'))
+    laws = set(live.loc[live['kind'] == '법률', 'law'])
+    orphan = live[(live['kind'] != '법률') & ~live['parent_law'].isin(laws)]
+    out.append(('OK' if orphan.empty else 'FAIL', '하위법령 parent_law ' + ('모두 7개 법률 중 하나' if orphan.empty else
+                f"법률에 없음 {len(orphan)}행: {orphan['article_id'].head().tolist()}")))
+    base = paths.V4_ARTICLES
+    if base.is_file():
+        cols = ['law', 'article_no', 'title', 'text']
+        a = live.loc[live['kind'] == '법률', cols].reset_index(drop=True)
+        b = pd.read_csv(base, encoding='utf-8-sig').query('deleted == 0')[cols].reset_index(drop=True)
+        same = a.equals(b)
+        out.append(('OK' if same else 'FAIL', f'법률 조문이 {base.name}와 ' + ('같음 (법률 검색·임베딩 그대로)' if same else
+                    '다름: 하위법령을 켜면 법률 검색 결과가 바뀔 수 있음')))
 
 def check_manifest(p, out):
     """조문 CSV가 매니페스트(조문 수·sha256)와 같은지. 모델 서버(로컬 모드 load_app)는 FAIL이면 시작을 거부한다"""
@@ -165,7 +212,11 @@ def check_model_server(p, out):
     if not ready:
         return out.append(('FAIL', '모델 서버가 아직 모델을 불러오는 중입니다. 잠시 뒤 다시 확인하세요.'))
     info = client.get_json('/info')
-    diff = remote.check_info(info, p)
+    try:
+        dc = deploy.decree(p, require_reranker=False)
+    except ValueError:                   # check_decree가 FAIL로 알림
+        dc = None
+    diff = remote.check_info(info, p, dc)
     out.extend(('FAIL', f'모델 서버 설정 불일치: {d}') for d in diff)
     if not diff:
         out.append(('OK', f"모델 서버 api_version {info['api_version']} · 프로필 {info['profile']['name']} 일치"))
@@ -175,6 +226,7 @@ def check_model_server(p, out):
     rr = info['reranker']
     out.append(('INFO', f"모델 서버: 조문 {info['n_articles']}개 · 리랭커 "
                         f"{'후보 ' + str(rr['candidates']) + '개' if rr else '꺼짐'} · 모델 {info['models']} · "
+                        f"하위법령 {info.get('decree') or '꺼짐'} · "
                         f"상주 {info['loaded']} (최대 {info['max_resident']}) · MLX 메모리(GB) {info['memory']}"))
 
 def run(name=None):
@@ -189,6 +241,7 @@ def run(name=None):
     for spec in p.disabled:             # LAWBOT_MODELS에서 뺀 모델은 검사하지 않음 (화면에 비활성 표시)
         out.append(('INFO', f'{spec.label}: 이 기기에서 사용 안 함 (LAWBOT_MODELS)'))
     check_reranker(p, out)
+    check_decree(p, out)
     check_ports(out)
     check_model_server(p, out)
     return out

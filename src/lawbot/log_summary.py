@@ -26,9 +26,14 @@ def summarize(d):
     for (mode, model), g in ok.groupby(['mode', 'model']):
         out.append(f'[{mode} · {model}] 성공 {len(g)}건')
         for k in MS_FIELDS:
+            if f'{k}_ms' not in g:       # 하위법령 필드가 생기기 전 로그 (decree_search_ms 등)
+                continue
             s = g[f'{k}_ms'].dropna()
             if len(s):
                 out.append(f'  {k:10} 중앙값 {s.median() / 1000:6.2f}초 · p95 {s.quantile(.95) / 1000:6.2f}초 ({len(s)}건)')
+        if 'n_decree' in g and g['n_decree'].notna().any():
+            n = g['n_decree'].dropna()
+            out.append(f'  시행령·시행규칙 첨부 평균 {n.mean():.2f}개 · 없음 {(n == 0).mean():.0%} ({len(n)}건)')
         if g['peak_gb'].notna().any():
             out.append(f"  peak_gb    최대 {g['peak_gb'].max():.1f}GB")
         if (g['finish'] == 'length').any():

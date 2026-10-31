@@ -1,0 +1,77 @@
+{
+  "tag": "pro_concise_rr_dec_val",
+  "runs": [
+    {
+      "date": "2026-10-31T21:13:10+09:00",
+      "mode": "local",
+      "split": "val",
+      "n": 200,
+      "stages": [
+        "retrieval",
+        "answers",
+        "refusal",
+        "decree"
+      ],
+      "model": "pro",
+      "fmt": "concise",
+      "model_dir": "qwen_27b_mlx_4bit",
+      "info": {
+        "api_version": 2,
+        "profile": {
+          "name": "v4",
+          "doc_style": "v4"
+        },
+        "models": [
+          "pro"
+        ],
+        "loaded": [
+          "pro"
+        ],
+        "max_resident": 1,
+        "reranker": {
+          "candidates": 10
+        },
+        "decree": {
+          "tau": 0.9,
+          "k": 2,
+          "candidates": 10,
+          "max_seq": 3072,
+          "models": [
+            "pro"
+          ],
+          "n_articles": 397
+        },
+        "n_articles": 812,
+        "memory": {
+          "active": 17.4,
+          "peak": 17.4,
+          "cache": 0.0
+        },
+        "dataset": {
+          "dataset_version": "v4-decree",
+          "reference_date": "2026-10-20",
+          "articles_sha256": "62517fad36b669be89fea1c831aac980a6518e119a62defbd65305369c13e040"
+        }
+      },
+      "dataset": {
+        "dataset_version": "v4-decree",
+        "reference_date": "2026-10-20",
+        "articles_sha256": "62517fad36b669be89fea1c831aac980a6518e119a62defbd65305369c13e040"
+      },
+      "commit": "3405afb3af5abe3f1da7ee2850eb89e774927a3e",
+      "dirty": false,
+      "decree": {
+        "tau": 0.9,
+        "k": 2,
+        "models": [
+          "pro"
+        ],
+        "applied": true
+      },
+      "argv": [
+        "--split",
+        "val"
+      ]
+    }
+  ]
+}

@@ -45,7 +45,8 @@ def hit_key(h):
     return key(hit_law(h), h['article_id'])
 
 def article_keys(retriever):
-    """검색기(로컬 Retriever·RemoteRetriever)의 전체 조문 → {(법령, 제N조)}. 삭제 조문은 검색기에 없다"""
+    """검색기(로컬 Retriever·RemoteRetriever)의 전체 조문 → {(법령, 제N조)}. 삭제 조문은 검색기에 없다
+    하위법령을 켠 검색기는 하위법령 397개도 포함 (법령 '근로기준법 시행령')"""
     laws = getattr(retriever, 'laws', None)
     laws = laws if laws is not None else [DEFAULT_LAW] * len(retriever.ids)
     return set(zip(map(str, laws), map(str, retriever.ids)))
@@ -90,8 +91,10 @@ def check(cites, hits, articles=None):
       ambiguous  : 법령명이 없고, 그 번호가 검색 결과(없으면 전체 조문)에서 여러 법령에 있음
       wrong_law  : 같은 번호의 다른 법령 조문이 검색 결과에 있음 (법령을 헷갈림)
       outside    : 전체 조문에는 있지만 검색 결과 밖
-      nonexistent: 전체 조문(비삭제 415개)에 없음. 삭제 조문·하위법령 조문 포함
-    articles: 전체 조문 {(법령, 제N조)} (article_keys). None이면 존재 여부를 모르므로 검색 결과 밖은 모두 outside"""
+      nonexistent: 전체 조문에 없음 (삭제 조문 포함). 전체 조문은 검색기 기준: 하위법령을 끄면 법률 415개라
+                   하위법령 인용도 nonexistent, 켜면 812개('근로기준법 시행령', '제2조')라 참고 조문 밖이면 outside
+    articles: 전체 조문 {(법령, 제N조)} (article_keys). None이면 존재 여부를 모르므로 검색 결과 밖은 모두 outside
+    hits에 첨부한 하위법령 dict(law '근로기준법 시행령')도 법률 조문과 같은 규칙으로 판정한다"""
     by_key = {(hit_law(h), h['article_id']): h for h in hits}
     out = []
     for law, no in cites:
