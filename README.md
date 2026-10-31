@@ -61,7 +61,7 @@ v1:
 - **v4 웹앱 test (2026-10-25)**: 리랭킹 Recall@3 0.940, 조문 인용 정확도 0.905, 범위 밖 거절률 0.96, 질문당 15.1초 · MLX 최대 20.4GB → [기록](docs/evals/2026-10-25-v4-webapp-test.md)
 - **원격 모드 재확인 (2026-10-29)**: 답변 522개가 로컬 모드와 글자 단위로 같고, 지연 차이는 0.3초 이내 → [기록](docs/evals/2026-10-29-model-server.md)
 - **시행령·시행규칙 첨부 실험 (val, 2026-10-29~31)**: 채택 규칙의 정답 하위법령 포함 0.921, 하위법령 질문 정답 인용 0.000 → 0.900, 법률 질문 답변은 그대로 → [기록](docs/evals/2026-10-31-decree-experiment.md)
-- **시행령·시행규칙 웹앱 반영 검증 (val, 2026-10-31)**: 진행 중 (배포 검사·법률 임베딩 동일·로컬/원격 동등성 통과) → [기록](docs/evals/2026-10-31-decree-attach.md)
+- **시행령·시행규칙 웹앱 반영 검증 (val, 2026-10-31)**: 법률 검색 지표 기준선과 동일, 정답 하위법령 첨부 0.91·인용 0.885, 다른 법 첨부 문항 0.089, 법률 인용 0.865→0.855, 완료 15.5→19.6초 → [기록](docs/evals/2026-10-31-decree-attach.md)
 - **v1 근로기준법 130조문 (2026-10-16~18)**: 검색 Recall@3 0.940, 종합 점수 0.854 (검색 조문) / 0.961 (정답 조문), 범위 밖 거절률 0.707 → [기록](docs/evals/2026-10-18-v1.md)
 
 ### 빠른 시작
@@ -591,7 +591,7 @@ One line per evaluation with a link to its record; tables, settings and commands
 - **v4 web app, test (2026-10-25)**: reranked Recall@3 0.940, citation accuracy 0.905, out-of-scope refusal 0.96, 15.1 s per question, MLX peak 20.4GB → [record](docs/evals/2026-10-25-v4-webapp-test.md)
 - **Remote mode recheck (2026-10-29)**: all 522 answers identical to local mode, latency within 0.3 s → [record](docs/evals/2026-10-29-model-server.md)
 - **Enforcement-decree attachment experiment (val, 2026-10-29 to 31)**: chosen rule attaches the gold decree 0.921; gold-decree citation on decree questions 0.000 → 0.900; Act answers unchanged → [record](docs/evals/2026-10-31-decree-experiment.md)
-- **Decree attachment in the web app (val, 2026-10-31)**: in progress (deploy check, identical Act embeddings, local/remote equivalence passed) → [record](docs/evals/2026-10-31-decree-attach.md)
+- **Decree attachment in the web app (val, 2026-10-31)**: Act retrieval identical to baseline, correct decree attached 0.91 · cited 0.885, other-law attachment 0.089 of questions, Act citation 0.865→0.855, completion 15.5→19.6 s → [record](docs/evals/2026-10-31-decree-attach.md)
 - **v1, 130 Labor Standards Act articles (2026-10-16 to 18)**: Recall@3 0.940, total score 0.854 (retrieved) / 0.961 (gold articles), out-of-scope refusal 0.707 → [record](docs/evals/2026-10-18-v1.md)
 
 ### Quick start
