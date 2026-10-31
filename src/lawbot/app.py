@@ -1,7 +1,7 @@
 # src/lawbot/app.py  →  uv run lawbot-app
 import html
 import gradio as gr
-from lawbot import envfile, manifest
+from lawbot import envfile, feedback, feedback_ui, manifest
 from lawbot.decree import is_decree
 from lawbot.answer_format import answer_citations, render
 from lawbot.service import ask, load_app, uses_decrees
@@ -98,10 +98,14 @@ def fmt_stats(label, stage, st):
         parts.append('✍️ 답변 생성 중…')
     return ' · '.join(parts)
 
-def make_chat(app):
+def session_of(request):
+    return getattr(request, 'session_hash', None) if request is not None else None
+
+def make_chat(app, fb=None):
     # 이름이 chat인 함수를 넘겨야 Gradio API 이름(/gradio_api/call/chat)이 유지됨
     # API 입력은 [질문, 모델 key, 형식] 세 개 (Gradio 6.30은 빠진 입력을 기본값으로 채우지 않음)
-    def chat(message, history, model_key, fmt):      # 단일 턴: history는 쓰지 않음
+    # request(gr.Request)는 Gradio가 넣는 특수 인자: API 입력 수는 그대로. fb(feedback.Feedback)가 있으면 끝난 턴을 기억한다
+    def chat(message, history, model_key, fmt, request: gr.Request = None):   # 단일 턴: history는 순번에만 씀
         if not (message or '').strip():
             yield '질문을 입력해 주세요.', '', ''
             return
@@ -125,6 +129,12 @@ def make_chat(app):
                     src = fmt_sources(hits, used, no)
                     if not raw.strip():
                         text = EMPTY
+                    if fb is not None:           # 이 답에 버튼을 누르면 저장할 입력 전체 (history의 assistant 수 = 이 답의 순번)
+                        try:
+                            fb.remember(session_of(request), sum(feedback.role(m) == 'assistant' for m in history or []),
+                                        feedback.turn_record(app, message, hits, raw, text, model_key, fmt, st))
+                        except Exception as e:   # 피드백 기록 실패는 답변을 막지 않는다
+                            print(f'[lawbot] 경고: 피드백용 턴 기록 실패 ({type(e).__name__})')
                 elif not text.strip():           # 표시 기호를 쓰는 중 (간결형)
                     text = WRITING
                 yield text, src, fmt_stats(spec.label, stage, st)
@@ -175,7 +185,13 @@ def sources_heading(app):
         return f'### 검색된 조문 (법률 3개 + 시행령·시행규칙 최대 {app.decree.k}개)'
     return '### 검색된 조문 (상위 3개)'
 
-def build_demo(app):                 # 화면만 만든다: 인증 검사·모델 로딩은 main에서
+def make_on_feedback(fb):
+    """Chatbot .like 이벤트 → feedback.Feedback.on_like (알림 팝업 없음)"""
+    def on_feedback(history, d: gr.LikeData, request: gr.Request):
+        fb.on_like(session_of(request), history, d.index, d.value, d.liked)
+    return on_feedback
+
+def build_demo(app, fb=None):        # 화면만 만든다: 인증 검사·모델 로딩은 main에서. fb: feedback.from_env() (None이면 버튼 없음)
     p, title = app.profile, page_title(app)
     with gr.Blocks(title=title) as demo:
         gr.Markdown(f'# {title}\n{intro_text(app)}'
@@ -191,10 +207,17 @@ def build_demo(app):                 # 화면만 만든다: 인증 검사·모�
                     fmt = gr.Radio([('간결', 'concise'), ('전체 (4항목)', 'full')], value=p.models[0].fmt,
                                    label='답변 형식')
                 model.change(default_fmt(app), model, [model, fmt], queue=False, api_visibility='private')
+                # 메시지 복사·재시도는 기본 제공. 공유(Hugging Face 업로드) 버튼은 상담 내용이 나가지 않게 뺀다
+                # 피드백: 👍('Like')과 깃발(이유 4종). 'Dislike'는 넣지 않는다
+                chatbot = gr.Chatbot(buttons=['copy', 'copy_all'], height=480,
+                                     feedback_options=feedback.OPTIONS if fb is not None else [])
+                if fb is not None:
+                    chatbot.like(make_on_feedback(fb), chatbot, None, queue=False, api_visibility='private')
                 gr.ChatInterface(
-                    fn=make_chat(app),
-                    # 메시지 복사·재시도는 기본 제공. 공유(Hugging Face 업로드) 버튼은 상담 내용이 나가지 않게 뺀다
-                    chatbot=gr.Chatbot(buttons=['copy', 'copy_all'], height=480),
+                    fn=make_chat(app, fb),
+                    chatbot=chatbot,
+                    # 'never' 명시: 환경 변수 GRADIO_CHAT_FLAGGING_MODE로 기본 기능(.gradio/flagged에 화면 대화 저장)이 켜지지 않게
+                    flagging_mode='never',
                     additional_inputs=[model, fmt],
                     additional_outputs=[sources, stats],
                     examples=[[q, None, None] for q in EXAMPLES],   # None: 예시를 눌러도 현재 모델·형식 선택 유지
@@ -208,8 +231,10 @@ def build_demo(app):                 # 화면만 만든다: 인증 검사·모�
 def main():
     envfile.load()                       # .env (셸에 있는 변수 우선). 인증·모델 설정을 읽기 전에
     config = get_local_launch_config()   # 인증 정보가 없으면 모델 로딩 전에 실행 거부
-    demo = build_demo(load_app())
-    demo.launch(**config)            # 127.0.0.1:<LAWBOT_PORT>, 로그인 필수, 공유 링크 없음
+    fb = feedback.from_env()             # LAWBOT_FEEDBACK=1: 저장 폴더가 gitignore 밖이면 모델 로딩 전에 거부
+    a = load_app()
+    demo = build_demo(a, fb) if fb is not None else build_demo(a)   # 꺼져 있으면 기존과 같은 호출
+    demo.launch(**config, **feedback_ui.launch_options(fb))   # 127.0.0.1:<LAWBOT_PORT>, 로그인 필수, 공유 링크 없음
 
 if __name__ == '__main__':
     main()
