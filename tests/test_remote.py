@@ -189,7 +189,7 @@ def test_mismatch_refused(fakes):
             with pytest.raises(RuntimeError, match=want):
                 service.load_app(profile)
         fakes.setattr(remote, 'API_VERSION', 99)
-        with pytest.raises(RuntimeError, match='api_version: 서버 1 / 웹앱 99'):
+        with pytest.raises(RuntimeError, match='api_version: 서버 2 / 웹앱 99'):
             service.load_app()
 
 def test_missing_model_key_refused(fakes):

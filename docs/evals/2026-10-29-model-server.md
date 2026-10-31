@@ -1,0 +1,47 @@
+# 평가 기록: 모델 서버 분리 (원격 모드) 검증
+
+- 날짜: 2026-10-29
+- 장비: 맥 미니 32GB
+- 대상: 운영 모델 서버 (프로필 v4, Pro만 상주 `max_resident` 1, 리랭커 후보 10)
+- 계획: [`docs/archives/model-server.md`](../archives/model-server.md) 9장
+- 원본: 계획 문서 9장 "결과 기록 표"를 이 파일로 옮겼습니다(내용은 같음).
+- 결과 파일: `results/v4/*_pro_concise_rr.csv`(로컬, 10-25), `results/v4/*_pro_concise_rr_remote.csv`(원격, 10-29)
+
+## 요약
+웹앱이 모델 서버에 접속하는 원격 모드에서 답변 522개가 로컬 모드와 글자 단위로 모두 같았습니다(answers 200 · oos 122 · refusal 200). 지연 차이는 0.3초 이내였습니다.
+
+## 결과 기록 표
+
+측정: 2026-10-29, 맥미니 32GB. 운영 중인 모델 서버(운영 태그, 프로필 v4, 답변 모델 Pro만 상주 `max_resident` 1, 리랭커 후보 10개)를 대상으로 측정했다.
+로컬 모드 열은 10-25 `pro_concise_rr` 결과(로컬 모드)에서 옮겼다. 운영 중에 로컬 모드를 따로 띄우면 27B가 한 벌 더 올라가 32GB를 넘을 수 있어 새로 재지 않았다.
+6번의 20문항 소표본 비교는 개선 계획 B0의 전체 비교(test 표본 answers 200 · oos 122 · refusal 200, `lawbot.diff_answers`)로 대신했다.
+
+| 항목 | 로컬 모드 (기존) | 원격 모드 | 비고 |
+| --- | --- | --- | --- |
+| 모델 서버 로딩 시간 (초) | – | 28.0 | 서버 로그 `ready` 줄 (Pro 27B + 임베딩 + 리랭커) |
+| 메모리: 모델 서버 프로세스 (GB) | – | 미측정 | 활성 상태 보기. 대신 MLX 값: 로딩 직후 active 17.4 |
+| 메모리: 운영 웹앱 프로세스 (GB) | 미측정 | 미측정 | |
+| 메모리: 개발 웹앱 프로세스 (GB) | 실행 불가 | 미측정 | |
+| MLX peak (GB, `/info` 또는 측정 줄) | 20.4 (10-25) | 20.4 | `/info` 평가 후 peak 20.4 · active 17.4 · cache 0.23. 측정 줄 `peak_gb` 최댓값도 20.40 |
+| 첫 글자 (초, 예시 질문 1) | 미측정 | 4.3 | 운영 화면 측정 칸 (Pro · 간결) |
+| 완료 (초, 예시 질문 1) | 미측정 | 15.1 | 운영 화면 측정 칸 (Pro · 간결) |
+| 답변 글자 단위 일치 (B0 전체 비교) | 기준 | answers 200/200 · oos 122/122 · refusal 200/200 | `results/v4/*_pro_concise_rr.csv` vs `*_pro_concise_rr_remote.csv` |
+| 정지 후 다음 요청 대기 (초) | – | 미측정 | 7번 (개발 웹앱을 따로 띄우지 않음) |
+| 휴대폰(Tailscale HTTPS) 로그인·답변 | – | 성공 | |
+
+answers 200문항 지연 시간 (`summary_pro_concise_rr` → `summary_pro_concise_rr_remote`). 정확도·거절 지표는 모두 같다.
+
+| 지표 | 로컬 모드 (10-25) | 원격 모드 (10-29) |
+| --- | --- | --- |
+| 첫 토큰 (초, 중앙값) | 2.82 | 2.78 |
+| 완료 (초, 평균 / p95) | 15.13 / 20.60 | 14.90 / 20.33 |
+| 생성 속도 (tok/s, 평균) | 9.71 | 9.81 |
+| 검색 / 리랭킹 (초, 중앙값) | 0.028 / 1.796 | 0.029 / 1.789 |
+| 범위 밖 완료 평균 (초, 122) | 14.62 | 14.51 |
+| 정답 없는 참고 조문 답변 평균 (초, 200) | 11.87 | 11.82 |
+
+HTTP 왕복이 더해졌는데도 원격 모드가 느려지지 않았다(차이 0.3초 이내, 측정 오차 범위로 본다).
+
+## English (README text)
+
+Rechecked in the production setup (remote mode, 2026-10-29): the web app talking to the model server reran answers, out-of-scope and refusal, and `lawbot.diff_answers` found all 522 answers identical character for character (200 · 122 · 200), so the accuracy numbers above stand. End-to-end time averaged 14.9 s, first token 2.78 s (median) and MLX peak memory 20.4GB, with no visible HTTP overhead (`results/v4/*_pro_concise_rr_remote.csv`).

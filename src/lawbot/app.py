@@ -2,8 +2,9 @@
 import html
 import gradio as gr
 from lawbot import envfile, manifest
+from lawbot.decree import is_decree
 from lawbot.answer_format import answer_citations, render
-from lawbot.service import ask, load_app
+from lawbot.service import ask, load_app, uses_decrees
 from lawbot.security import get_local_launch_config, instance_name
 
 # v4 Fast로 검색·답변을 확인한 질문 (근로기준법 제26조, 최저임금법 제6조, 남녀고용평등법 제19조)
@@ -15,11 +16,14 @@ SEARCHING = '⏳ 조문을 찾는 중…'         # '⏳'로 시작하는 문구
 WRITING = '⏳ 답변을 쓰는 중…'
 
 def source_title(h):
-    return f"{h['law'] + ' ' if 'law' in h else ''}{h['article_id']} {h['title']}"
+    """하위법령은 앞에 〔시행령〕·〔시행규칙〕 표시 (법률 카드와 구분)"""
+    tag = f"〔{h['kind']}〕 " if is_decree(h) else ''
+    return f"{tag}{h['law'] + ' ' if 'law' in h else ''}{h['article_id']} {h['title']}"
 
 def source_scores(h):
+    where = '하위법령 임베딩' if is_decree(h) else '임베딩'
     return (f"유사도 {h['score']:.3f}"
-            + (f" · 리랭커 {h['rerank_score']:.3f} (임베딩 {h['emb_rank']}위)" if 'rerank_score' in h else ''))
+            + (f" · 리랭커 {h['rerank_score']:.3f} ({where} {h['emb_rank']}위)" if 'rerank_score' in h else ''))
 
 def source_card(h):
     return f"**{source_title(h)}** · {source_scores(h)}\n\n{h['doc'].split(chr(10), 1)[1]}"
@@ -31,7 +35,8 @@ def folded_card(h):
 
 def fmt_sources(hits, cited=None, refused=False):
     """오른쪽 조문 카드. cited(답변에서 인용한 검색 결과 조문)를 주면 인용한 조문은 펼쳐서 먼저, 나머지는 접어서 뒤에
-    생성 중이거나(cited=None) 인용을 찾지 못한 답변은 세 개를 모두 펼친다 (사용자가 직접 확인할 수 있게)"""
+    생성 중이거나(cited=None) 인용을 찾지 못한 답변은 모두 펼친다 (사용자가 직접 확인할 수 있게)
+    hits 순서(법률 → 첨부한 하위법령)를 그룹 안에서도 지킨다: 하위법령 카드는 항상 법률 카드 뒤"""
     if not refused and not cited:
         return '\n\n---\n\n'.join(source_card(h) for h in hits)
     used = [h for h in hits if h in (cited or [])]
@@ -47,7 +52,8 @@ def fmt_sources(hits, cited=None, refused=False):
 def data_notice(app):
     """제목 아래 한 줄: 법령 기준일 (웹앱 레포의 매니페스트). 원격 모드에서 모델 서버의 데이터 버전이 다르면 경고"""
     m = manifest.load(app.profile.articles)
-    line = (f"법령 기준일 {m['reference_date']} (데이터 {m['dataset_version']})" if m else
+    kinds = manifest.kinds_text(m)       # 하위법령을 켜면 '법률 415 · 시행령 273 · 시행규칙 124'
+    line = (f"법령 기준일 {m['reference_date']} (데이터 {m['dataset_version']}{' · ' + kinds if kinds else ''})" if m else
             '법령 기준일: 확인되지 않음 (데이터 매니페스트 없음)')
     client = getattr(app.retriever, 'client', None)
     if client is not None:
@@ -60,9 +66,10 @@ def data_notice(app):
             line += ' · ⚠ 모델 서버의 법령 데이터가 이 웹앱과 다릅니다 (' + '; '.join(w.split(' (')[0] for w in warn) + ')'
     return line
 
-def searching_stats(app):
-    """질문 직후 처리 단계 (검색 → 리랭킹 → 생성)"""
-    return '⏳ 조문 검색' + (' → 리랭킹' if app.reranker else '') + ' 중…'
+def searching_stats(app, model_key=None):
+    """질문 직후 처리 단계 (검색 → 리랭킹 → 하위법령 → 생성)"""
+    return ('⏳ 조문 검색' + (' → 리랭킹' if app.reranker else '')
+            + (' → 시행령·시행규칙' if uses_decrees(app, model_key) else '') + ' 중…')
 
 def fmt_stats(label, stage, st):
     """측정 칸: 서버 기준 시간. 브라우저 표시 지연은 lawbot.bench_ui로 따로 잰다"""
@@ -71,6 +78,8 @@ def fmt_stats(label, stage, st):
     parts = [label, f"검색 {st['search']:.2f}초"]
     if 'rerank' in st:
         parts.append(f"리랭킹 {st['rerank']:.2f}초")
+    if 'decree_rerank' in st:
+        parts.append(f"시행령·시행규칙 {st['decree_search'] + st['decree_rerank']:.2f}초 ({st['n_decree']}개 첨부)")
     if st['load'] is not None:
         parts.append(f"모델 전환 {st['load']:.1f}초")
     if 'ttft' in st:
@@ -102,10 +111,10 @@ def make_chat(app):
         if spec is None or fmt not in ('concise', 'full'):
             raise gr.Error(f'알 수 없는 선택: {model_key!r}, {fmt!r}')
         early = fmt == 'concise' and app.early_stop
-        yield SEARCHING, '', searching_stats(app)
+        yield SEARCHING, '', searching_stats(app, model_key)
         try:
             for stage, hits, raw, st in ask(app, message, model_key, early_stop=early, fmt=fmt):
-                src = fmt_sources(hits)          # 생성 중에는 조문 3개를 모두 펼쳐 둔다
+                src = fmt_sources(hits)          # 생성 중에는 조문을 모두 펼쳐 둔다
                 if stage == 'load':
                     yield f'⏳ {spec.label} 불러오는 중…', src, fmt_stats(spec.label, stage, st)
                     continue
@@ -153,10 +162,23 @@ def page_title(app):
     name = instance_name()
     return f'{app.profile.title} · {name}' if name else app.profile.title
 
+def intro_text(app):
+    """제목 아래 안내: 하위법령 첨부 모델이 있으면 그 모델 이름과 함께 알린다"""
+    names = [s.label for s in app.models.specs.values() if uses_decrees(app, s.key)]
+    if not names:
+        return '질문과 관련된 조문 3개를 찾아 그 조문을 근거로 답합니다. '
+    return (f"질문과 관련된 법률 조문 3개를 찾아 그 조문을 근거로 답합니다. {', '.join(names)}는 관련 시행령·시행규칙을 "
+            f'최대 {app.decree.k}개 더 붙입니다. ')
+
+def sources_heading(app):
+    if any(uses_decrees(app, k) for k in app.models.specs):
+        return f'### 검색된 조문 (법률 3개 + 시행령·시행규칙 최대 {app.decree.k}개)'
+    return '### 검색된 조문 (상위 3개)'
+
 def build_demo(app):                 # 화면만 만든다: 인증 검사·모델 로딩은 main에서
     p, title = app.profile, page_title(app)
     with gr.Blocks(title=title) as demo:
-        gr.Markdown(f'# {title}\n질문과 관련된 조문 3개를 찾아 그 조문을 근거로 답합니다. '
+        gr.Markdown(f'# {title}\n{intro_text(app)}'
                     f'법률 자문이 아닌 참고용 답변입니다.\n\n{data_notice(app)}')
         sources = gr.Markdown(render=False)
         stats = gr.Markdown(render=False)
@@ -179,7 +201,7 @@ def build_demo(app):                 # 화면만 만든다: 인증 검사·모�
                     concurrency_limit=1)                            # 생성은 한 번에 하나 (두 모델 동시 생성 금지)
                 stats.render()
             with gr.Column(scale=2):
-                gr.Markdown('### 검색된 조문 (상위 3개)')
+                gr.Markdown(sources_heading(app))
                 sources.render()
     return demo
 

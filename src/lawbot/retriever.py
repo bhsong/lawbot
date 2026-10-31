@@ -7,23 +7,48 @@ DOC_STYLES = {
     'v1': lambda law: law['article_id'] + ' ' + law['title'] + '\n' + law['text'],        # 제26조 해고의 예고\n본문
     'v4': lambda law: law['law'] + ' ' + law['article_id'] + '(' + law['title'] + ')\n' + law['text'],  # 근로기준법 제26조(해고의 예고)\n본문
 }
+LAW_KIND = '법률'
 
 class Retriever:
-    def __init__(self, model_dir=EMB, law_csv=ARTICLES, max_seq_length=512, doc_style='v1'):
+    """법률 검색 (search·rank_all, 지금과 같음) + 켜져 있으면 하위법령 검색 (search_decrees)
+    조문 배열(ids·titles·docs·laws·kinds·parent_laws)은 법률 먼저, 하위법령 뒤 (n_law개가 법률).
+    kind 열이 없는 CSV(415·130조문)는 모두 법률
+    법률 문서는 하위법령을 끈 웹앱과 같은 문서 목록·같은 호출·같은 max_seq_length로 따로 인코딩한다
+    (812개를 함께 인코딩하면 길이 정렬 후 batch 구성·패딩이 바뀌어 fp16 값이 달라질 수 있음)
+    decree_max_seq: 하위법령 인코딩 최대 토큰 (deploy.DECREE_MAX_SEQ). None이면 하위법령 행을 읽지 않음"""
+    def __init__(self, model_dir=EMB, law_csv=ARTICLES, max_seq_length=512, doc_style='v1', decree_max_seq=None):
         law = pd.read_csv(law_csv, encoding='utf-8-sig')
-        law = law[law['deleted'] == 0].reset_index(drop=True)   # v1 130개, v4 415개 조문
+        law = law[law['deleted'] == 0].reset_index(drop=True)   # v1 130개, v4 415개 조문 (+ 하위법령 397개)
         if 'article_no' in law:      # v4 CSV는 article_id에 법령명이 들어 있음('근로기준법 제26조') → 번호만 쓴다
             law['article_id'] = law['article_no']
-        self.ids = law['article_id'].to_numpy()
-        self.titles = law['title'].to_numpy()
-        self.laws = law['law'].to_numpy() if doc_style == 'v4' else None   # v4: 법령마다 조문 번호가 겹침
-        self.docs = DOC_STYLES[doc_style](law).tolist()
+        kind = law['kind'] if 'kind' in law else pd.Series(LAW_KIND, index=law.index)
+        dec = law[kind != LAW_KIND].reset_index(drop=True) if decree_max_seq else law.iloc[:0]
+        law = law[kind == LAW_KIND].reset_index(drop=True)
+        if decree_max_seq and not len(dec):
+            raise ValueError(f'하위법령(kind 시행령·시행규칙) 조문이 없습니다: {law_csv}')
+        both = pd.concat([law, dec], ignore_index=True)
+        self.n_law = len(law)
+        self.ids = both['article_id'].to_numpy()
+        self.titles = both['title'].to_numpy()
+        self.laws = both['law'].to_numpy() if doc_style == 'v4' else None   # v4: 법령마다 조문 번호가 겹침
+        self.kinds = (both['kind'] if 'kind' in both else pd.Series(LAW_KIND, index=both.index)).to_numpy()
+        self.parent_laws = (both['parent_law'] if 'parent_law' in both else both.get('law', pd.Series(None, index=both.index))).to_numpy()
+        law_docs = DOC_STYLES[doc_style](law).tolist()
+        dec_docs = DOC_STYLES[doc_style](dec).tolist() if len(dec) else []
+        self.docs = law_docs + dec_docs
         self.starter = set(law.loc[law['starter'] == 1, 'article_id']) if 'starter' in law else set()
         self.m = SentenceTransformer(str(model_dir), device='mps',
                                      model_kwargs={'torch_dtype': torch.float16})
+        self.max_seq_length, self.decree_max_seq = max_seq_length, decree_max_seq if len(dec) else None
         self.m.max_seq_length = max_seq_length
-        self.D = self.m.encode(self.docs, normalize_embeddings=True, batch_size=4,
+        self.D = self.m.encode(law_docs, normalize_embeddings=True, batch_size=4,
                                convert_to_numpy=True).astype(np.float32)
+        self.D_dec = None
+        if dec_docs:
+            self.m.max_seq_length = decree_max_seq
+            self.D_dec = self.m.encode(dec_docs, normalize_embeddings=True, batch_size=4,
+                                       convert_to_numpy=True).astype(np.float32)
+            self.m.max_seq_length = max_seq_length               # 질문 인코딩은 지금과 같은 설정
         torch.mps.empty_cache()                                  # 조문 인코딩에 쓴 임시 메모리 반납
 
     def _encode_queries(self, queries, batch_size=16):
@@ -31,6 +56,7 @@ class Retriever:
                              batch_size=batch_size, convert_to_numpy=True).astype(np.float32)
 
     def rank_all(self, queries):
+        """법률 조문 순위 (순번 0~n_law-1 = ids 앞부분)"""
         return np.argsort(-(self._encode_queries(queries) @ self.D.T), axis=1)
 
     def _hit(self, i, score):
@@ -38,5 +64,15 @@ class Retriever:
         return h if self.laws is None else h | {'law': self.laws[i]}
 
     def search(self, query, k=3):
+        """법률 조문 상위 k개 (하위법령을 켜도 같음)"""
         s = self.D @ self._encode_queries([query])[0]
         return [self._hit(i, float(s[i])) for i in np.argsort(-s)[:k]]
+
+    def search_decrees(self, query, k=10):
+        """하위법령 조문 상위 k개. 법률 hit 형식 + kind('시행령'·'시행규칙')·parent_law('근로기준법')"""
+        if self.D_dec is None:
+            raise ValueError('하위법령 검색 인덱스가 없습니다 (LAWBOT_DECREE_ENABLED=1로 시작해야 함)')
+        s = self.D_dec @ self._encode_queries([query])[0]
+        return [self._hit(self.n_law + i, float(s[i])) | {'kind': self.kinds[self.n_law + i],
+                                                          'parent_law': self.parent_laws[self.n_law + i]}
+                for i in np.argsort(-s)[:k]]

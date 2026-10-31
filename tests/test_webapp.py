@@ -349,8 +349,10 @@ def test_env_example_is_complete_without_secrets(env):
     p = deploy.get_profile()
     assert p.name == 'v4' and [m.key for m in p.models] == ['pro']
     assert p.models[0].path == paths.V4_PRO and p.models[0].system_file == paths.V4_SYSTEM_CONCISE
-    assert p.emb == paths.V4_EMB and p.articles == paths.V4_ARTICLES
+    assert p.emb == paths.V4_EMB and values['LAWBOT_V4_ARTICLES'] == 'data/v4/articles_v4.csv'
+    assert p.articles == paths.V4_DECREE_ARTICLES                 # 맥미니 32GB: 시행령·시행규칙 첨부 켜짐 (812조문)
     assert deploy.reranker(p) == deploy.RerankerConfig(paths.V4_RERANKER, 10)
+    assert deploy.decree(p) == deploy.DecreeConfig(0.9, 2, ('pro',))
     assert paths.V4_SYSTEM_CONCISE.is_file()                       # Pro 간결형 system은 저장소에 있음
 
 def test_env_file_loading(env, tmp_path, capsys):

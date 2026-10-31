@@ -117,7 +117,7 @@ def fake_app(articles):
 def test_info_has_dataset(tmp_path):
     app, p = fake_app(V4_ARTICLES)
     info = model_server.info(app)
-    assert info['api_version'] == 1 and info['dataset'] == {
+    assert info['api_version'] == 2 and info['dataset'] == {
         'dataset_version': 'v4', 'reference_date': '2026-10-20',
         'articles_sha256': manifest.load(V4_ARTICLES)['articles_sha256']}
     assert remote.check_info(info, p) == [] and remote.dataset_warnings(info, p) == []
@@ -138,16 +138,35 @@ def test_dataset_version_difference_warns():
     assert remote.dataset_warnings(info, p) == ['dataset_version: 서버 v4.1 / 웹앱 v4 (모델 서버와 웹앱의 레포 버전을 맞추세요)']
 
 def test_decree_csv_kinds():
-    """로드맵 2.8 실험 CSV(kind 열: 법률·시행령·시행규칙): 지금 매니페스트는 articles_v4.csv만 설명하므로 적용하지 않고,
-    채택할 때 새 dataset_version으로 만들 매니페스트의 종류별 조문 수는 그대로 검사된다"""
+    """812조문 CSV(kind 열: 법률·시행령·시행규칙)는 같은 폴더의 manifest_decree.json이 설명한다 (하위법령 첨부)
+    기존 manifest.json은 그대로 415조문 CSV를 설명한다"""
     import pandas as pd
     decree = V4_ARTICLES.with_name('law_articles_v4_decree.csv')
-    assert manifest.load(decree) is None
+    m = manifest.load(decree)
+    assert m is not None and manifest.path_for(decree).name == 'manifest_decree.json'
+    assert manifest.load(V4_ARTICLES)['articles_total'] == 415 and manifest.path_for(V4_ARTICLES).name == 'manifest.json'
     live = pd.read_csv(decree, encoding='utf-8-sig').query('deleted == 0')
     by_kind = live['kind'].value_counts().to_dict()
-    assert by_kind == {'법률': 415, '시행령': 273, '시행규칙': 124}
-    m = {'articles_sha256': manifest.sha256(decree), 'articles_total': len(live), 'collected_date': '2026-10-20',
-         'articles_by_law': live['law'].value_counts().to_dict(), 'articles_by_kind': by_kind}
+    assert by_kind == m['articles_by_kind'] == {'법률': 415, '시행령': 273, '시행규칙': 124}
+    assert (m['articles_total'], m['dataset_version'], m['reference_date']) == (812, 'v4-decree', '2026-10-20')
+    assert m['trained_on'] == {'embedding': 'v4', 'fast_lora': 'v4'}       # 임베딩·4B는 다시 학습하지 않음
     assert levels(manifest.verify(decree, m)) == {'OK'}
-    m['articles_by_kind'] = {'법률': 812}                 # v4 매니페스트를 그대로 복사한 경우
-    assert any('종류별' in msg for lv, msg in manifest.verify(decree, m) if lv == 'FAIL')
+    assert manifest.kinds_text(m) == '법률 415 · 시행령 273 · 시행규칙 124' and manifest.kinds_text(manifest.load(V4_ARTICLES)) == ''
+    bad = m | {'articles_by_kind': {'법률': 812}}           # v4 매니페스트를 그대로 복사한 경우
+    assert any('종류별' in msg for lv, msg in manifest.verify(decree, bad) if lv == 'FAIL')
+    bad = m | {'articles_total': 415}
+    assert any('비삭제' in msg for lv, msg in manifest.verify(decree, bad) if lv == 'FAIL')
+
+def test_manifest_extra_files(tmp_path):
+    """폴더의 manifest_*.json 중 articles_file이 맞는 것. 같은 CSV를 설명하는 매니페스트가 둘이면 오류"""
+    import json
+    import pytest
+    (tmp_path / 'a.csv').write_text('x'), (tmp_path / 'b.csv').write_text('x')
+    (tmp_path / 'manifest.json').write_text(json.dumps({'articles_file': 'a.csv', 'dataset_version': 'A'}))
+    (tmp_path / 'manifest_b.json').write_text(json.dumps({'articles_file': 'b.csv', 'dataset_version': 'B'}))
+    assert manifest.load(tmp_path / 'a.csv')['dataset_version'] == 'A'
+    assert manifest.load(tmp_path / 'b.csv')['dataset_version'] == 'B'
+    assert manifest.load(tmp_path / 'c.csv') is None and manifest.path_for(tmp_path / 'c.csv').name == 'manifest.json'
+    (tmp_path / 'manifest_b2.json').write_text(json.dumps({'articles_file': 'b.csv'}))
+    with pytest.raises(RuntimeError, match='여러 개'):
+        manifest.load(tmp_path / 'b.csv')

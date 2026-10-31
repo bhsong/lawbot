@@ -6,6 +6,7 @@
 from pathlib import Path
 import mlx.core as mx
 from mlx_lm import load
+from lawbot.decree import rank_order   # 점수 내림차순, 동점은 임베딩 순서 (하위법령 필터와 같은 함수)
 
 # 아래 세 문자열과 MAX_LENGTH는 노트북 셀 3을 글자 그대로 옮긴 것 (바꾸면 실험 결과와 비교할 수 없음)
 TASK = 'Given a Korean labor-law question, retrieve the statutory article that directly provides the legal basis for answering it.'
@@ -21,9 +22,6 @@ def yes_probability(no_yes):
     """노트북과 같이 float32 softmax([no, yes])[1]. 차이가 크면 1.0으로 포화해 동점이 생길 수 있다"""
     return mx.softmax(no_yes.astype(mx.float32))[1].item()
 
-def rank_order(scores):
-    """점수 내림차순 순서. 같은 점수는 입력(임베딩) 순서 유지"""
-    return sorted(range(len(scores)), key=lambda i: (-scores[i], i))
 
 class Reranker:
     def __init__(self, path, candidates=CANDIDATES, max_length=MAX_LENGTH):
