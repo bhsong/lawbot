@@ -3,7 +3,6 @@
 # 접속은 127.0.0.1만 허용 (conftest.py의 integration 마커 처리)
 import json
 import os
-import socket
 import subprocess
 import sys
 import time
@@ -11,7 +10,7 @@ import types
 from pathlib import Path
 import httpx
 import pytest
-from conftest import ENV_KEYS
+from conftest import ENV_KEYS, free_port
 from lawbot.app import EXAMPLES
 
 pytestmark = pytest.mark.integration
@@ -20,11 +19,6 @@ USER, PW = 'tester', 'test-only-pw'   # 테스트 전용 가짜 값
 QUESTION = EXAMPLES[0]                # 로그인 후 챗봇 화면에만 나오는 예시 질문
 SERVER = Path(__file__).with_name('integration_server.py')
 START_TIMEOUT = 60
-
-def free_port():
-    with socket.socket() as s:
-        s.bind(('127.0.0.1', 0))
-        return s.getsockname()[1]
 
 def server_log(path):                 # 실패 진단용 서버 출력 (비밀번호는 가림)
     return path.read_text(encoding='utf-8', errors='replace').replace(PW, '***')

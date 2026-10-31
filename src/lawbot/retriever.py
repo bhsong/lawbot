@@ -1,5 +1,6 @@
 import numpy as np, pandas as pd, torch
 from sentence_transformers import SentenceTransformer
+from lawbot.decree import LAW_KIND
 from lawbot.paths import ARTICLES, EMB
 
 # 검색 문서 문자열: 임베딩 학습 때와 글자 단위로 같아야 한다
@@ -7,7 +8,6 @@ DOC_STYLES = {
     'v1': lambda law: law['article_id'] + ' ' + law['title'] + '\n' + law['text'],        # 제26조 해고의 예고\n본문
     'v4': lambda law: law['law'] + ' ' + law['article_id'] + '(' + law['title'] + ')\n' + law['text'],  # 근로기준법 제26조(해고의 예고)\n본문
 }
-LAW_KIND = '법률'
 
 class Retriever:
     """법률 검색 (search·rank_all, 지금과 같음) + 켜져 있으면 하위법령 검색 (search_decrees)
@@ -39,7 +39,6 @@ class Retriever:
         self.starter = set(law.loc[law['starter'] == 1, 'article_id']) if 'starter' in law else set()
         self.m = SentenceTransformer(str(model_dir), device='mps',
                                      model_kwargs={'torch_dtype': torch.float16})
-        self.max_seq_length, self.decree_max_seq = max_seq_length, decree_max_seq if len(dec) else None
         self.m.max_seq_length = max_seq_length
         self.D = self.m.encode(law_docs, normalize_embeddings=True, batch_size=4,
                                convert_to_numpy=True).astype(np.float32)

@@ -79,9 +79,9 @@ def hide_thinking(responses, markers):
         yield _with_text(r, buf[i + len(end):].lstrip())
 
 class LLM:
-    def __init__(self, path=LLM_4BIT, temp=0.0, system=SYSTEM, prompt_style='v1'):
+    def __init__(self, path=LLM_4BIT, system=SYSTEM, prompt_style='v1'):
         self.model, self.tok = load(str(path))
-        self.sampler = make_sampler(temp=temp)
+        self.sampler = make_sampler(temp=0.0)          # 탐욕적 생성 (평가·웹앱 공통)
         self.system, self.prompt_style = system, prompt_style    # v4: deploy 프로필의 system 파일
         self.think = think_markers(self.tok)
 

@@ -158,35 +158,6 @@ def test_service_does_not_import_gradio():
     out = subprocess.run([sys.executable, '-c', code], capture_output=True, text=True, check=True)
     assert out.stdout.strip() == 'False'
 
-def test_load_models_llm_path_default(fake_models):
-    r, m = service.load_models()
-    assert isinstance(r, FakeRetriever) and m.path == service.LLM_4BIT
-    assert FakeRetriever.created == 1 and FakeLLM.created == 1
-
-def test_load_models_llm_path_env(fake_models, env):
-    env.setenv('LLM_PATH', 'models/sllm_mlx_8bit')
-    assert service.load_models()[1].path == 'models/sllm_mlx_8bit'
-
-def test_answer_stream_returns_sources_then_chunks(fake_models):
-    r, m = FakeRetriever(), FakeLLM('models/fake')
-    hits, chunks = service.answer_stream(r, m, '수습 기간에도 해고 예고?')
-    assert hits == HITS[:service.TOP_K]             # 생성 전에 근거 조문이 정해짐
-    assert r.query == '수습 기간에도 해고 예고?'
-    assert list(chunks) == ['【결론】', '예고해야', ' 합니다.']
-    assert m.args == ('수습 기간에도 해고 예고?', hits)
-
-def test_answer_stream_k(fake_models):
-    r, m = FakeRetriever(), FakeLLM('models/fake')
-    hits, chunks = service.answer_stream(r, m, '질문', k=1)
-    list(chunks)
-    assert hits == HITS[:1] and m.args == ('질문', HITS[:1])
-
-def test_answer_stream_generation_failure_propagates(fake_models):
-    FakeLLM.chunks = ['【결론】', RuntimeError('generation failed')]
-    _, chunks = service.answer_stream(FakeRetriever(), FakeLLM('models/fake'), '질문')
-    with pytest.raises(RuntimeError, match='generation failed'):
-        list(chunks)
-
 # ---- 웹앱 ----
 @pytest.fixture
 def app(env, fake_models):

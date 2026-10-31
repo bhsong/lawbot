@@ -12,7 +12,7 @@ from collections import OrderedDict
 from dataclasses import dataclass
 from pathlib import Path
 from lawbot import decree as decree_filter, deploy, manifest, security
-from lawbot.paths import LLM_4BIT, ROOT
+from lawbot.paths import ROOT
 
 TOP_K = 3                            # 답변 근거로 넘기는 조문 수 (Fast·Pro 공통)
 
@@ -29,15 +29,6 @@ def __getattr__(name):
 
 def _lazy(name):
     return globals()[name] if name in globals() else __getattr__(name)
-
-def load_models():
-    """검색기·sLLM을 불러온다. LLM_PATH 환경 변수로 다른 sLLM을 지정 (평가·기존 호출용, 웹앱은 load_app)"""
-    return _lazy('Retriever')(), _lazy('LLM')(os.environ.get('LLM_PATH', LLM_4BIT))
-
-def answer_stream(retriever, llm, question, k=TOP_K):
-    """(근거 조문 목록, 답변 조각 생성기). 조문은 생성 전에 정해지므로 먼저 돌려준다"""
-    hits = retriever.search(question, k=k)
-    return hits, (r.text for r in llm.stream(question, hits))
 
 def free_memory():
     """내린 모델의 Metal 버퍼를 반납 (MLX는 해제한 버퍼를 캐시에 남겨 둠)"""

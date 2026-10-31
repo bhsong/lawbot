@@ -30,7 +30,7 @@ from lawbot import deploy, envfile, manifest
 from lawbot.decree import is_decree
 from lawbot.paths import DATA, EVAL, RESULTS, ROOT, V4_QA, V4_SPLIT
 # 인용·거절 판정은 웹앱 화면과 같은 citation 모듈 (ev.citations·ev.refused·ev.key 등 기존 이름은 그대로 둠)
-from lawbot.citation import LAW_ALIASES, REFUSAL, cite_section, citations, refused
+from lawbot.citation import LAW_ALIASES, cite_section, citations, refused
 from lawbot.citation import NONEXISTENT, OUTSIDE, WRONG_LAW, check
 from lawbot.citation import hit_key as key
 from lawbot.score_answers import score_one

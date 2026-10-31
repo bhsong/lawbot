@@ -400,7 +400,6 @@ uv run python -m lawbot.eval_decree --ctx data/v4/decree_ctx_dq_val200.csv --tag
 ```bash
 uv run lawbot-eval --n 0      # 검색 성능만 (650문항)
 uv run lawbot-eval --n 100    # 검색 + 답변 생성·채점 (무작위 100문항), 검색 순위는 results/retrieval_<임베딩폴더>.csv
-uv run python -m lawbot.summ_dev scored_sllm_mlx_4bit.csv   # 위 결과의 거짓 거절률·검색 실패 시 거절률
 uv run python -m lawbot.eval_oos       # 범위 밖 질문 102개 거절률·억지 적용률 → results/oos_v2_4bit.csv
 uv run python -m lawbot.eval_refusal   # 무관한 조문 / 비슷한 조문만 줄 때 거절률 (각 100문항) → results/refusal_v2_4bit.csv
 uv run python -m lawbot.eval_refusal --hard   # 근거 없이 주장했던 81건을 같은 참고 조문으로 다시 → results/refusal_hard_4bit.csv
@@ -473,13 +472,9 @@ src/lawbot/
 ├── eval_dev.py        # 검색·답변 평가
 ├── score_answers.py   # 키워드 기반 채점기
 ├── refusal.py         # 거절 판정 (【결론】에 '확인할 수 없'), 범위 밖 답변 판정 (거절·안내·억지적용·미인용)
-├── summ_dev.py        # eval_dev 결과의 거절 지표 요약
 ├── report.py          # 평가 결과를 metrics.csv 한 행으로 모으고 기준 실행과 비교
 ├── eval_oos.py        # 범위 밖 질문 거절률
-├── eval_refusal.py    # 무관한 / 비슷한 조문 제공 시 거절률, --hard: 근거 없이 주장했던 사례 재평가
-├── diag_oracle.py     # 정답 조문 제공 조건 답변 평가
-├── diag_fail.py       # 검색은 맞았지만 인용이 틀린 문항 분석
-└── diag_pos.py        # 정답 조문 위치별 인용 정확도 분석
+└── eval_refusal.py    # 무관한 / 비슷한 조문 제공 시 거절률, --hard: 근거 없이 주장했던 사례 재평가
 deploy/launchd/        # 상시 운영용 launchd 템플릿 (모델 서버·웹앱)
 ```
 
@@ -872,7 +867,6 @@ The previous v1 evaluation scripts (130 articles, 4B), which produced the README
 ```bash
 uv run lawbot-eval --n 0      # retrieval only (650 questions)
 uv run lawbot-eval --n 100    # retrieval + generation + scoring (100 random questions); retrieval ranks go to results/retrieval_<embedding-folder>.csv
-uv run python -m lawbot.summ_dev scored_sllm_mlx_4bit.csv   # false refusals and refusals on retrieval misses
 uv run python -m lawbot.eval_oos       # refusal and forced-answer rate on 102 out-of-scope questions → results/oos_v2_4bit.csv
 uv run python -m lawbot.eval_refusal   # refusal given unrelated / similar articles only (100 each) → results/refusal_v2_4bit.csv
 uv run python -m lawbot.eval_refusal --hard   # re-ask the 81 unsupported-claim cases with the same articles → results/refusal_hard_4bit.csv
@@ -925,13 +919,9 @@ src/lawbot/
 ├── eval_dev.py        # retrieval and answer evaluation
 ├── score_answers.py   # keyword-based answer scorer
 ├── refusal.py         # refusal detection ('확인할 수 없' in the conclusion), out-of-scope verdicts (refusal, referral, forced, uncited)
-├── summ_dev.py        # refusal metrics from eval_dev results
 ├── report.py          # combine evaluation results into a metrics.csv row and compare with a baseline
 ├── eval_oos.py        # refusal on out-of-scope questions
-├── eval_refusal.py    # refusal given unrelated / similar articles, --hard: re-evaluate unsupported-claim cases
-├── diag_oracle.py     # answer evaluation with gold articles
-├── diag_fail.py       # failures where retrieval hit but citation missed
-└── diag_pos.py        # citation accuracy by gold-article position
+└── eval_refusal.py    # refusal given unrelated / similar articles, --hard: re-evaluate unsupported-claim cases
 deploy/launchd/        # launchd templates for the always-on setup (model server, web app)
 ```
 

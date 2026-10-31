@@ -14,13 +14,13 @@ GEN_FIELDS = ('text', 'generation_tps', 'prompt_tokens', 'prompt_tps', 'generati
               'finish_reason')
 
 class ModelServerError(RuntimeError):
-    """모델 서버가 보낸 오류 (kind: 서버 쪽 예외 이름, base: 'OSError'·'ValueError'·None 계열)"""
+    """모델 서버가 보낸 오류 (kind: 서버 쪽 예외 이름 — 메시지에만 씀, base: 'OSError'·'ValueError'·None 계열)"""
     def __init__(self, kind, message, status=None, base=None):
         super().__init__(f'모델 서버 오류 {kind}: {message}')
-        self.kind, self.status, self.base = kind, status, base
+        self.status, self.base = status, base
 
 class RemoteLoadError(OSError):
-    """모델 서버에서 답변 모델을 불러오지 못함 (app.py가 OSError로 받아 기존 안내를 보여 줌)"""
+    """모델 서버에서 답변 모델을 불러오지 못함 (OSError 계열. 웹앱 안내는 service.error_type이 단계 'load'로 판정)"""
 
 class RemoteValueError(ValueError):
     """모델 서버에서 답변 모델을 불러오지 못함: 형식 오류 등 ValueError 계열"""
