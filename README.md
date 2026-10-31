@@ -354,7 +354,7 @@ uv run python -m lawbot.feedback_review <운영 피드백 폴더> feedback/     
 uv run python -m lawbot.feedback_export feedback_review_<날짜>.csv --out data/feedback/
 ```
 
-- `feedback_review`: 같은 답은 마지막 선택만 남기고 해제는 뺍니다. 평가 데이터(v4 test 2,075문항, `oos_eval`, `scope_controls`, `refusal_hard_cases`, `labor_eval_keywords`)와 같은 질문(공백·문장부호 무시)과 유사도 0.9 이상인 질문을 빼고, 뺀 id를 출력합니다. 엑셀·Numbers에서 `h_ok`(맞음/틀림/모름), `h_gold`(`법령명 제N조`, 여러 개면 `;`), `h_scope`(범위 안/범위 밖), `h_note`를 채웁니다. `--keep 이전 CSV`로 채운 칸을 이어받습니다
+- `feedback_review`: 같은 답은 마지막 선택만 남기고 해제는 뺍니다. 평가 데이터(v4 test 2,075·val 1,110문항, 하위법령 질문 val 444·test 1,880문항, `oos_eval`, `scope_controls`, `refusal_hard_cases`, `labor_eval_keywords`)와 같은 질문(공백·문장부호 무시)과 유사도 0.9 이상인 질문을 빼고, 뺀 id를 출력합니다. 엑셀·Numbers에서 `h_ok`(맞음/틀림/모름), `h_gold`(`법령명 제N조`, 여러 개면 `;`), `h_scope`(범위 안/범위 밖), `h_note`를 채웁니다. `--keep 이전 CSV`로 채운 칸을 이어받습니다
 - `feedback_export`(맥에서 실행): `fb_questions.csv`(dev 질문), `fb_emb_pairs.csv`(정답 조문 positive, 검색 오류는 검색 1위를 hard negative), `fb_sft.csv`(맞음 + 👍), `fb_kto.csv`(맞음/틀림 라벨). 프롬프트는 저장한 조문(첨부된 시행령·시행규칙 포함)으로 `llm.build_prompt_v4`를 다시 불러 만들고, `h_gold`에는 법률과 하위법령 조문(`근로기준법 시행령 제2조`)을 모두 쓸 수 있으며, 피드백 안에서 `random_state=42`로 val을 뗍니다. 평가는 계속 기존 test로만 합니다
 - 깃발의 터치 보정(`feedback_ui.py`)은 Gradio 6.30.0 내부 이름에 기댑니다. Gradio를 올리면 맥 브라우저와 휴대폰에서 다시 확인하세요
 
@@ -851,7 +851,7 @@ uv run python -m lawbot.feedback_review <production feedback folder> feedback/  
 uv run python -m lawbot.feedback_export feedback_review_<date>.csv --out data/feedback/
 ```
 
-- `feedback_review`: keeps the last choice per answer and drops cleared ones. It removes questions that match the evaluation data (v4 test 2,075, `oos_eval`, `scope_controls`, `refusal_hard_cases`, `labor_eval_keywords`) ignoring spaces and punctuation, or with difflib similarity ≥ 0.9, and prints the removed ids. Fill in `h_ok` (맞음/틀림/모름), `h_gold` (`<law> 제N조`, `;`-separated), `h_scope` (범위 안/범위 밖) and `h_note` in Excel or Numbers. `--keep <previous CSV>` carries filled cells over
+- `feedback_review`: keeps the last choice per answer and drops cleared ones. It removes questions that match the evaluation data (v4 test 2,075 and val 1,110, decree questions val 444 and test 1,880, `oos_eval`, `scope_controls`, `refusal_hard_cases`, `labor_eval_keywords`) ignoring spaces and punctuation, or with difflib similarity ≥ 0.9, and prints the removed ids. Fill in `h_ok` (맞음/틀림/모름), `h_gold` (`<law> 제N조`, `;`-separated), `h_scope` (범위 안/범위 밖) and `h_note` in Excel or Numbers. `--keep <previous CSV>` carries filled cells over
 - `feedback_export` (run on the Mac): `fb_questions.csv` (dev questions), `fb_emb_pairs.csv` (gold-article positives; for retrieval errors the top hit becomes a hard negative), `fb_sft.csv` (correct + 👍), `fb_kto.csv` (correct/incorrect labels). Prompts are rebuilt from the stored articles (including attached decrees) with `llm.build_prompt_v4`, `h_gold` may name statute or decree articles (`근로기준법 시행령 제2조`), and a val split is drawn inside the feedback data with `random_state=42`. Evaluation stays on the existing test set
 - The touch fix for the flag (`feedback_ui.py`) relies on Gradio 6.30.0 internals. Recheck on a Mac browser and a phone after upgrading Gradio
 
