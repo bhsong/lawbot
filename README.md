@@ -56,160 +56,13 @@ v1:
 
 ### 성능
 
-**v4 웹앱 구성 (7개 법률 415조문 · 리랭커 · Qwen3.8-27B 4비트)**
+평가마다 결과 한 줄과 기록 파일 링크만 둡니다. 표·설정·명령은 [`docs/evals/`](docs/evals/)에 있습니다.
 
-2026-10-25 맥 미니 32GB에서 `uv run lawbot-eval-v4`로 측정했습니다(문항별 결과 `results/v4/*_pro_concise_rr.csv`). 구성은 `.env.example` 그대로입니다: 튜닝 Qwen3-Embedding-0.6B 상위 10개 → Qwen3-Reranker-4B(튜닝 없음, MLX 4비트) 상위 3개 → Qwen3.8-27B(튜닝 없음, MLX 4비트, 간결형 답변). 문항은 학습·검증에 쓰지 않은 v4 test 2,075문항(근로기준법 650 + 신규 6개 법률 1,425)입니다.
-
-*검색 (test 2,075문항, 415조문 대상)*
-
-| 단계 | Recall@1 | Recall@3 | Recall@10 | MRR |
-| --- | --- | --- | --- | --- |
-| 튜닝 임베딩 | 0.765 | 0.913 | 0.976 | 0.845 (@10) |
-| + 리랭커 (후보 10개 → 3개) | **0.829** | **0.940** | - | **0.880** (@3) |
-
-근로기준법 650문항은 리랭킹 후 Recall@3 0.923, 신규 법률 1,425문항은 0.947입니다. Colab(L4, fp16) 실험의 같은 test 수치(임베딩 0.765·0.914, 리랭커 0.827·0.941·MRR@3 0.880)와 0.002 이내로 같습니다.
-
-리랭커는 Colab과 같은 질문·임베딩 Top 10으로 따로 대조했습니다(val 1,110문항, `results/reranker_verify_val_mlx4bit.csv`).
-
-| 리랭커 | Recall@1 | Recall@3 | MRR@3 | 질문당 시간 |
-| --- | --- | --- | --- | --- |
-| Colab (transformers fp16, L4) | 0.836 | 0.950 | 0.888 | 1.01초 |
-| 맥 (MLX 4비트) | 0.819 | 0.946 | 0.877 | 1.93초 (p95 3.04) |
-
-1위 조문은 90%가 Colab과 같지만, 4비트 양자화로 점수 크기는 크게 달라집니다(질문별 최대 점수 차 중앙값 0.28, 상위 3개 집합 일치 0.58). 그래도 정답 순위 지표는 Recall@1 0.017, Recall@3 0.004 차이에 그칩니다.
-
-*답변 (test 표본 200문항: 근로기준법 100 + 신규 법률 100, 고정 시드)*
-
-| 지표 | 전체 | 근로기준법 | 신규 6개 법률 |
-| --- | --- | --- | --- |
-| 검색 top3 적중률 | 0.915 | 0.93 | 0.90 |
-| 조문 인용 정확도 (법령명까지) | 0.905 | 0.91 | 0.90 |
-| 거짓 거절률 | 0.065 | 0.07 | 0.06 |
-| 거짓 거절률 (검색 적중 문항) | 0.011 | 0.022 | 0.000 |
-| 키워드 그룹 충족률 | - | 0.853 | - |
-| 종합 점수 (검색 적중 문항) | - | 0.828 (0.891) | - |
-
-- 검색이 정답을 놓친 17문항 중 11문항은 거절했고, 검색이 맞았는데 거절한 것은 2문항입니다. 검색이 맞고 거절하지 않은 문항은 모두 정답 조문을 인용했습니다.
-- 키워드 채점은 기존 650문항 기준이 있는 근로기준법 문항만 합니다. 신규 법률 문항은 인용·거절만 봅니다.
-- 2026.4.7 근로기준법 개정(임금체불 벌칙 제109조 → 제107조, 5년·5천만원)에 맞춰 키워드 2문항을 보정했습니다.
-- v1(4B, 4항목 답변, 130조문, 무작위 100문항)의 종합 점수 0.812와는 답변 형식·조문 수·표본이 달라 직접 비교하기 어렵습니다.
-
-*거절 동작*
-
-| 지표 | 값 | 문항 |
-| --- | --- | --- |
-| 범위 밖 질문 거절률 | **0.96** | 75 |
-| 범위 밖 질문 억지 적용률 (거절 않고 조문 인용) | 0.04 | 75 |
-| 다른 법률 조문만 제공 시 거절률 | **1.00** | 100 |
-| 비슷한 조문만 제공 시 거절률 | 0.69 | 100 |
-| 범위 안이 된 7개 법률 질문: 거짓 거절률 / 해당 법률 인용률 | 0.111 / 0.889 | 27 |
-| 범위 안 대조군(근로기준법): 거짓 거절률 / 정답 조문 인용률 | 0.10 / 0.80 | 20 |
-
-- 범위 밖 102문항 중 출처가 7개 법률인 27문항은 이제 범위 안이므로 따로 셉니다. 그래서 v1의 범위 밖 거절률(82문항, 0.707)과 같은 문항이 아닙니다. 억지 적용 3건은 산재 신청(→ 근로기준법 제88조), 미성년자 계약 취소(→ 제67조), 직장폐쇄 임금(→ 제46조)입니다.
-- 범위 안 27문항의 거짓 거절 3건 중 2건(올해 최저시급 금액, 육아기 근로시간 단축 신청 방법)은 그 내용이 조문이 아니라 고시·시행령에 있어 거절이 타당한 쪽입니다. 나머지 1건(1년 미만 퇴직금)은 검색이 근퇴법 제4조를 찾지 못했습니다.
-- 비슷한 조문 중에는 실제로 답이 되는 조문이 섞일 수 있어 1.0이 목표는 아닙니다(v1 4B는 0.20, 맥 4비트 0.24).
-- 튜닝하지 않은 27B는 v1 학습 문구("확인할 수 없") 대신 "근거를 찾을 수 없습니다", "답변할 수 없습니다"처럼 거절해, v4 평가는 이런 표현도 거절로 봅니다(`citation.REFUSAL`). 범위 안 답변 200문항에서는 이 확장으로 새로 거절로 잡힌 답변이 없었습니다. 웹앱 간결형 화면도 같은 판정을 써서, 이런 거절에는 근거 줄이나 경고를 붙이지 않습니다.
-
-*속도·메모리 (답변 200문항, 맥 미니 32GB)*
-
-| 지표 | 값 |
-| --- | --- |
-| 임베딩 검색 | 0.03초 |
-| 리랭킹 (후보 10개) | 평균 1.95초, p95 3.1초 |
-| 첫 토큰 (생성 시작부터) | 중앙값 2.8초 |
-| 질문당 완료 (검색부터 답변 끝까지) | 평균 15.1초, p95 20.9초 |
-| 생성 속도 | 9.7 토큰/초 |
-| 답변 길이 | 평균 165자 (96토큰) |
-| MLX 최대 메모리 (27B + 리랭커) | 20.4GB |
-
-*운영 구성(원격 모드)에서의 재확인 (2026-10-29)*
-
-웹앱이 모델 서버에 접속하는 운영 구성으로 answers·oos·refusal을 다시 돌려 `lawbot.diff_answers`로 위 결과와 비교했습니다. 답변 522개가 글자 단위로 모두 같아(answers 200 · oos 122 · refusal 200) 위 정확도 수치를 그대로 씁니다. 질문당 완료 평균 14.9초, 첫 토큰 중앙값 2.78초, MLX 최대 메모리 20.4GB로 HTTP 왕복에 따른 지연은 보이지 않았습니다(`results/v4/*_pro_concise_rr_remote.csv`).
-
-*시행령·시행규칙 첨부 실험 (val, 웹앱 반영 전, 2026-10-29~31)*
-
-고시·시행령에 있는 내용(예: 평균임금 계산에서 빼는 기간, 융자 이자율)은 법률 조문만으로 답할 수 없어서, 7개 법률의 시행령·시행규칙 397개 조문을 더하는 실험을 했습니다. 812개를 한 번에 검색하면 법률 정답 Recall@3이 0.950 → 0.927로 떨어져, 법률 검색은 그대로 두고 하위법령을 따로 찾아 붙이는 방식(구성 B)을 골랐습니다.
-
-```
-법률 415개: 임베딩 상위 10개 → 리랭커 → 상위 3개 (지금과 같음)
-하위법령 397개: 임베딩 상위 10개 → 리랭커 → 필터 → 상위 2개 첨부
-  필터: 법률 1위와 같은 법의 하위법령은 그대로, 다른 법의 하위법령은 리랭커 점수 0.9 이상일 때만
-```
-
-필터 규칙은 저장된 리랭커 점수로 비교해 골랐습니다(`lawbot.decree_filter`). 하위법령 정답 val 444문항의 정답 포함률과, 법률 정답 val 1,110문항에 다른 법 하위법령이 붙는 비율을 함께 봤습니다.
-
-| 필터 (첨부 2개) | 하위법령 정답 포함 (fp16 / 맥 MLX 4비트) | 법률 질문에 붙은 다른 법 하위법령 비율 (fp16 / MLX) | 프롬프트 토큰 |
-| --- | --- | --- | --- |
-| 없음 | 0.928 / 0.923 | 0.238 / 0.236 | 1,406 |
-| 법률 1위와 같은 법만 | 0.824 / 0.820 | 0.031 / 0.044 | 1,366 |
-| **같은 법 + 다른 법은 점수 0.9 이상 (채택)** | **0.921 / 0.912** | **0.055 / 0.064** | **1,376** |
-
-답변은 Qwen3.8-27B(맥 미니, 참고 조문 고정)로 val 표본을 평가했습니다(`lawbot.eval_decree`, `results/v4/decree_answers_pro*.csv`).
-
-| 문항 (val 200) | 지표 | 법률만 | 같은 법만 | 채택 규칙 |
-| --- | --- | --- | --- | --- |
-| 하위법령이 정답인 질문 | 정답 하위법령 인용 | 0.000 | 0.820 | **0.900** |
-| | 참고 조문 밖 인용 | 0.010 | 0.005 | 0.000 |
-| | 완료 시간 (초) | 14.1 | 17.1 | 17.1 |
-| 법률이 정답인 질문 | 정답 인용 (검색 적중) | 0.947 | 0.947 | 0.947 |
-| | 거짓 거절 (검색 적중) | 0.048 | 0.043 | 0.043 |
-| | 종합 점수 (검색 적중) | 0.894 | 0.896 | 0.896 |
-
-- 법률 조문만 주면 하위법령 질문의 62%를 거절합니다. 하위법령을 붙이면 법률 질문 답변은 그대로이고, 하위법령 질문의 정답 인용이 0.900이 됩니다.
-- 구어체 질문은 같은 법 필터에서 0.647로 가장 낮았습니다. '체불'·'이자'처럼 법령명 없는 질문에서 법률 리랭커 1위가 근로기준법으로 쏠렸기 때문입니다. 채택 규칙에서는 0.765입니다.
-- 임베딩은 다시 학습하지 않았습니다(하위법령 397개 중 상위 10개에 정답 0.964).
-- 이 방식과 규칙을 그대로 웹앱에 넣었습니다(아래 "시행령·시행규칙 첨부"). 위 수치는 참고 조문을 고정한 실험 값이고, 웹앱 경로(MLX 4비트 리랭커 점수로 고른 첨부)로 `lawbot-eval-v4 --split val`을 다시 잰 값은 맥 미니 수동 검증 뒤 이 절에 더합니다. MLX 점수는 fp16과 첨부 집합이 일부 문항에서 달라 정확히 같지는 않습니다.
-
-**v1 (근로기준법 130조문 · Qwen3-4B LoRA)**
-
-모든 수치는 학습·검증에 사용하지 않은 테스트 650문항 기준입니다(별도 표기 제외). 측정일은 2026-10-16부터 10-18까지입니다.
-
-**검색 (130개 조문 대상)**
-
-| 모델 | Recall@1 | Recall@3 | Recall@5 | Recall@10 | MRR |
-| --- | --- | --- | --- | --- | --- |
-| Qwen3-Embedding-0.6B (튜닝 전) | 0.622 | - | 0.837 | 0.888 | 0.718 |
-| 튜닝 후 (hard negative) | **0.789** | **0.940** | **0.962** | **0.986** | **0.868** |
-
-질문 분류 정확도(130개 클래스, 로지스틱 회귀)도 함께 측정했습니다.
-
-| 모델 | 정확도 | Top-3 | MRR |
-| --- | --- | --- | --- |
-| TF-IDF (char 2~4그램) | 0.655 | 0.858 | 0.767 |
-| 튜닝 전 임베딩 | 0.789 | 0.926 | 0.865 |
-| 튜닝 임베딩 | **0.855** | **0.963** | **0.911** |
-
-**답변 생성 (Colab, bf16)**
-
-종합 점수 = 키워드 그룹 충족률 × 조문 인용 정확 여부 × (금지 표현 시 0.5)이고, 만점은 1.0입니다. 거절 답변은 0점입니다. 아래 Colab 수치는 2026-10-19 채점기 수정(거절 답변의 제공 조문 목록을 인용으로 세던 문제) 전에 측정했습니다. 수정 영향은 거짓 거절 문항에 한정되므로 최대 0.005입니다.
-
-| 조건 | 조문 인용 정확도 | 키워드 그룹 충족률 | 종합 점수 |
-| --- | --- | --- | --- |
-| Qwen3-4B (튜닝 전), 정답 조문 제공 | 0.955 | 0.894 | 0.866 |
-| Qwen3-4B + LoRA, 정답 조문 제공 | **0.983** | **0.967** | **0.961** |
-| Qwen3-4B + LoRA, 검색 조문 제공 (실서비스 조건) | 0.869 | 0.884 | 0.854 |
-| 위와 같음, 검색 적중 문항만 | - | - | 0.908 |
-
-**거절 동작**
-
-| 지표 | 튜닝 전 | 튜닝 후 |
-| --- | --- | --- |
-| 무관한 조문만 제공 시 거절률 (100문항) | 0.11 | **0.91** |
-| 정답 조문이 있는데 거절한 비율 | 0.002 | 0.005 |
-| 범위 밖 질문 거절률 (82문항, 검색 조문 제공) | 0.098 | **0.707** |
-| 비슷한 조문만 제공 시 거절률 (100문항) | - | 0.20 |
-
-범위 밖 질문은 일상 질문 25개, 다른 노동법 질문 32개(근퇴법·최저임금법·남녀고용평등법 등), 다른 법 질문 25개입니다(`data/oos_eval.csv`). 맥 4비트에서는 범위 밖 0.671, 비슷한 조문 0.24로 bf16과 비슷합니다. 근로기준법에 비슷한 조문이 있는 다른 노동법 질문은 튜닝 후에도 거절률이 0.250에 그쳐, 가장 큰 약점입니다. 거절하지 않은 답변을 나누어 보면, 다른 노동법 32문항 중 5개는 퇴직급여(제34조)·안전보건(제76조)처럼 다른 법에 맡기는 조문만 들어 그 법으로 안내했고, 13개(0.406)는 휴업보상(제79조)으로 산재 휴업급여를 답하는 식으로 근로기준법 조문을 억지로 적용했습니다. 82문항 전체의 억지 적용률은 0.256입니다(`refusal.oos_verdict`).
-
-**로컬 실행 (MacBook Air 8GB, MLX 4비트, dev 100문항)**
-
-| 지표 | 값 |
-| --- | --- |
-| 종합 점수 (검색 조문 / 정답 조문) | 0.812 / 0.937 |
-| 첫 토큰까지 시간 (중앙값) | 5.4초 |
-| 생성 속도 | 24.5 토큰/초 |
-| 질문당 소요 시간 | 20.4초 |
-| sLLM 최대 메모리 | 3.16GB |
+- **v4 웹앱 test (2026-10-25)**: 리랭킹 Recall@3 0.940, 조문 인용 정확도 0.905, 범위 밖 거절률 0.96, 질문당 15.1초 · MLX 최대 20.4GB → [기록](docs/evals/2026-10-25-v4-webapp-test.md)
+- **원격 모드 재확인 (2026-10-29)**: 답변 522개가 로컬 모드와 글자 단위로 같고, 지연 차이는 0.3초 이내 → [기록](docs/evals/2026-10-29-model-server.md)
+- **시행령·시행규칙 첨부 실험 (val, 2026-10-29~31)**: 채택 규칙의 정답 하위법령 포함 0.921, 하위법령 질문 정답 인용 0.000 → 0.900, 법률 질문 답변은 그대로 → [기록](docs/evals/2026-10-31-decree-experiment.md)
+- **시행령·시행규칙 웹앱 반영 검증 (val, 2026-10-31)**: 진행 중 (배포 검사·법률 임베딩 동일·로컬/원격 동등성 통과) → [기록](docs/evals/2026-10-31-decree-attach.md)
+- **v1 근로기준법 130조문 (2026-10-16~18)**: 검색 Recall@3 0.940, 종합 점수 0.854 (검색 조문) / 0.961 (정답 조문), 범위 밖 거절률 0.707 → [기록](docs/evals/2026-10-18-v1.md)
 
 ### 빠른 시작
 
@@ -642,7 +495,7 @@ deploy/launchd/        # 상시 운영용 launchd 템플릿 (모델 서버·웹�
   - 모델 선택과 하이퍼파라미터 결정은 검증 셋으로만 했습니다.
 - **답변 채점**: 문항마다 필수 키워드 그룹, 금지 표현, 정답 조문 번호를 지정해 자동 채점합니다. 제43조와 제43조의2처럼 비슷한 번호는 구분합니다. 거절 답변은 `해당 없음 (제공된 조문: …)`에 정답 번호가 있어도 인용으로 보지 않습니다. `cite_strict`는 【근거 조문】에 정답이 있고 헷갈리는 조문이나 번호가 비슷한 조문을 함께 인용하지 않았는지를 따로 기록합니다(종합 점수에는 반영하지 않음). 다른 법의 같은 번호(예: 근로자퇴직급여 보장법 제34조)는 구분하지 못합니다. 평가 파일의 모범 답변은 650문항 모두 1.0점입니다.
 - **범위 밖 질문**: 근로기준법으로 답할 수 없는 질문 102개로 거절률을 따로 잽니다(`data/oos_eval.csv`).
-  - 2026-10-19에 근로기준법과 개념이 겹치는 다른 노동법 질문 20개(OOS083–102)를 추가했습니다. 근거 조문(`note`)은 [Legalize KR](https://github.com/legalize-kr/legalize-kr) 법령 원문으로 확인했습니다. 위 성능 수치는 추가 전 82문항 기준입니다.
+  - 2026-10-19에 근로기준법과 개념이 겹치는 다른 노동법 질문 20개(OOS083–102)를 추가했습니다. 근거 조문(`note`)은 [Legalize KR](https://github.com/legalize-kr/legalize-kr) 법령 원문으로 확인했습니다. v1 성능 수치([기록](docs/evals/2026-10-18-v1.md))는 추가 전 82문항 기준입니다.
   - 답변은 거절, 안내(`refer_lsa`에 적힌, 다른 법에 맡기는 조문만 인용), 억지적용(그 밖의 근로기준법 조문으로 답함), 미인용(거절 문구도 인용도 없음)으로 판정합니다. `near_lsa`는 README 수치의 기준이고, `near_lsa_v2`는 누락을 보완한 표시입니다.
 - **범위 안 대조군**: 다른 노동법 질문과 닮았지만 근로기준법으로 답해야 하는 테스트 문항 20개입니다(`data/scope_controls.csv`, `twin_oos`에 짝 문항). 범위 밖 거절을 늘리는 개선이 이 문항들까지 거절하게 만들지 않는지 확인합니다.
 - **근거 없는 주장 사례**: `refusal_v1_4bit.csv`에서 거절하지 않은 86건을 억지적용 77, 지어냄 4, 근거밖_정답 2, 결론타당 3으로 분류했습니다(`data/refusal_hard_cases.csv`). 억지적용·지어냄 81건은 `eval_refusal --hard`로 다시 평가합니다.
@@ -733,122 +586,13 @@ Question
 
 ### Results
 
-**v4 web app setup (415 articles from 7 laws · reranker · Qwen3.8-27B 4-bit)**
+One line per evaluation with a link to its record; tables, settings and commands live in [`docs/evals/`](docs/evals/).
 
-Measured on 2026-10-25 on a 32GB Mac mini with `uv run lawbot-eval-v4` (per-question results in `results/v4/*_pro_concise_rr.csv`), using the `.env.example` setup: fine-tuned Qwen3-Embedding-0.6B top 10 → Qwen3-Reranker-4B (not fine-tuned, MLX 4-bit) top 3 → Qwen3.8-27B (not fine-tuned, MLX 4-bit, concise answers). Questions are the 2,075 v4 test questions (650 Labor Standards Act + 1,425 from the six added laws), never used for training or validation.
-
-| Retrieval (2,075 test) | Recall@1 | Recall@3 | Recall@10 | MRR |
-| --- | --- | --- | --- | --- |
-| Fine-tuned embedding | 0.765 | 0.913 | 0.976 | 0.845 (@10) |
-| + reranker (10 → 3) | **0.829** | **0.940** | - | **0.880** (@3) |
-
-These match the Colab (L4, fp16) run on the same test set within 0.002. On the same val questions and embedding top 10 (1,110 questions), the MLX 4-bit reranker gives Recall@1 0.819 / Recall@3 0.946 vs Colab 0.836 / 0.950; the top-1 article agrees 90% of the time, but quantization changes the raw scores a lot (median max score difference 0.28). Reranking takes 1.93 s per question (p95 3.04 s) vs 1.01 s on Colab L4.
-
-| Answers (200 sampled: 100 + 100) | All | Labor Standards Act | Six added laws |
-| --- | --- | --- | --- |
-| Gold article in retrieved top 3 | 0.915 | 0.93 | 0.90 |
-| Citation accuracy (law name included) | 0.905 | 0.91 | 0.90 |
-| False refusal rate | 0.065 | 0.07 | 0.06 |
-| False refusal rate (retrieval hits) | 0.011 | 0.022 | 0.000 |
-| Keyword group coverage | - | 0.853 | - |
-| Overall score (retrieval hits) | - | 0.828 (0.891) | - |
-
-| Refusal behavior | Value | Questions |
-| --- | --- | --- |
-| Out-of-scope refusal rate | **0.96** | 75 |
-| Out-of-scope forced answers (cites an article instead of refusing) | 0.04 | 75 |
-| Refusal with only other-law articles | **1.00** | 100 |
-| Refusal with only similar articles | 0.69 | 100 |
-| Former out-of-scope questions now in scope: false refusal / cites that law | 0.111 / 0.889 | 27 |
-| In-scope controls: false refusal / gold citation | 0.10 / 0.80 | 20 |
-
-The 27 questions whose source is one of the seven laws are now in scope, so the out-of-scope set differs from v1 (82 questions, 0.707). Two of the three false refusals there (this year's minimum wage amount, how to apply for reduced hours during childcare) concern details set by notice or decree rather than the statute text. The untuned 27B refuses in its own words ("근거를 찾을 수 없습니다", "답변할 수 없습니다"), so the v4 evaluation also counts those phrases (`citation.REFUSAL`); this added no refusals among the 200 in-scope answers. The concise web view uses the same check, so such refusals show no citation line or warning. Keyword scoring uses the existing 650-question keyword set, with two rows updated for the 2026-04-07 amendment. Scores are not directly comparable with v1 (4B, four-part answers, 130 articles, different sample).
-
-Speed and memory (200 answers): embedding search 0.03 s, reranking 1.95 s (p95 3.1 s), first token 2.8 s (median, from generation start), 15.1 s per question end to end (p95 20.9 s), 9.7 tokens/s, 165 characters (96 tokens) per answer, MLX peak memory 20.4GB (27B + reranker).
-
-Rechecked in the production setup (remote mode, 2026-10-29): the web app talking to the model server reran answers, out-of-scope and refusal, and `lawbot.diff_answers` found all 522 answers identical character for character (200 · 122 · 200), so the accuracy numbers above stand. End-to-end time averaged 14.9 s, first token 2.78 s (median) and MLX peak memory 20.4GB, with no visible HTTP overhead (`results/v4/*_pro_concise_rr_remote.csv`).
-
-*Enforcement decrees and rules (validation before web integration, 2026-10-29 to 31)*
-
-Some answers live in enforcement decrees and rules rather than the Acts (e.g. periods excluded from average wages, loan interest rates), so the 397 decree and rule articles of the seven laws were added as an experiment. Searching all 812 articles together lowered Act Recall@3 from 0.950 to 0.927, so Act retrieval stays as it is and decree articles are retrieved separately and attached (setup B):
-
-```
-415 Act articles: embedding top 10 → reranker → top 3 (unchanged)
-397 decree/rule articles: embedding top 10 → reranker → filter → attach top 2
-  filter: keep decrees of the same law as the top Act article; decrees of other laws only with reranker score ≥ 0.9
-```
-
-The filter was chosen from saved reranker scores (`lawbot.decree_filter`), weighing the gold-decree hit rate on 444 decree-answer validation questions against how often decrees of another law get attached to the 1,110 Act-answer validation questions.
-
-| Filter (attach 2) | Gold decree attached (fp16 / Mac MLX 4-bit) | Other-law decrees on Act questions (fp16 / MLX) | Prompt tokens |
-| --- | --- | --- | --- |
-| None | 0.928 / 0.923 | 0.238 / 0.236 | 1,406 |
-| Same law as the top Act article only | 0.824 / 0.820 | 0.031 / 0.044 | 1,366 |
-| **Same law + other laws at score ≥ 0.9 (chosen)** | **0.921 / 0.912** | **0.055 / 0.064** | **1,376** |
-
-Answers were evaluated with Qwen3.8-27B on the Mac mini with fixed contexts (`lawbot.eval_decree`, `results/v4/decree_answers_pro*.csv`):
-
-| Questions (val 200) | Metric | Acts only | Same law only | Chosen rule |
-| --- | --- | --- | --- | --- |
-| Decree is the answer | Gold decree cited | 0.000 | 0.820 | **0.900** |
-| | Citations outside the context | 0.010 | 0.005 | 0.000 |
-| | Time to completion (s) | 14.1 | 17.1 | 17.1 |
-| Act is the answer | Gold cited (retrieval hit) | 0.947 | 0.947 | 0.947 |
-| | False refusal (retrieval hit) | 0.048 | 0.043 | 0.043 |
-| | Total score (retrieval hit) | 0.894 | 0.896 | 0.896 |
-
-With Act articles only, the model refuses 62% of decree questions. Attaching decrees leaves Act answers unchanged and brings gold-decree citation to 0.900. Colloquial questions were lowest under the same-law filter (0.647) because the Act reranker leaned toward the Labor Standards Act on questions without a law name; the chosen rule reaches 0.765. The embedding model was not retrained (gold decree in the top 10 of 397: 0.964). The web app now uses this setup and rule (see "Enforcement decrees and rules (optional, v4)" below). The numbers above come from fixed contexts; web-app-path numbers from `lawbot-eval-v4 --split val` (attachments chosen with MLX 4-bit reranker scores) will be added here after manual verification on the Mac mini. MLX scores pick a different attachment set than fp16 on some questions, so they will not match exactly.
-
-**v1 (130 Labor Standards Act articles · Qwen3-4B LoRA)**
-
-Unless noted otherwise, all numbers are on the 650-question test set, which was never used for training or model selection. Measured from 2026-10-16 to 2026-10-18.
-
-**Retrieval (130 articles)**
-
-| Model | Recall@1 | Recall@3 | Recall@5 | Recall@10 | MRR |
-| --- | --- | --- | --- | --- | --- |
-| Qwen3-Embedding-0.6B (base) | 0.622 | - | 0.837 | 0.888 | 0.718 |
-| Fine-tuned (hard negatives) | **0.789** | **0.940** | **0.962** | **0.986** | **0.868** |
-
-Question classification over 130 classes (logistic regression):
-
-| Model | Accuracy | Top-3 | MRR |
-| --- | --- | --- | --- |
-| TF-IDF (char 2-4 grams) | 0.655 | 0.858 | 0.767 |
-| Base embedding | 0.789 | 0.926 | 0.865 |
-| Fine-tuned embedding | **0.855** | **0.963** | **0.911** |
-
-**Answer generation (Colab, bf16)**
-
-Total score = keyword-group coverage × correct article citation × (0.5 if a forbidden phrase appears). The maximum is 1.0, and refusals score 0. The Colab numbers below were measured before the 2026-10-19 scorer fix (refusals listing the provided articles were counted as citations). The fix only affects false refusals, so its effect is at most 0.005.
-
-| Setting | Citation accuracy | Keyword coverage | Total score |
-| --- | --- | --- | --- |
-| Qwen3-4B (base), gold articles | 0.955 | 0.894 | 0.866 |
-| Qwen3-4B + LoRA, gold articles | **0.983** | **0.967** | **0.961** |
-| Qwen3-4B + LoRA, retrieved articles (production setting) | 0.869 | 0.884 | 0.854 |
-| Same, questions where retrieval hit only | - | - | 0.908 |
-
-**Refusal behavior**
-
-| Metric | Base | Fine-tuned |
-| --- | --- | --- |
-| Refusal rate given only unrelated articles (100 questions) | 0.11 | **0.91** |
-| False refusal rate when the gold article is present | 0.002 | 0.005 |
-| Refusal rate on out-of-scope questions (82, retrieved articles) | 0.098 | **0.707** |
-| Refusal rate given only similar but non-answering articles (100) | - | 0.20 |
-
-The out-of-scope set has 25 everyday questions, 32 questions governed by other labor laws (severance pay, minimum wage, equal employment, and so on), and 25 questions on other laws (`data/oos_eval.csv`). The 4-bit MLX model scores 0.671 and 0.24 on the last two rows, close to bf16. Questions under other labor laws that resemble a Labor Standards Act article are refused only 25% of the time even after fine-tuning, the largest remaining weakness. Of the 32 other-labor-law questions, 5 non-refusals only cite an article that delegates to another law (retirement benefits, Article 34; safety and health, Article 76) and point to that law, while 13 (0.406) force a Labor Standards Act article onto the question, such as answering an industrial-accident leave benefit question with Article 79. The forced-answer rate over all 82 questions is 0.256 (`refusal.oos_verdict`).
-
-**Local inference (MacBook Air 8 GB, MLX 4-bit, 100 dev questions)**
-
-| Metric | Value |
-| --- | --- |
-| Total score (retrieved / gold articles) | 0.812 / 0.937 |
-| Time to first token (median) | 5.4 s |
-| Generation speed | 24.5 tokens/s |
-| Time per question | 20.4 s |
-| Peak SLM memory | 3.16 GB |
+- **v4 web app, test (2026-10-25)**: reranked Recall@3 0.940, citation accuracy 0.905, out-of-scope refusal 0.96, 15.1 s per question, MLX peak 20.4GB → [record](docs/evals/2026-10-25-v4-webapp-test.md)
+- **Remote mode recheck (2026-10-29)**: all 522 answers identical to local mode, latency within 0.3 s → [record](docs/evals/2026-10-29-model-server.md)
+- **Enforcement-decree attachment experiment (val, 2026-10-29 to 31)**: chosen rule attaches the gold decree 0.921; gold-decree citation on decree questions 0.000 → 0.900; Act answers unchanged → [record](docs/evals/2026-10-31-decree-experiment.md)
+- **Decree attachment in the web app (val, 2026-10-31)**: in progress (deploy check, identical Act embeddings, local/remote equivalence passed) → [record](docs/evals/2026-10-31-decree-attach.md)
+- **v1, 130 Labor Standards Act articles (2026-10-16 to 18)**: Recall@3 0.940, total score 0.854 (retrieved) / 0.961 (gold articles), out-of-scope refusal 0.707 → [record](docs/evals/2026-10-18-v1.md)
 
 ### Quick start
 
@@ -1203,7 +947,7 @@ deploy/launchd/        # launchd templates for the always-on setup (model server
   - Model selection and hyperparameters were decided on validation data only.
 - **Answer scoring**: Each test question specifies required keyword groups, forbidden phrases, and the gold article. Scoring is automatic and distinguishes similar article numbers such as Article 43 and Article 43-2. A refusal is never counted as a citation, even when its list of provided articles contains the gold article. `cite_strict` separately records whether the cited-articles section names the gold article without also citing a confusable or similarly numbered article (not part of the total score). The same number in another law (e.g. Article 34 of the Employee Retirement Benefit Security Act) is not distinguished. The reference answers in the evaluation file score 1.0 on all 650 questions.
 - **Out-of-scope questions**: 102 questions the Labor Standards Act cannot answer measure refusal separately (`data/oos_eval.csv`).
-  - On 2026-10-19, 20 other-labor-law questions that overlap with Labor Standards Act concepts (OOS083-102) were added. Their legal basis (`note`) was checked against statute text from [Legalize KR](https://github.com/legalize-kr/legalize-kr). The results above use the original 82.
+  - On 2026-10-19, 20 other-labor-law questions that overlap with Labor Standards Act concepts (OOS083-102) were added. Their legal basis (`note`) was checked against statute text from [Legalize KR](https://github.com/legalize-kr/legalize-kr). The v1 results ([record](docs/evals/2026-10-18-v1.md)) use the original 82.
   - Answers are classified as refusal, referral (cites only an article in `refer_lsa` that delegates to another law), forced (answers with any other Labor Standards Act article), or uncited (neither a refusal phrase nor a citation). `near_lsa` is the basis of the README numbers; `near_lsa_v2` fills in missing labels.
 - **In-scope controls**: 20 test questions that resemble other-labor-law questions but must be answered under the Labor Standards Act (`data/scope_controls.csv`, paired via `twin_oos`). They check that raising out-of-scope refusal does not make the model refuse these too.
 - **Unsupported-claim cases**: The 86 non-refusals in `refusal_v1_4bit.csv` are labeled forced 77, fabricated 4, correct-but-unsupported 2 and reasonable 3 (`data/refusal_hard_cases.csv`). The 81 forced and fabricated cases are re-evaluated with `eval_refusal --hard`.

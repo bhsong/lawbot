@@ -41,3 +41,7 @@ answers 200문항 지연 시간 (`summary_pro_concise_rr` → `summary_pro_conci
 | 정답 없는 참고 조문 답변 평균 (초, 200) | 11.87 | 11.82 |
 
 HTTP 왕복이 더해졌는데도 원격 모드가 느려지지 않았다(차이 0.3초 이내, 측정 오차 범위로 본다).
+
+## English (README text)
+
+Rechecked in the production setup (remote mode, 2026-10-29): the web app talking to the model server reran answers, out-of-scope and refusal, and `lawbot.diff_answers` found all 522 answers identical character for character (200 · 122 · 200), so the accuracy numbers above stand. End-to-end time averaged 14.9 s, first token 2.78 s (median) and MLX peak memory 20.4GB, with no visible HTTP overhead (`results/v4/*_pro_concise_rr_remote.csv`).
