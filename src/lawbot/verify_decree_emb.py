@@ -1,5 +1,5 @@
 # src/lawbot/verify_decree_emb.py  →  uv run python -m lawbot.verify_decree_emb   (맥 전용, 임베딩 모델만 올림)
-# 하위법령 첨부를 켜도 법률 415개 임베딩이 지금과 같은지 확인한다 (docs/plans/decree-attach.md Q3)
+# 하위법령 첨부를 켜도 법률 415개 임베딩이 지금과 같은지 확인한다 (docs/archives/decree-attach.md Q3)
 #   A: 하위법령 끔  — 415조문 CSV, max_seq 2304 (지금 웹앱)
 #   B: 하위법령 켬  — 812조문 CSV, 법률 max_seq 2304 + 하위법령 397개 max_seq 3072 (따로 인코딩)
 #   → 법률 행렬 A.D와 B.D가 비트 단위로 같아야 함 (np.array_equal). 검색 결과도 val 질문 일부로 대조

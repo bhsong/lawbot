@@ -1,4 +1,4 @@
-# tests/test_decree.py  →  시행령·시행규칙(하위법령) 첨부 (docs/plans/decree-attach.md). 모델 파일 불필요
+# tests/test_decree.py  →  시행령·시행규칙(하위법령) 첨부 (docs/archives/decree-attach.md). 모델 파일 불필요
 #   필터가 val 실험(decree_filter same1+other0.9, 저장된 fp16 점수)과 같은지, 첨부를 끈 구성·Fast가 지금과 같은지,
 #   원격·로컬 동등성, 812조문 검색기·인용 판정·화면·평가 경로
 import dataclasses

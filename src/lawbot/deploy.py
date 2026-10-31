@@ -95,7 +95,7 @@ def reranker(profile):
     n = int(os.environ.get('LAWBOT_RERANKER_CANDIDATES', '10'))
     return RerankerConfig(reranker_path(), n)
 
-# ---- 시행령·시행규칙(하위법령) 첨부 (docs/plans/decree-attach.md) ----
+# ---- 시행령·시행규칙(하위법령) 첨부 (docs/archives/decree-attach.md) ----
 # 법률 검색(임베딩 10 → 리랭커 → 3개)은 그대로 두고, 하위법령 397개를 따로 임베딩 10 → 같은 리랭커 → 필터 → 최대 k개 첨부
 # 필터(val로 고른 same1+other0.9): 법률 1위와 같은 법의 하위법령은 그대로, 다른 법은 리랭커 점수 ≥ τ일 때만 (lawbot.decree)
 DECREE_CANDIDATES = 10   # 하위법령 임베딩 후보 수 (실험과 같음)

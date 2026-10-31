@@ -1,5 +1,5 @@
 # src/lawbot/model_server.py  →  uv run lawbot-model-server
-# 임베딩·리랭커·답변 모델을 한 번만 올려 운영·개발 웹앱이 함께 쓰는 내부 모델 서버 (docs/plans/model-server.md)
+# 임베딩·리랭커·답변 모델을 한 번만 올려 운영·개발 웹앱이 함께 쓰는 내부 모델 서버 (docs/archives/model-server.md)
 # 127.0.0.1에만 열고(포트는 .env의 LAWBOT_MODEL_SERVER_PORT, 기본값 없음), 모든 요청에 토큰(LAWBOT_MODEL_TOKEN)이 필요하다
 # 모델은 service.load_app(local=True)로 올린다: 로딩·검증·LRU는 웹앱 로컬 모드와 같은 코드
 # 모델 연산은 전역 락으로 한 번에 하나만 (혼자 쓰는 전제, MLX·MPS 동시 실행을 피함). 질문 내용은 로그에 남기지 않는다
