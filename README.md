@@ -204,6 +204,8 @@ LAWBOT_PROFILE=v1 LAWBOT_MODELS= LAWBOT_RERANKER_ENABLED=0 uv run lawbot-app
 | `LAWBOT_MODEL_TOKEN` | 모델 서버·원격 모드 필수 | 모델 서버 토큰 (16자 이상, `openssl rand -hex 32`). 웹앱과 모델 서버가 같은 값 |
 | `LAWBOT_MODEL_SERVER_WAIT` | 아니요 | 원격 모드 웹앱이 시작할 때 모델 서버 준비를 기다리는 최대 초 (기본 `300`) |
 | `LAWBOT_REQUEST_LOG` | 아니요 | 요청 로그 파일 (기본 레포 최상위 `logs/requests.jsonl`). 빈 값이면 기록하지 않음 |
+| `LAWBOT_FEEDBACK` | 아니요 | `1`이면 답변마다 👍·깃발 버튼을 달고 누른 답을 저장 (기본 `0`, `0`·`1`만) |
+| `LAWBOT_FEEDBACK_DIR` | 아니요 | 피드백 저장 폴더 (기본 레포 최상위 `feedback/`). 레포 안이면 `.gitignore`에 걸리는 경로만 허용. 운영은 레포 밖 절대 경로 권장 |
 
 `LAWBOT_USER`와 `LAWBOT_PW`가 하나라도 없거나 비어 있으면 모델을 불러오기 전에 `RuntimeError`로 실행을 거부합니다. 인증 없이 서버를 띄우는 방법은 없습니다.
 
@@ -341,6 +343,21 @@ uv run python -m lawbot.log_summary --caller lawbot-app  # 평가 실행 제외
 
 오류 유형은 화면 안내와 같습니다. `model_server`(서버 연결 실패·토큰 불일치·로딩 중)는 "모델 서버가 준비되지 않았습니다", `model_load`(모델 폴더·system 파일 없음)는 기존 "모델을 불러오지 못했습니다"로 안내합니다. 리랭킹·생성 오류는 임베딩 순위로 되돌리지 않고 그대로 오류로 표시합니다.
 
+**답변 피드백 (선택, `LAWBOT_FEEDBACK=1`)**
+
+답변마다 👍과 깃발(이유: 검색 오류·답변 오류·불필요한 거절·기타)이 붙습니다. 마우스는 깃발에 올리면, 휴대폰은 깃발을 탭하면 이유가 보입니다. 누르면 그 답을 만든 입력 전체(질문, 참고 조문(첨부된 시행령·시행규칙 포함)과 첨부 설정, system, 답변 원문·화면 글, 인용 판정, 측정값, 데이터 버전, 커밋, `request_id`)를 `feedback/feedback_YYYY-MM.jsonl`(Git 제외, 권한 600)에 한 줄씩 덧붙입니다. 질문 원문은 이 파일에만, 버튼을 누른 답에만 남습니다. 앱을 다시 시작하기 전의 답이나 화면 글이 기록과 다른 답에는 저장하지 않습니다. Gradio 기본 flagging(`.gradio/flagged`)은 항상 끕니다.
+
+저장한 줄은 바로 학습에 쓰지 않고 검수를 거칩니다.
+
+```zsh
+uv run python -m lawbot.feedback_review <운영 피드백 폴더> feedback/          # → feedback_review_<날짜>.csv (+ .jsonl)
+uv run python -m lawbot.feedback_export feedback_review_<날짜>.csv --out data/feedback/
+```
+
+- `feedback_review`: 같은 답은 마지막 선택만 남기고 해제는 뺍니다. 평가 데이터(v4 test 2,075·val 1,110문항, 하위법령 질문 val 444·test 1,880문항, `oos_eval`, `scope_controls`, `refusal_hard_cases`, `labor_eval_keywords`)와 같은 질문(공백·문장부호 무시)과 유사도 0.9 이상인 질문을 빼고, 뺀 id를 출력합니다. 엑셀·Numbers에서 `h_ok`(맞음/틀림/모름), `h_gold`(`법령명 제N조`, 여러 개면 `;`), `h_scope`(범위 안/범위 밖), `h_note`를 채웁니다. `--keep 이전 CSV`로 채운 칸을 이어받습니다
+- `feedback_export`(맥에서 실행): `fb_questions.csv`(dev 질문), `fb_emb_pairs.csv`(정답 조문 positive, 검색 오류는 검색 1위를 hard negative), `fb_sft.csv`(맞음 + 👍), `fb_kto.csv`(맞음/틀림 라벨). 프롬프트는 저장한 조문(첨부된 시행령·시행규칙 포함)으로 `llm.build_prompt_v4`를 다시 불러 만들고, `h_gold`에는 법률과 하위법령 조문(`근로기준법 시행령 제2조`)을 모두 쓸 수 있으며, 피드백 안에서 `random_state=42`로 val을 뗍니다. 평가는 계속 기존 test로만 합니다
+- 깃발의 터치 보정(`feedback_ui.py`)은 Gradio 6.30.0 내부 이름에 기댑니다. Gradio를 올리면 맥 브라우저와 휴대폰에서 다시 확인하세요
+
 > 주의: 비밀번호를 소스 코드, 셸 설정 파일, 스크립트, `.env.example` 등 Git에 올라가는 파일에 적지 마세요. 파일에 둘 때는 Git에서 제외된 `.env`(권한 600)에만 두고, 더 안전하게는 실행할 때 입력하거나 macOS 키체인을 쓰세요.
 
 **테스트 실행**
@@ -462,6 +479,10 @@ src/lawbot/
 ├── citation.py        # 인용 파싱·형식 검증·거절 판정 (웹앱 화면과 eval_v4 채점이 같이 씀)
 ├── manifest.py        # 법령 데이터 매니페스트 검사 (조문 수·sha256·기준일)
 ├── log_summary.py     # 요청 로그(logs/requests.jsonl) 요약
+├── feedback.py        # 답변 피드백 저장 (LAWBOT_FEEDBACK, feedback/*.jsonl)
+├── feedback_ui.py     # 피드백 깃발의 터치 기기 보정 CSS·JS
+├── feedback_review.py # 피드백 → 검수 CSV (평가 데이터와 겹치는 질문 제외)
+├── feedback_export.py # 검수 CSV → dev 질문·임베딩 쌍·SFT·KTO CSV
 ├── eval_v4.py         # v4 웹앱 구성 평가 (lawbot-eval-v4)
 ├── diff_answers.py    # 두 평가 결과의 답변 원문 글자 단위 비교
 ├── decree_filter.py   # 하위법령 첨부 필터 규칙 비교 (저장된 리랭커 점수, CPU)
@@ -714,6 +735,8 @@ The web app is local-only, for use on this Mac. The address is fixed to `127.0.0
 | `LAWBOT_MODEL_TOKEN` | Model server, remote mode | Model server token (16+ characters, `openssl rand -hex 32`); same value for web apps and server |
 | `LAWBOT_MODEL_SERVER_WAIT` | No | Seconds a remote-mode web app waits at startup for the model server to be ready (default `300`) |
 | `LAWBOT_REQUEST_LOG` | No | Request log file (default `logs/requests.jsonl` at the repo root). Empty disables it |
+| `LAWBOT_FEEDBACK` | No | `1` adds 👍 and flag buttons to each answer and saves the rated answers (default `0`; only `0` or `1`) |
+| `LAWBOT_FEEDBACK_DIR` | No | Feedback folder (default `feedback/` at the repo root). Inside the repo it must be git-ignored. For production, an absolute path outside the repo is recommended |
 
 If either `LAWBOT_USER` or `LAWBOT_PW` is missing or empty, the app refuses to start with a `RuntimeError` before loading any model. There is no way to run the server without a login.
 
@@ -817,6 +840,21 @@ uv run python -m lawbot.log_summary --caller lawbot-app  # exclude evaluation ru
 
 Error types match the on-screen messages: `model_server` (unreachable server, token mismatch, still loading) shows "the model server is not ready", `model_load` (missing model folder or system file) keeps the existing load-failure message. Reranking and generation errors are shown as errors, never silently replaced by the embedding order.
 
+**Answer feedback (optional, `LAWBOT_FEEDBACK=1`)**
+
+Each answer gets a 👍 and a flag (reasons: retrieval error, answer error, unnecessary refusal, other). With a mouse the reasons appear when hovering over the flag; on a phone, tap the flag. A click appends the full input behind that answer (question, the context articles including attached decrees and the decree settings, system prompt, raw and displayed answer, citation checks, timings, data version, commit, `request_id`) as one line to `feedback/feedback_YYYY-MM.jsonl` (git-ignored, mode 600). Question text is stored only there and only for rated answers. Answers from before an app restart, or whose displayed text does not match the record, are not saved. Gradio's built-in flagging (`.gradio/flagged`) is always off.
+
+Saved lines are reviewed before any training use:
+
+```zsh
+uv run python -m lawbot.feedback_review <production feedback folder> feedback/   # → feedback_review_<date>.csv (+ .jsonl)
+uv run python -m lawbot.feedback_export feedback_review_<date>.csv --out data/feedback/
+```
+
+- `feedback_review`: keeps the last choice per answer and drops cleared ones. It removes questions that match the evaluation data (v4 test 2,075 and val 1,110, decree questions val 444 and test 1,880, `oos_eval`, `scope_controls`, `refusal_hard_cases`, `labor_eval_keywords`) ignoring spaces and punctuation, or with difflib similarity ≥ 0.9, and prints the removed ids. Fill in `h_ok` (맞음/틀림/모름), `h_gold` (`<law> 제N조`, `;`-separated), `h_scope` (범위 안/범위 밖) and `h_note` in Excel or Numbers. `--keep <previous CSV>` carries filled cells over
+- `feedback_export` (run on the Mac): `fb_questions.csv` (dev questions), `fb_emb_pairs.csv` (gold-article positives; for retrieval errors the top hit becomes a hard negative), `fb_sft.csv` (correct + 👍), `fb_kto.csv` (correct/incorrect labels). Prompts are rebuilt from the stored articles (including attached decrees) with `llm.build_prompt_v4`, `h_gold` may name statute or decree articles (`근로기준법 시행령 제2조`), and a val split is drawn inside the feedback data with `random_state=42`. Evaluation stays on the existing test set
+- The touch fix for the flag (`feedback_ui.py`) relies on Gradio 6.30.0 internals. Recheck on a Mac browser and a phone after upgrading Gradio
+
 > Warning: never put the password in source code, shell profiles, scripts, `.env.example` or any other file that goes into Git. If you keep it in a file, use only the git-ignored `.env` (mode 600); typing it at launch or the macOS Keychain is safer.
 
 **Run the tests**
@@ -909,6 +947,10 @@ src/lawbot/
 ├── citation.py        # citation parsing, per-citation checks, refusal detection (shared by the web view and eval_v4)
 ├── manifest.py        # law data manifest checks (article counts, SHA-256, reference date)
 ├── log_summary.py     # summary of the request log (logs/requests.jsonl)
+├── feedback.py        # answer feedback storage (LAWBOT_FEEDBACK, feedback/*.jsonl)
+├── feedback_ui.py     # touch-device CSS/JS for the feedback flag
+├── feedback_review.py # feedback → review CSV (drops questions overlapping the evaluation data)
+├── feedback_export.py # review CSV → dev questions, embedding pairs, SFT and KTO CSVs
 ├── eval_v4.py         # v4 web app evaluation (lawbot-eval-v4)
 ├── diff_answers.py    # character-level comparison of answers from two evaluation runs
 ├── decree_filter.py   # compare decree-attachment filter rules (saved reranker scores, CPU)
