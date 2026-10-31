@@ -17,3 +17,11 @@ models/
 
 # 요청 로그 (lawbot.service.log_request, 질문 원문 없음)
 logs/
+
+# 답변 피드백 (lawbot.feedback, 질문 원문 있음: 절대 커밋하지 않음)
+feedback/
+feedback_review_*
+data/feedback/
+
+# Gradio 기본 저장 폴더 (flagging 등)
+.gradio/
