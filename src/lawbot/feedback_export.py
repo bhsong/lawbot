@@ -14,9 +14,10 @@ import pandas as pd
 from lawbot import citation
 from lawbot.feedback import check_private
 from lawbot.feedback_review import E, companion, private_write
-from lawbot.paths import V4_ARTICLES
+from lawbot.paths import V4_ARTICLES, V4_DECREE_ARTICLES
 
 SEED = 42
+ARTICLES = (V4_ARTICLES, V4_DECREE_ARTICLES)   # 법률 415 + 하위법령 첨부용 812조문 (하위법령 hit 대조·h_gold)
 VAL_FRAC = 0.1
 OK_VALUES = ('맞음', '틀림', '모름')
 SCOPE_VALUES = ('범위 안', '범위 밖')
@@ -54,7 +55,10 @@ def parse_gold(value, keys):
     return out
 
 def article_docs(articles):
-    """{(법령, 제N조): 검색 문서 문자열} (retriever.DOC_STYLES['v4']와 같은 문자열, 삭제 조문 제외)"""
+    """{(법령, 제N조): 검색 문서 문자열} (retriever.DOC_STYLES['v4']와 같은 문자열, 삭제 조문 제외)
+    articles: 조문 CSV 하나 또는 여러 개 (앞 파일부터 합친다. 하위법령 법령명은 '근로기준법 시행령'이라 키가 겹치지 않음)"""
+    if isinstance(articles, (list, tuple)):
+        return {k: v for a in articles for k, v in article_docs(a).items()}
     from lawbot.retriever import DOC_STYLES
     law = pd.read_csv(articles, **E)
     law = law[law['deleted'] == 0].reset_index(drop=True)
@@ -68,7 +72,7 @@ def assign_split(ids, frac=VAL_FRAC):
     val = set(s.sample(frac=frac, random_state=SEED)) if len(s) else set()
     return {i: 'val' if i in val else 'train' for i in s}
 
-def export(review_csv, out, articles=V4_ARTICLES, frac=VAL_FRAC):
+def export(review_csv, out, articles=ARTICLES, frac=VAL_FRAC):
     """요약 줄 목록. out 폴더에 CSV 4개"""
     from lawbot.llm import build_prompt_v4
     out = Path(out)
@@ -119,7 +123,8 @@ def main(argv=None):
     ap = argparse.ArgumentParser(description='검수 CSV → 학습·개발용 CSV (fb_questions·fb_emb_pairs·fb_sft·fb_kto)')
     ap.add_argument('review', help='사람이 채운 feedback_review_<날짜>.csv (같은 이름의 .jsonl이 옆에 있어야 함)')
     ap.add_argument('--out', default='data/feedback/')
-    ap.add_argument('--articles', default=str(V4_ARTICLES), help='정답 조문 본문을 찾을 조문 CSV (v4)')
+    ap.add_argument('--articles', nargs='+', default=[str(a) for a in ARTICLES],
+                    help='정답 조문·참고 조문 본문을 찾을 조문 CSV (기본: v4 법률 + 하위법령 첨부용)')
     ap.add_argument('--val-frac', type=float, default=VAL_FRAC)
     a = ap.parse_args(argv)
     for line in export(a.review, a.out, a.articles, a.val_frac):

@@ -345,7 +345,7 @@ uv run python -m lawbot.log_summary --caller lawbot-app  # 평가 실행 제외
 
 **답변 피드백 (선택, `LAWBOT_FEEDBACK=1`)**
 
-답변마다 👍과 깃발(이유: 검색 오류·답변 오류·불필요한 거절·기타)이 붙습니다. 마우스는 깃발에 올리면, 휴대폰은 깃발을 탭하면 이유가 보입니다. 누르면 그 답을 만든 입력 전체(질문, 참고 조문 3개, system, 답변 원문·화면 글, 인용 판정, 측정값, 데이터 버전, 커밋, `request_id`)를 `feedback/feedback_YYYY-MM.jsonl`(Git 제외, 권한 600)에 한 줄씩 덧붙입니다. 질문 원문은 이 파일에만, 버튼을 누른 답에만 남습니다. 앱을 다시 시작하기 전의 답이나 화면 글이 기록과 다른 답에는 저장하지 않습니다. Gradio 기본 flagging(`.gradio/flagged`)은 항상 끕니다.
+답변마다 👍과 깃발(이유: 검색 오류·답변 오류·불필요한 거절·기타)이 붙습니다. 마우스는 깃발에 올리면, 휴대폰은 깃발을 탭하면 이유가 보입니다. 누르면 그 답을 만든 입력 전체(질문, 참고 조문(첨부된 시행령·시행규칙 포함)과 첨부 설정, system, 답변 원문·화면 글, 인용 판정, 측정값, 데이터 버전, 커밋, `request_id`)를 `feedback/feedback_YYYY-MM.jsonl`(Git 제외, 권한 600)에 한 줄씩 덧붙입니다. 질문 원문은 이 파일에만, 버튼을 누른 답에만 남습니다. 앱을 다시 시작하기 전의 답이나 화면 글이 기록과 다른 답에는 저장하지 않습니다. Gradio 기본 flagging(`.gradio/flagged`)은 항상 끕니다.
 
 저장한 줄은 바로 학습에 쓰지 않고 검수를 거칩니다.
 
@@ -355,7 +355,7 @@ uv run python -m lawbot.feedback_export feedback_review_<날짜>.csv --out data/
 ```
 
 - `feedback_review`: 같은 답은 마지막 선택만 남기고 해제는 뺍니다. 평가 데이터(v4 test 2,075문항, `oos_eval`, `scope_controls`, `refusal_hard_cases`, `labor_eval_keywords`)와 같은 질문(공백·문장부호 무시)과 유사도 0.9 이상인 질문을 빼고, 뺀 id를 출력합니다. 엑셀·Numbers에서 `h_ok`(맞음/틀림/모름), `h_gold`(`법령명 제N조`, 여러 개면 `;`), `h_scope`(범위 안/범위 밖), `h_note`를 채웁니다. `--keep 이전 CSV`로 채운 칸을 이어받습니다
-- `feedback_export`(맥에서 실행): `fb_questions.csv`(dev 질문), `fb_emb_pairs.csv`(정답 조문 positive, 검색 오류는 검색 1위를 hard negative), `fb_sft.csv`(맞음 + 👍), `fb_kto.csv`(맞음/틀림 라벨). 프롬프트는 저장한 조문으로 `llm.build_prompt_v4`를 다시 불러 만들고, 피드백 안에서 `random_state=42`로 val을 뗍니다. 평가는 계속 기존 test로만 합니다
+- `feedback_export`(맥에서 실행): `fb_questions.csv`(dev 질문), `fb_emb_pairs.csv`(정답 조문 positive, 검색 오류는 검색 1위를 hard negative), `fb_sft.csv`(맞음 + 👍), `fb_kto.csv`(맞음/틀림 라벨). 프롬프트는 저장한 조문(첨부된 시행령·시행규칙 포함)으로 `llm.build_prompt_v4`를 다시 불러 만들고, `h_gold`에는 법률과 하위법령 조문(`근로기준법 시행령 제2조`)을 모두 쓸 수 있으며, 피드백 안에서 `random_state=42`로 val을 뗍니다. 평가는 계속 기존 test로만 합니다
 - 깃발의 터치 보정(`feedback_ui.py`)은 Gradio 6.30.0 내부 이름에 기댑니다. Gradio를 올리면 맥 브라우저와 휴대폰에서 다시 확인하세요
 
 > 주의: 비밀번호를 소스 코드, 셸 설정 파일, 스크립트, `.env.example` 등 Git에 올라가는 파일에 적지 마세요. 파일에 둘 때는 Git에서 제외된 `.env`(권한 600)에만 두고, 더 안전하게는 실행할 때 입력하거나 macOS 키체인을 쓰세요.
@@ -842,7 +842,7 @@ Error types match the on-screen messages: `model_server` (unreachable server, to
 
 **Answer feedback (optional, `LAWBOT_FEEDBACK=1`)**
 
-Each answer gets a 👍 and a flag (reasons: retrieval error, answer error, unnecessary refusal, other). With a mouse the reasons appear when hovering over the flag; on a phone, tap the flag. A click appends the full input behind that answer (question, the three context articles, system prompt, raw and displayed answer, citation checks, timings, data version, commit, `request_id`) as one line to `feedback/feedback_YYYY-MM.jsonl` (git-ignored, mode 600). Question text is stored only there and only for rated answers. Answers from before an app restart, or whose displayed text does not match the record, are not saved. Gradio's built-in flagging (`.gradio/flagged`) is always off.
+Each answer gets a 👍 and a flag (reasons: retrieval error, answer error, unnecessary refusal, other). With a mouse the reasons appear when hovering over the flag; on a phone, tap the flag. A click appends the full input behind that answer (question, the context articles including attached decrees and the decree settings, system prompt, raw and displayed answer, citation checks, timings, data version, commit, `request_id`) as one line to `feedback/feedback_YYYY-MM.jsonl` (git-ignored, mode 600). Question text is stored only there and only for rated answers. Answers from before an app restart, or whose displayed text does not match the record, are not saved. Gradio's built-in flagging (`.gradio/flagged`) is always off.
 
 Saved lines are reviewed before any training use:
 
@@ -852,7 +852,7 @@ uv run python -m lawbot.feedback_export feedback_review_<date>.csv --out data/fe
 ```
 
 - `feedback_review`: keeps the last choice per answer and drops cleared ones. It removes questions that match the evaluation data (v4 test 2,075, `oos_eval`, `scope_controls`, `refusal_hard_cases`, `labor_eval_keywords`) ignoring spaces and punctuation, or with difflib similarity ≥ 0.9, and prints the removed ids. Fill in `h_ok` (맞음/틀림/모름), `h_gold` (`<law> 제N조`, `;`-separated), `h_scope` (범위 안/범위 밖) and `h_note` in Excel or Numbers. `--keep <previous CSV>` carries filled cells over
-- `feedback_export` (run on the Mac): `fb_questions.csv` (dev questions), `fb_emb_pairs.csv` (gold-article positives; for retrieval errors the top hit becomes a hard negative), `fb_sft.csv` (correct + 👍), `fb_kto.csv` (correct/incorrect labels). Prompts are rebuilt from the stored articles with `llm.build_prompt_v4`, and a val split is drawn inside the feedback data with `random_state=42`. Evaluation stays on the existing test set
+- `feedback_export` (run on the Mac): `fb_questions.csv` (dev questions), `fb_emb_pairs.csv` (gold-article positives; for retrieval errors the top hit becomes a hard negative), `fb_sft.csv` (correct + 👍), `fb_kto.csv` (correct/incorrect labels). Prompts are rebuilt from the stored articles (including attached decrees) with `llm.build_prompt_v4`, `h_gold` may name statute or decree articles (`근로기준법 시행령 제2조`), and a val split is drawn inside the feedback data with `random_state=42`. Evaluation stays on the existing test set
 - The touch fix for the flag (`feedback_ui.py`) relies on Gradio 6.30.0 internals. Recheck on a Mac browser and a phone after upgrading Gradio
 
 > Warning: never put the password in source code, shell profiles, scripts, `.env.example` or any other file that goes into Git. If you keep it in a file, use only the git-ignored `.env` (mode 600); typing it at launch or the macOS Keychain is safer.

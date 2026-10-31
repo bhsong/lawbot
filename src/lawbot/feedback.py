@@ -23,8 +23,8 @@ OPTIONS = [LIKE, *REASONS]               # 'Dislike'는 넣지 않는다 (👎 �
 TURNS_PER_SESSION = 50                   # 세션마다 최근 턴만 둔다 (메모리 상한)
 MAX_SESSIONS = 200                       # 오래된 세션은 LRU로 버림
 DEDUP_S = 2.0                            # 이유 클릭 한 번이 이벤트 두 번으로 들어온다: 같은 값이 이 안에 다시 오면 저장 안 함
-HIT_FIELDS = ('law', 'article_id', 'title', 'doc', 'score', 'rerank_score', 'emb_rank')
-TIMING_FIELDS = ('search', 'rerank', 'load', 'ttft', 'first_text', 'total', 'gen_tokens', 'finish')
+HIT_FIELDS = ('law', 'article_id', 'title', 'doc', 'score', 'rerank_score', 'emb_rank', 'kind', 'parent_law')  # kind·parent_law: 하위법령 hit만
+TIMING_FIELDS = ('search', 'rerank', 'decree_search', 'decree_rerank', 'load', 'ttft', 'first_text', 'total', 'gen_tokens', 'finish')
 
 def enabled():
     """LAWBOT_FEEDBACK: '0'(기본)·'1'만"""
@@ -132,6 +132,11 @@ def jsonable(v):
     """numpy 값 → 파이썬 값 (검색 결과의 점수·순위)"""
     return v.item() if hasattr(v, 'item') else v
 
+def decree_settings(app, model_key):
+    """이 답에 하위법령 첨부가 켜졌으면 {tau, k}, 아니면 None (service.uses_decrees와 같은 판단)"""
+    dc = getattr(app, 'decree', None)
+    return {'tau': dc.tau, 'k': dc.k} if dc is not None and model_key in dc.models else None
+
 def turn_record(app, question, hits, raw, shown, model_key, fmt, st):
     """저장할 한 턴 (label·reason·feedback_id·ts·turn_id는 저장할 때 붙인다)"""
     m = manifest.load(app.profile.articles)
@@ -141,6 +146,7 @@ def turn_record(app, question, hits, raw, shown, model_key, fmt, st):
             'answer_raw': raw, 'answer_shown': shown, 'model': model_key, 'fmt': fmt,
             'refused': st.get('refused'), 'n_cited': st.get('n_cited'), 'citations': cite_details(app, raw, hits),
             'timing': {k: st.get(k) for k in TIMING_FIELDS},
+            'decree': decree_settings(app, model_key), 'n_decree': st.get('n_decree'),
             'instance': security.instance_name(),
             'mode': 'remote' if getattr(app.retriever, 'client', None) is not None else 'local',
             'profile': app.profile.name, 'dataset_version': m.get('dataset_version') if m else None,

@@ -339,3 +339,65 @@ def test_split_is_deterministic():
     ids = [f'id{i}' for i in range(50)]
     s = feedback_export.assign_split(ids)
     assert s == feedback_export.assign_split(list(reversed(ids))) and sum(v == 'val' for v in s.values()) == 5
+
+# ---- 하위법령 첨부(main #26)와 함께 ----
+def test_decree_turn_record(env, tmp_path):
+    """T11: 첨부 모델(Pro) 턴의 hits에 하위법령 kind·parent_law가 남고, 첨부 설정·수·측정값이 기록된다"""
+    import test_decree as td
+    env.setattr(td.RR, 'SCORES', {})
+    env.setattr(td.RR, 'ERROR', None)
+    a = td.make()
+    fb = feedback.Feedback(tmp_path)
+    chat = app_mod.make_chat(a, fb)
+    q = '해고 예고?'
+    h = turn(chat, [], question=q, model='pro', fmt='concise')
+    _, hits, _, st = list(service.ask(a, q, 'pro', fmt='concise'))[-1]
+    assert len(hits) > 3 and st['n_decree'] == len(hits) - 3
+    row = fb.on_like('s1', h, 1, [h[1]['content']], True)
+    assert row['hits'] == json.loads(json.dumps(hits, default=feedback.jsonable, ensure_ascii=False))
+    assert [x.get('kind') for x in row['hits'][3:]] and all(x['kind'] in ('시행령', '시행규칙') for x in row['hits'][3:])
+    assert all('kind' not in x for x in row['hits'][:3]) and row['hits'][3]['parent_law']
+    assert row['decree'] == {'tau': 0.9, 'k': 2} and row['n_decree'] == st['n_decree']
+    assert row['timing']['decree_rerank'] is not None
+    h = turn(chat, h, question=q, model='fast', fmt='full')
+    row = fb.on_like('s1', h, 3, [h[3]['content']], True)
+    assert row['decree'] is None and row['n_decree'] is None and len(row['hits']) == 3
+
+def test_export_with_decree_hits(env, tmp_path):
+    """T12: 하위법령 hit가 있는 기록: 조문 대조 경고 없음, 프롬프트에 하위법령 블록, h_gold에 하위법령 조문"""
+    hits = [{'law': '근로기준법', 'article_id': '제26조', 'title': '해고의 예고', 'score': 0.9,
+             'doc': '근로기준법 제26조(해고의 예고)\n본문26'},
+            {'law': '근로기준법 시행령', 'article_id': '제2조', 'title': '평균임금의 계산', 'score': 0.7,
+             'doc': '근로기준법 시행령 제2조(평균임금의 계산)\n본문시2', 'kind': '시행령', 'parent_law': '근로기준법'}]
+    write_rows(tmp_path / 'fb', [fb_row('a', '질문A', hits=hits)])
+    out = tmp_path / 'review.csv'
+    feedback_review.review([tmp_path / 'fb'], out, evals=[])
+    d = pd.read_csv(out, dtype=str, keep_default_na=False, encoding='utf-8-sig')
+    assert d.loc[0, 'hits'] == '근로기준법 제26조; 근로기준법 시행령 제2조'
+    d.loc[0, ['h_ok', 'h_gold']] = ['맞음', '근로기준법 시행령 제2조']
+    d.to_csv(out, index=False, encoding='utf-8-sig')
+    law = tmp_path / 'law.csv'
+    pd.DataFrame({'law': ['근로기준법'], 'article_id': ['근로기준법 제26조'], 'article_no': ['제26조'],
+                  'title': ['해고의 예고'], 'deleted': 0, 'text': ['본문26']}).to_csv(law, index=False, encoding='utf-8-sig')
+    dec = tmp_path / 'dec.csv'
+    pd.DataFrame({'law': ['근로기준법', '근로기준법 시행령'], 'article_id': ['근로기준법 제26조', '근로기준법 시행령 제2조'],
+                  'article_no': ['제26조', '제2조'], 'title': ['해고의 예고', '평균임금의 계산'], 'deleted': 0,
+                  'text': ['본문26', '본문시2'], 'kind': ['법률', '시행령']}).to_csv(dec, index=False, encoding='utf-8-sig')
+    text = '\n'.join(feedback_export.export(out, tmp_path / 'out', articles=[law, dec]))
+    assert '다른 기록' not in text
+    read = lambda n: pd.read_csv(tmp_path / 'out' / f'{n}.csv', dtype=str, keep_default_na=False, encoding='utf-8-sig')
+    from lawbot.llm import build_prompt_v4
+    sft, pairs = read('fb_sft'), read('fb_emb_pairs')
+    assert sft.prompt.iloc[0] == build_prompt_v4(hits, '질문A') and '[2] 근로기준법 시행령 제2조' in sft.prompt.iloc[0]
+    assert list(pairs.gold) == ['근로기준법 시행령 제2조'] and pairs.positive.iloc[0] == hits[1]['doc']
+    with pytest.raises(ValueError, match='조문 CSV에 없음'):           # 법률 CSV만: 하위법령 정답 조문을 찾을 수 없음
+        feedback_export.export(out, tmp_path / 'out2', articles=law)
+    d.loc[0, 'h_gold'] = ''
+    d.to_csv(out, index=False, encoding='utf-8-sig')
+    assert '다른 기록 1' in '\n'.join(feedback_export.export(out, tmp_path / 'out2', articles=law))   # 하위법령 hit 대조 불가
+
+def test_export_default_articles_include_decrees():
+    from lawbot.paths import V4_ARTICLES, V4_DECREE_ARTICLES
+    assert feedback_export.ARTICLES == (V4_ARTICLES, V4_DECREE_ARTICLES)
+    docs = feedback_export.article_docs(feedback_export.ARTICLES)
+    assert ('근로기준법', '제26조') in docs and ('근로기준법 시행령', '제2조') in docs
