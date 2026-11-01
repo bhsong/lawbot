@@ -114,7 +114,7 @@ def test_like_saves_full_turn(env, tmp_path):
     assert row['refused'] is False and row['citations'] == [
         {'law': '근로기준법', 'article_id': '제26조', 'verdict': 'ok'}
     ]
-    assert (row['mode'], row['profile'], row['dataset_version']) == ('api', 'v1', 'v1')
+    assert (row['mode'], row['profile'], row['dataset_version']) == ('api', 'v4', 'v4')
     assert row['request_id'] and row['timing']['total'] is not None and row['commit']
 
 
@@ -123,12 +123,10 @@ def test_full_format_system_and_default(env, tmp_path):
     fb = feedback.Feedback(tmp_path)
     chat = app_mod.make_chat(a, fb)
     h = turn(chat, [], model='pro', fmt='full')  # 간결형 모델에서 '전체' → 4항목 system
-    h = turn(chat, h, model='fast', fmt='full')  # Fast: 모델 기본 system (v1 SYSTEM)
+    h = turn(chat, h, model='fast', fmt='full')  # Fast: 모델 기본 system (프로필 4항목 system 파일)
     r1 = fb.on_like('s1', h, 1, h[1]['content'], True)
     r2 = fb.on_like('s1', h, 3, h[3]['content'], True)
-    from lawbot.prompts import SYSTEM
-
-    assert r1['system'] == a.full_system and r2['system'] == SYSTEM
+    assert r1['system'] == a.full_system and r2['system'] == service.system_text(a.profile, a.models.specs['fast'])
 
 
 def test_labels_reasons_and_dedup(env, tmp_path):
@@ -436,9 +434,9 @@ def test_export(env, tmp_path):
     assert pairs.positive.iloc[0] == '근로기준법 제26조(해고의 예고)\n본문26'
     assert list(pairs.negative) == ['', hits[0]['doc'], hits[0]['doc']]  # reason=retrieval만 검색 1위가 hard negative
     assert list(sft.feedback_id) == ['a'] and list(kto.label) == ['True', 'False', 'False']
-    from lawbot.llm import build_prompt_v4
+    from lawbot.llm import build_prompt
 
-    assert sft.prompt.iloc[0] == build_prompt_v4(hits, '질문A') and sft.completion.iloc[0] == '【결론】\n답'
+    assert sft.prompt.iloc[0] == build_prompt(hits, '질문A') and sft.completion.iloc[0] == '【결론】\n답'
     assert set(q.split) <= {'train', 'val'} and 'v4 프로필이 아니어서 뺌 1' in '\n'.join(lines_)
     assert all(stat.S_IMODE(f.stat().st_mode) == 0o600 for f in (tmp_path / 'out').iterdir())
     d.loc['c', 'h_gold'] = '제26조'  # 법령명 없는 정답 조문
@@ -537,10 +535,10 @@ def test_export_with_decree_hits(env, tmp_path):
     text = '\n'.join(feedback_export.export(out, tmp_path / 'out', articles=[law, dec]))
     assert '다른 기록' not in text
     read = lambda n: pd.read_csv(tmp_path / 'out' / f'{n}.csv', dtype=str, keep_default_na=False, encoding='utf-8-sig')
-    from lawbot.llm import build_prompt_v4
+    from lawbot.llm import build_prompt
 
     sft, pairs = read('fb_sft'), read('fb_emb_pairs')
-    assert sft.prompt.iloc[0] == build_prompt_v4(hits, '질문A') and '[2] 근로기준법 시행령 제2조' in sft.prompt.iloc[0]
+    assert sft.prompt.iloc[0] == build_prompt(hits, '질문A') and '[2] 근로기준법 시행령 제2조' in sft.prompt.iloc[0]
     assert list(pairs.gold) == ['근로기준법 시행령 제2조'] and pairs.positive.iloc[0] == hits[1]['doc']
     with pytest.raises(ValueError, match='조문 CSV에 없음'):  # 법률 CSV만: 하위법령 정답 조문을 찾을 수 없음
         feedback_export.export(out, tmp_path / 'out2', articles=law)

@@ -4,25 +4,19 @@
 import re
 import types
 
+import httpx
 import openai
-import pandas as pd
 
-from lawbot.api_client import ModelServerError, error_from_body
-from lawbot.paths import ARTICLES
-from lawbot.prompts import SYSTEM  # v1 학습 system (여기서 다시 export)
-
-_law = pd.read_csv(ARTICLES, encoding='utf-8-sig')
-_clean = lambda s: re.sub(r' <(?:개정|신설)[^<>]*>', '', s)
-ART = {a: (t, _clean(x)) for a, t, x in zip(_law['article_id'], _law['title'], _law['text']) if pd.notna(t)}
+from lawbot.api_client import ModelServerError, ModelServerTimeout, error_from_body
 
 
-def build_prompt(ids, question):
-    blocks = [f'[{i}] {a}({ART[a][0]})\n{ART[a][1]}' for i, a in enumerate(ids, 1)]
-    return '[참고 조문]\n' + '\n\n'.join(blocks) + f'\n\n[질문]\n{question}'
+def _clean(s):
+    """조문 본문의 개정·신설 표시(' <개정 2020. 5. 26.>' 등)를 뺀다"""
+    return re.sub(r' <(?:개정|신설)[^<>]*>', '', s)
 
 
-def build_prompt_v4(hits, question):
-    """v4: 검색 결과의 법령명·조문을 그대로 쓴다 (7개 법률은 조문 번호가 겹쳐 ART로 찾을 수 없음)
+def build_prompt(hits, question):
+    """[참고 조문] 프롬프트: 검색 결과의 법령명·조문 번호·제목·본문 (7개 법률은 조문 번호가 겹쳐 법령명을 붙임)
     미확인: v4 학습 노트북의 [참고 조문] 형식과 글자 단위로 대조해야 함"""
     blocks = [
         f'[{i}] {h["law"]} {h["article_id"]}({h["title"]})\n{_clean(h["doc"].split(chr(10), 1)[1])}'
@@ -48,7 +42,10 @@ def response(text='', **kw):
 
 
 def convert_error(e):
-    """openai SDK 예외 → 웹앱이 안내하는 예외 (연결 실패는 ConnectionError, 모델 불러오기 실패는 ModelLoadError)"""
+    """openai SDK 예외 → 웹앱이 안내하는 예외 (시간 초과는 ModelServerTimeout, 연결 실패는 ConnectionError,
+    모델 불러오기 실패는 ModelLoadError)"""
+    if isinstance(e, openai.APITimeoutError):
+        return ModelServerTimeout(f'생성 API가 응답하지 않았습니다 ({type(e).__name__})')
     if isinstance(e, openai.APIConnectionError):
         return ConnectionError(f'생성 API에 연결할 수 없습니다 ({type(e).__name__})')
     if isinstance(e, openai.APIStatusError):
@@ -87,19 +84,16 @@ def responses(chunks):
 
 
 class LLM:
-    """model: API 모델 id, client: openai.OpenAI. stream()은 이전 MLX LLM.stream과 같은 인자·응답 속성"""
+    """model: API 모델 id, client: openai.OpenAI, system: 이 모델의 기본 system (deploy 프로필·모델의 system 파일)"""
 
-    def __init__(self, model, client, system=SYSTEM, prompt_style='v1'):
-        self.model, self.client = model, client
-        self.system, self.prompt_style = system, prompt_style  # v4: deploy 프로필의 system 파일
+    def __init__(self, model, client, system):
+        self.model, self.client, self.system = model, client, system
 
     def build_messages(self, question, hits, system=None):
-        user = (
-            build_prompt_v4(hits, question)
-            if self.prompt_style == 'v4'
-            else build_prompt([h['article_id'] for h in hits], question)
-        )
-        return [{'role': 'system', 'content': system or self.system}, {'role': 'user', 'content': user}]
+        return [
+            {'role': 'system', 'content': system or self.system},
+            {'role': 'user', 'content': build_prompt(hits, question)},
+        ]
 
     def stream(self, question, hits, max_tokens=1024, system=None):
         """system: 이번 요청만 다른 system으로 (None이면 모델의 기본 system). 생성기를 닫으면 연결을 끊는다 (서버가 생성을 멈춤)"""
@@ -118,8 +112,10 @@ class LLM:
             yield from responses(s)
         except openai.OpenAIError as e:
             raise convert_error(e) from e
+        except httpx.TimeoutException as e:  # 스트림 중 응답 조각 사이가 상한을 넘음 (SDK가 감싸지 않음)
+            raise ModelServerTimeout(f'생성 API가 응답 중에 멈췄습니다 ({type(e).__name__})') from e
         finally:
             s.close()
 
 
-__all__ = ['LLM', 'SYSTEM', 'ModelServerError', 'build_prompt', 'build_prompt_v4']
+__all__ = ['LLM', 'ModelServerError', 'build_prompt']

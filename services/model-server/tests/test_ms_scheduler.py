@@ -12,7 +12,7 @@ from mlx_lm.models import qwen3, qwen3_5
 from mlx_lm.sample_utils import make_sampler
 
 from lawbot_model_server.chat import THINK, BatchEngine
-from lawbot_model_server.scheduler import ModelLoadError, Scheduler
+from lawbot_model_server.scheduler import ModelLoadError, QueueFull, Scheduler
 
 from .ms_fakes import Compute, FakeChat, FakeEmbedder, registry
 
@@ -286,6 +286,43 @@ def test_engine_comes_from_model():
 
     a, b = run(main())
     assert text(a) == text(b) == '【결론】예고해야 합니다.' and reg.chat['chat-a'].engines == [3]
+
+
+def test_queue_limit_rejects_new_chat_and_frees_after():
+    # 생성 중 1 + 대기 2(상한)면 다음 요청은 바로 거부 (서버 대기열이 끝없이 늘지 않게). 대기가 빠지면 다시 받음
+    FakeChat.per_prompt = {f'q{i}': [str(i)] * 20 for i in range(5)}
+    FakeChat.delay = 0.003
+    s = Scheduler(registry(), max_concurrent=1, max_queued=2)
+
+    async def main():
+        a = s.chat('chat-a', ask('q0'), KW)
+        first = await a.next()  # 첫 토큰: a는 생성 중 (대기열에서 빠짐)
+        b, c = s.chat('chat-a', ask('q1'), KW), s.chat('chat-a', ask('q2'), KW)
+        with pytest.raises(QueueFull, match='2개'):
+            s.chat('chat-a', ask('q3'), KW)
+        ra, rb, rc = await asyncio.gather(collect(a), collect(b), collect(c))
+        d = s.chat('chat-a', ask('q4'), KW)
+        return first, ra, rb, rc, await collect(d)
+
+    first, ra, rb, rc, rd = run(main())
+    assert first[0] == 'item' and (text(rb), text(rc), text(rd)) == ('1' * 20, '2' * 20, '4' * 20)
+    assert s.queued() == 0
+
+
+def test_cancelled_waiting_requests_leave_queue():
+    FakeChat.per_prompt = {'q0': ['a'] * 30, 'q1': ['b'], 'q2': ['c']}
+    FakeChat.delay = 0.003
+    s = Scheduler(registry(), max_concurrent=1, max_queued=1)
+
+    async def main():
+        a = s.chat('chat-a', ask('q0'), KW)
+        await a.next()
+        b = s.chat('chat-a', ask('q1'), KW)
+        b.cancel()  # 정지 버튼: 대기 중에 끊김
+        await collect(a)
+        return await collect(s.chat('chat-a', ask('q2'), KW))  # 끊긴 요청은 자리를 차지하지 않음
+
+    assert text(run(main())) == 'c' and s.queued() == 0
 
 
 @pytest.mark.parametrize('n', [0, 17])

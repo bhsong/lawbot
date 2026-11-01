@@ -16,8 +16,10 @@ import lawbot.service as service
 from conftest import set_auth
 from fakes import HITS, FakeLLM, FakeRetriever
 from lawbot.api_client import ModelLoadError, ModelServerError
-from lawbot.llm import LLM, SYSTEM, build_prompt, build_prompt_v4
-from lawbot.paths import ARTICLES, EVAL
+from lawbot.llm import LLM, build_prompt
+from lawbot.paths import V4_ARTICLES
+
+SYSTEM = '테스트 4항목 system'
 
 
 # ---- 검색 ----
@@ -38,33 +40,34 @@ class FakeEncoder:
 @pytest.fixture
 def retriever(env):
     FakeEncoder.calls = []
-    return retriever_mod.Retriever(FakeEncoder())
+    return retriever_mod.Retriever(FakeEncoder(), V4_ARTICLES, 2304)
 
 
 def test_retriever_indexes_only_current_articles(retriever):
-    law = pd.read_csv(ARTICLES, encoding='utf-8-sig')
-    live = law.loc[law['deleted'] == 0, 'article_id']
-    assert len(retriever.ids) == 130 == len(retriever.docs)
-    assert set(retriever.ids) == set(live)
-    assert retriever.D.shape == (130, 512)
-    assert FakeEncoder.calls == [(130, 'document', 512)]  # 조문 목록 하나를 한 번에 (query 프롬프트 없이)
+    law = pd.read_csv(V4_ARTICLES, encoding='utf-8-sig')
+    live = law[law['deleted'] == 0]
+    assert len(retriever.ids) == 415 == len(retriever.docs)
+    assert set(zip(retriever.laws, retriever.ids)) == set(zip(live['law'], live['article_no']))
+    assert retriever.D.shape == (415, 512)
+    assert FakeEncoder.calls == [(415, 'document', 2304)]  # 조문 목록 하나를 한 번에 (query 프롬프트 없이)
 
 
 def test_search_returns_top_k_sorted(retriever):
     hits = retriever.search('수습 기간에도 해고 예고를 해야 하나요?', k=3)
     assert len(hits) == 3
-    assert [set(h) for h in hits] == [{'article_id', 'title', 'doc', 'score'}] * 3
+    assert [set(h) for h in hits] == [{'article_id', 'title', 'doc', 'score', 'law'}] * 3
     scores = [h['score'] for h in hits]
     assert scores == sorted(scores, reverse=True)
-    assert len({h['article_id'] for h in hits}) == 3
+    assert len({(h['law'], h['article_id']) for h in hits}) == 3
     for h in hits:
-        assert h['doc'].startswith(f'{h["article_id"]} {h["title"]}\n')
-    assert FakeEncoder.calls[-1] == (1, 'query', 512)  # 질문은 query 프롬프트, 조문과 같은 max_seq
+        assert h['doc'].startswith(f'{h["law"]} {h["article_id"]}({h["title"]})\n')
+    assert FakeEncoder.calls[-1] == (1, 'query', 2304)  # 질문은 query 프롬프트, 조문과 같은 max_seq
 
 
 def test_search_finds_exact_article(retriever):
-    i = list(retriever.ids).index('제26조')
-    assert retriever.search(retriever.docs[i], k=1)[0]['article_id'] == '제26조'
+    i = list(zip(retriever.laws, retriever.ids)).index(('근로기준법', '제26조'))
+    top = retriever.search(retriever.docs[i], k=1)[0]
+    assert (top['law'], top['article_id']) == ('근로기준법', '제26조')
 
 
 def test_search_unrelated_query_still_returns_k(retriever):
@@ -75,23 +78,11 @@ def test_search_unrelated_query_still_returns_k(retriever):
 
 def test_rank_all_is_full_ranking(retriever):
     rank = retriever.rank_all(['연차 유급휴가', '최저임금'])
-    assert rank.shape == (2, 130)
-    assert all(sorted(r) == list(range(130)) for r in rank)
+    assert rank.shape == (2, 415)
+    assert all(sorted(r) == list(range(415)) for r in rank)
 
 
 # ---- 생성 ----
-def test_prompt_matches_training_format():
-    # 평가 파일의 oracle_prompt는 학습 때 쓴 형식: 650문항 모두 글자 단위로 같아야 함
-    ev = pd.read_csv(EVAL, encoding='utf-8-sig', dtype=str)
-    for r in ev.itertuples():
-        assert build_prompt(r.oracle_context_ids.split('|'), r.question) == r.oracle_prompt, r.id
-
-
-def test_build_prompt_unknown_article_fails():
-    with pytest.raises(KeyError):
-        build_prompt(['제999조'], '질문')
-
-
 def chunk(content=None, finish=None, usage=None, timings=None, role=False):
     """모델 서버가 보내는 SSE 청크와 같은 SDK 객체"""
     delta = ({'role': 'assistant'} if role else {}) | ({'content': content} if content is not None else {})
@@ -148,8 +139,8 @@ class FakeClient:
 
 def test_llm_request_and_responses():
     c = FakeClient()
-    m = LLM('qwen3.8-27b-4bit', client=c)
-    hits = [{'article_id': '제26조'}, {'article_id': '제36조'}]
+    m = LLM('qwen3.8-27b-4bit', client=c, system=SYSTEM)
+    hits = HITS
     out = list(m.stream('해고 예고?', hits))
     assert ''.join(r.text for r in out) == '【결론】답' and [r.text for r in out] == ['【결론】', '답', '']
     last = out[-1]  # 측정값은 마지막 응답에 (service.ask가 읽음)
@@ -160,7 +151,7 @@ def test_llm_request_and_responses():
         'model': 'qwen3.8-27b-4bit',
         'messages': [
             {'role': 'system', 'content': SYSTEM},
-            {'role': 'user', 'content': build_prompt(['제26조', '제36조'], '해고 예고?')},
+            {'role': 'user', 'content': build_prompt(HITS, '해고 예고?')},
         ],
         'max_tokens': 1024,
         'temperature': 0,
@@ -170,10 +161,10 @@ def test_llm_request_and_responses():
     assert c.streams[0].closed
 
 
-def test_llm_v4_prompt_and_system():
-    # v4: 프로필의 system 문자열과 법령명이 붙은 참고 조문을 쓴다 (v1 기본값은 위 테스트)
+def test_llm_prompt_and_system():
+    # 프로필의 system 문자열과 법령명이 붙은 참고 조문, 개정 표시는 뺀다
     c = FakeClient()
-    m = LLM('m', client=c, system='V4 SYSTEM', prompt_style='v4')
+    m = LLM('m', client=c, system='V4 SYSTEM')
     hits = [
         {
             'law': '최저임금법',
@@ -188,22 +179,22 @@ def test_llm_v4_prompt_and_system():
     assert messages[1]['content'] == (
         '[참고 조문]\n[1] 최저임금법 제6조(최저임금의 효력)\n① 사용자는 지급하여야 한다.\n\n[질문]\n최저임금?'
     )
-    assert messages[1]['content'] == build_prompt_v4(hits, '최저임금?')
+    assert messages[1]['content'] == build_prompt(hits, '최저임금?')
 
 
 def test_llm_system_override():
     c = FakeClient()
-    m = LLM('m', client=c)
-    list(m.stream('질문', [{'article_id': '제1조'}], system='4항목 SYSTEM'))
+    m = LLM('m', client=c, system=SYSTEM)
+    list(m.stream('질문', HITS[:1], system='4항목 SYSTEM'))
     assert c.calls[-1]['messages'][0] == {'role': 'system', 'content': '4항목 SYSTEM'}
-    list(m.stream('질문', [{'article_id': '제1조'}]))
+    list(m.stream('질문', HITS[:1]))
     assert c.calls[-1]['messages'][0] == {'role': 'system', 'content': SYSTEM}  # 다음 요청은 기본 system
 
 
 def test_llm_closing_stops_stream():
     # 정지 버튼: 생성기를 닫으면 SDK 스트림(HTTP 연결)을 닫는다 → 서버가 생성을 멈춤
     c = FakeClient([chunk('a', role=True)] + [chunk('b')] * 100)
-    g = LLM('m', client=c).stream('질문', [{'article_id': '제1조'}])
+    g = LLM('m', client=c, system=SYSTEM).stream('질문', HITS[:1])
     next(g)
     g.close()
     assert c.streams[0].closed
@@ -211,7 +202,7 @@ def test_llm_closing_stops_stream():
 
 def test_llm_no_content_still_yields_one():
     out = list(
-        LLM('m', client=FakeClient([chunk(finish='stop'), chunk(usage=(5, 0))])).stream('q', [{'article_id': '제1조'}])
+        LLM('m', client=FakeClient([chunk(finish='stop'), chunk(usage=(5, 0))]), system=SYSTEM).stream('q', HITS[:1])
     )
     assert len(out) == 1 and out[0].text == '' and out[0].finish_reason == 'stop'
 
@@ -246,13 +237,28 @@ def status_error(status, body):
 )
 def test_llm_errors_before_stream(error, kind, match):
     with pytest.raises(kind, match=match):
-        list(LLM('m', client=FakeClient(error=error)).stream('q', [{'article_id': '제1조'}]))
+        list(LLM('m', client=FakeClient(error=error), system=SYSTEM).stream('q', HITS[:1]))
+
+
+def test_llm_timeouts_are_model_server_timeout():
+    from lawbot.api_client import ModelServerTimeout
+
+    with pytest.raises(ModelServerTimeout):  # 첫 응답 전 (SDK가 감싼 시간 초과)
+        list(
+            LLM('m', client=FakeClient(error=openai.APITimeoutError(request=REQ)), system=SYSTEM).stream('q', HITS[:1])
+        )
+    c = FakeClient([chunk('【결론】', role=True), httpx.ReadTimeout('slow', request=REQ)])
+    g = LLM('m', client=c, system=SYSTEM).stream('q', HITS[:1])
+    assert next(g).text == '【결론】'
+    with pytest.raises(ModelServerTimeout):  # 스트림 중 (httpx 예외 그대로)
+        next(g)
+    assert c.streams[0].closed
 
 
 def test_llm_error_mid_stream():
     err = openai.APIError('생성 실패', request=REQ, body={'message': '생성 실패'})
     c = FakeClient([chunk('【결론】', role=True), err])
-    g = LLM('m', client=c).stream('q', [{'article_id': '제1조'}])
+    g = LLM('m', client=c, system=SYSTEM).stream('q', HITS[:1])
     assert next(g).text == '【결론】'
     with pytest.raises(RuntimeError, match='생성 오류: 생성 실패'):
         next(g)
@@ -305,7 +311,7 @@ def test_build_demo_with_fakes_needs_no_auth(app):
     lawbot = service.load_app()
     FakeRetriever.created = FakeLLM.created = 0
     demo = app.build_demo(lawbot)
-    assert isinstance(demo, app.gr.Blocks) and demo.title == '근로기준법 챗봇'
+    assert isinstance(demo, app.gr.Blocks) and demo.title == '노동법 챗봇'
     assert FakeRetriever.created == 0 and FakeLLM.created == 0  # 넘겨준 객체 외에 모델을 만들지 않음
     assert app.launched == []
 
@@ -323,7 +329,7 @@ def test_app_launches_local_only(app, env):
     env.setenv('GRADIO_SHARE', 'True')
     app.main()
     [(demo, launched)] = app.launched
-    assert demo.title == '근로기준법 챗봇'
+    assert demo.title == '노동법 챗봇'
     assert launched == {
         'server_name': '127.0.0.1',
         'server_port': 7860,
@@ -362,7 +368,7 @@ def test_chat_streams_answer_with_sources(app):
     ]
     src = steps[-1][1]
     assert all(s == src for _, s, _ in steps)  # 근거 조문 칸은 답변 내내 같음 (인용이 없으면 끝나도 세 개 모두 펼침)
-    assert '**제26조 해고의 예고** · 유사도 0.912' in src
+    assert '**근로기준법 제26조 해고의 예고** · 유사도 0.912' in src
     assert '30일 전에 예고' in src
     assert src.count('제26조 해고의 예고') == 1  # 조문 본문 첫 줄(제목 줄)은 중복 표시 안 함
     assert lawbot.retriever.query == '수습 기간에도 해고 예고?'

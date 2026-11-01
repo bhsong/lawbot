@@ -7,7 +7,16 @@ import time
 import httpx
 import numpy as np
 
-TIMEOUT = httpx.Timeout(None, connect=5.0)  # 연결만 5초. 문서 인코딩·27B 로딩은 오래 걸릴 수 있어 읽기 제한 없음
+CONNECT_TIMEOUT = 5.0
+TIMEOUT = httpx.Timeout(
+    None, connect=CONNECT_TIMEOUT
+)  # 기본: 연결만 5초. 시작할 때 조문 인덱스 인코딩은 오래 걸려 읽기 제한 없음
+
+
+def request_timeout(read_s):
+    """질문 처리 중 호출(질문 임베딩·리랭크·생성)의 시간 상한: 응답 조각 사이가 read_s초를 넘으면 ModelServerTimeout
+    (LAWBOT_MODEL_READ_TIMEOUT, service.read_timeout). 연결은 5초"""
+    return httpx.Timeout(read_s, connect=CONNECT_TIMEOUT)
 
 
 class ModelServerError(RuntimeError):
@@ -16,6 +25,10 @@ class ModelServerError(RuntimeError):
     def __init__(self, message, status=None, kind=None, code=None):
         super().__init__(message)
         self.status, self.kind, self.code = status, kind, code
+
+
+class ModelServerTimeout(TimeoutError):
+    """질문 처리 중 모델 서버(또는 외부 생성 API)가 시간 상한 안에 응답하지 않음. 웹앱은 '응답이 없습니다'로 안내"""
 
 
 class ModelLoadError(OSError):
@@ -47,8 +60,16 @@ class ModelServerClient:
             self.http.headers['Authorization'] = f'Bearer {token}'
 
     def _call(self, method, path, body=None, timeout=None):
+        timeout = timeout or TIMEOUT
         try:
-            r = self.http.request(method, path, json=body, **({'timeout': timeout} if timeout else {}))
+            r = self.http.request(method, path, json=body, timeout=timeout)
+        except httpx.ConnectTimeout:
+            raise ConnectionError(
+                f'모델 서버에 연결할 수 없습니다: {self.url} (uv run lawbot-model-server 실행 여부 확인, ConnectTimeout)'
+            ) from None
+        except httpx.TimeoutException:
+            read = timeout.read if isinstance(timeout, httpx.Timeout) else timeout
+            raise ModelServerTimeout(f'모델 서버가 {read:g}초 동안 응답하지 않았습니다 ({path})') from None
         except httpx.TransportError as e:
             raise ConnectionError(
                 f'모델 서버에 연결할 수 없습니다: {self.url} (uv run lawbot-model-server 실행 여부 확인, {type(e).__name__})'
@@ -68,21 +89,21 @@ class ModelServerClient:
         """[{id, type, loaded, …}] (/v1/models)"""
         return self._call('GET', '/v1/models')['data']
 
-    def embed(self, model, texts, input_type='document', max_seq_length=None):
-        """(len(texts), dim) float32. base64로 받아 비트 그대로"""
+    def embed(self, model, texts, input_type='document', max_seq_length=None, timeout=None):
+        """(len(texts), dim) float32. base64로 받아 비트 그대로. timeout: 질문이면 request_timeout(…), 없으면 제한 없음"""
         body = {'model': model, 'input': list(texts), 'encoding_format': 'base64', 'input_type': input_type}
         if max_seq_length:
             body['max_seq_length'] = int(max_seq_length)
-        data = sorted(self._call('POST', '/v1/embeddings', body)['data'], key=lambda d: d['index'])
+        data = sorted(self._call('POST', '/v1/embeddings', body, timeout)['data'], key=lambda d: d['index'])
         return np.stack([np.frombuffer(base64.b64decode(d['embedding']), dtype='<f4') for d in data]).astype(np.float32)
 
-    def rerank(self, model, query, documents, instruction=None):
+    def rerank(self, model, query, documents, instruction=None, timeout=None):
         """문서 순서대로 점수 목록 (정렬은 호출한 쪽이 한다)"""
         body = {'model': model, 'query': query, 'documents': list(documents)}
         if instruction:
             body['instruction'] = instruction
         scores = [None] * len(documents)
-        for r in self._call('POST', '/v1/rerank', body)['results']:
+        for r in self._call('POST', '/v1/rerank', body, timeout)['results']:
             scores[r['index']] = r['relevance_score']
         if any(s is None for s in scores):
             raise ModelServerError('모델 서버 rerank 응답에 빠진 문서가 있습니다')
@@ -90,13 +111,15 @@ class ModelServerClient:
 
 
 class Embedder:
-    """retriever.Retriever가 쓰는 인코더: 모델 서버의 한 임베딩 모델"""
+    """retriever.Retriever가 쓰는 인코더: 모델 서버의 한 임베딩 모델
+    query_timeout: 질문 임베딩(input_type='query')에만 거는 시간 상한. 조문 인덱스(document)는 제한 없음"""
 
-    def __init__(self, client, model):
-        self.client, self.model = client, model
+    def __init__(self, client, model, query_timeout=None):
+        self.client, self.model, self.query_timeout = client, model, query_timeout
 
     def encode(self, texts, input_type='document', max_seq_length=None):
-        return self.client.embed(self.model, texts, input_type, max_seq_length)
+        timeout = self.query_timeout if input_type == 'query' else None
+        return self.client.embed(self.model, texts, input_type, max_seq_length, timeout)
 
 
 WAIT_INTERVAL = 1.0  # 준비 확인 간격 (초)

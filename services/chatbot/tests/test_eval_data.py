@@ -3,10 +3,13 @@
 import pandas as pd
 import pytest
 
-from lawbot.paths import ARTICLES, DATA, EVAL, RESULTS
+from lawbot.paths import DATA, EVAL, RESULTS
 from lawbot.refusal import is_refusal, oos_verdict
 
 E = dict(encoding='utf-8-sig')
+LSA_ARTICLES = (
+    DATA / 'labor_articles_20261001.csv'
+)  # 평가 데이터(근로기준법 130조문)가 가리키는 조문 (웹앱은 쓰지 않음)
 REFUSAL = (
     '【결론】\n제공된 조문만으로는 질문에 대한 근거를 확인할 수 없습니다.\n\n'
     '【근거 조문】\n해당 없음 (제공된 조문: 제34조(퇴직급여 제도))'
@@ -35,7 +38,7 @@ def oos():
 
 @pytest.fixture(scope='module')
 def live():
-    law = pd.read_csv(ARTICLES, **E)
+    law = pd.read_csv(LSA_ARTICLES, **E)
     return set(law.loc[law['deleted'] == 0, 'article_id'])
 
 
@@ -76,7 +79,7 @@ def test_oos_eval_schema(oos, live):
     assert oos['id'].is_unique and len(oos) == 102
     assert oos['category'].isin(['unrelated', 'other_labor', 'other_law']).all()
     assert ids(oos['near_lsa']) | ids(oos['near_lsa_v2']) | ids(oos['refer_lsa']) <= live
-    # 기존 82문항의 near_lsa는 README 수치의 기준이므로 그대로, 추가 문항은 near_lsa_v2와 근거(note)를 가짐
+    # 기존 82문항의 near_lsa는 v1 기록 수치의 기준이므로 그대로, 추가 문항은 near_lsa_v2와 근거(note)를 가짐
     assert oos['near_lsa'].notna().sum() == 18
     added = oos[oos['id'] >= 'OOS083']
     assert len(added) == 20 and added['near_lsa_v2'].notna().all() and added['note'].notna().all()

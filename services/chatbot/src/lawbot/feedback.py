@@ -152,16 +152,11 @@ def text_of(value):
 
 
 def model_system(app, model_key, fmt):
-    """이번 요청에 쓴 system 전문: format_system(화면 형식) → 모델·프로필 system 파일 → 기본(prompts.SYSTEM)
+    """이번 요청에 쓴 system 전문: format_system(화면 형식) → 모델·프로필 system 파일
     service.load_app의 factory와 같은 순서"""
     from lawbot import service
-    from lawbot.prompts import SYSTEM
 
-    return (
-        service.format_system(app, model_key, fmt)
-        or service.system_text(app.profile, app.models.specs[model_key])
-        or SYSTEM
-    )
+    return service.format_system(app, model_key, fmt) or service.system_text(app.profile, app.models.specs[model_key])
 
 
 def cite_details(app, raw, hits):

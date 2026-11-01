@@ -3,16 +3,22 @@
 # 루프 한 바퀴: 수신함 비우기 → embeddings·rerank 같은 한 번짜리 작업 실행 → 자리가 있으면 chat 요청을 엔진에 넣기
 #               → 생성 한 스텝 → 끊긴 요청 빼기
 # 동시 생성 상한은 max_concurrent. 다른 chat 모델 요청이 맨 앞에 오면 진행 중 생성이 끝난 뒤 모델을 바꾼다 (수신 순서 유지)
+# 아직 생성을 시작하지 않은 chat 요청이 max_queued개면 새 요청은 바로 QueueFull (api.py가 503 server_busy)
 import asyncio
 import queue
 import threading
 from collections import deque
 
 MAX_CONCURRENT_LIMIT = 16
+MAX_QUEUED_DEFAULT = 32
 
 
 class ModelLoadError(RuntimeError):
     """chat 모델을 불러오지 못함 (폴더 없음·형식 오류). 원래 예외는 __cause__ (api.py가 예외 이름을 code로 보냄)"""
+
+
+class QueueFull(RuntimeError):
+    """대기 중인 chat 요청이 상한(max_queued)에 닿음"""
 
 
 class Ticket:
@@ -41,10 +47,12 @@ def default_engine(model, max_concurrent):
 
 
 class Scheduler:
-    def __init__(self, registry, max_concurrent=1, make_engine=default_engine):
+    def __init__(self, registry, max_concurrent=1, make_engine=default_engine, max_queued=MAX_QUEUED_DEFAULT):
         if not 1 <= max_concurrent <= MAX_CONCURRENT_LIMIT:
             raise ValueError(f'max_concurrent는 1–{MAX_CONCURRENT_LIMIT}: {max_concurrent}')
         self.registry, self.max_concurrent, self.make_engine = registry, max_concurrent, make_engine
+        self.max_queued = max_queued
+        self._queued, self.queue_lock = 0, threading.Lock()  # 생성을 시작하지 않은 chat 요청 수 (두 스레드가 만짐)
         self.inbox = queue.Queue()
         self.calls, self.waiting = deque(), deque()  # GPU 스레드만 만짐
         self.engine, self.engine_model = None, None
@@ -59,10 +67,23 @@ class Scheduler:
         return t
 
     def chat(self, model_id, messages, kw):
-        """생성 요청. 토큰마다 ('item', 응답), 끝나면 ('end', None)"""
+        """생성 요청. 토큰마다 ('item', 응답), 끝나면 ('end', None). 대기가 max_queued개면 QueueFull"""
+        with self.queue_lock:
+            if self._queued >= self.max_queued:
+                raise QueueFull(f'대기 중인 생성 요청이 {self.max_queued}개라 받지 않습니다. 잠시 뒤 다시 보내세요')
+            self._queued += 1
         t = Ticket()
         self._submit(('chat', t, (model_id, messages, kw)))
         return t
+
+    def queued(self):
+        """생성을 시작하지 않은 chat 요청 수 (대기열 상한 기준)"""
+        with self.queue_lock:
+            return self._queued
+
+    def _dequeue(self):
+        with self.queue_lock:
+            self._queued -= 1
 
     def pending(self):
         """아직 끝나지 않은 작업 수 (대략값: 테스트·로그용)"""
@@ -117,6 +138,7 @@ class Scheduler:
             t, (model_id, messages, kw) = self.waiting[0]
             if t.cancelled.is_set():
                 self.waiting.popleft()
+                self._dequeue()
                 continue
             if self.engine is not None and self.engine_model != model_id:
                 if len(self.engine):  # 다른 모델이 생성 중: 끝날 때까지 뒤 요청도 기다림 (수신 순서)
@@ -125,6 +147,7 @@ class Scheduler:
             if self.engine is not None and len(self.engine) >= self.max_concurrent:
                 return
             self.waiting.popleft()
+            self._dequeue()  # 이 아래는 생성을 시작하거나 오류로 끝남
             if self.engine is None:
                 try:
                     model, _ = self.registry.get(model_id, 'chat')  # 처음 쓰는 모델은 여기서 불러옴 (LRU 교체)

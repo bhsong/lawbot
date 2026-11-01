@@ -32,7 +32,8 @@ uv run law-monitor daily                  # launchd가 매일 실행: collect �
 ```
 
 - 마지막 줄이 실행 요약입니다: `collectors=2 ok=2 failed=0 events=1`. 같은 줄이 `logs/collector-YYYYMMDD.log` 끝에도 남습니다.
-- 종료 코드: 0 성공, 1 수집기 일부 실패(나머지는 저장됨), 2 실행 전 거부(설정 오류, bootstrap 전 collect, `LAW_OC` 없음 등).
+- 종료 코드: 0 성공, 1 수집기 일부 실패(나머지는 저장됨), 2 실행 전 거부(설정 오류, bootstrap 전 collect, `LAW_OC` 없음, 다른 실행 중 등).
+- 같은 home(`data/`)으로 두 실행이 겹치지 않게 `data/.lock`에 잠금을 겁니다. launchd의 `daily`가 도는 동안 수동으로 실행하면 "다른 law-monitor 실행 중"으로 바로 끝납니다(종료 코드 2). 프로세스가 죽으면 잠금은 저절로 풀립니다.
 - `LAW_OC`는 환경변수가 먼저이고, 없으면 `services/monitor/.env`에서 읽습니다. `bootstrap`은 법제처를 부르지 않아 키 없이도 됩니다. 로그·이벤트·오류 메시지에는 `OC=***`로만 남습니다.
 - 법제처 호출이 실패하면(재시도 3회 뒤) 그 수집기가 실패로 끝나고 커서가 그대로라, 다음 실행에서 같은 변경을 다시 처리합니다. 원문이 빠진 이벤트는 저장하지 않습니다.
 - 한 수집기가 3번 연속 실패하면 `collector_failing` 이벤트가 한 번 생깁니다.
@@ -42,7 +43,7 @@ uv run law-monitor daily                  # launchd가 매일 실행: collect �
 
 - 대상: `state.db`의 `events`에서 `processed_at`이 빈 것. 요약이 끝나면 `processed_at`을 적습니다.
 - 법령·행정규칙 이벤트 하나에 모델 호출 하나입니다. 같은 개정의 별표서식 이벤트(`parent_event_id`)는 그 호출에 함께 넣습니다. 입력은 호출당 약 12,000자이고, 넘치면 뒤를 자르고 내용을 못 넣은 서식은 제목만 넣습니다.
-- 모델 설정은 웹앱과 같은 `LAWBOT_MODEL_SERVER`·`LAWBOT_MODEL_TOKEN`입니다. 환경변수 → `services/monitor/.env` → **레포 최상위 `.env`** 순서로 읽어서, 운영 worktree에서는 따로 넣을 것이 없습니다. 모델 id는 `LAW_MONITOR_SUMMARY_MODEL`(기본 `qwen3.8-27b-4bit`). 생성 설정은 temperature 0, 최대 800토큰, thinking 끔.
+- 모델 설정은 웹앱과 같은 `LAWBOT_MODEL_SERVER`·`LAWBOT_MODEL_TOKEN`입니다. 환경변수 → `services/monitor/.env` → **레포 최상위 `.env`** 순서로 읽어서, 운영 worktree에서는 따로 넣을 것이 없습니다. 모델 id는 `LAW_MONITOR_SUMMARY_MODEL`(기본 `qwen3.8-27b-4bit`, 환경변수나 `services/monitor/.env`에만: 레포 최상위 `.env`에는 `LAWBOT_*`만 적을 수 있음). `.env` 형식은 웹앱과 같은 규칙입니다(`export`·따옴표·줄 끝 ` # 주석` 허용, `lawbot_common.envfile`). `services/monitor/.env`에는 `LAW_*`·`DATA_GO_KR_*`·`LAWBOT_MODEL_SERVER`·`LAWBOT_MODEL_TOKEN`만 적을 수 있고, 다른 변수가 있으면 실행을 거부합니다. 생성 설정은 temperature 0, 최대 800토큰, thinking 끔.
 - md 구성: 머리(실행 시각·수집 요약 줄·이벤트 수) → 한눈에 보기 번호별 절 → 법령마다 모델 요약 + 바뀐 별표서식 목록 + 원문 이벤트 경로·법제처 링크 → 경고(수집기 연속 실패). 새 이벤트가 없으면 "새 변경 없음".
 - 파일 날짜는 **요약을 실행한 날**입니다. 내용은 "지난 요약 실행(처음이면 bootstrap) ~ 이번 실행" 사이에 저장소에 새로 들어와 감지된 변경이고, md 머리의 `대상:` 줄에 그 구간을 적습니다. 공포일은 항목마다 따로 나옵니다 (legalize-kr은 커밋 날짜가 공포일이라 오늘 들어온 개정이 과거 공포일일 수 있음).
 - 같은 날 두 번 실행하면 두 번째 파일은 `YYYY-MM-DD-HHMMSS.md`입니다 (앞 파일을 덮지 않음).

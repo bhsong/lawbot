@@ -1,4 +1,4 @@
-# lawbot/check_deploy.py  →  uv run python -m lawbot.check_deploy [v1|v4]
+# lawbot/check_deploy.py  →  uv run python -m lawbot.check_deploy
 # 웹앱이 쓸 조문 CSV·매니페스트·system·검색 설정과 웹앱 포트를 검사하고, 모델 서버에 접속해 필요한 모델 id가 있는지 본다
 # 모델 폴더(양자화·어댑터·토크나이저) 검사는 모델 서버 쪽: uv run python -m lawbot_model_server.check
 # 실패 항목이 있으면 종료 코드 1
@@ -11,29 +11,29 @@ import pandas as pd
 from lawbot import deploy, envfile, manifest, paths, security, service
 from lawbot.deploy import get_profile
 
-EXPECTED_ARTICLES = {'v1': 130, 'v4': 415}  # 법률 조문 수
+EXPECTED_ARTICLES = 415  # 법률 조문 수
 EXPECTED_DECREE = {'시행령': 273, '시행규칙': 124}  # 하위법령을 켰을 때 812조문 CSV의 하위법령 수
 DECREE_COLUMNS = {'kind', 'parent_law', 'article_no'}
-COLUMNS = {'v1': {'article_id', 'title', 'deleted', 'text'}, 'v4': {'law', 'article_id', 'title', 'deleted', 'text'}}
+COLUMNS = {'law', 'article_id', 'title', 'deleted', 'text'}
 
 
 def check_articles(p, out):
     if not p.articles.is_file():
         return out.append(('FAIL', f'조문 CSV 없음: {p.articles}'))
     law = pd.read_csv(p.articles, encoding='utf-8-sig')
-    missing = COLUMNS[p.doc_style] - set(law.columns)
+    missing = COLUMNS - set(law.columns)
     if missing:
         return out.append(('FAIL', f'조문 CSV 열 없음 {sorted(missing)} (있는 열: {list(law.columns)})'))
     live = law[law['deleted'] == 0]
-    key = ['law', 'article_id'] if p.doc_style == 'v4' else ['article_id']
+    key = ['law', 'article_id']
     dup = live[live.duplicated(key, keep=False)]
     n_law = int((live['kind'] == '법률').sum()) if 'kind' in live else len(live)  # 검색기는 kind로 법률만 법률 인덱스에
-    n_ok = n_law == EXPECTED_ARTICLES[p.name]
+    n_ok = n_law == EXPECTED_ARTICLES
     if 'kind' in live:  # 812조문 CSV (하위법령 첨부)
         out.append(
             (
                 'OK' if n_ok else 'FAIL',
-                f'비삭제 법률 조문 {n_law}개 (기대 {EXPECTED_ARTICLES[p.name]}) · '
+                f'비삭제 법률 조문 {n_law}개 (기대 {EXPECTED_ARTICLES}) · '
                 f'전체 {len(live)}개 · sha256 {manifest.sha256(p.articles)[:12]}',
             )
         )
@@ -41,8 +41,7 @@ def check_articles(p, out):
         out.append(
             (
                 'OK' if n_ok else 'FAIL',
-                f'비삭제 조문 {len(live)}개 (기대 {EXPECTED_ARTICLES[p.name]}) · '
-                f'sha256 {manifest.sha256(p.articles)[:12]}',
+                f'비삭제 조문 {len(live)}개 (기대 {EXPECTED_ARTICLES}) · sha256 {manifest.sha256(p.articles)[:12]}',
             )
         )
     if len(dup):
@@ -57,8 +56,7 @@ def check_articles(p, out):
                 '(법령명이 들어 있으면 번호만 담은 article_no 열 추가)',
             )
         )
-    if p.doc_style == 'v4':
-        out.append(('INFO', f'법령별 조문 수: {live["law"].value_counts().to_dict()}'))
+    out.append(('INFO', f'법령별 조문 수: {live["law"].value_counts().to_dict()}'))
 
 
 def check_decree(p, out):
@@ -143,12 +141,7 @@ def check_system_file(name, f, out):
 
 
 def check_system(p, out):
-    if p.system_file is None:
-        from lawbot.prompts import SYSTEM  # v1: 코드에 든 학습 system
-
-        out.append(('OK', f'기본 system: llm.SYSTEM (v1) · sha256 {hashlib.sha256(SYSTEM.encode()).hexdigest()[:12]}'))
-    else:
-        check_system_file('기본', p.system_file, out)
+    check_system_file('기본', p.system_file, out)
     for spec in p.models:  # 모델별 system (Pro 간결형)
         if spec.system_file:
             check_system_file(spec.label, spec.system_file, out)
@@ -178,7 +171,7 @@ def check_reranker(p, out):
 
 
 def check_models(p, out):
-    out.append(('INFO', f'임베딩 {p.emb_model} · 조문 인코딩 max_seq_length {p.max_seq} · 문서 형식 {p.doc_style}'))
+    out.append(('INFO', f'임베딩 {p.emb_model} · 조문 인코딩 max_seq_length {p.max_seq}'))
     for spec in p.models:
         out.append(('INFO', f'{spec.label}: 모델 {spec.model}'))
     for spec in p.disabled:  # LAWBOT_MODELS에서 뺀 모델은 검사하지 않음 (화면에 비활성 표시)
@@ -239,8 +232,8 @@ def check_model_server(p, out):
     )
 
 
-def run(name=None):
-    p = get_profile(name)
+def run():
+    p = get_profile()
     out = [('INFO', f'프로필 {p.name}: {p.title}')]
     check_articles(p, out)
     check_manifest(p, out)
@@ -255,7 +248,7 @@ def run(name=None):
 
 def main():
     envfile.load()  # 웹앱과 같은 .env 설정으로 검사
-    out = run(sys.argv[1] if len(sys.argv) > 1 else None)
+    out = run()
     for level, msg in out:
         print(f'[{level:4}] {msg}')
     sys.exit(1 if any(level == 'FAIL' for level, _ in out) else 0)

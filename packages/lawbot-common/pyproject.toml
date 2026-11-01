@@ -1,0 +1,13 @@
+[project]
+name = "lawbot-common"
+version = "0.1.0"
+description = "서비스 공통 규칙 (.env 파서, 포트 검증). 의존성 없음: 세 서비스가 같은 규칙을 쓰려고 둔다"
+authors = [
+    { name = "bhsong", email = "sbh3003@gmail.com" }
+]
+requires-python = ">=3.14"
+dependencies = []
+
+[build-system]
+requires = ["uv_build>=0.12.19,<0.13.0"]
+build-backend = "uv_build"

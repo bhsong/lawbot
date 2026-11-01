@@ -16,8 +16,16 @@ from openai import OpenAI
 
 from lawbot import decree as decree_filter
 from lawbot import deploy, manifest, security
-from lawbot.api_client import Embedder, ModelLoadError, ModelServerClient, ModelServerError, wait_ready
-from lawbot.llm import LLM, SYSTEM
+from lawbot.api_client import (
+    Embedder,
+    ModelLoadError,
+    ModelServerClient,
+    ModelServerError,
+    ModelServerTimeout,
+    request_timeout,
+    wait_ready,
+)
+from lawbot.llm import LLM
 from lawbot.paths import ROOT
 from lawbot.reranker import Reranker
 from lawbot.retriever import Retriever
@@ -57,7 +65,7 @@ class LawbotApp:
     retriever: object
     models: ChatModels
     reranker: object = None  # None: 임베딩 상위 TOP_K개 그대로 (LAWBOT_RERANKER_ENABLED=0, 기본)
-    full_system: str = None  # '전체(4항목)' system: 프로필 system 파일, 없으면 llm.SYSTEM (v1)
+    full_system: str = None  # '전체(4항목)' system: 프로필 system 파일
     decree: object = None  # deploy.DecreeConfig: 시행령·시행규칙 첨부 (None: 법률 3개만, LAWBOT_DECREE_ENABLED=0 기본)
     llm_mode: str = 'api'  # 생성 위치: 'api'(모델 서버) / 'external'(LAWBOT_LLM_BASE_URL의 외부 API)
 
@@ -69,20 +77,18 @@ def uses_decrees(app, model_key):
 
 
 def system_text(profile, spec):
-    """모델별 system 파일 → 프로필 system 파일 → None(llm.SYSTEM, v1 4섹션) 순서"""
-    f = spec.system_file or profile.system_file
-    return f.read_text(encoding='utf-8').strip() if f else None
+    """모델별 system 파일 → 프로필 system 파일 순서"""
+    return (spec.system_file or profile.system_file).read_text(encoding='utf-8').strip()
 
 
 def check_profile_files(p):
     """프로필의 조문 CSV·기본 system 파일이 있는지 모델 서버에 접속하기 전에 확인
     조문 CSV가 매니페스트(조문 수·sha256)와 다르면 거부, 매니페스트가 없으면 경고만 (manifest.check)"""
-    missing = [str(f) for f in (p.articles, p.system_file) if f is not None and not f.is_file()]
+    missing = [str(f) for f in (p.articles, p.system_file) if not f.is_file()]
     if missing:
         raise RuntimeError(
             f'프로필 {p.name}에 필요한 파일이 없습니다: {", ".join(missing)}. '
-            'uv run python -m lawbot.check_deploy로 확인하거나, '
-            'v4 자산 준비 전에는 LAWBOT_PROFILE=v1로 실행하세요.'
+            'uv run python -m lawbot.check_deploy로 확인하세요.'
         )
     manifest.check(p.articles)
 
@@ -92,6 +98,22 @@ def server_wait():
         return float(os.environ.get('LAWBOT_MODEL_SERVER_WAIT') or 300)
     except ValueError:
         raise ValueError(f'LAWBOT_MODEL_SERVER_WAIT는 초(숫자): {os.environ["LAWBOT_MODEL_SERVER_WAIT"]!r}') from None
+
+
+READ_TIMEOUT = 300.0  # 질문 처리 중 응답 조각 사이 최대 대기 (27B 교체 로딩·monitor 요약 뒤 대기를 넘는 값)
+
+
+def read_timeout():
+    """LAWBOT_MODEL_READ_TIMEOUT (초, 기본 300): 질문 임베딩·리랭크·생성에서 응답 조각 사이가 이 시간을 넘으면 오류
+    (동시 처리 수 1이라 멈춘 요청 하나가 뒤 질문을 모두 막지 않게). 시작할 때 조문 인덱스 인코딩에는 걸지 않음"""
+    raw = (os.environ.get('LAWBOT_MODEL_READ_TIMEOUT') or str(READ_TIMEOUT)).strip()
+    try:
+        value = float(raw)
+    except ValueError:
+        value = 0
+    if not value > 0:
+        raise ValueError(f'LAWBOT_MODEL_READ_TIMEOUT는 0보다 큰 초: {raw!r}')
+    return value
 
 
 def missing_models(available, p, rr, external):
@@ -121,7 +143,7 @@ def load_app(profile=None):
         )
     llm_url, llm_key, external = security.llm_endpoint(url)
     client = ModelServerClient(url, security.model_token())
-    wait = server_wait()
+    wait, limit = server_wait(), request_timeout(read_timeout())
     print(f'[lawbot] 모델 서버 {url} 준비 대기 (최대 {wait:g}초)', flush=True)
     wait_ready(client, wait)
     missing = missing_models(client.models(), p, rr, external)
@@ -133,23 +155,23 @@ def load_app(profile=None):
         )
     t0 = time.perf_counter()
     retriever = Retriever(
-        Embedder(client, p.emb_model),
+        Embedder(client, p.emb_model, query_timeout=limit),
         p.articles,
         max_seq_length=p.max_seq,
-        doc_style=p.doc_style,
         **({'decree_max_seq': dc.max_seq} if dc else {}),
     )
     print(
         f'[lawbot] 조문 인덱스 {time.perf_counter() - t0:.1f}초 · 법률 {getattr(retriever, "n_law", len(retriever.ids))}개'
         + (f' + 하위법령 {len(retriever.ids) - retriever.n_law}개 (max_seq {dc.max_seq})' if dc else '')
     )
-    reranker = Reranker(client, rr.model, rr.candidates) if rr else None
+    reranker = Reranker(client, rr.model, rr.candidates, timeout=limit) if rr else None
     # 외부 API는 셸의 프록시 설정을 따른다. 모델 서버(127.0.0.1)는 프록시를 거치지 않음
-    oa = OpenAI(base_url=llm_url, api_key=llm_key, max_retries=0, http_client=httpx.Client(trust_env=external))
+    oa = OpenAI(
+        base_url=llm_url, api_key=llm_key, max_retries=0, timeout=limit, http_client=httpx.Client(trust_env=external)
+    )
 
     def factory(spec):  # system 파일이 없으면 FileNotFoundError (화면에서 오류 안내)
-        system = system_text(p, spec)
-        return LLM(spec.model, client=oa, prompt_style=p.doc_style, **({'system': system} if system else {}))
+        return LLM(spec.model, client=oa, system=system_text(p, spec))
 
     def loaded():
         return {m['id'] for m in client.models() if m.get('loaded')}
@@ -161,7 +183,7 @@ def load_app(profile=None):
         f'({", ".join(s.model for s in p.models)})',
         flush=True,
     )
-    full = p.system_file.read_text(encoding='utf-8').strip() if p.system_file else SYSTEM
+    full = p.system_file.read_text(encoding='utf-8').strip()
     return LawbotApp(p, retriever, models, reranker, full, dc, 'external' if external else 'api')
 
 
@@ -256,7 +278,13 @@ def error_type(e, stage):
     """오류 유형 (로그·화면 안내 공통). stage: 오류가 난 단계 'search'·'rerank'·'load'·'generation'
     model_server: 모델 서버(생성 API) 연결 실패·토큰 불일치(401)·로딩 중(503). 서버 쪽 연산 오류(500)는 단계로 나눈다
     model_load: 답변 모델 불러오기 실패 (서버의 모델 폴더 없음·형식 오류 = ModelLoadError, 웹앱의 system 파일 없음)
-    config: 없는 모델 key, 서버에 없는 모델 id(404)"""
+    config: 없는 모델 key, 서버에 없는 모델 id(404)
+    model_server_timeout: 질문 처리 중 응답 조각 사이가 LAWBOT_MODEL_READ_TIMEOUT을 넘음
+    model_server_busy: 모델 서버 대기열이 가득 참 (503 server_busy)"""
+    if isinstance(e, ModelServerTimeout):
+        return 'model_server_timeout'
+    if isinstance(e, ModelServerError) and e.status == 503 and e.kind == 'server_busy':
+        return 'model_server_busy'
     if isinstance(e, ConnectionError) or (isinstance(e, ModelServerError) and e.status in (401, 503)):
         return 'model_server'
     if isinstance(e, ModelLoadError):

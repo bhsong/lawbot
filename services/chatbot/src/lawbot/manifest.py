@@ -1,5 +1,5 @@
 # src/lawbot/manifest.py  →  법령 데이터 매니페스트 (조문 CSV의 버전·기준일·출처·조문 수·sha256)
-# 매니페스트는 조문 CSV와 같은 폴더의 manifest.json (v4: data/v4/manifest.json, v1: data/manifest.json)
+# 매니페스트는 조문 CSV와 같은 폴더의 manifest.json (data/v4/manifest.json, 812조문은 manifest_decree.json)
 # 한 폴더에 조문 CSV가 여럿이면 manifest_<이름>.json을 더 둔다 (v4 812조문: data/v4/manifest_decree.json)
 #   → articles_file이 그 CSV 이름인 매니페스트를 고른다 (manifest.json 먼저, 그다음 manifest_*.json 이름순)
 # 검사하는 곳: 웹앱 load_app(불일치면 실행 거부), check_deploy(PASS/FAIL). 조문 데이터는 웹앱에만 있다

@@ -9,12 +9,13 @@ CANDIDATES = 10
 
 
 class Reranker:
-    def __init__(self, client, model, candidates=CANDIDATES):
+    def __init__(self, client, model, candidates=CANDIDATES, timeout=None):
         self.client, self.model, self.candidates = client, model, candidates
+        self.timeout = timeout  # 질문 처리 중 호출의 시간 상한 (api_client.request_timeout)
 
     def score(self, question, docs):
         """문서마다 P(yes). 0~1 밖(NaN 등)이면 정렬 결과를 믿을 수 없으므로 오류 (서버도 검사함)"""
-        scores = self.client.rerank(self.model, question, docs, TASK)
+        scores = self.client.rerank(self.model, question, docs, TASK, timeout=self.timeout)
         bad = [i for i, s in enumerate(scores) if not (isinstance(s, (int, float)) and 0.0 <= s <= 1.0)]
         if bad:
             raise RuntimeError(f'리랭커 점수가 올바르지 않습니다 (후보 {bad}): {[scores[i] for i in bad]}')

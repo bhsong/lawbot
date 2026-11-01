@@ -35,7 +35,6 @@ def server(tmp_path_factory):
     env.update(
         LAWBOT_USER=USER,
         LAWBOT_PW=PW,
-        LAWBOT_PROFILE='v1',
         LAWBOT_ENV_FILE='',
         GRADIO_ANALYTICS_ENABLED='False',
         LAWBOT_REQUEST_LOG='',
@@ -151,7 +150,7 @@ def test_valid_login_can_use_chatbot(client, server):
     page = client.get('/')
     assert page.status_code == 200 and QUESTION in page.text  # 챗봇 화면
     cfg = client.get('/config')
-    assert cfg.status_code == 200 and cfg.json()['title'] == '근로기준법 챗봇'
+    assert cfg.status_code == 200 and cfg.json()['title'] == '노동법 챗봇'
 
     before = len(chat_calls(server))
     answer, _, sources, stats = ask(client, QUESTION)

@@ -4,7 +4,7 @@
 #   fb_emb_pairs.csv : h_gold가 있는 행의 (질문, 정답 조문) positive. reason=retrieval이면 그때 검색 1위 조문을 hard negative로
 #   fb_sft.csv       : h_ok=맞음 + label=like (system, 프롬프트, 답변 원문)
 #   fb_kto.csv       : h_ok가 맞음/틀림인 행, 좋음(True)/나쁨(False) 라벨 (TRL KTOTrainer처럼 짝 없는 라벨)
-# 프롬프트는 저장한 hits로 llm.build_prompt_v4를 다시 불러 만든다 (모델 불필요)
+# 프롬프트는 저장한 hits로 llm.build_prompt를 다시 불러 만든다 (모델 불필요)
 # 분할: 피드백 안에서 random_state=42로 val을 뗀다 (split 열). 평가는 계속 기존 test로만 하고, 피드백을 test에 섞지 않는다
 # 출력에는 질문 원문이 있다: 레포 안이면 .gitignore에 걸리는 폴더만 허용 (data/feedback/는 gitignore). 파일 권한 600
 import argparse
@@ -62,17 +62,17 @@ def parse_gold(value, keys):
 
 
 def article_docs(articles):
-    """{(법령, 제N조): 검색 문서 문자열} (retriever.DOC_STYLES['v4']와 같은 문자열, 삭제 조문 제외)
+    """{(법령, 제N조): 검색 문서 문자열} (retriever.doc_text와 같은 문자열, 삭제 조문 제외)
     articles: 조문 CSV 하나 또는 여러 개 (앞 파일부터 합친다. 하위법령 법령명은 '근로기준법 시행령'이라 키가 겹치지 않음)"""
     if isinstance(articles, (list, tuple)):
         return {k: v for a in articles for k, v in article_docs(a).items()}
-    from lawbot.retriever import DOC_STYLES
+    from lawbot.retriever import doc_text
 
     law = pd.read_csv(articles, **E)
     law = law[law['deleted'] == 0].reset_index(drop=True)
     if 'article_no' in law:
         law['article_id'] = law['article_no']
-    return dict(zip(zip(law['law'], law['article_id']), DOC_STYLES['v4'](law)))
+    return dict(zip(zip(law['law'], law['article_id']), doc_text(law)))
 
 
 def assign_split(ids, frac=VAL_FRAC):
@@ -84,7 +84,7 @@ def assign_split(ids, frac=VAL_FRAC):
 
 def export(review_csv, out, articles=ARTICLES, frac=VAL_FRAC):
     """요약 줄 목록. out 폴더에 CSV 4개"""
-    from lawbot.llm import build_prompt_v4
+    from lawbot.llm import build_prompt
 
     out = Path(out)
     check_private(out, '--out')
@@ -130,7 +130,7 @@ def export(review_csv, out, articles=ARTICLES, frac=VAL_FRAC):
                 'model': r['model'],
                 'fmt': r['fmt'],
                 'system': r['system'],
-                'prompt': build_prompt_v4(hits, r['question']),
+                'prompt': build_prompt(hits, r['question']),
                 'completion': r['answer_raw'],
             }
             kto.append(ex | {'label': row['h_ok'] == '맞음'})

@@ -1,12 +1,11 @@
 # src/lawbot/citation.py  →  조문 키·인용 파싱·인용 검증·거절 판정 (웹앱 화면과 eval_v4 채점이 같이 쓴다)
 # gradio를 import하지 않는다 (평가에서도 씀, tests/test_citation.py가 검사)
 # 검색 결과 dict 형식은 그대로 쓴다: 조문 키는 웹앱 쪽에서 law + ' ' + article_id로 만든다 (retriever·서버 API 변경 없음)
-# v1 refusal.is_refusal은 기준선 재현용이라 그대로 둔다 (v1 평가 스크립트가 씀)
+# refusal.is_refusal(【결론】에 '확인할 수 없')은 키워드 채점(score_answers)과 v1 기록 재현 테스트가 쓴다
 import re
 
 from lawbot.score_answers import conclusion_part, norm
 
-DEFAULT_LAW = '근로기준법'  # v1 검색 결과에는 law가 없다 (근로기준법 130조문)
 SUB_LAWS = ('시행령', '시행규칙')  # 법령명 뒤에 붙으면 법령명의 일부 ('근로기준법 시행령')
 
 # 줄임말로 인용해도 인정할 법령 이름 (공백·가운뎃점은 norm으로 맞춤)
@@ -48,7 +47,7 @@ def key(law, no):
 
 
 def hit_law(h):
-    return h.get('law') or DEFAULT_LAW
+    return h['law']
 
 
 def hit_key(h):
@@ -59,9 +58,7 @@ def hit_key(h):
 def article_keys(retriever):
     """검색기(로컬 Retriever·RemoteRetriever)의 전체 조문 → {(법령, 제N조)}. 삭제 조문은 검색기에 없다
     하위법령을 켠 검색기는 하위법령 397개도 포함 (법령 '근로기준법 시행령')"""
-    laws = getattr(retriever, 'laws', None)
-    laws = laws if laws is not None else [DEFAULT_LAW] * len(retriever.ids)
-    return set(zip(map(str, laws), map(str, retriever.ids)))
+    return set(zip(map(str, retriever.laws), map(str, retriever.ids)))
 
 
 # ---- 인용 파싱 ----

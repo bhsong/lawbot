@@ -10,13 +10,15 @@ HITS = [
         'article_id': '제26조',
         'title': '해고의 예고',
         'score': 0.91234,
-        'doc': '제26조 해고의 예고\n사용자는 근로자를 해고하려면 적어도 30일 전에 예고를 하여야 한다.',
+        'doc': '근로기준법 제26조(해고의 예고)\n사용자는 근로자를 해고하려면 적어도 30일 전에 예고를 하여야 한다.',
+        'law': '근로기준법',
     },
     {
         'article_id': '제36조',
         'title': '금품 청산',
         'score': 0.5,
-        'doc': '제36조 금품 청산\n사용자는 근로자가 사망 또는 퇴직한 경우에는 14일 이내에 지급하여야 한다.',
+        'doc': '근로기준법 제36조(금품 청산)\n사용자는 근로자가 사망 또는 퇴직한 경우에는 14일 이내에 지급하여야 한다.',
+        'law': '근로기준법',
     },
 ]
 
@@ -24,6 +26,7 @@ HITS = [
 class FakeRetriever:
     created = 0
     ids = [h['article_id'] for h in HITS]
+    laws = [h['law'] for h in HITS]
 
     def __init__(self, *args, **kw):  # service.load_app이 넘기는 경로·설정을 기록
         FakeRetriever.created += 1
@@ -77,15 +80,15 @@ class FakeServerClient:
 
         rr = os.environ.get('LAWBOT_RERANK_MODEL') or 'qwen3-reranker-4b'
         out = [{'id': rr, 'type': 'rerank', 'loaded': True}]
-        for p in (deploy.get_profile('v1'), deploy.get_profile('v4')):  # 두 프로필의 모델 모두 (check_deploy v4 등)
-            out.append({'id': p.emb_model, 'type': 'embedding', 'loaded': True})
-            out += [
-                {'id': s.model, 'type': 'chat', 'loaded': self.loaded is None or s.model in self.loaded}
-                for s in p.models + p.disabled
-            ]
+        p = deploy.get_profile()
+        out.append({'id': p.emb_model, 'type': 'embedding', 'loaded': True})
+        out += [
+            {'id': s.model, 'type': 'chat', 'loaded': self.loaded is None or s.model in self.loaded}
+            for s in p.models + p.disabled
+        ]
         return out
 
-    def embed(self, model, texts, input_type='document', max_seq_length=None):
+    def embed(self, model, texts, input_type='document', max_seq_length=None, timeout=None):
         """글자 해시 bag-of-chars (같은 글자를 많이 공유할수록 유사도가 높다)"""
         self.calls.append(('embed', model, len(texts), input_type, max_seq_length))
         v = np.zeros((len(texts), 512), np.float32)
@@ -94,7 +97,7 @@ class FakeServerClient:
                 v[i, ord(ch) % 512] += 1
         return v / np.maximum(np.linalg.norm(v, axis=1, keepdims=True), 1e-9)
 
-    def rerank(self, model, query, documents, instruction=None):
+    def rerank(self, model, query, documents, instruction=None, timeout=None):
         self.calls.append(('rerank', model, query, len(documents), instruction))
         return [1 / (1 + len(d)) for d in documents]
 

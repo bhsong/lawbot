@@ -159,6 +159,10 @@ def make_chat(app, fb=None):
                 yield text, src, fmt_stats(spec.label, stage, st)
         except Exception as e:  # 유형은 service.ask가 붙임 (요청 로그의 error_type과 같음)
             kind = getattr(e, 'lawbot_error', None)
+            if kind == 'model_server_timeout':
+                raise gr.Error(f'모델 서버 응답이 없습니다 ({e}). 잠시 뒤 다시 질문하세요.') from e
+            if kind == 'model_server_busy':
+                raise gr.Error('모델 서버가 바쁩니다 (대기 중인 질문이 많음). 잠시 뒤 다시 질문하세요.') from e
             if kind == 'model_server':  # 모델 서버(생성 API) 연결 실패·토큰 불일치·로딩 중
                 raise gr.Error(
                     f'모델 서버가 준비되지 않았습니다 ({type(e).__name__}). 잠시 뒤 다시 질문하고, 계속되면 '

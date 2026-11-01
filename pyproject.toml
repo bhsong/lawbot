@@ -2,14 +2,16 @@
 #   services/chatbot       패키지 lawbot: 웹앱·평가 (uv run lawbot-app)
 #   services/model-server  패키지 lawbot_model_server: OpenAI 호환 모델 서버 (uv run lawbot-model-server)
 #   services/monitor       패키지 law_monitor: 법령 변경 수집기 (uv run law-monitor, docs/plans/monitor-collector.md)
+#   packages/lawbot-common 패키지 lawbot_common: 서비스 공통 규칙 (.env 파서, 포트 검증). 서비스끼리는 import하지 않고 이것만 같이 씀
 # 공통 개발 도구(pytest·ruff)와 설정은 여기에 둔다. uv.lock은 workspace 전체에 하나
 [tool.uv.workspace]
-members = ["services/*"]
+members = ["services/*", "packages/*"]
 
 [tool.uv.sources]
 lawbot = { workspace = true }
 lawbot-model-server = { workspace = true }
 law-monitor = { workspace = true }
+lawbot-common = { workspace = true }
 
 [tool.uv]
 environments = ["sys_platform == 'darwin'"]   # mlx는 macOS용: 잠금 파일을 macOS 기준으로만 풀이
@@ -25,7 +27,7 @@ dev = [
 ]
 
 [tool.pytest.ini_options]
-testpaths = ["services/chatbot/tests", "services/model-server/tests", "services/monitor/tests"]
+testpaths = ["services/chatbot/tests", "services/model-server/tests", "services/monitor/tests", "packages/lawbot-common/tests"]
 addopts = "-ra --strict-markers -m 'not models and not network'"   # 실제 모델·외부 접속 테스트는 -m models / -m network로 따로 실행
 filterwarnings = [
     # OpenAI SDK가 TestClient(계약 테스트)에 요청마다 timeout을 넘김: 테스트 대역에서만 나는 경고
@@ -40,7 +42,7 @@ markers = [
 [tool.ruff]
 line-length = 120   # 포맷터가 줄을 나누는 기준. 줄 길이 검사(E501)는 켜지 않음 (줄 끝 주석이 길어도 됨)
 target-version = "py314"
-src = ["services/*/src", "services/*/tests"]   # import 정렬에서 lawbot·tests 모듈(conftest·fakes)을 프로젝트 모듈로 봄
+src = ["services/*/src", "services/*/tests", "packages/*/src", "packages/*/tests"]   # import 정렬에서 lawbot·tests 모듈(conftest·fakes)을 프로젝트 모듈로 봄
 # data_gd/ 등은 .gitignore에 있어 자동으로 건너뜀 (docs/archives/ruff-lint-format.md)
 
 [tool.ruff.lint]
@@ -55,7 +57,7 @@ ignore = [
 ]
 
 [tool.ruff.lint.per-file-ignores]
-"services/*/tests/**" = [
+"{services,packages}/*/tests/**" = [
     "E402",     # 가짜 모듈을 sys.modules에 넣은 뒤 import, 절마다 import
     "RUF012",   # 테스트 대역의 공유 기록용 클래스 속성
     "RUF059",   # 튜플 풀기로 반환 구조를 보여 줌

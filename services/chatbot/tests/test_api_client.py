@@ -19,6 +19,70 @@ from lawbot_model_server.config import ModelEntry
 from lawbot_model_server.registry import Registry
 
 
+# ---- 질문 처리 중 호출의 시간 상한 (LAWBOT_MODEL_READ_TIMEOUT) ----
+def test_read_timeout_is_model_server_timeout():
+    def slow(req):
+        raise httpx.ReadTimeout('slow', request=req)
+
+    c = mock_client(slow)
+    with pytest.raises(ac.ModelServerTimeout, match='300초'):
+        c.embed('emb', ['q'], 'query', timeout=ac.request_timeout(300))
+    with pytest.raises(ac.ModelServerTimeout):
+        c.rerank('rr', 'q', ['d'], timeout=ac.request_timeout(300))
+
+
+def test_connect_timeout_stays_connection_error():
+    def down(req):
+        raise httpx.ConnectTimeout('down', request=req)
+
+    with pytest.raises(ConnectionError, match='연결할 수 없습니다'):
+        mock_client(down).embed('emb', ['q'], 'query', timeout=ac.request_timeout(300))
+
+
+def test_timeout_only_on_question_calls():
+    # 시작할 때의 조문 인덱스 임베딩은 오래 걸려 제한 없음, 질문 임베딩·리랭크에만 상한
+    seen = []
+
+    def handler(req):
+        seen.append((req.url.path, req.extensions['timeout']))
+        if req.url.path == '/v1/rerank':
+            return httpx.Response(200, json={'results': [{'index': 0, 'relevance_score': 0.5}]})
+        vec = base64.b64encode(np.zeros(4, '<f4').tobytes()).decode()
+        return httpx.Response(200, json={'data': [{'index': 0, 'embedding': vec}]})
+
+    c = mock_client(handler)
+    emb = ac.Embedder(c, 'emb', query_timeout=ac.request_timeout(120))
+    emb.encode(['조문'], 'document')
+    emb.encode(['질문'], 'query')
+    from lawbot.reranker import Reranker
+
+    Reranker(c, 'rr', timeout=ac.request_timeout(120)).score('질문', ['조문'])
+    (_, doc), (_, query), (_, rr) = seen
+    assert doc['read'] is None and query['read'] == rr['read'] == 120 and query['connect'] == 5
+
+
+def test_read_timeout_setting(env):
+    assert service.read_timeout() == 300  # 기본
+    env.setenv('LAWBOT_MODEL_READ_TIMEOUT', '60')
+    assert service.read_timeout() == 60
+    for bad in ('0', '-1', 'x'):
+        env.setenv('LAWBOT_MODEL_READ_TIMEOUT', bad)
+        with pytest.raises(ValueError, match='LAWBOT_MODEL_READ_TIMEOUT'):
+            service.read_timeout()
+
+
+def test_load_app_applies_read_timeout(env):
+    from fakes import FakeLLM, FakeRetriever
+
+    env.setattr(service, 'Retriever', FakeRetriever)
+    env.setattr(service, 'LLM', FakeLLM)
+    env.setenv('LAWBOT_MODEL_READ_TIMEOUT', '90')
+    a = service.load_app()
+    assert a.retriever.args[0][0].query_timeout.read == 90  # 질문 임베딩
+    oa = a.models.get('fast')[0].client  # 생성 (openai SDK)
+    assert oa.kw['timeout'].read == 90 and oa.kw['timeout'].connect == 5
+
+
 # ---- api_client (httpx MockTransport) ----
 def mock_client(handler):
     return ac.ModelServerClient(
@@ -188,7 +252,7 @@ def test_external_llm_skips_server_chat_models(env, model_server):
     env.setenv('LAWBOT_LLM_ALLOW_EXTERNAL', '1')
     env.setenv('LAWBOT_LLM_API_KEY', 'sk-test-only')
     env.setenv('LAWBOT_PRO_MODEL', 'gpt-cloud')
-    model_server.available = [{'id': 'lawbot-emb-v1', 'type': 'embedding'}]  # 서버에는 임베딩만
+    model_server.available = [{'id': 'lawbot-emb-v4', 'type': 'embedding'}]  # 서버에는 임베딩만
     a = service.load_app()
     assert a.llm_mode == 'external' and a.models.is_loaded('pro')  # 외부 API는 '불러오는 중' 단계 없음
     llm = a.models.get('pro')[0]
@@ -276,12 +340,12 @@ class Rr:
 
 @pytest.fixture
 def real_server(env):
-    """lawbot_model_server.api 앱 (v1 프로필이 쓰는 모델 id, 가짜 모델) + 챗봇이 이 앱으로 접속하게"""
+    """lawbot_model_server.api 앱 (v4 프로필이 쓰는 모델 id, 가짜 모델) + 챗봇이 이 앱으로 접속하게"""
     entries = [
-        ModelEntry('lawbot-emb-v1', 'embedding', None),
+        ModelEntry('lawbot-emb-v4', 'embedding', None),
         ModelEntry('qwen3-reranker-4b', 'rerank', None),
-        ModelEntry('lawbot-fast-v1', 'chat', None),
-        ModelEntry('qwen3-14b-4bit', 'chat', None),
+        ModelEntry('lawbot-fast-v4', 'chat', None),
+        ModelEntry('qwen3.8-27b-4bit', 'chat', None),
     ]
     reg = Registry(entries, {'chat': Chat, 'embedding': Emb, 'rerank': Rr}, max_resident=1)
     reg.load_fixed()
@@ -295,10 +359,10 @@ def real_server(env):
 
 def test_end_to_end_through_real_server_app(env, real_server, tmp_path):
     env.setenv('LAWBOT_REQUEST_LOG', str(tmp_path / 'requests.jsonl'))
-    a = service.load_app()  # v1: 130조문 인덱스를 서버 임베딩으로
-    emb = real_server.fixed['lawbot-emb-v1']
-    assert emb.calls == [(130, 'document', 512)]
-    assert len(a.retriever.ids) == 130 and a.retriever.D.shape == (130, 64)
+    a = service.load_app()  # 415조문 인덱스를 서버 임베딩으로
+    emb = real_server.fixed['lawbot-emb-v4']
+    assert emb.calls == [(415, 'document', 2304)]
+    assert len(a.retriever.ids) == 415 and a.retriever.D.shape == (415, 64)
     assert not a.models.is_loaded('fast')  # 서버에 아직 올라 있지 않음
     steps = list(service.ask(a, '수습 기간에도 해고 예고를 해야 하나요?', 'fast'))
     assert steps[0][0] == 'load' and steps[-1][0] == 'done'
@@ -311,8 +375,8 @@ def test_end_to_end_through_real_server_app(env, real_server, tmp_path):
         3.25,
         'stop',
     )
-    assert emb.calls[-1] == (1, 'query', 512)
-    messages, kw = real_server.chat['lawbot-fast-v1'].calls[0]
+    assert emb.calls[-1] == (1, 'query', 2304)
+    messages, kw = real_server.chat['lawbot-fast-v4'].calls[0]
     assert messages[1]['content'].startswith('[참고 조문]\n[1] ') and messages[1]['content'].endswith(
         '[질문]\n수습 기간에도 해고 예고를 해야 하나요?'
     )

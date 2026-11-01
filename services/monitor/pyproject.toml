@@ -8,6 +8,7 @@ authors = [
 requires-python = ">=3.14"
 dependencies = [   # git은 subprocess. 법제처 API는 JSON + 서식 텍스트가 응답에 있어 PDF·XML 라이브러리는 쓰지 않음
     "httpx>=0.28.1",
+    "lawbot-common",
     "pyyaml>=6.0.3",
     "tenacity>=9.2.1",
 ]
@@ -15,6 +16,9 @@ dependencies = [   # git은 subprocess. 법제처 API는 JSON + 서식 텍스트
 [project.scripts]
 # 레포 최상위에서 uv run law-monitor bootstrap / collect / replay
 law-monitor = "law_monitor.cli:main"
+
+[tool.uv.sources]
+lawbot-common = { workspace = true }
 
 [build-system]
 requires = ["uv_build>=0.12.19,<0.13.0"]
