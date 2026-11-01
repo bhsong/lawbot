@@ -31,7 +31,7 @@ class ScoreClient:
     def __init__(self, table=None):
         self.table, self.calls = table or {}, []
 
-    def rerank(self, model, query, documents, instruction=None):
+    def rerank(self, model, query, documents, instruction=None, timeout=None):
         self.calls.append((model, query, list(documents), instruction))
         return [self.table.get(d, 0.5) for d in documents]
 
@@ -149,7 +149,7 @@ class FakeReranker:
     created = 0
     fail = None
 
-    def __init__(self, client, model, candidates=10):
+    def __init__(self, client, model, candidates=10, timeout=None):
         FakeReranker.created += 1
         self.client, self.model, self.candidates, self.calls = client, model, candidates, []
 

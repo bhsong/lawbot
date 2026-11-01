@@ -240,6 +240,21 @@ def test_llm_errors_before_stream(error, kind, match):
         list(LLM('m', client=FakeClient(error=error), system=SYSTEM).stream('q', HITS[:1]))
 
 
+def test_llm_timeouts_are_model_server_timeout():
+    from lawbot.api_client import ModelServerTimeout
+
+    with pytest.raises(ModelServerTimeout):  # 첫 응답 전 (SDK가 감싼 시간 초과)
+        list(
+            LLM('m', client=FakeClient(error=openai.APITimeoutError(request=REQ)), system=SYSTEM).stream('q', HITS[:1])
+        )
+    c = FakeClient([chunk('【결론】', role=True), httpx.ReadTimeout('slow', request=REQ)])
+    g = LLM('m', client=c, system=SYSTEM).stream('q', HITS[:1])
+    assert next(g).text == '【결론】'
+    with pytest.raises(ModelServerTimeout):  # 스트림 중 (httpx 예외 그대로)
+        next(g)
+    assert c.streams[0].closed
+
+
 def test_llm_error_mid_stream():
     err = openai.APIError('생성 실패', request=REQ, body={'message': '생성 실패'})
     c = FakeClient([chunk('【결론】', role=True), err])

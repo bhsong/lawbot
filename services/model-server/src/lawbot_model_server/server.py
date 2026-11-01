@@ -23,10 +23,11 @@ def load_models(app, cfg, registry_cls=Registry):
     reg = registry_cls(cfg.models, max_resident=cfg.max_resident)
     reg.load_fixed()
     reg.preload(cfg.preload)
-    app.state.max_concurrent = cfg.max_concurrent
+    app.state.max_concurrent, app.state.max_queued = cfg.max_concurrent, cfg.max_queued
     api.set_registry(app, reg)
     print(
         f'[model-server] ready · 불러오기 {time.perf_counter() - t0:.1f}초 · 동시 생성 최대 {cfg.max_concurrent} · '
+        f'대기 최대 {cfg.max_queued} · '
         + ', '.join(f'{m["id"]}({m["type"]}{", 상주" if m["loaded"] else ""})' for m in reg.listing()),
         flush=True,
     )
@@ -35,7 +36,7 @@ def load_models(app, cfg, registry_cls=Registry):
 def main():
     envfile.load()
     cfg = config.load()  # 포트·토큰·모델 목록이 없으면 모델을 올리기 전에 실행 거부
-    app = api.create_app(cfg.token, max_concurrent=cfg.max_concurrent)
+    app = api.create_app(cfg.token, max_concurrent=cfg.max_concurrent, max_queued=cfg.max_queued)
     server = build_server(app, cfg.port)
     failed = []
 

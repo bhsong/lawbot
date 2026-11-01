@@ -4,9 +4,10 @@
 import re
 import types
 
+import httpx
 import openai
 
-from lawbot.api_client import ModelServerError, error_from_body
+from lawbot.api_client import ModelServerError, ModelServerTimeout, error_from_body
 
 
 def _clean(s):
@@ -41,7 +42,10 @@ def response(text='', **kw):
 
 
 def convert_error(e):
-    """openai SDK 예외 → 웹앱이 안내하는 예외 (연결 실패는 ConnectionError, 모델 불러오기 실패는 ModelLoadError)"""
+    """openai SDK 예외 → 웹앱이 안내하는 예외 (시간 초과는 ModelServerTimeout, 연결 실패는 ConnectionError,
+    모델 불러오기 실패는 ModelLoadError)"""
+    if isinstance(e, openai.APITimeoutError):
+        return ModelServerTimeout(f'생성 API가 응답하지 않았습니다 ({type(e).__name__})')
     if isinstance(e, openai.APIConnectionError):
         return ConnectionError(f'생성 API에 연결할 수 없습니다 ({type(e).__name__})')
     if isinstance(e, openai.APIStatusError):
@@ -108,6 +112,8 @@ class LLM:
             yield from responses(s)
         except openai.OpenAIError as e:
             raise convert_error(e) from e
+        except httpx.TimeoutException as e:  # 스트림 중 응답 조각 사이가 상한을 넘음 (SDK가 감싸지 않음)
+            raise ModelServerTimeout(f'생성 API가 응답 중에 멈췄습니다 ({type(e).__name__})') from e
         finally:
             s.close()
 

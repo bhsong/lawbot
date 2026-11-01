@@ -226,6 +226,26 @@ def test_error_mid_stream(client):
             pass
 
 
+def test_queue_full_is_503_server_busy(client):
+    from lawbot_model_server.scheduler import QueueFull
+
+    def full(*a):
+        raise QueueFull('대기 중인 생성 요청이 32개라 받지 않습니다')
+
+    client.app.state.scheduler.chat = full
+    for stream in (False, True):
+        r = client.post(
+            '/v1/chat/completions', headers=AUTH, json={'model': 'chat-a', 'messages': MESSAGES, 'stream': stream}
+        )
+        err = r.json()['error']
+        assert r.status_code == 503 and err['type'] == 'server_busy' and '32개' in err['message']
+
+
+def test_create_app_passes_queue_limit(reg):
+    app = api.create_app(TOKEN, reg, max_queued=7)
+    assert app.state.scheduler.max_queued == 7
+
+
 def test_error_before_first_token(client):
     FakeChat.chunks = [RuntimeError('프리필 실패')]
     r = client.post('/v1/chat/completions', headers=AUTH, json={'model': 'chat-a', 'messages': MESSAGES})

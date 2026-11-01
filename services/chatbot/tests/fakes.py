@@ -88,7 +88,7 @@ class FakeServerClient:
         ]
         return out
 
-    def embed(self, model, texts, input_type='document', max_seq_length=None):
+    def embed(self, model, texts, input_type='document', max_seq_length=None, timeout=None):
         """글자 해시 bag-of-chars (같은 글자를 많이 공유할수록 유사도가 높다)"""
         self.calls.append(('embed', model, len(texts), input_type, max_seq_length))
         v = np.zeros((len(texts), 512), np.float32)
@@ -97,7 +97,7 @@ class FakeServerClient:
                 v[i, ord(ch) % 512] += 1
         return v / np.maximum(np.linalg.norm(v, axis=1, keepdims=True), 1e-9)
 
-    def rerank(self, model, query, documents, instruction=None):
+    def rerank(self, model, query, documents, instruction=None, timeout=None):
         self.calls.append(('rerank', model, query, len(documents), instruction))
         return [1 / (1 + len(d)) for d in documents]
 

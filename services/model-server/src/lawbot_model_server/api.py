@@ -18,7 +18,7 @@ from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from lawbot_model_server.registry import UnknownModel
-from lawbot_model_server.scheduler import ModelLoadError, Scheduler
+from lawbot_model_server.scheduler import MAX_QUEUED_DEFAULT, ModelLoadError, QueueFull, Scheduler
 
 MAX_BODY = 8 * 1024 * 1024  # 요청 본문 최대 (조문 415개 인코딩, 질문 2,075개 rank가 들어감)
 DEFAULT_MAX_TOKENS = 1024  # max_tokens가 없을 때 (챗봇은 항상 1024를 보냄)
@@ -192,7 +192,12 @@ async def chat_completions(request: Request):
         'enable_thinking': bool(req.chat_template_kwargs and req.chat_template_kwargs.enable_thinking),
     }
 
-    job = request.app.state.scheduler.chat(req.model, messages, kw)  # 처음 쓰는 모델은 GPU 스레드가 불러옴 (LRU 교체)
+    try:
+        job = request.app.state.scheduler.chat(
+            req.model, messages, kw
+        )  # 처음 쓰는 모델은 GPU 스레드가 불러옴 (LRU 교체)
+    except QueueFull as e:
+        raise ApiError(503, str(e), 'server_busy') from None
     try:
         kind, value = await job.next()  # 첫 토큰 전 오류(모델 불러오기 실패 등)는 HTTP 상태로 알린다
     except BaseException:
@@ -351,15 +356,15 @@ class Guard:
 
 def set_registry(app, registry):
     """모델을 다 불러온 뒤: 레지스트리와 GPU 스레드 스케줄러를 붙인다 (이때부터 ready)"""
-    app.state.scheduler = Scheduler(registry, app.state.max_concurrent)
+    app.state.scheduler = Scheduler(registry, app.state.max_concurrent, max_queued=app.state.max_queued)
     app.state.registry = registry
 
 
-def create_app(token, registry=None, max_body=MAX_BODY, max_concurrent=1):
+def create_app(token, registry=None, max_body=MAX_BODY, max_concurrent=1, max_queued=MAX_QUEUED_DEFAULT):
     """registry가 None이면 /health가 ready:false이고 나머지는 503 (모델을 불러오는 중). 다 불러오면 set_registry"""
     app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
     app.state.registry, app.state.scheduler = None, None
-    app.state.max_body, app.state.max_concurrent = max_body, max_concurrent
+    app.state.max_body, app.state.max_concurrent, app.state.max_queued = max_body, max_concurrent, max_queued
     if registry is not None:
         set_registry(app, registry)
 

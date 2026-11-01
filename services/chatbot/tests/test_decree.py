@@ -394,7 +394,7 @@ def test_load_app_with_decree(env, tmp_path):
     made = []
     env.setattr(service, 'Retriever', lambda *a, **kw: made.append(kw) or DecRet())
     env.setattr(service, 'LLM', lambda *a, **kw: Bot(None))
-    env.setattr(service, 'Reranker', lambda *a: RR())
+    env.setattr(service, 'Reranker', lambda *a, **kw: RR())
     with pytest.raises(ValueError, match='리랭커가 필요'):  # 모델 서버에 접속하기 전에 거부
         service.load_app()
     assert made == []

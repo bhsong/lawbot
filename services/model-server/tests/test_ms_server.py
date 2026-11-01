@@ -41,6 +41,13 @@ def test_config_max_concurrent(ms_env):
     assert config.load().max_concurrent == 4
 
 
+def test_config_max_queued(ms_env):
+    set_minimal(ms_env)
+    assert config.load().max_queued == 32  # 기본: 대기 중인 chat 요청 32개까지
+    ms_env.setenv('LAWBOT_MAX_QUEUED', '5')
+    assert config.load().max_queued == 5
+
+
 def test_config_preload_and_resident(ms_env):
     set_minimal(ms_env, LAWBOT_MAX_RESIDENT='1')
     assert config.load().preload == ('qwen3.8-27b-4bit',)
@@ -68,6 +75,9 @@ def test_config_preload_and_resident(ms_env):
         ('LAWBOT_MAX_CONCURRENT', '0', ValueError, 'LAWBOT_MAX_CONCURRENT는 1–16'),
         ('LAWBOT_MAX_CONCURRENT', '17', ValueError, 'LAWBOT_MAX_CONCURRENT는 1–16'),
         ('LAWBOT_MAX_CONCURRENT', 'x', ValueError, 'LAWBOT_MAX_CONCURRENT는 1–16'),
+        ('LAWBOT_MAX_QUEUED', '0', ValueError, 'LAWBOT_MAX_QUEUED는 1–1024'),
+        ('LAWBOT_MAX_QUEUED', '1025', ValueError, 'LAWBOT_MAX_QUEUED는 1–1024'),
+        ('LAWBOT_MAX_QUEUED', 'x', ValueError, 'LAWBOT_MAX_QUEUED는 1–1024'),
     ],
 )
 def test_config_errors(ms_env, key, value, exc, msg):
@@ -129,6 +139,7 @@ def test_load_models_sets_registry():
     server.load_models(app, cfg, Reg)
     assert app.state.registry.is_loaded('chat-a') and app.state.registry.is_loaded('emb')
     assert app.state.scheduler.registry is app.state.registry and app.state.scheduler.max_concurrent == 3
+    assert app.state.scheduler.max_queued == 32  # Config 기본값
 
 
 # ---- 점검 (모델 없이) ----

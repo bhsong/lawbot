@@ -19,6 +19,70 @@ from lawbot_model_server.config import ModelEntry
 from lawbot_model_server.registry import Registry
 
 
+# ---- 질문 처리 중 호출의 시간 상한 (LAWBOT_MODEL_READ_TIMEOUT) ----
+def test_read_timeout_is_model_server_timeout():
+    def slow(req):
+        raise httpx.ReadTimeout('slow', request=req)
+
+    c = mock_client(slow)
+    with pytest.raises(ac.ModelServerTimeout, match='300초'):
+        c.embed('emb', ['q'], 'query', timeout=ac.request_timeout(300))
+    with pytest.raises(ac.ModelServerTimeout):
+        c.rerank('rr', 'q', ['d'], timeout=ac.request_timeout(300))
+
+
+def test_connect_timeout_stays_connection_error():
+    def down(req):
+        raise httpx.ConnectTimeout('down', request=req)
+
+    with pytest.raises(ConnectionError, match='연결할 수 없습니다'):
+        mock_client(down).embed('emb', ['q'], 'query', timeout=ac.request_timeout(300))
+
+
+def test_timeout_only_on_question_calls():
+    # 시작할 때의 조문 인덱스 임베딩은 오래 걸려 제한 없음, 질문 임베딩·리랭크에만 상한
+    seen = []
+
+    def handler(req):
+        seen.append((req.url.path, req.extensions['timeout']))
+        if req.url.path == '/v1/rerank':
+            return httpx.Response(200, json={'results': [{'index': 0, 'relevance_score': 0.5}]})
+        vec = base64.b64encode(np.zeros(4, '<f4').tobytes()).decode()
+        return httpx.Response(200, json={'data': [{'index': 0, 'embedding': vec}]})
+
+    c = mock_client(handler)
+    emb = ac.Embedder(c, 'emb', query_timeout=ac.request_timeout(120))
+    emb.encode(['조문'], 'document')
+    emb.encode(['질문'], 'query')
+    from lawbot.reranker import Reranker
+
+    Reranker(c, 'rr', timeout=ac.request_timeout(120)).score('질문', ['조문'])
+    (_, doc), (_, query), (_, rr) = seen
+    assert doc['read'] is None and query['read'] == rr['read'] == 120 and query['connect'] == 5
+
+
+def test_read_timeout_setting(env):
+    assert service.read_timeout() == 300  # 기본
+    env.setenv('LAWBOT_MODEL_READ_TIMEOUT', '60')
+    assert service.read_timeout() == 60
+    for bad in ('0', '-1', 'x'):
+        env.setenv('LAWBOT_MODEL_READ_TIMEOUT', bad)
+        with pytest.raises(ValueError, match='LAWBOT_MODEL_READ_TIMEOUT'):
+            service.read_timeout()
+
+
+def test_load_app_applies_read_timeout(env):
+    from fakes import FakeLLM, FakeRetriever
+
+    env.setattr(service, 'Retriever', FakeRetriever)
+    env.setattr(service, 'LLM', FakeLLM)
+    env.setenv('LAWBOT_MODEL_READ_TIMEOUT', '90')
+    a = service.load_app()
+    assert a.retriever.args[0][0].query_timeout.read == 90  # 질문 임베딩
+    oa = a.models.get('fast')[0].client  # 생성 (openai SDK)
+    assert oa.kw['timeout'].read == 90 and oa.kw['timeout'].connect == 5
+
+
 # ---- api_client (httpx MockTransport) ----
 def mock_client(handler):
     return ac.ModelServerClient(

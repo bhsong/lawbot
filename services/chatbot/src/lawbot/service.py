@@ -16,7 +16,15 @@ from openai import OpenAI
 
 from lawbot import decree as decree_filter
 from lawbot import deploy, manifest, security
-from lawbot.api_client import Embedder, ModelLoadError, ModelServerClient, ModelServerError, wait_ready
+from lawbot.api_client import (
+    Embedder,
+    ModelLoadError,
+    ModelServerClient,
+    ModelServerError,
+    ModelServerTimeout,
+    request_timeout,
+    wait_ready,
+)
 from lawbot.llm import LLM
 from lawbot.paths import ROOT
 from lawbot.reranker import Reranker
@@ -92,6 +100,22 @@ def server_wait():
         raise ValueError(f'LAWBOT_MODEL_SERVER_WAIT는 초(숫자): {os.environ["LAWBOT_MODEL_SERVER_WAIT"]!r}') from None
 
 
+READ_TIMEOUT = 300.0  # 질문 처리 중 응답 조각 사이 최대 대기 (27B 교체 로딩·monitor 요약 뒤 대기를 넘는 값)
+
+
+def read_timeout():
+    """LAWBOT_MODEL_READ_TIMEOUT (초, 기본 300): 질문 임베딩·리랭크·생성에서 응답 조각 사이가 이 시간을 넘으면 오류
+    (동시 처리 수 1이라 멈춘 요청 하나가 뒤 질문을 모두 막지 않게). 시작할 때 조문 인덱스 인코딩에는 걸지 않음"""
+    raw = (os.environ.get('LAWBOT_MODEL_READ_TIMEOUT') or str(READ_TIMEOUT)).strip()
+    try:
+        value = float(raw)
+    except ValueError:
+        value = 0
+    if not value > 0:
+        raise ValueError(f'LAWBOT_MODEL_READ_TIMEOUT는 0보다 큰 초: {raw!r}')
+    return value
+
+
 def missing_models(available, p, rr, external):
     """모델 서버 /v1/models에 없는 필요한 모델 [(종류, id)]. 외부 생성 API면 chat 모델은 서버에서 찾지 않음"""
     have = {(m['id'], m.get('type')) for m in available}
@@ -119,7 +143,7 @@ def load_app(profile=None):
         )
     llm_url, llm_key, external = security.llm_endpoint(url)
     client = ModelServerClient(url, security.model_token())
-    wait = server_wait()
+    wait, limit = server_wait(), request_timeout(read_timeout())
     print(f'[lawbot] 모델 서버 {url} 준비 대기 (최대 {wait:g}초)', flush=True)
     wait_ready(client, wait)
     missing = missing_models(client.models(), p, rr, external)
@@ -131,7 +155,7 @@ def load_app(profile=None):
         )
     t0 = time.perf_counter()
     retriever = Retriever(
-        Embedder(client, p.emb_model),
+        Embedder(client, p.emb_model, query_timeout=limit),
         p.articles,
         max_seq_length=p.max_seq,
         **({'decree_max_seq': dc.max_seq} if dc else {}),
@@ -140,9 +164,11 @@ def load_app(profile=None):
         f'[lawbot] 조문 인덱스 {time.perf_counter() - t0:.1f}초 · 법률 {getattr(retriever, "n_law", len(retriever.ids))}개'
         + (f' + 하위법령 {len(retriever.ids) - retriever.n_law}개 (max_seq {dc.max_seq})' if dc else '')
     )
-    reranker = Reranker(client, rr.model, rr.candidates) if rr else None
+    reranker = Reranker(client, rr.model, rr.candidates, timeout=limit) if rr else None
     # 외부 API는 셸의 프록시 설정을 따른다. 모델 서버(127.0.0.1)는 프록시를 거치지 않음
-    oa = OpenAI(base_url=llm_url, api_key=llm_key, max_retries=0, http_client=httpx.Client(trust_env=external))
+    oa = OpenAI(
+        base_url=llm_url, api_key=llm_key, max_retries=0, timeout=limit, http_client=httpx.Client(trust_env=external)
+    )
 
     def factory(spec):  # system 파일이 없으면 FileNotFoundError (화면에서 오류 안내)
         return LLM(spec.model, client=oa, system=system_text(p, spec))
@@ -252,7 +278,13 @@ def error_type(e, stage):
     """오류 유형 (로그·화면 안내 공통). stage: 오류가 난 단계 'search'·'rerank'·'load'·'generation'
     model_server: 모델 서버(생성 API) 연결 실패·토큰 불일치(401)·로딩 중(503). 서버 쪽 연산 오류(500)는 단계로 나눈다
     model_load: 답변 모델 불러오기 실패 (서버의 모델 폴더 없음·형식 오류 = ModelLoadError, 웹앱의 system 파일 없음)
-    config: 없는 모델 key, 서버에 없는 모델 id(404)"""
+    config: 없는 모델 key, 서버에 없는 모델 id(404)
+    model_server_timeout: 질문 처리 중 응답 조각 사이가 LAWBOT_MODEL_READ_TIMEOUT을 넘음
+    model_server_busy: 모델 서버 대기열이 가득 참 (503 server_busy)"""
+    if isinstance(e, ModelServerTimeout):
+        return 'model_server_timeout'
+    if isinstance(e, ModelServerError) and e.status == 503 and e.kind == 'server_busy':
+        return 'model_server_busy'
     if isinstance(e, ConnectionError) or (isinstance(e, ModelServerError) and e.status in (401, 503)):
         return 'model_server'
     if isinstance(e, ModelLoadError):
