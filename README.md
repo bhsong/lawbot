@@ -61,6 +61,7 @@ v1:
 평가마다 결과 한 줄과 기록 파일 링크만 둡니다. 표·설정·명령은 [`docs/evals/`](docs/evals/)에 있습니다.
 
 - **v4 웹앱 test (2026-10-25)**: 리랭킹 Recall@3 0.940, 조문 인용 정확도 0.905, 범위 밖 거절률 0.96, 질문당 15.1초 · MLX 최대 20.4GB → [기록](docs/evals/2026-10-25-v4-webapp-test.md)
+- **동시 추론 (val answers, 2026-11-01)**: 배치 경로 1건은 답변 200개가 기준과 같음, 동시 2·4는 처리량 ×1.36·×1.67 · 요청당 완료 19.6→28.8·46.8초 · MLX 최대 21.9·23.4GB, 답변 52·56개가 대부분 표현만 다르고 지표는 같거나 조금 나음 → [기록](docs/evals/2026-11-01-batch-generation.md)
 - **OpenAI 호환 모델 서버 전환 (val, 2026-11-01)**: 답변 600개·검색 순위 1,110행·하위법령 첨부가 기준과 글자 단위로 같고, 지연 차이는 0.3초 이내 → [기록](docs/evals/2026-11-01-openai-api.md)
 - **원격 모드 재확인 (2026-10-29)**: 답변 522개가 로컬 모드와 글자 단위로 같고, 지연 차이는 0.3초 이내 → [기록](docs/evals/2026-10-29-model-server.md)
 - **시행령·시행규칙 첨부 실험 (val, 2026-10-29~31)**: 채택 규칙의 정답 하위법령 포함 0.921, 하위법령 질문 정답 인용 0.000 → 0.900, 법률 질문 답변은 그대로 → [기록](docs/evals/2026-10-31-decree-experiment.md)
@@ -619,6 +620,7 @@ Question
 One line per evaluation with a link to its record; tables, settings and commands live in [`docs/evals/`](docs/evals/).
 
 - **v4 web app, test (2026-10-25)**: reranked Recall@3 0.940, citation accuracy 0.905, out-of-scope refusal 0.96, 15.1 s per question, MLX peak 20.4GB → [record](docs/evals/2026-10-25-v4-webapp-test.md)
+- **Concurrent inference (val answers, 2026-11-01)**: batch path with one request gives all 200 answers identical to baseline; concurrency 2/4 gives ×1.36/×1.67 throughput, per-request completion 19.6→28.8/46.8 s, MLX peak 21.9/23.4 GB, 52/56 answers differ, mostly in wording, with equal or slightly better metrics → [record](docs/evals/2026-11-01-batch-generation.md)
 - **Switch to the OpenAI-compatible model server (val, 2026-11-01)**: all 600 answers, 1,110 retrieval rows and decree attachments identical to baseline, latency within 0.3 s → [record](docs/evals/2026-11-01-openai-api.md)
 - **Remote mode recheck (2026-10-29)**: all 522 answers identical to local mode, latency within 0.3 s → [record](docs/evals/2026-10-29-model-server.md)
 - **Enforcement-decree attachment experiment (val, 2026-10-29 to 31)**: chosen rule attaches the gold decree 0.921; gold-decree citation on decree questions 0.000 → 0.900; Act answers unchanged → [record](docs/evals/2026-10-31-decree-experiment.md)

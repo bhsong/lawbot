@@ -262,7 +262,7 @@ LAWBOT_FAST_MODEL=lawbot-fast-v4
 | --- | --- |
 | 1 `chore/monorepo` | #33 병합 (2026-11-01) |
 | 2 `feat/openai-api` | #34 병합 (2026-11-01). 답변 600개 동일 ([기록](../evals/2026-11-01-openai-api.md)) |
-| 3 `feat/batch-generation` | 계획 확정(§4), 구현 중 |
+| 3 `feat/batch-generation` | 구현·테스트·실제 모델 검증 완료 ([기록](../evals/2026-11-01-batch-generation.md)). 기본값·`SequentialEngine` 삭제 결정 대기, 병합 전 |
 
 ### PR 2 구현 중 계획과 달라진 점
 
