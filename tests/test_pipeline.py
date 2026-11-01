@@ -3,9 +3,11 @@
 import subprocess
 import sys
 import types
+
 import numpy as np
 import pandas as pd
 import pytest
+
 import lawbot.llm as llm_mod
 import lawbot.retriever as retriever_mod
 import lawbot.service as service
@@ -13,6 +15,7 @@ from conftest import set_auth
 from fakes import HITS, FakeLLM, FakeRetriever
 from lawbot.llm import LLM, SYSTEM, build_prompt, build_prompt_v4
 from lawbot.paths import ARTICLES, EVAL
+
 
 # ---- 검색 ----
 class FakeEncoder:
@@ -244,6 +247,7 @@ def test_chat_generation_failure_is_not_hidden(app):
 
 # ---- 생각 단계 끄기 (튜닝 전 모델의 chat template이 enable_thinking을 무시할 때) ----
 from lawbot.llm import THINK, close_thinking, hide_thinking
+
 
 def test_close_thinking_prompt():
     ok = '<|im_start|>assistant\n<think>\n\n</think>\n\n'

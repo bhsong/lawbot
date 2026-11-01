@@ -3,6 +3,7 @@
 # 검색 결과 dict 형식은 그대로 쓴다: 조문 키는 웹앱 쪽에서 law + ' ' + article_id로 만든다 (retriever·서버 API 변경 없음)
 # v1 refusal.is_refusal은 기준선 재현용이라 그대로 둔다 (v1 평가 스크립트가 씀)
 import re
+
 from lawbot.score_answers import conclusion_part, norm
 
 DEFAULT_LAW = '근로기준법'           # v1 검색 결과에는 law가 없다 (근로기준법 130조문)
@@ -102,7 +103,7 @@ def check(cites, hits, articles=None):
         if law is None:
             if len(same_no) == 1:
                 verdict, h = OK, same_no[0]
-            elif same_no or articles is not None and len({l for l, a in articles if a == no}) > 1:
+            elif same_no or (articles is not None and len({l for l, a in articles if a == no}) > 1):
                 verdict, h = AMBIGUOUS, None
             elif articles is not None and not any(a == no for _, a in articles):
                 verdict, h = NONEXISTENT, None

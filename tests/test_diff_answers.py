@@ -1,6 +1,7 @@
 # tests/test_diff_answers.py  →  로컬/원격 답변 동일성 비교 (diff_answers): 같음·한 글자 다름·id 누락
 import pandas as pd
 import pytest
+
 from lawbot import diff_answers as da
 from lawbot.paths import RESULTS
 

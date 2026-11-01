@@ -1,13 +1,14 @@
 # tests/test_request_log.py  →  요청 로그 JSONL (service.log_request)·오류 유형 구분·log_summary
 # 가짜 검색기·sLLM과 가짜 모델 서버로 돈다 (모델 파일 불필요). 로그는 tmp_path에만 쓴다
 import json
-import types
+
 import pytest
+
 import lawbot.app as app_mod
 import lawbot.remote as remote
 import lawbot.service as service
-from lawbot import log_summary
 from fakes import FakeLLM, FakeRetriever
+from lawbot import log_summary
 from model_fakes import TOKEN, GenLLM, Ret, serve
 
 QUESTION = '해고 예고 없이 해고되면 어떻게 하나요 고유문구XYZ'   # 로그에 남으면 안 되는 질문 원문

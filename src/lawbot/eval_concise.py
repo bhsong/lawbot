@@ -10,7 +10,9 @@ import argparse
 import os
 import time
 from pathlib import Path
+
 import pandas as pd
+
 from lawbot import envfile
 from lawbot.answer_format import cited_hits, concise, sections
 from lawbot.paths import DATA, RESULTS

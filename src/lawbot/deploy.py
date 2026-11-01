@@ -3,7 +3,9 @@
 import os
 from dataclasses import dataclass, replace
 from pathlib import Path
+
 from lawbot import paths
+
 
 @dataclass(frozen=True)
 class ModelSpec:

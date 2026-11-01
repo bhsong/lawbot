@@ -4,6 +4,7 @@
 # 모두 같고 빠진 id가 없으면 종료 코드 0, 아니면 1. 모델을 올리지 않는다
 import argparse
 import sys
+
 import pandas as pd
 
 E = dict(encoding='utf-8-sig')

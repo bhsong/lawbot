@@ -3,8 +3,10 @@
 # 폴더: LAWBOT_RERANKER_MODEL_PATH 또는 models/v4/reranker_4b_mlx_4bit. 실험과의 순위 일치는 lawbot.verify_reranker로 잰다
 import os
 from pathlib import Path
+
 import pandas as pd
 import pytest
+
 from lawbot import paths
 
 pytestmark = pytest.mark.models

@@ -3,10 +3,14 @@
 #   다른 장 조문: lawbot_2 셀 11과 같은 방식 / 비슷한 조문: lawbot_5 셀 2와 같은 방식
 #   --hard: data/refusal_hard_cases.csv에서 근거 없이 주장한 사례(억지적용·지어냄)를 기록된 참고 조문 그대로 다시 묻는다
 # 결과파일명 기본값 refusal_v2_4bit.csv / refusal_hard_4bit.csv (refusal_v1_4bit.csv는 기준선이므로 덮어쓰지 않음)
-import os, sys
-import numpy as np, pandas as pd
-from lawbot.paths import ARTICLES, DATA, EVAL, LLM_4BIT, RESULTS
+import os
+import sys
+
+import numpy as np
+import pandas as pd
+
 from lawbot.llm import LLM
+from lawbot.paths import ARTICLES, DATA, EVAL, LLM_4BIT, RESULTS
 from lawbot.refusal import is_refusal
 
 HARD_LABELS = ('억지적용', '지어냄')

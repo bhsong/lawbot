@@ -6,7 +6,9 @@ import time
 import types
 import urllib.error
 import urllib.request
+
 import numpy as np
+
 from lawbot import manifest
 
 API_VERSION = 2                      # model_server.API_VERSION과 같아야 함 (모델 서버 모듈은 import하지 않음)

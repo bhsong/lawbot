@@ -1,13 +1,18 @@
 # src/lawbot/eval_dev.py  →  uv run lawbot-eval --n 100
 #   검색 순위(650문항)는 results/retrieval_<임베딩폴더>.csv, 답변 채점은 results/scored_<모델폴더>.csv (--out으로 변경)
 #   범위 안 대조군만: uv run lawbot-eval --ids data/scope_controls.csv --out scored_controls_4bit.csv
-import argparse, time
+import argparse
+import time
 from pathlib import Path
-import numpy as np, pandas as pd
+
+import numpy as np
+import pandas as pd
+
+from lawbot.llm import LLM
 from lawbot.paths import EMB, EVAL, LLM_4BIT, RESULTS
 from lawbot.retriever import Retriever
-from lawbot.llm import LLM
 from lawbot.score_answers import score_one
+
 
 def main():
     ap = argparse.ArgumentParser()

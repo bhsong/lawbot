@@ -2,9 +2,11 @@
 # 실제 모델 대신 가짜 검색기·리랭커·sLLM으로 모든 단계를 끝까지 돌린다 (data/는 읽기만)
 import json
 import types
+
 import numpy as np
 import pandas as pd
 import pytest
+
 import lawbot.eval_v4 as ev
 from lawbot import deploy, service
 from lawbot.paths import DATA

@@ -2,8 +2,10 @@
 import json
 import struct
 import types
+
 import pandas as pd
 import pytest
+
 import lawbot.app as app_mod
 import lawbot.retriever as retriever_mod
 import lawbot.service as service
@@ -11,6 +13,7 @@ from fakes import HITS, FakeLLM, FakeRetriever
 from lawbot import check_deploy, deploy, paths
 from lawbot.answer_format import cited_hits, concise
 from lawbot.llm import build_prompt_v4
+
 
 class PathLLM(FakeLLM):
     """모델 폴더 이름을 답으로 내는 가짜 sLLM: 어떤 모델이 답했는지 확인용"""
@@ -338,6 +341,7 @@ def test_eval_concise_refuses_test_set(env):
 
 # ---- 실행 설정 파일 (.env) ----
 from lawbot import envfile
+
 
 def test_env_example_is_complete_without_secrets(env):
     """레포의 .env.example: 형식이 맞고, 비밀번호·사용자명은 비어 있고, 모든 값이 앱 설정으로 읽힌다"""

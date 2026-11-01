@@ -6,6 +6,7 @@ import os
 import re
 import stat
 from pathlib import Path
+
 from lawbot.paths import ROOT
 
 DEFAULT = ROOT / '.env'

@@ -9,6 +9,7 @@ import dataclasses
 import json
 import sys
 from pathlib import Path
+
 from lawbot import envfile
 
 QUESTIONS = ['체불 융자 이자 몇프로 이하에요?',              # 임금채권보장법 시행령 제24조 기대

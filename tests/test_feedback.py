@@ -1,18 +1,19 @@
 # tests/test_feedback.py  →  답변 피드백(B6): 화면 버튼·저장 기록·검수·내보내기 (가짜 모델, 피드백 파일은 tmp_path에만)
 import json
-import os
 import stat
 import subprocess
 import sys
 import threading
 import types
+
 import pandas as pd
 import pytest
+
 import lawbot.app as app_mod
 import lawbot.service as service
+from fakes import FakeLLM, FakeRetriever
 from lawbot import feedback, feedback_export, feedback_review, feedback_ui
 from lawbot.paths import ROOT
-from fakes import FakeLLM, FakeRetriever
 from model_fakes import TOKEN, GenLLM, Ret, serve
 
 QUESTION = '해고 예고 없이 해고되면 어떻게 하나요 고유문구XYZ'

@@ -11,7 +11,9 @@ import uuid
 from collections import OrderedDict
 from dataclasses import dataclass
 from pathlib import Path
-from lawbot import decree as decree_filter, deploy, manifest, security
+
+from lawbot import decree as decree_filter
+from lawbot import deploy, manifest, security
 from lawbot.paths import ROOT
 
 TOP_K = 3                            # 답변 근거로 넘기는 조문 수 (Fast·Pro 공통)
@@ -253,7 +255,7 @@ def error_type(e, stage):
     model_server: 모델 서버 연결 실패·토큰 불일치(401)·로딩 중(503). 서버 쪽 연산 오류(500)는 단계로 나눈다
     model_load: 답변 모델 불러오기 실패 (모델 폴더·system 파일 없음, 원격은 RemoteLoadError·RemoteValueError)"""
     from lawbot.remote import ModelServerError
-    if isinstance(e, ConnectionError) or isinstance(e, ModelServerError) and e.status in (401, 503):
+    if isinstance(e, ConnectionError) or (isinstance(e, ModelServerError) and e.status in (401, 503)):
         return 'model_server'
     if isinstance(e, KeyError):          # 없는 모델 key 등 설정 오류
         return 'config'

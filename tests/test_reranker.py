@@ -2,11 +2,12 @@
 # 실제 4B 리랭커 대신 작은 무작위 MLX Qwen3 모델·가짜 토크나이저를 쓴다: 모델 파일·네트워크 불필요
 # 실제 모델 스모크 테스트는 test_models.py (-m models)
 import json
-import types
+
 import mlx.core as mx
 import mlx.nn as nn
 import pytest
 from mlx_lm.models import qwen3
+
 import lawbot.app as app_mod
 import lawbot.reranker as rr_mod
 import lawbot.service as service

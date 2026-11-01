@@ -10,7 +10,9 @@
 import argparse
 import json
 from pathlib import Path
+
 import pandas as pd
+
 from lawbot import citation
 from lawbot.feedback import check_private
 from lawbot.feedback_review import E, companion, private_write

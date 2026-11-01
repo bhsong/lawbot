@@ -1,11 +1,13 @@
 # tests/test_scoring.py  →  채점기(score_answers)와 거절 판정(refusal) 회귀 테스트
 # 저장소에 든 data/·results/만 읽고 수정하지 않음 (모델 불필요)
 import json
+
 import pandas as pd
 import pytest
+
 from lawbot.paths import EVAL, RESULTS
-from lawbot.refusal import conclusion, is_refusal, cited_articles
-from lawbot.score_answers import norm, term_in, cite_ok, cite_strict, score_one
+from lawbot.refusal import cited_articles, conclusion, is_refusal
+from lawbot.score_answers import cite_ok, cite_strict, norm, score_one, term_in
 
 ANSWER = ('【결론】\n수습 기간에도 해고 예고를 해야 합니다.\n\n'
           '【근거 조문】\n근로기준법 제26조(해고의 예고)\n\n'

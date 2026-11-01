@@ -1,11 +1,13 @@
 # src/lawbot/app.py  →  uv run lawbot-app
 import html
+
 import gradio as gr
+
 from lawbot import envfile, feedback, feedback_ui, manifest
-from lawbot.decree import is_decree
 from lawbot.answer_format import answer_citations, render
-from lawbot.service import ask, load_app, uses_decrees
+from lawbot.decree import is_decree
 from lawbot.security import get_local_launch_config, instance_name
+from lawbot.service import ask, load_app, uses_decrees
 
 # v4 Fast로 검색·답변을 확인한 질문 (근로기준법 제26조, 최저임금법 제6조, 남녀고용평등법 제19조)
 EXAMPLES = ['해고 예고 없이 갑자기 해고되면 어떻게 하나요?',

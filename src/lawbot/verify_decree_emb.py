@@ -6,8 +6,10 @@
 # 출력: 인코딩 시간(초)과 MPS 메모리(GB, torch.mps). 수동 검증 표의 '시작 시간·메모리' 칸에 적는다
 import argparse
 import time
+
 import numpy as np
 import pandas as pd
+
 from lawbot import deploy, envfile
 from lawbot.paths import V4_ARTICLES, V4_DECREE_ARTICLES, V4_QA, V4_SPLIT
 

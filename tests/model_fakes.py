@@ -4,7 +4,9 @@ import contextlib
 import threading
 import time
 import types
+
 import numpy as np
+
 from lawbot import model_server
 from lawbot.prompts import SYSTEM
 

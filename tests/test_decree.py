@@ -4,16 +4,18 @@
 import dataclasses
 import json
 import types
+
 import numpy as np
 import pandas as pd
 import pytest
+
 import lawbot.app as app_mod
 import lawbot.eval_v4 as ev
 import lawbot.model_server as model_server
 import lawbot.remote as remote
 import lawbot.retriever as retriever_mod
 import lawbot.service as service
-from lawbot import answer_format, citation, decree, deploy, manifest
+from lawbot import answer_format, citation, decree, deploy
 from lawbot import decree_filter as F
 from lawbot.llm import build_prompt_v4
 from lawbot.paths import DATA, V4_ARTICLES, V4_DECREE_ARTICLES

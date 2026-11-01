@@ -4,8 +4,11 @@
 import argparse
 import json
 from pathlib import Path
+
 import pandas as pd
+
 from lawbot.service import MS_FIELDS, REQUEST_LOG, request_log_path
+
 
 def load(path):
     """JSONL → DataFrame. 깨진 줄(쓰는 중에 멈춘 마지막 줄 등)은 건너뛰고 개수를 함께 돌려준다"""

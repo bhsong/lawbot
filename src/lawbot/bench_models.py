@@ -9,7 +9,9 @@ import platform
 import re
 import subprocess
 import time
+
 import pandas as pd
+
 from lawbot import envfile
 from lawbot.answer_format import concise
 from lawbot.paths import RESULTS

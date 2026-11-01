@@ -2,6 +2,7 @@
 # 저장소의 results/는 읽기만 하고, 쓰기 테스트는 임시 폴더에서 함 (모델 불필요)
 import pandas as pd
 import pytest
+
 import lawbot.report as report
 from lawbot.paths import RESULTS
 from lawbot.report import compute, warnings

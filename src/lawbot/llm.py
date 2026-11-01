@@ -1,11 +1,13 @@
 # src/lawbot/llm.py
 import copy
 import re
+
 import pandas as pd
 from mlx_lm import load, stream_generate
 from mlx_lm.sample_utils import make_sampler
+
 from lawbot.paths import ARTICLES, LLM_4BIT
-from lawbot.prompts import SYSTEM   # v1 학습 system (모델 라이브러리 없이 읽도록 prompts.py에 둠, 여기서 다시 export)
+from lawbot.prompts import SYSTEM  # v1 학습 system (모델 라이브러리 없이 읽도록 prompts.py에 둠, 여기서 다시 export)
 
 _law = pd.read_csv(ARTICLES, encoding='utf-8-sig')
 _clean = lambda s: re.sub(r' <(?:개정|신설)[^<>]*>', '', s)

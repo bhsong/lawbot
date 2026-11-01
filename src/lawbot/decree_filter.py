@@ -14,8 +14,10 @@
 # test 문항은 쓰지 않는다. τ는 fp16 점수 기준이라 맥 MLX 4비트 점수와 다를 수 있다
 import argparse
 from pathlib import Path
+
 import numpy as np
 import pandas as pd
+
 from lawbot.paths import DATA
 
 E = dict(encoding='utf-8-sig')

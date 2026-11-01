@@ -6,12 +6,15 @@ import argparse
 import json
 import os
 import time
+
 import httpx
 import pandas as pd
+
+from lawbot import envfile
 from lawbot.bench_models import QUESTIONS
 from lawbot.paths import RESULTS
-from lawbot import envfile
 from lawbot.security import SERVER_NAME, server_port
+
 
 def ask_timed(c, question, model_key, fmt):
     t0 = time.perf_counter()

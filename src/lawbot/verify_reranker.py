@@ -10,12 +10,15 @@ import argparse
 import json
 import time
 from pathlib import Path
+
 import numpy as np
 import pandas as pd
+
 from lawbot import deploy, envfile
 from lawbot.paths import RESULTS
 from lawbot.reranker import Reranker, pair_text, rank_order
 from lawbot.retriever import DOC_STYLES
+
 
 def read(path):
     return pd.read_csv(path, encoding='utf-8-sig')

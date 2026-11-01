@@ -16,7 +16,9 @@
 import argparse
 import re
 import time
+
 import pandas as pd
+
 from lawbot import envfile
 from lawbot.citation import LAW_ALIASES, cite_section, refused
 from lawbot.paths import DATA, RESULTS

@@ -3,11 +3,14 @@
 import json
 import shutil
 import types
+
 import pytest
+
 import lawbot.service as service
+from fakes import FakeLLM, FakeRetriever
 from lawbot import check_deploy, deploy, manifest, model_server, remote
 from lawbot.paths import ARTICLES, V4_ARTICLES
-from fakes import FakeLLM, FakeRetriever
+
 
 def copy_v4(tmp_path, edit=None):
     """v4 조문 CSV와 매니페스트를 tmp_path로 복사. edit(csv 글, 매니페스트 dict)로 바꿀 수 있음"""
@@ -160,6 +163,7 @@ def test_decree_csv_kinds():
 def test_manifest_extra_files(tmp_path):
     """폴더의 manifest_*.json 중 articles_file이 맞는 것. 같은 CSV를 설명하는 매니페스트가 둘이면 오류"""
     import json
+
     import pytest
     (tmp_path / 'a.csv').write_text('x'), (tmp_path / 'b.csv').write_text('x')
     (tmp_path / 'manifest.json').write_text(json.dumps({'articles_file': 'a.csv', 'dataset_version': 'A'}))

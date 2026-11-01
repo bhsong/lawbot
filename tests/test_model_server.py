@@ -8,7 +8,9 @@ import threading
 import time
 import urllib.error
 import urllib.request
+
 import pytest
+
 import lawbot.model_server as ms
 import lawbot.service as service
 from conftest import free_port
@@ -228,6 +230,7 @@ def test_model_server_does_not_import_gradio():
 # ---- 배포 템플릿 (.env 예시·launchd): 비밀 값·포트 번호 없음 ----
 def test_env_examples_have_no_ports_or_secrets(env):
     import re
+
     from lawbot import deploy, envfile, paths, security
     prod = (paths.ROOT / '.env.example').read_text(encoding='utf-8')
     block = prod[prod.index('# ---- 상시 운영'):]
@@ -251,6 +254,7 @@ def test_env_examples_have_no_ports_or_secrets(env):
 @pytest.mark.parametrize('kind,prog', [('model-server', 'lawbot-model-server'), ('web', 'lawbot-app')])
 def test_launchd_templates(kind, prog):
     import plistlib
+
     from lawbot import paths
     text = (paths.ROOT / 'deploy' / 'launchd' / f'com.lawbot.{kind}.plist.example').read_text(encoding='utf-8')
     p = plistlib.loads(text.encode())

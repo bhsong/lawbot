@@ -9,7 +9,9 @@ import struct
 import sys
 from collections import Counter
 from pathlib import Path
+
 import pandas as pd
+
 from lawbot import deploy, envfile, manifest, paths, remote, security
 from lawbot.deploy import get_profile
 
@@ -119,7 +121,7 @@ def check_system_file(name, f, out):
 
 def check_system(p, out):
     if p.system_file is None:
-        from lawbot.prompts import SYSTEM   # v1: 코드에 든 학습 system
+        from lawbot.prompts import SYSTEM  # v1: 코드에 든 학습 system
         out.append(('OK', f'기본 system: llm.SYSTEM (v1) · sha256 {hashlib.sha256(SYSTEM.encode()).hexdigest()[:12]}'))
     else:
         check_system_file('기본', p.system_file, out)

@@ -2,9 +2,12 @@
 # 모델·네트워크 없이 보안 설정만 검사 (env 픽스처·set_auth는 conftest.py)
 import subprocess
 import sys
+
 import pytest
+
 from conftest import set_auth
 from lawbot.security import get_local_launch_config
+
 
 # 정상 설정
 def test_valid_config(env):
@@ -69,6 +72,7 @@ def test_no_model_libraries_loaded():
 # 웹앱 포트 (LAWBOT_PORT) · 인스턴스 이름 (LAWBOT_INSTANCE)
 from conftest import free_port
 from lawbot import security
+
 
 @pytest.mark.parametrize('value', [None, '', '   '], ids=['unset', 'empty', 'blank'])
 def test_port_defaults_to_legacy(env, value):

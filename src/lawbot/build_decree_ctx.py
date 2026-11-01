@@ -11,8 +11,10 @@
 # --scores mlx: 맥 MLX 4비트 점수(lawbot.mlx_decree_scores). 파일 이름 끝에 _mlx (법률 쪽 대조는 건너뜀)
 import argparse
 from pathlib import Path
+
 import numpy as np
 import pandas as pd
+
 from lawbot import decree_filter as F
 from lawbot.paths import DATA
 

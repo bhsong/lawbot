@@ -4,6 +4,7 @@
 import sys
 import types
 from pathlib import Path
+
 from fakes import FakeLLM, FakeRetriever
 
 port, call_log = int(sys.argv[1]), Path(sys.argv[2])
@@ -24,8 +25,8 @@ def fake_module(name, **attrs):
 sys.modules['lawbot.retriever'] = fake_module('lawbot.retriever', Retriever=FakeRetriever)
 sys.modules['lawbot.llm'] = fake_module('lawbot.llm', LLM=RecordingLLM, SYSTEM='가짜 4항목 system')
 
+import lawbot.app as app  # 가짜 모듈을 넣은 뒤에 import해야 함
 import lawbot.security as security
-import lawbot.app as app   # 가짜 모듈을 넣은 뒤에 import해야 함
 
 security.SERVER_PORT = port
 app.main()

@@ -1,6 +1,7 @@
 # src/lawbot/answer_format.py  →  모델 원문(4섹션)을 화면용 간결형으로 바꾸는 후처리 (gradio 미사용)
 # 모델 입력([참고 조문])과 원문 출력은 바꾸지 않는다. 평가는 원문과 간결형을 따로 잰다 (eval_concise)
 import re
+
 from lawbot.citation import OK, check, hit_law, parse, refused
 
 SECTION = re.compile(r'【(결론|근거 조문|설명|참고)】')

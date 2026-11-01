@@ -4,9 +4,11 @@
 #   → 마지막 위치의 no·yes 로짓을 float32 softmax → P(yes). 점수 내림차순, 동점은 임베딩 순위
 # 노트북은 4B를 batch 1로 돌렸으므로(패딩 없음) 여기서도 후보마다 한 번씩 계산한다
 from pathlib import Path
+
 import mlx.core as mx
 from mlx_lm import load
-from lawbot.decree import rank_order   # 점수 내림차순, 동점은 임베딩 순서 (하위법령 필터와 같은 함수)
+
+from lawbot.decree import rank_order  # 점수 내림차순, 동점은 임베딩 순서 (하위법령 필터와 같은 함수)
 
 # 아래 세 문자열과 MAX_LENGTH는 노트북 셀 3을 글자 그대로 옮긴 것 (바꾸면 실험 결과와 비교할 수 없음)
 TASK = 'Given a Korean labor-law question, retrieve the statutory article that directly provides the legal basis for answering it.'

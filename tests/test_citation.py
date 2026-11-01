@@ -2,12 +2,15 @@
 import subprocess
 import sys
 import types
+
 import pandas as pd
 import pytest
+
 import lawbot.eval_v4 as ev
 from lawbot import citation as ci
 from lawbot.answer_format import cited_hits, concise
 from lawbot.paths import V4_ARTICLES
+
 
 def hit(law, no, title='제목'):
     return {'law': law, 'article_id': no, 'title': title, 'doc': f'{law} {no}({title})\n본문', 'score': 0.5}

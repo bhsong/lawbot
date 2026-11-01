@@ -1,5 +1,8 @@
-import numpy as np, pandas as pd, torch
+import numpy as np
+import pandas as pd
+import torch
 from sentence_transformers import SentenceTransformer
+
 from lawbot.decree import LAW_KIND
 from lawbot.paths import ARTICLES, EMB
 

@@ -8,8 +8,10 @@ import sys
 import time
 import types
 from pathlib import Path
+
 import httpx
 import pytest
+
 from conftest import ENV_KEYS, free_port
 from lawbot.app import EXAMPLES
 

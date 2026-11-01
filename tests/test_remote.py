@@ -7,8 +7,10 @@ import sys
 import textwrap
 import threading
 import time
+
 import pandas as pd
 import pytest
+
 import lawbot.app as app_mod
 import lawbot.eval_v4 as ev
 import lawbot.remote as remote

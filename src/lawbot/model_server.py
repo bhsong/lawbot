@@ -9,6 +9,7 @@ import json
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
 from lawbot import envfile, manifest, service
 from lawbot.security import SERVER_NAME, model_server_port, model_token
 
@@ -38,7 +39,7 @@ def field(body, name, kind, default=...):
     value = body.get(name, default)
     if value is ...:
         raise BadRequest(f'필드 없음: {name}')
-    if not isinstance(value, kind) or isinstance(value, bool) and kind is int:
+    if not isinstance(value, kind) or (isinstance(value, bool) and kind is int):
         raise BadRequest(f'필드 형식 오류: {name}')
     return value
 
@@ -130,7 +131,7 @@ class Handler(BaseHTTPRequestHandler):
 
     def authorized(self):
         got = (self.headers.get('Authorization') or '').encode('utf-8')
-        return hmac.compare_digest(got, f'Bearer {self.server.token}'.encode('utf-8'))
+        return hmac.compare_digest(got, f'Bearer {self.server.token}'.encode())
 
     def read_body(self):
         """JSON 객체. 크기 초과는 None(413을 이미 보냄), 형식 오류는 BadRequest"""

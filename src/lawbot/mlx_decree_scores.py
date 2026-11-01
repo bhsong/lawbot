@@ -10,8 +10,10 @@
 import argparse
 import time
 from pathlib import Path
+
 import numpy as np
 import pandas as pd
+
 from lawbot import deploy, envfile
 from lawbot.paths import DATA
 from lawbot.retriever import DOC_STYLES
@@ -54,7 +56,7 @@ def main():
     art['article_id'] = art['article_no']                 # retriever와 같은 규칙
     docs = DOC_STYLES['v4'](art).tolist()
 
-    from lawbot.reranker import Reranker                  # mlx는 여기서 import (위 검사는 모델 없이)
+    from lawbot.reranker import Reranker  # mlx는 여기서 import (위 검사는 모델 없이)
     rr_cfg = deploy.reranker(deploy.get_profile('v4'))
     if rr_cfg is None:
         raise SystemExit('.env에서 LAWBOT_RERANKER_ENABLED=1, LAWBOT_RERANKER_MODEL_PATH를 확인하세요')
