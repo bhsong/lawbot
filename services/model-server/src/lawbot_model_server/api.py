@@ -10,91 +10,33 @@ import hmac
 import json
 import time
 import uuid
-from typing import Literal
 
 import numpy as np
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse, StreamingResponse
-from pydantic import BaseModel, ConfigDict, Field, ValidationError
+from pydantic import ValidationError
 
+from lawbot_common import api as contract
 from lawbot_model_server.registry import UnknownModel
 from lawbot_model_server.scheduler import MAX_QUEUED_DEFAULT, ModelLoadError, QueueFull, Scheduler
 
 MAX_BODY = 8 * 1024 * 1024  # 요청 본문 최대 (조문 415개 인코딩, 질문 2,075개 rank가 들어감)
 DEFAULT_MAX_TOKENS = 1024  # max_tokens가 없을 때 (챗봇은 항상 1024를 보냄)
-MAX_TOKENS_LIMIT = 32768
-MAX_INPUTS = 4096  # embeddings input 개수
-MAX_DOCUMENTS = 1000  # rerank documents 개수
-
-
-# ---- 요청 형식 (모르는 필드는 400: 조용히 무시하지 않음) ----
-class Strict(BaseModel):
-    model_config = ConfigDict(extra='forbid', strict=True)
-
-
-class TextPart(Strict):
-    type: Literal['text']
-    text: str
-
-
-class Message(Strict):
-    role: Literal['system', 'user', 'assistant']
-    content: str | list[TextPart]
-    name: str | None = None
-
-
-class StreamOptions(Strict):
-    include_usage: bool = False
-
-
-class TemplateKwargs(Strict):
-    enable_thinking: bool = False
-
-
-class ChatRequest(Strict):
-    model: str
-    messages: list[Message] = Field(min_length=1)
-    max_tokens: int | None = Field(None, ge=1, le=MAX_TOKENS_LIMIT)
-    max_completion_tokens: int | None = Field(None, ge=1, le=MAX_TOKENS_LIMIT)
-    temperature: float | None = Field(None, ge=0, le=2)  # 없으면 0 (탐욕적 생성). OpenAI 기본값(1)과 다름
-    top_p: float | None = Field(None, gt=0, le=1)
-    stream: bool = False
-    stream_options: StreamOptions | None = None
-    n: int | None = Field(None, ge=1, le=1)
-    chat_template_kwargs: TemplateKwargs | None = None  # 기본 생각 끔
-    user: str | None = None  # 받기만 하고 쓰지 않음
-
-
-class EmbeddingRequest(Strict):
-    model: str
-    input: str | list[str] = Field(min_length=1, max_length=MAX_INPUTS)
-    encoding_format: Literal['float', 'base64'] = 'float'  # base64: float32 little-endian 그대로
-    input_type: Literal['query', 'document'] = 'document'
-    max_seq_length: int | None = Field(None, ge=1, le=32768)
-    user: str | None = None
-
-
-class RerankRequest(Strict):
-    model: str
-    query: str = Field(min_length=1)
-    documents: list[str] = Field(min_length=1, max_length=MAX_DOCUMENTS)
-    top_n: int | None = Field(None, ge=1)
-    instruction: str | None = None
-    return_documents: bool = False
+# 요청·응답 형식과 오류 type은 웹앱과 같이 쓰는 계약 (lawbot_common.api)
+ChatRequest, EmbeddingRequest, RerankRequest = contract.ChatRequest, contract.EmbeddingRequest, contract.RerankRequest
 
 
 # ---- 오류 ----
 class ApiError(Exception):
-    def __init__(self, status, message, kind='invalid_request_error', code=None):
+    def __init__(self, status, message, kind=contract.INVALID_REQUEST, code=None):
         super().__init__(message)
         self.status, self.message, self.kind, self.code = status, message, kind, code
 
 
-def error_body(message, kind, code=None):
-    return {'error': {'message': message, 'type': kind, 'param': None, 'code': code}}
+error_body = contract.error_body
 
 
-def error_response(status, message, kind='invalid_request_error', code=None):
+def error_response(status, message, kind=contract.INVALID_REQUEST, code=None):
     return JSONResponse(error_body(message, kind, code), status_code=status)
 
 
@@ -103,11 +45,11 @@ def exception_body(e):
     if isinstance(e, ApiError):
         return e.status, error_body(e.message, e.kind, e.code)
     if isinstance(e, UnknownModel):
-        return 404, error_body(str(e), 'invalid_request_error', 'model_not_found')
+        return 404, error_body(str(e), contract.INVALID_REQUEST, contract.MODEL_NOT_FOUND)
     if isinstance(e, ModelLoadError):
         cause = e.__cause__
-        return 500, error_body(f'모델을 불러오지 못했습니다: {cause}', 'model_load_error', type(cause).__name__)
-    return 500, error_body(f'{type(e).__name__}: {e}', 'server_error', type(e).__name__)
+        return 500, error_body(f'모델을 불러오지 못했습니다: {cause}', contract.MODEL_LOAD, type(cause).__name__)
+    return 500, error_body(f'{type(e).__name__}: {e}', contract.SERVER_ERROR, type(e).__name__)
 
 
 def validation_message(e):
@@ -133,7 +75,7 @@ async def parse(request, model):
 def ready(request):
     reg = request.app.state.registry
     if reg is None:
-        raise ApiError(503, '모델을 불러오는 중입니다', 'server_not_ready')
+        raise ApiError(503, '모델을 불러오는 중입니다', contract.SERVER_NOT_READY)
     return reg
 
 
@@ -145,7 +87,9 @@ async def run_call(request, fn):
         if kind == 'error':  # 리랭커 점수 NaN 등 모델 연산 오류: 예외 이름을 code로 500
             if isinstance(value, (ApiError, UnknownModel)):
                 raise value
-            raise ApiError(500, f'{type(value).__name__}: {value}', 'server_error', type(value).__name__) from value
+            raise ApiError(
+                500, f'{type(value).__name__}: {value}', contract.SERVER_ERROR, type(value).__name__
+            ) from value
         await t.next()  # ('end', None)
         return value
     finally:
@@ -197,7 +141,7 @@ async def chat_completions(request: Request):
             req.model, messages, kw
         )  # 처음 쓰는 모델은 GPU 스레드가 불러옴 (LRU 교체)
     except QueueFull as e:
-        raise ApiError(503, str(e), 'server_busy') from None
+        raise ApiError(503, str(e), contract.SERVER_BUSY) from None
     try:
         kind, value = await job.next()  # 첫 토큰 전 오류(모델 불러오기 실패 등)는 HTTP 상태로 알린다
     except BaseException:
@@ -284,15 +228,14 @@ async def embeddings(request: Request):
     v = await run_call(
         request, lambda: reg.get(req.model, 'embedding')[0].encode(texts, req.input_type, req.max_seq_length)
     )
-    return {
-        'object': 'list',
-        'model': req.model,
-        'data': [
-            {'object': 'embedding', 'index': i, 'embedding': encode_vector(row, req.encoding_format)}
+    return contract.EmbeddingResponse(
+        model=req.model,
+        data=[
+            contract.EmbeddingItem(index=i, embedding=encode_vector(row, req.encoding_format))
             for i, row in enumerate(v)
         ],
-        'usage': {'prompt_tokens': 0, 'total_tokens': 0},  # 토큰 수는 세지 않음
-    }
+        usage=contract.Usage(),  # 토큰 수는 세지 않음
+    ).model_dump()
 
 
 # ---- rerank ----
@@ -306,11 +249,15 @@ async def rerank(request: Request):
     )
     order = sorted(range(len(scores)), key=lambda i: -scores[i])  # 점수 내림차순, 동점은 입력 순서
     results = [
-        {'index': i, 'relevance_score': float(scores[i])}
-        | ({'document': {'text': req.documents[i]}} if req.return_documents else {})
+        contract.RerankResult(
+            index=i,
+            relevance_score=float(scores[i]),
+            document=contract.RerankDocument(text=req.documents[i]) if req.return_documents else None,
+        )
         for i in order[: req.top_n]
     ]
-    return {'id': f'rerank-{uuid.uuid4().hex[:24]}', 'model': req.model, 'results': results}
+    res = contract.RerankResponse(id=f'rerank-{uuid.uuid4().hex[:24]}', model=req.model, results=results)
+    return res.model_dump(exclude_none=True)  # document는 return_documents일 때만
 
 
 # ---- 인증·크기 제한·로그 (ASGI 미들웨어: 스트림과 끊김을 그대로 전달) ----
@@ -334,7 +281,7 @@ class Guard:
         try:
             if not hmac.compare_digest(headers.get(b'authorization', b''), self.token):  # 토큰 값은 남기지 않음
                 resp = error_response(
-                    401, '모델 서버 토큰이 맞지 않습니다 (LAWBOT_MODEL_TOKEN)', 'authentication_error'
+                    401, '모델 서버 토큰이 맞지 않습니다 (LAWBOT_MODEL_TOKEN)', contract.AUTHENTICATION
                 )
             elif not length.isdigit() or int(length) > self.max_body:
                 resp = error_response(413, f'요청 본문이 {self.max_body}바이트를 넘습니다')
@@ -374,16 +321,16 @@ def create_app(token, registry=None, max_body=MAX_BODY, max_concurrent=1, max_qu
         status, body = exception_body(e)
         return JSONResponse(body, status_code=status)
 
-    @app.get('/health')
+    @app.get(contract.HEALTH_PATH)
     async def health(request: Request):
-        return {'ready': request.app.state.registry is not None}
+        return contract.HealthResponse(ready=request.app.state.registry is not None).model_dump()
 
-    @app.get('/v1/models')
+    @app.get(contract.MODELS_PATH)
     async def models(request: Request):
-        return {'object': 'list', 'data': ready(request).listing()}
+        return contract.ModelsResponse(data=ready(request).listing()).model_dump()
 
-    app.post('/v1/chat/completions')(chat_completions)
-    app.post('/v1/embeddings')(embeddings)
-    app.post('/v1/rerank')(rerank)
+    app.post(contract.CHAT_PATH)(chat_completions)
+    app.post(contract.EMBEDDINGS_PATH)(embeddings)
+    app.post(contract.RERANK_PATH)(rerank)
     app.add_middleware(Guard, token=token, max_body=max_body)
     return app

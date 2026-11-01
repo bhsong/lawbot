@@ -3,7 +3,7 @@
 #   services/model-server  패키지 lawbot_model_server: OpenAI 호환 모델 서버 (uv run lawbot-model-server)
 #   services/monitor       패키지 law_monitor: 법령 변경 수집기 (uv run law-monitor, docs/plans/monitor-collector.md)
 #   tools/lawbot-tools     패키지 lawbot_tools: 평가·분석 도구 (uv run lawbot-eval-v4). 런타임 lawbot을 import, 반대는 안 됨
-#   packages/lawbot-common 패키지 lawbot_common: 서비스 공통 규칙 (.env 파서, 포트 검증). 서비스끼리는 import하지 않고 이것만 같이 씀
+#   packages/lawbot-common 패키지 lawbot_common: 서비스 공통 규칙 (.env 파서, 포트 검증, API 계약). 서비스끼리는 import하지 않고 이것만 같이 씀
 # 공통 개발 도구(pytest·ruff)와 설정은 여기에 둔다. uv.lock은 workspace 전체에 하나
 [tool.uv.workspace]
 members = ["services/*", "packages/*", "tools/*"]

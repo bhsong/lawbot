@@ -24,14 +24,14 @@
 
 ## 레포 구성
 
-uv workspace 모노레포입니다. 레포 최상위에서 `uv sync`·`uv run …`을 실행하면 모든 서비스가 함께 설치됩니다. 데이터(`data/`), 모델(`models/`), 평가 결과(`results/`)는 레포 최상위에 그대로 둡니다. 서비스는 서로 import하지 않고 HTTP(OpenAI 호환 API)로만 통합니다. 세 서비스가 같은 규칙을 써야 하는 것(`.env` 파서, 포트 검증)만 `packages/lawbot-common`에 두고 함께 씁니다.
+uv workspace 모노레포입니다. 레포 최상위에서 `uv sync`·`uv run …`을 실행하면 모든 서비스가 함께 설치됩니다. 데이터(`data/`), 모델(`models/`), 평가 결과(`results/`)는 레포 최상위에 그대로 둡니다. 서비스는 서로 import하지 않고 HTTP(OpenAI 호환 API)로만 통합니다. 세 서비스가 같은 규칙을 써야 하는 것(`.env` 파서, 포트 검증, 웹앱 ↔ 모델 서버 요청·응답 형식과 오류 type)만 `packages/lawbot-common`에 두고 함께 씁니다.
 
 ```
 pyproject.toml         # workspace 루트: 멤버 목록, pytest·ruff 설정
 services/chatbot/      # 웹앱 런타임 (패키지 lawbot, 모델 라이브러리 없음), 테스트는 services/chatbot/tests/ (평가 도구 테스트 포함)
 services/model-server/ # OpenAI 호환 모델 서버 (패키지 lawbot_model_server, MLX·torch), 테스트는 services/model-server/tests/
 services/monitor/      # 법령 변경 수집기 (패키지 law_monitor, git만 사용). 사용법은 ../services/monitor/README.md
-packages/lawbot-common/ # 서비스 공통 규칙 (패키지 lawbot_common: .env 파서·포트 검증, 의존성 없음)
+packages/lawbot-common/ # 서비스 공통 규칙 (패키지 lawbot_common: .env 파서·포트 검증·웹앱 ↔ 모델 서버 API 계약 api.py)
 tools/lawbot-tools/    # 평가·분석 도구 (패키지 lawbot_tools, uv run lawbot-eval-v4). lawbot을 import하고, lawbot은 이것을 import하지 않음
 ```
 

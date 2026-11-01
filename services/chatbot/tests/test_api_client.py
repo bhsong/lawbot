@@ -140,6 +140,51 @@ def test_rerank_maps_scores_to_input_order():
         mock_client(partial).rerank('rr', 'q', ['a', 'b'])
 
 
+def test_request_bodies_pass_server_validation():
+    # 웹앱이 만드는 요청 본문을 모델 서버가 쓰는 계약 모델(lawbot_common.api)이 그대로 받는다
+    from lawbot_common import api as contract
+
+    bodies = []
+
+    def handler(req):
+        bodies.append((req.url.path, req.read()))
+        if req.url.path == contract.RERANK_PATH:
+            return httpx.Response(200, json={'results': [{'index': 0, 'relevance_score': 0.5}]})
+        vec = base64.b64encode(np.zeros(2, '<f4').tobytes()).decode()
+        return httpx.Response(200, json={'data': [{'index': 0, 'embedding': vec}]})
+
+    c = mock_client(handler)
+    c.embed('emb', ['가'], 'query', 2304)
+    c.embed('emb', ['가'])
+    c.rerank('rr', 'q', ['a'], 'TASK')
+    c.rerank('rr', 'q', ['a'])
+    models = {contract.EMBEDDINGS_PATH: contract.EmbeddingRequest, contract.RERANK_PATH: contract.RerankRequest}
+    for path, body in bodies:
+        models[path].model_validate_json(body)  # 모르는 필드·타입 오류면 ValidationError
+
+
+@pytest.mark.parametrize(
+    'path,body',
+    [
+        ('/v1/models', {'object': 'list'}),  # data 없음
+        ('/v1/models', {'data': [{'id': 'x', 'type': 'llm', 'loaded': True}]}),  # 모르는 type
+        ('/v1/embeddings', {'data': [{'embedding': 'AAAA'}]}),  # index 없음
+        ('/v1/rerank', {'results': [{'index': 0}]}),  # 점수 없음
+        ('/health', {}),
+    ],
+)
+def test_malformed_server_response_is_model_server_error(path, body):
+    c = mock_client(lambda req: httpx.Response(200, json=body))
+    call = {
+        '/v1/models': c.models,
+        '/v1/embeddings': lambda: c.embed('emb', ['가']),
+        '/v1/rerank': lambda: c.rerank('rr', 'q', ['a']),
+        '/health': c.ready,
+    }[path]
+    with pytest.raises(ac.ModelServerError, match='응답 형식'):
+        call()
+
+
 @pytest.mark.parametrize(
     'status,body,exc,match',
     [
