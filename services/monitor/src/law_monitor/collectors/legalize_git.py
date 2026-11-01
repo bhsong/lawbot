@@ -139,15 +139,19 @@ class LegalizeGitCollector:
         result.cursors = {self.repo_key: head}
         return result
 
-    def replay(self, ctx: RunContext, since: str, until: str) -> CollectResult:
-        """since..until 구간을 다시 만든다. 상태(커서·items)는 읽지도 바꾸지도 않는다."""
+    def replay(self, ctx: RunContext, since: str, until: str) -> tuple[CollectResult, str, str]:
+        """since..until 구간을 다시 만든다. 상태(커서·items)는 읽지도 바꾸지도 않는다.
+
+        since·until은 'abc^'·'HEAD' 같은 이름도 되고, 실제 커밋 해시도 함께 돌려준다 (결과 폴더 이름용).
+        """
         repo = self._repo(ctx)
+        since_sha, until_sha = repo.resolve(since), repo.resolve(until)
         build = _Builder(self, ctx, repo, {}, replay=True)
-        for sha in repo.rev_list(repo.resolve(since), repo.resolve(until), self.matcher.pathspecs()):
+        for sha in repo.rev_list(since_sha, until_sha, self.matcher.pathspecs()):
             build.commit(sha)
         result = build.result()
         result.items, result.removed = [], []
-        return result
+        return result, since_sha, until_sha
 
     def _baseline(self, ctx: RunContext, repo: GitRepo, head: str) -> CollectResult:
         build = _Builder(self, ctx, repo, {})

@@ -88,15 +88,15 @@ class Monitor:
             raise ValueError(f'replay할 수 있는 저장소가 아닙니다: {repo_key}')
         ctx = RunContext(self.config, self.state, self.paths, 'replay', 'replay', self.now)
         with _file_log(self.paths, self.now()):
-            result = collector.replay(ctx, since, until)
-            store = EventStore(self.paths.home, self.paths.replay / f'{since[:8]}_{until[:8]}', dated=False)
+            result, since_sha, until_sha = collector.replay(ctx, since, until)
+            store = EventStore(self.paths.home, self.paths.replay / f'{since_sha[:8]}_{until_sha[:8]}', dated=False)
             for ev in result.events:
                 store.write(ev, result.diffs.get(ev['event_id']))
             log.info(
                 'replay %s %s..%s events=%d → %s',
                 repo_key,
-                since[:8],
-                until[:8],
+                since_sha[:8],
+                until_sha[:8],
                 len(result.events),
                 self.paths.rel(store.base),
             )

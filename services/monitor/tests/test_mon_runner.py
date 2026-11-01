@@ -91,6 +91,15 @@ def test_replay_writes_separately_without_state(tmp_path, legalize):
     assert list(mon.paths.events.glob('**/*.json')) == []
 
 
+def test_replay_folder_uses_resolved_commits(tmp_path, legalize):
+    """--from 'abc^'처럼 이름으로 줘도 폴더 이름은 실제 커밋 해시 앞 8자리."""
+    first = legalize.head()
+    second = legalize.commit({LAW_PATH: law_md('근로기준법', {'제1조 (목적)': 'v2'})}, '개정 1')
+    mon = make_monitor(tmp_path, make_config(legalize, laws=[{'name': '근로기준법', 'category': 1}]))
+    assert len(mon.replay('legalize-kr', f'{second}^', 'HEAD')) == 1
+    assert [p.name for p in mon.paths.replay.iterdir()] == [f'{first[:8]}_{second[:8]}']
+
+
 def test_cli_end_to_end(tmp_path, legalize, capsys, monkeypatch):
     cfg = tmp_path / 'targets.yaml'
     cfg.write_text(
