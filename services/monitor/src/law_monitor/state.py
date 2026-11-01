@@ -92,6 +92,26 @@ class State:
                 [(now, eid) for eid in event_ids],
             )
 
+    def last_summary_started(self) -> str | None:
+        """끝난 요약 실행 중 마지막 것의 시작 시각 (다음 요약의 감지 구간 시작)."""
+        row = self.conn.execute(
+            "select started_at from runs where mode = 'summarize' and finished_at is not null "
+            'order by started_at desc, rowid desc limit 1'
+        ).fetchone()
+        return row[0] if row else None
+
+    def first_run_started(self) -> str | None:
+        """첫 수집 실행(보통 bootstrap) 시각."""
+        row = self.conn.execute("select min(started_at) from runs where mode != 'summarize'").fetchone()
+        return row[0] if row else None
+
+    def finish_run(self, run_id: str, finished_at: str, status: str, summary_json: str) -> None:
+        with self.conn:
+            self.conn.execute(
+                'update runs set finished_at = ?, status = ?, summary_json = ? where run_id = ?',
+                (finished_at, status, summary_json, run_id),
+            )
+
     def start_run(self, run_id: str, mode: str, started_at: str) -> None:
         with self.conn:
             self.conn.execute(

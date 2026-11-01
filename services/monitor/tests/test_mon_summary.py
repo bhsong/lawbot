@@ -110,6 +110,22 @@ def test_one_call_per_amendment_and_md(tmp_path, legalize):
     assert result.path.read_text(encoding='utf-8') == md  # 앞 파일은 그대로
 
 
+def test_header_states_detection_window(tmp_path, legalize):
+    """파일 날짜는 실행일. 대상은 '지난 요약(없으면 bootstrap) ~ 이번 실행' 사이에 저장소에서 새로 감지된 변경."""
+    from datetime import datetime
+
+    mon = monitor_with_events(tmp_path, legalize, FakeLLM().client())  # bootstrap·collect 모두 11-02 06:30
+    first = mon.summarize().path.read_text(encoding='utf-8')
+    assert '- 대상: 2026-11-02 06:30 ~ 2026-11-02 06:30 사이 새로 감지된 변경' in first
+    assert '공포일과 다를 수 있음' in first
+
+    mon.now = lambda: datetime.fromisoformat('2026-11-03T06:30:00+09:00')
+    second = mon.summarize()
+    assert second.path.name == '2026-11-03.md'
+    assert '- 대상: 2026-11-02 06:30 ~ 2026-11-03 06:30' in second.path.read_text(encoding='utf-8')
+    assert mon.state.last_run()['mode'] == 'summarize'
+
+
 def test_request_shape_and_token_not_saved(tmp_path, legalize):
     llm = FakeLLM()
     mon = monitor_with_events(tmp_path, legalize, llm.client())
@@ -184,6 +200,7 @@ def test_replay_folder_summary_does_not_touch_state(tmp_path, legalize):
     folder = mon.paths.replay / f'{first[:8]}_{second[:8]}'
     result = mon.summarize(events_dir=folder)
     assert result.path == folder / 'summary.md' and result.calls == 1 and result.events == 3
+    assert f'- 대상: replay 구간 `{folder.name}`' in result.path.read_text(encoding='utf-8')
     assert mon.state.pending_count() == 0 and mon.state.conn.execute('select count(*) from events').fetchone()[0] == 0
 
 

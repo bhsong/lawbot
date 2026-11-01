@@ -134,6 +134,7 @@ class Monitor:
                 '(환경변수, services/monitor/.env 또는 레포 최상위 .env)'
             )
         now = self.now()
+        run_id = None
         with _file_log(self.paths, now):
             if events_dir is not None:
                 folder = self.paths.home / events_dir if not events_dir.is_absolute() else events_dir
@@ -143,7 +144,16 @@ class Monitor:
                 ]
                 events, paths = load_events(self.paths.home, items)
                 out = folder / 'summary.md'
+                window = f'replay 구간 `{folder.name}`'
             else:
+                # 감지 구간: 지난 요약 실행(없으면 첫 수집 = bootstrap) ~ 지금. 저장소에 새로 들어온 시점 기준
+                since = self.state.last_summary_started() or self.state.first_run_started()
+                window = (
+                    f'{_hm(since) if since else "처음"} ~ {_hm(now.isoformat())} 사이 새로 감지된 변경 '
+                    '(저장소 반영 기준, 공포일과 다를 수 있음)'
+                )
+                run_id = f'{now.strftime("%Y%m%dT%H%M%S")}-{uuid.uuid4().hex[:6]}'
+                self.state.start_run(run_id, 'summarize', now.isoformat(timespec='seconds'))
                 events, paths = load_events(self.paths.home, self.state.pending_events())
                 day = now.strftime('%Y-%m-%d')
                 out = self.paths.data / 'summaries' / f'{day}.md'
@@ -158,9 +168,23 @@ class Monitor:
                 title_date=now.strftime('%Y-%m-%d'),
                 run_line=run_line,
                 ran_at=now.isoformat(timespec='seconds'),
+                window=window,
             )
-            if events_dir is None:
-                self.state.mark_processed(done, self.now().isoformat(timespec='seconds'))
+            if run_id is not None:
+                finished = self.now().isoformat(timespec='seconds')
+                self.state.mark_processed(done, finished)
+                info = {
+                    'summarize': {
+                        'events': result.events,
+                        'calls': result.calls,
+                        'pending': result.pending,
+                        'failed': result.failed,
+                        'path': self.paths.rel(result.path),
+                    }
+                }
+                self.state.finish_run(
+                    run_id, finished, 'failed' if result.failed else 'ok', json.dumps(info, ensure_ascii=False)
+                )
         return result
 
     def _run(self, chosen: list[Collector], mode: str) -> RunSummary:
@@ -239,6 +263,10 @@ class Monitor:
             'diff': {'kind': 'none', 'path': None, 'chunks': []},
             'context': {'error': error, 'consecutive_failures': n, 'run_id': run_id},
         }
+
+
+def _hm(iso: str) -> str:
+    return datetime.fromisoformat(iso).strftime('%Y-%m-%d %H:%M')
 
 
 class _file_log:

@@ -218,6 +218,7 @@ def write_summary(
     title_date: str,
     run_line: str | None,
     ran_at: str,
+    window: str | None = None,
 ) -> tuple[SummaryResult, list[str]]:
     """요약 md를 쓰고 (결과, 요약을 끝낸 event_id 목록)을 돌려준다."""
     groups, warnings = group(events)
@@ -259,6 +260,7 @@ def write_summary(
         f'> 자동 요약입니다 (모델 `{client.model}`). 시행일·금액·서식 내용은 반드시 아래 원문으로 확인하세요.',
         '',
         f'- 실행: {ran_at}',
+        *([f'- 대상: {window}'] if window else []),
         f'- 수집: {run_line or "(이번에는 summarize만 실행)"}',
         f'- 이벤트 {len(events)}건 ({", ".join(f"{k} {v}" for k, v in counts.items())}) · 모델 호출 {calls}번',
         '',
