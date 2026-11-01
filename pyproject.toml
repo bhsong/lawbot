@@ -1,4 +1,4 @@
-# uv workspace 루트 (가상 루트: 패키지 없음). 서비스는 services/* (docs/plans/monorepo-openai-api.md)
+# uv workspace 루트 (가상 루트: 패키지 없음). 서비스는 services/* (docs/archives/monorepo-openai-api.md)
 #   services/chatbot       패키지 lawbot: 웹앱·평가 (uv run lawbot-app)
 #   services/model-server  패키지 lawbot_model_server: OpenAI 호환 모델 서버 (uv run lawbot-model-server)
 #   services/monitor       패키지 law_monitor: 법령 변경 수집기 (uv run law-monitor, docs/plans/monitor-collector.md)
