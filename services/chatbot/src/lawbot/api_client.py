@@ -1,5 +1,5 @@
 # lawbot/api_client.py  →  모델 서버 클라이언트 (임베딩·리랭크·모델 목록·준비 확인). 생성은 llm.py가 openai SDK로
-# 표준 OpenAI 형식 + 확장 필드 (docs/plans/monorepo-openai-api.md): /v1/embeddings의 input_type·max_seq_length, /v1/rerank
+# 표준 OpenAI 형식 + 확장 필드 (docs/archives/monorepo-openai-api.md): /v1/embeddings의 input_type·max_seq_length, /v1/rerank
 # 프록시 환경 변수를 쓰지 않는다 (trust_env=False): 질문이 맥 밖(프록시)으로 나가지 않게 127.0.0.1에 직접 접속
 import base64
 import time

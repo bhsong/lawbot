@@ -5,7 +5,7 @@
 - 코드: `feat/openai-api` (PR #34, 커밋 b319cd7)
 - 대상: 브랜치의 모델 서버(`lawbot-model-server`)를 임시 포트로 실행. 운영 서비스는 내려 둠
   - chat `qwen3.8-27b-4bit`(`models/v4/qwen_27b_mlx_4bit`), embedding `lawbot-emb-v4`, rerank `qwen3-reranker-4b`, 리랭커 후보 10, 하위법령 첨부 켜짐
-- 계획: [`docs/plans/monorepo-openai-api.md`](../plans/monorepo-openai-api.md) §3.5
+- 계획: [`docs/archives/monorepo-openai-api.md`](../archives/monorepo-openai-api.md) §3.5
 - 기준: `results/v4/*_pro_concise_rr_dec_val.csv` (로컬 모드, 2026-10-31, [기록](2026-10-31-decree-attach.md))
 
 ## 요약

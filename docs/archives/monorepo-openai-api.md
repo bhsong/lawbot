@@ -262,7 +262,11 @@ LAWBOT_FAST_MODEL=lawbot-fast-v4
 | --- | --- |
 | 1 `chore/monorepo` | #33 병합 (2026-11-01) |
 | 2 `feat/openai-api` | #34 병합 (2026-11-01). 답변 600개 동일 ([기록](../evals/2026-11-01-openai-api.md)) |
-| 3 `feat/batch-generation` | 구현·테스트·실제 모델 검증 완료 ([기록](../evals/2026-11-01-batch-generation.md)). 기본값 1 유지, `SequentialEngine` 삭제 (사용자 결정), 병합 전 |
+| 3 `feat/batch-generation` | #35 병합 (2026-11-01). 기본값 1 유지, `SequentialEngine` 삭제 ([기록](../evals/2026-11-01-batch-generation.md)) |
+
+운영 반영: v4.4.0 (PR #34까지, [기록](../evals/2026-11-01-deploy-openai-api-prod.md)) → v4.4.1 (PR #35, [기록](../evals/2026-11-01-deploy-batch-prod.md)). 이 계획은 끝났다 (2026-11-01, `docs/archives/`로 옮김).
+
+남은 확인 (급하지 않음): `SequentialEngine` 삭제 뒤 실제 27B 스모크(`pytest -m models services/model-server`)는 돌리지 않았다. 다음 mlx-lm 업데이트 때 함께 돌린다.
 
 ### PR 2 구현 중 계획과 달라진 점
 

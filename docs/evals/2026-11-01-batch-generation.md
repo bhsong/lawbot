@@ -5,7 +5,7 @@
 - 코드: `feat/batch-generation` (PR #35, 커밋 dc768f2)
 - 대상: 브랜치의 모델 서버를 임시 포트로 실행(`LAWBOT_MAX_CONCURRENT=4`). 운영 모델 서버는 측정 동안 내려 둠
   - chat `qwen3.8-27b-4bit`, embedding `lawbot-emb-v4`, rerank `qwen3-reranker-4b`, 리랭커 후보 10, 하위법령 첨부 켜짐
-- 계획: [`docs/plans/monorepo-openai-api.md`](../plans/monorepo-openai-api.md) §4.4
+- 계획: [`docs/archives/monorepo-openai-api.md`](../archives/monorepo-openai-api.md) §4.4
 - 기준: `results/v4/answers_pro_concise_rr_dec_val.csv` (PR 2에서 OpenAI 호환 API 결과와 글자 단위로 같음을 확인, [기록](2026-11-01-openai-api.md))
 - 범위: answers 단계(val 표본 200문항)만
 
