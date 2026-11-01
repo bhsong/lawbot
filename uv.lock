@@ -8,6 +8,18 @@ supported-markers = [
     "sys_platform == 'darwin'",
 ]
 
+[manifest]
+members = [
+    "lawbot",
+]
+
+[manifest.dependency-groups]
+dev = [
+    { name = "lawbot", editable = "services/chatbot" },
+    { name = "pytest", specifier = ">=9.1.1" },
+    { name = "ruff", specifier = "==0.17.3" },
+]
+
 [[package]]
 name = "annotated-doc"
 version = "0.0.5"
@@ -316,18 +328,12 @@ wheels = [
 [[package]]
 name = "lawbot"
 version = "0.1.0"
-source = { editable = "." }
+source = { editable = "services/chatbot" }
 dependencies = [
     { name = "gradio" },
     { name = "mlx-lm" },
     { name = "pandas" },
     { name = "sentence-transformers" },
-]
-
-[package.dev-dependencies]
-dev = [
-    { name = "pytest" },
-    { name = "ruff" },
 ]
 
 [package.metadata]
@@ -336,12 +342,6 @@ requires-dist = [
     { name = "mlx-lm", specifier = ">=0.32.2" },
     { name = "pandas", specifier = ">=3.0.6" },
     { name = "sentence-transformers", specifier = ">=6.1.0" },
-]
-
-[package.metadata.requires-dev]
-dev = [
-    { name = "pytest", specifier = ">=9.1.1" },
-    { name = "ruff", specifier = "==0.17.3" },
 ]
 
 [[package]]

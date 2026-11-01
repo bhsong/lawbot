@@ -1,6 +1,6 @@
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[2]  # src/lawbot/paths.py → 레포 최상위
+ROOT = Path(__file__).resolve().parents[4]  # services/chatbot/src/lawbot/paths.py → 레포 최상위
 DATA, MODELS, RESULTS = ROOT / 'data', ROOT / 'models', ROOT / 'results'
 
 ARTICLES = DATA / 'labor_articles_20261001.csv'

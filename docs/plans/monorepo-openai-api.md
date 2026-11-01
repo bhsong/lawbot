@@ -80,7 +80,7 @@ services/
     src/lawbot/...
     tests/...
   model-server/
-    pyproject.toml           # 패키지 lawbot_model_server (PR 1에서는 비어 있는 자리, PR 2에서 채움)
+    pyproject.toml           # 패키지 lawbot_model_server (PR 2에서 만든다. 빈 패키지를 미리 두지 않음)
     src/lawbot_model_server/
     tests/
   monitor/                   # 만들지 않음. README에 자리만 적음
@@ -91,7 +91,8 @@ data/  models/  results/  docs/  deploy/   # 레포 최상위에 그대로
 - PR 1에서는 기존 `model_server.py`·`remote.py`가 챗봇 패키지 안에 그대로 있다 (PR 2에서 바뀜).
 - CI: `compileall`·pytest 경로를 `services/*`로. pytest는 루트에서 모든 서비스 테스트를 실행한다.
 - `.git-blame-ignore-revs`는 이동만으로는 필요 없다 (git이 이름 변경을 추적).
-- 확인: `uv sync --locked`, pytest 405 passed 그대로, ruff 그대로.
+- 루트는 가상 workspace 루트(패키지 없음)이고, dev 의존성 그룹에 `lawbot`을 넣어 루트에서 `uv sync`·`uv run lawbot-app`이 그대로 동작한다 (launchd 템플릿 변경 없음).
+- 확인: `uv sync --locked`, pytest 403 + `paths.ROOT` 테스트 1개 = 404 passed, ruff 그대로.
 
 ---
 

@@ -172,7 +172,7 @@ LAWBOT_PROFILE=v1 LAWBOT_MODELS= LAWBOT_RERANKER_ENABLED=0 uv run lawbot-app
 
 모델 경로나 메모리 설정은 `.env`에서 바꿉니다(상대 경로는 저장소 최상위 기준). 아래 표가 전체 변수입니다.
 
-웹앱은 이 맥에서만 쓰는 로컬 전용입니다. 주소는 `127.0.0.1` 고정이고, 포트는 `.env`의 `LAWBOT_PORT`(없으면 기존 기본값)입니다. 브라우저에서 `http://127.0.0.1:<포트>`로 접속해 로그인합니다. 같은 네트워크의 다른 기기에서는 접속할 수 없으며, Gradio 공개 공유 링크(`share`)도 만들지 않습니다. 주소·공유 설정은 바꿀 수 없고, `GRADIO_SERVER_NAME`·`GRADIO_SERVER_PORT` 같은 Gradio 환경 변수는 무시합니다(`src/lawbot/security.py`). 상시 운영할 때는 `.env`에 `LAWBOT_PORT`를 따로 정하세요.
+웹앱은 이 맥에서만 쓰는 로컬 전용입니다. 주소는 `127.0.0.1` 고정이고, 포트는 `.env`의 `LAWBOT_PORT`(없으면 기존 기본값)입니다. 브라우저에서 `http://127.0.0.1:<포트>`로 접속해 로그인합니다. 같은 네트워크의 다른 기기에서는 접속할 수 없으며, Gradio 공개 공유 링크(`share`)도 만들지 않습니다. 주소·공유 설정은 바꿀 수 없고, `GRADIO_SERVER_NAME`·`GRADIO_SERVER_PORT` 같은 Gradio 환경 변수는 무시합니다(`services/chatbot/src/lawbot/security.py`). 상시 운영할 때는 `.env`에 `LAWBOT_PORT`를 따로 정하세요.
 
 | 변수 | 필수 | 용도 |
 | --- | --- | --- |
@@ -211,13 +211,13 @@ LAWBOT_PROFILE=v1 LAWBOT_MODELS= LAWBOT_RERANKER_ENABLED=0 uv run lawbot-app
 
 **리랭커 (선택, v4)**
 
-켜면 검색 흐름이 `임베딩 상위 10개 → Qwen3-Reranker-4B(튜닝 없음) → 리랭킹 상위 3개 → 답변 모델`이 됩니다. Fast·Pro가 같은 리랭킹 결과를 참고하고, 리랭커는 앱 시작 때 한 번 올려 상주합니다. 끄면(기본) 리랭커를 올리지 않고 이전과 같은 임베딩 상위 3개를 씁니다. 채점 방식(instruction, 프롬프트, 최대 2,560토큰, yes/no 로짓, 동점은 임베딩 순위)은 v4 리랭커 실험 노트북과 같습니다(`src/lawbot/reranker.py`).
+켜면 검색 흐름이 `임베딩 상위 10개 → Qwen3-Reranker-4B(튜닝 없음) → 리랭킹 상위 3개 → 답변 모델`이 됩니다. Fast·Pro가 같은 리랭킹 결과를 참고하고, 리랭커는 앱 시작 때 한 번 올려 상주합니다. 끄면(기본) 리랭커를 올리지 않고 이전과 같은 임베딩 상위 3개를 씁니다. 채점 방식(instruction, 프롬프트, 최대 2,560토큰, yes/no 로짓, 동점은 임베딩 순위)은 v4 리랭커 실험 노트북과 같습니다(`services/chatbot/src/lawbot/reranker.py`).
 
 `.env.example`에는 켜져 있습니다(`LAWBOT_RERANKER_ENABLED=1`). 모델 준비는 위 "모델 준비"의 변환 명령을 씁니다.
 
 ```zsh
 uv run python -m lawbot.check_deploy           # .env 설정 그대로: 리랭커 폴더·양자화·yes/no 토큰 검사
-uv run pytest -m models tests/test_reranker_models.py   # 실제 로딩·채점 스모크 테스트
+uv run pytest -m models services/chatbot/tests/test_reranker_models.py   # 실제 로딩·채점 스모크 테스트
 LAWBOT_RERANKER_ENABLED=0 uv run lawbot-app    # 한 번만 끄고 실행
 ```
 
@@ -420,8 +420,15 @@ uv run python -m lawbot.report --tag v1_4bit_full --retrieval retrieval_emb_fina
 
 ### 프로젝트 구조
 
+uv workspace 모노레포입니다. 레포 최상위에서 `uv sync`·`uv run …`을 실행하면 모든 서비스가 함께 설치됩니다. 데이터(`data/`), 모델(`models/`), 평가 결과(`results/`)는 레포 최상위에 그대로 둡니다. 모델 서버를 별도 서비스(`services/model-server`, OpenAI 호환 API)로 나누는 작업이 진행 중입니다([계획](docs/plans/monorepo-openai-api.md)).
+
 ```
-src/lawbot/
+pyproject.toml         # workspace 루트: 멤버 목록, pytest·ruff 설정
+services/chatbot/      # 웹앱·평가 (패키지 lawbot), 테스트는 services/chatbot/tests/
+```
+
+```
+services/chatbot/src/lawbot/
 ├── paths.py           # 데이터·모델 경로
 ├── retriever.py       # 임베딩 검색 (법률, 켜면 하위법령 인덱스 따로)
 ├── decree.py          # 시행령·시행규칙 첨부 필터 (same1+other0.9, 웹앱·평가 공통)
@@ -652,7 +659,7 @@ Switching models also switches the answer format to that model's default; you ca
 
 Change model paths or memory settings in `.env` (relative paths are resolved from the repository root); the table below lists every variable.
 
-The web app is local-only, for use on this Mac. The address is fixed to `127.0.0.1`; the port is `LAWBOT_PORT` in `.env` (the previous default if unset). Open `http://127.0.0.1:<port>` in a browser and log in. Other devices on the network cannot connect, and no public Gradio share link is created. The address and share setting cannot be changed, and Gradio variables such as `GRADIO_SERVER_NAME` and `GRADIO_SERVER_PORT` are ignored (`src/lawbot/security.py`). For an always-on setup, set `LAWBOT_PORT` explicitly in `.env`.
+The web app is local-only, for use on this Mac. The address is fixed to `127.0.0.1`; the port is `LAWBOT_PORT` in `.env` (the previous default if unset). Open `http://127.0.0.1:<port>` in a browser and log in. Other devices on the network cannot connect, and no public Gradio share link is created. The address and share setting cannot be changed, and Gradio variables such as `GRADIO_SERVER_NAME` and `GRADIO_SERVER_PORT` are ignored (`services/chatbot/src/lawbot/security.py`). For an always-on setup, set `LAWBOT_PORT` explicitly in `.env`.
 
 | Variable | Required | Purpose |
 | --- | --- | --- |
@@ -691,13 +698,13 @@ If either `LAWBOT_USER` or `LAWBOT_PW` is missing or empty, the app refuses to s
 
 **Reranker (optional, v4)**
 
-When enabled, retrieval becomes `embedding top 10 → Qwen3-Reranker-4B (not fine-tuned) → reranked top 3 → answer model`. Fast and Pro share the reranked context, and the reranker is loaded once at startup and stays resident. When disabled (default) it is not loaded and the app uses the embedding top 3 as before. Scoring (instruction, prompt, 2,560-token limit, yes/no logits, ties kept in embedding order) matches the v4 reranker experiment notebook (`src/lawbot/reranker.py`).
+When enabled, retrieval becomes `embedding top 10 → Qwen3-Reranker-4B (not fine-tuned) → reranked top 3 → answer model`. Fast and Pro share the reranked context, and the reranker is loaded once at startup and stays resident. When disabled (default) it is not loaded and the app uses the embedding top 3 as before. Scoring (instruction, prompt, 2,560-token limit, yes/no logits, ties kept in embedding order) matches the v4 reranker experiment notebook (`services/chatbot/src/lawbot/reranker.py`).
 
 `.env.example` enables it (`LAWBOT_RERANKER_ENABLED=1`); see "Model setup" above for the conversion command.
 
 ```zsh
 uv run python -m lawbot.check_deploy           # with .env: reranker folder, quantization, yes/no tokens
-uv run pytest -m models tests/test_reranker_models.py   # real load + scoring smoke test
+uv run pytest -m models services/chatbot/tests/test_reranker_models.py   # real load + scoring smoke test
 LAWBOT_RERANKER_ENABLED=0 uv run lawbot-app    # one-off run without it
 ```
 
@@ -862,8 +869,15 @@ See the Korean section above for an example `lawbot.report` command on the saved
 
 ### Project layout
 
+The repository is a uv workspace monorepo. Running `uv sync` or `uv run …` at the top level installs every service. Data (`data/`), models (`models/`) and evaluation results (`results/`) stay at the top level. Splitting the model server into its own service (`services/model-server`, an OpenAI-compatible API) is in progress ([plan](docs/plans/monorepo-openai-api.md)).
+
 ```
-src/lawbot/
+pyproject.toml         # workspace root: members, pytest and ruff settings
+services/chatbot/      # web app and evaluation (package lawbot); tests in services/chatbot/tests/
+```
+
+```
+services/chatbot/src/lawbot/
 ├── paths.py           # data and model paths
 ├── retriever.py       # embedding retrieval (Acts; separate decree index when enabled)
 ├── decree.py          # enforcement-decree attachment filter (same1+other0.9, shared by web app and eval)
