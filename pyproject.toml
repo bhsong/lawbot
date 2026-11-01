@@ -65,3 +65,6 @@ ignore = [
     "RUF012",   # 테스트 대역의 공유 기록용 클래스 속성
     "RUF059",   # 튜플 풀기로 반환 구조를 보여 줌
 ]
+
+[tool.ruff.format]
+quote-style = "single"   # 기존 코드가 작은따옴표

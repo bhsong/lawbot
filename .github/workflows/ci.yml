@@ -34,6 +34,9 @@ jobs:
       - name: 린트 (ruff, 설정은 pyproject.toml)
         run: uv run ruff check --output-format=github
 
+      - name: 포맷 검사 (고치려면 uv run ruff format)
+        run: uv run ruff format --check
+
       - name: 테스트
         run: uv run pytest --junitxml=pytest-report.xml
 
