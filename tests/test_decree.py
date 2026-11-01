@@ -368,7 +368,7 @@ def test_remote_matches_local(server_env):
 def test_remote_refuses_mismatch(server_env):
     with serve(make()) as (_, url):
         server_env.setenv('LAWBOT_DECREE_TAU', '0.8')
-        with pytest.raises(RuntimeError, match='하위법령 tau: 서버 0.9 / 웹앱 0.8'):
+        with pytest.raises(RuntimeError, match=r'하위법령 tau: 서버 0.9 / 웹앱 0.8'):
             connect(server_env, url)
         server_env.delenv('LAWBOT_DECREE_TAU')
         server_env.setenv('LAWBOT_DECREE_ENABLED', '0')

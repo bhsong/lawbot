@@ -41,7 +41,6 @@ def main():
     d, pre, suf = Path(a.dir), ('mlx_' if a.scores == 'mlx' else ''), ('_mlx' if a.scores == 'mlx' else '')
     cfgs = CONFIGS | ({'o09k3': ('same1+other0.9', 3)} if a.k3 else {})
     art = F.load(d)
-    aid = art.article_id.values
     gold_law = dict(zip(art.article_id, art.parent_law))
 
     # 1) 법률 정답 val200: 10-30 평가와 같은 문항·열 + 새 규칙 열

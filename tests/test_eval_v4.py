@@ -322,7 +322,7 @@ def test_compare_warns(tmp_path, env, capsys):
     ev.compare('a', 'c')
     out = capsys.readouterr().out
     assert '[실패 유형별 건수]' in out and 'c answers false_refusal: Q9' in out
-    with pytest.raises(SystemExit, match='summary_x.csv이 없습니다'):
+    with pytest.raises(SystemExit, match=r'summary_x.csv이 없습니다'):
         ev.compare('a', 'x')
     env.setattr('sys.argv', ['lawbot-eval-v4', 'compare', '--base', 'a', '--new', 'c', '--strict'])
     with pytest.raises(SystemExit) as e:

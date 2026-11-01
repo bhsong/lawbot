@@ -215,7 +215,7 @@ def test_waits_until_ready(fakes):
 def test_wait_timeout(fakes):
     with serve(None) as (_, url):
         fakes.setenv('LAWBOT_MODEL_SERVER_WAIT', '0.3')
-        with pytest.raises(RuntimeError, match='0.3초 안에 준비되지 않았습니다 .모델을 불러오는 중'):
+        with pytest.raises(RuntimeError, match=r'0.3초 안에 준비되지 않았습니다 .모델을 불러오는 중'):
             connect(fakes, url)
 
 # ---- 원격 ModelManager ----

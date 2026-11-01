@@ -18,7 +18,7 @@ import re
 import time
 import pandas as pd
 from lawbot import envfile
-from lawbot.eval_v4 import LAW_ALIASES, refused, cite_section
+from lawbot.citation import LAW_ALIASES, cite_section, refused
 from lawbot.paths import DATA, RESULTS
 from lawbot.score_answers import norm, score_one
 
