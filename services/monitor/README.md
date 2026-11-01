@@ -32,7 +32,8 @@ uv run law-monitor daily                  # launchd가 매일 실행: collect �
 ```
 
 - 마지막 줄이 실행 요약입니다: `collectors=2 ok=2 failed=0 events=1`. 같은 줄이 `logs/collector-YYYYMMDD.log` 끝에도 남습니다.
-- 종료 코드: 0 성공, 1 수집기 일부 실패(나머지는 저장됨), 2 실행 전 거부(설정 오류, bootstrap 전 collect, `LAW_OC` 없음 등).
+- 종료 코드: 0 성공, 1 수집기 일부 실패(나머지는 저장됨), 2 실행 전 거부(설정 오류, bootstrap 전 collect, `LAW_OC` 없음, 다른 실행 중 등).
+- 같은 home(`data/`)으로 두 실행이 겹치지 않게 `data/.lock`에 잠금을 겁니다. launchd의 `daily`가 도는 동안 수동으로 실행하면 "다른 law-monitor 실행 중"으로 바로 끝납니다(종료 코드 2). 프로세스가 죽으면 잠금은 저절로 풀립니다.
 - `LAW_OC`는 환경변수가 먼저이고, 없으면 `services/monitor/.env`에서 읽습니다. `bootstrap`은 법제처를 부르지 않아 키 없이도 됩니다. 로그·이벤트·오류 메시지에는 `OC=***`로만 남습니다.
 - 법제처 호출이 실패하면(재시도 3회 뒤) 그 수집기가 실패로 끝나고 커서가 그대로라, 다음 실행에서 같은 변경을 다시 처리합니다. 원문이 빠진 이벤트는 저장하지 않습니다.
 - 한 수집기가 3번 연속 실패하면 `collector_failing` 이벤트가 한 번 생깁니다.

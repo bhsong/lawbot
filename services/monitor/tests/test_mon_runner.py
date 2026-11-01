@@ -117,3 +117,51 @@ def test_cli_end_to_end(tmp_path, legalize, capsys, monkeypatch):
     assert 'collectors=1 ok=1 failed=0 events=1' in capsys.readouterr().out
     # 모든 수집기 실행: legalize_admrule은 기준점이 없어 실행 전에 거부 (종료 코드 2)
     assert cli.main([*base, 'collect']) == 2
+
+
+# ---- 실행 잠금 (launchd 실행과 수동 실행이 겹치지 않게) ----
+def test_second_run_is_refused_while_locked(tmp_path, capsys):
+    from law_monitor.lock import AlreadyRunning, run_lock
+    from law_monitor.paths import Paths
+
+    home = tmp_path / 'h'
+    with run_lock(Paths(home)):
+        for command in (
+            ['bootstrap'],
+            ['collect'],
+            ['summarize'],
+            ['daily'],
+            ['replay', '--repo', 'legalize-kr', '--from', 'a', '--to', 'b'],
+        ):
+            assert cli.main(['--home', str(home), *command]) == 2
+            assert '다른 law-monitor 실행 중' in capsys.readouterr().err
+        with pytest.raises(AlreadyRunning):
+            with run_lock(Paths(home)):
+                pass
+    with run_lock(Paths(home)):  # 끝나면 다시 잡을 수 있음
+        pass
+    assert not (home / 'data' / 'state.db').exists()  # 잠금에 막힌 실행은 상태 DB도 열지 않음
+
+
+def test_lock_released_when_process_dies(tmp_path):
+    import subprocess
+    import sys
+
+    from law_monitor.lock import run_lock
+    from law_monitor.paths import Paths
+
+    home = tmp_path / 'h'
+    code = (
+        'import sys, time; from pathlib import Path; from law_monitor.lock import run_lock; from law_monitor.paths import Paths\n'
+        f'with run_lock(Paths(Path({str(home)!r}))):\n    print("locked", flush=True); time.sleep(60)\n'
+    )
+    p = subprocess.Popen([sys.executable, '-c', code], stdout=subprocess.PIPE, text=True)
+    try:
+        assert p.stdout.readline().strip() == 'locked'
+        p.kill()
+        p.wait(10)
+    finally:
+        if p.poll() is None:
+            p.kill()
+    with run_lock(Paths(home)):  # 죽은 프로세스의 잠금은 OS가 풀어 줌 (flock)
+        pass

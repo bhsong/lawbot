@@ -40,6 +40,10 @@ class Paths:
         return self.data / 'state.db'
 
     @property
+    def lock(self) -> Path:  # 실행 잠금 (lock.run_lock)
+        return self.data / '.lock'
+
+    @property
     def logs(self) -> Path:
         return self.home / 'logs'
 

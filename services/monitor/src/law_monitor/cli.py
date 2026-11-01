@@ -1,6 +1,6 @@
 """law-monitor 명령: bootstrap / collect / replay (원 계획서 5.5).
 
-종료 코드: 0 성공, 1 수집기 일부 실패(나머지는 저장됨), 2 실행 전 거부(설정 오류, 기준점 없음 등).
+종료 코드: 0 성공, 1 수집기 일부 실패(나머지는 저장됨), 2 실행 전 거부(설정 오류, 기준점 없음, 다른 실행 중 등).
 """
 
 import argparse
@@ -14,6 +14,7 @@ from law_monitor.config import CONFIG_FILE, REPOS, ConfigError, load
 from law_monitor.gitrepo import GitError
 from law_monitor.lawgo import LawGoClient
 from law_monitor.llm import ChatClient, load_config
+from law_monitor.lock import AlreadyRunning, run_lock
 from law_monitor.paths import Paths, default_home
 
 
@@ -79,31 +80,46 @@ def main(argv: list[str] | None = None) -> int:
     console.setFormatter(logging.Formatter('%(levelname)s %(name)s: %(message)s'))
     root = logging.getLogger('law_monitor')
     root.addHandler(console)
+    paths = Paths(args.home or default_home())
     try:
-        oc = secrets.law_oc()
-        lawgo = LawGoClient(oc) if oc else None
-        llm_config = load_config()
-        llm = ChatClient(llm_config) if llm_config else None
-        monitor = Monitor(Paths(args.home or default_home()), load(args.config), lawgo=lawgo, llm=llm)
-        if args.command == 'summarize':
-            return _summarize(monitor, events_dir=args.events_dir)
-        if args.command == 'daily':
-            return _daily(monitor, args.only)
-        if args.command == 'replay':
-            events = monitor.replay(args.repo, args.since, args.until)
-            print(f'replay events={len(events)} → {monitor.paths.replay}')
-            return 0
-        if args.command == 'bootstrap':
-            summary = monitor.bootstrap(only=args.only, force=args.force)
-        else:
-            summary = monitor.collect(only=args.only)
-        print(summary.line)
-        return 1 if summary.failed else 0
-    except (ConfigError, BootstrapRequired, AlreadyBootstrapped, MissingSecret, ValueError, GitError, OSError) as e:
+        with run_lock(paths):  # 같은 home의 다른 실행(launchd daily·수동)과 겹치지 않게
+            return _run(args, paths)
+    except (
+        AlreadyRunning,
+        ConfigError,
+        BootstrapRequired,
+        AlreadyBootstrapped,
+        MissingSecret,
+        ValueError,
+        GitError,
+        OSError,
+    ) as e:
         print(f'law-monitor: {e}', file=sys.stderr)
         return 2
     finally:
         root.removeHandler(console)
+
+
+def _run(args, paths: Paths) -> int:
+    oc = secrets.law_oc()
+    lawgo = LawGoClient(oc) if oc else None
+    llm_config = load_config()
+    llm = ChatClient(llm_config) if llm_config else None
+    monitor = Monitor(paths, load(args.config), lawgo=lawgo, llm=llm)
+    if args.command == 'summarize':
+        return _summarize(monitor, events_dir=args.events_dir)
+    if args.command == 'daily':
+        return _daily(monitor, args.only)
+    if args.command == 'replay':
+        events = monitor.replay(args.repo, args.since, args.until)
+        print(f'replay events={len(events)} → {monitor.paths.replay}')
+        return 0
+    if args.command == 'bootstrap':
+        summary = monitor.bootstrap(only=args.only, force=args.force)
+    else:
+        summary = monitor.collect(only=args.only)
+    print(summary.line)
+    return 1 if summary.failed else 0
 
 
 if __name__ == '__main__':
