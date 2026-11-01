@@ -30,15 +30,8 @@ import re
 
 import pandas as pd
 
-from lawbot.refusal import cited_articles, is_refusal
-
-
-def norm(s: str) -> str:
-    s = str(s)
-    s = s.replace('ㆍ', '·').replace('・', '·')
-    s = re.sub(r'(?<=\d),(?=\d{3})', '', s)
-    s = re.sub(r'\s+', '', s)
-    return s
+from lawbot.citation import conclusion_part, norm
+from lawbot_tools.refusal import cited_articles, is_refusal
 
 
 def term_in(term: str, text_n: str) -> bool:
@@ -67,12 +60,6 @@ def cite_strict(article_id: str, confusable, answer: str) -> bool:
     wrong = set(confusable.split(';')) if isinstance(confusable, str) and confusable else set()
     wrong |= {c for c in cited if c != article_id and article_family(c) == article_family(article_id)}
     return article_id in cited and not (cited & wrong)
-
-
-def conclusion_part(answer: str) -> str:
-    a = str(answer)
-    m = re.search(r'【결론】(.*?)(?=【|$)', a, re.S)
-    return m.group(1) if m else a[:150]
 
 
 def score_one(row, answer: str) -> dict:

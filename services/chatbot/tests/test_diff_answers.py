@@ -2,8 +2,8 @@
 import pandas as pd
 import pytest
 
-from lawbot import diff_answers as da
 from lawbot.paths import RESULTS
+from lawbot_tools import diff_answers as da
 
 E = dict(encoding='utf-8-sig')
 ROWS = [

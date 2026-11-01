@@ -1,4 +1,4 @@
-# src/lawbot/feedback_review.py  →  uv run python -m lawbot.feedback_review <피드백 폴더·파일>... [--out 검수.csv] [--keep 이전 검수.csv]
+# src/lawbot_tools/feedback_review.py  →  uv run python -m lawbot_tools.feedback_review <피드백 폴더·파일>... [--out 검수.csv] [--keep 이전 검수.csv]
 # 피드백 JSONL(lawbot.feedback)을 모아 사람이 검수할 CSV를 만든다 (B6 저장 → 검수 → 내보내기의 두 번째 단계)
 # 1. 같은 turn_id는 마지막 줄만, 'cleared'(선택 해제)는 뺀다
 # 2. 평가 데이터(v4 test 2,075·val 1,110, 하위법령 질문 val 444·test 1,880, oos·scope_controls·refusal_hard_cases·

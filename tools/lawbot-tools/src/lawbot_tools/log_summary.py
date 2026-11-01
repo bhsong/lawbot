@@ -1,4 +1,4 @@
-# src/lawbot/log_summary.py  →  uv run python -m lawbot.log_summary [logs/requests.jsonl] [--caller lawbot-app] [--since 2026-11-01]
+# src/lawbot_tools/log_summary.py  →  uv run python -m lawbot_tools.log_summary [logs/requests.jsonl] [--caller lawbot-app] [--since 2026-11-01]
 # 웹앱 요청 로그(JSONL, service.log_request)를 요약한다: 상태별 건수, 단계별 시간 중앙값·p95(성공 요청), 오류 유형별 건수
 # 로그에는 질문 원문·답변이 없다. 모델을 올리지 않는다
 import argparse

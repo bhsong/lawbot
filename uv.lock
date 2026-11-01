@@ -14,6 +14,7 @@ members = [
     "lawbot",
     "lawbot-common",
     "lawbot-model-server",
+    "lawbot-tools",
 ]
 
 [manifest.dependency-groups]
@@ -21,6 +22,7 @@ dev = [
     { name = "law-monitor", editable = "services/monitor" },
     { name = "lawbot", editable = "services/chatbot" },
     { name = "lawbot-model-server", editable = "services/model-server" },
+    { name = "lawbot-tools", editable = "tools/lawbot-tools" },
     { name = "openai", specifier = ">=2.0" },
     { name = "pytest", specifier = ">=9.1.1" },
     { name = "ruff", specifier = "==0.17.3" },
@@ -442,6 +444,23 @@ requires-dist = [
     { name = "numpy", specifier = ">=2.0" },
     { name = "sentence-transformers", specifier = ">=6.1.0" },
     { name = "uvicorn", specifier = ">=0.54.0" },
+]
+
+[[package]]
+name = "lawbot-tools"
+version = "0.1.0"
+source = { editable = "tools/lawbot-tools" }
+dependencies = [
+    { name = "lawbot" },
+    { name = "numpy" },
+    { name = "pandas" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "lawbot", editable = "services/chatbot" },
+    { name = "numpy", specifier = ">=2.0" },
+    { name = "pandas", specifier = ">=3.0.6" },
 ]
 
 [[package]]

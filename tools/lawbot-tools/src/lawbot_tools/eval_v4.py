@@ -1,4 +1,4 @@
-# src/lawbot/eval_v4.py  →  uv run lawbot-eval-v4            (전체: retrieval → answers → oos → refusal → summary)
+# src/lawbot_tools/eval_v4.py  →  uv run lawbot-eval-v4            (전체: retrieval → answers → oos → refusal → summary)
 #                             uv run lawbot-eval-v4 <단계> [--tag 이름] [--n 200] [--fmt concise|full] [--split test|val]
 #                             uv run lawbot-eval-v4 compare --base <tag> --new <tag>
 # v4 웹앱 구성(.env 그대로: v4 검색 415조문 + 리랭커 + 답변 모델)을 다시 평가한다 (맥 전용, 모델 필요)
@@ -36,7 +36,7 @@ from lawbot.citation import LAW_ALIASES, NONEXISTENT, OUTSIDE, WRONG_LAW, check,
 from lawbot.citation import hit_key as key
 from lawbot.decree import is_decree
 from lawbot.paths import DATA, EVAL, RESULTS, ROOT, V4_QA, V4_SPLIT
-from lawbot.score_answers import score_one
+from lawbot_tools.score_answers import score_one
 
 OUT = RESULTS / 'v4'
 SEED = 42

@@ -7,8 +7,8 @@ import pytest
 import lawbot.app as app_mod
 import lawbot.service as service
 from fakes import FakeLLM, FakeRetriever
-from lawbot import log_summary
 from lawbot.api_client import ModelLoadError, ModelServerError, ModelServerTimeout
+from lawbot_tools import log_summary
 
 QUESTION = '해고 예고 없이 해고되면 어떻게 하나요 고유문구XYZ'  # 로그에 남으면 안 되는 질문 원문
 

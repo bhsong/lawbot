@@ -1,4 +1,4 @@
-# src/lawbot/versions.py  →  uv run python -m lawbot.versions
+# src/lawbot_tools/versions.py  →  uv run python -m lawbot_tools.versions
 # 실제 설치된 패키지·맥 사양을 출력 (측정 결과와 함께 기록). 모델은 올리지 않는다
 import platform
 import subprocess

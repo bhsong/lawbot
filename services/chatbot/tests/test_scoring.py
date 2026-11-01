@@ -6,8 +6,8 @@ import pandas as pd
 import pytest
 
 from lawbot.paths import EVAL, RESULTS
-from lawbot.refusal import cited_articles, conclusion, is_refusal
-from lawbot.score_answers import cite_ok, cite_strict, norm, score_one, term_in
+from lawbot_tools.refusal import cited_articles, conclusion, is_refusal
+from lawbot_tools.score_answers import cite_ok, cite_strict, norm, score_one, term_in
 
 ANSWER = (
     '【결론】\n수습 기간에도 해고 예고를 해야 합니다.\n\n'

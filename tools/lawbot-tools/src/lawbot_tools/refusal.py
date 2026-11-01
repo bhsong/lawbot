@@ -1,4 +1,4 @@
-# src/lawbot/refusal.py
+# src/lawbot_tools/refusal.py
 # 거절 판정 (lawbot_2 false_refusal, lawbot_5 refusal_rate와 같은 규칙)
 import re
 

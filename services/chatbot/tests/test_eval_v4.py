@@ -7,7 +7,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-import lawbot.eval_v4 as ev
+import lawbot_tools.eval_v4 as ev
 from lawbot import deploy, service
 from lawbot.paths import DATA
 

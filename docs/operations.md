@@ -52,7 +52,7 @@ uv run mlx_lm.convert --hf-path Qwen/Qwen3-Reranker-4B --mlx-path models/v4/rera
 ```bash
 uv run python -m lawbot_model_server.check  # 모델 서버: .env의 LAWBOT_SERVE_* 모델 폴더 (양자화·어댑터·토크나이저·query 프롬프트)
 uv run python -m lawbot.check_deploy        # 웹앱: 조문 CSV·system·검색 설정 + 모델 서버 접속·필요 모델 (기본 v4)
-uv run python -m lawbot.versions            # 설치된 패키지 버전·맥 사양
+uv run python -m lawbot_tools.versions            # 설치된 패키지 버전·맥 사양
 ```
 
 ## 실행 (모델 서버 + 웹앱, 설정 파일 .env)
@@ -295,8 +295,8 @@ client.chat.completions.create(
 웹앱은 질문마다 `logs/requests.jsonl`(Git 제외)에 한 줄을 남깁니다. 단계별 시간(검색·리랭킹·모델 전환·첫 토큰·완료), 토큰 수, `peak_gb`, 상태(`ok`/`error`/`cancelled`), 오류 유형이 들어가고, 질문 원문·답변·조문 내용은 남기지 않습니다. 평가 스크립트도 같은 경로를 쓰므로 `caller`로 구분합니다.
 
 ```zsh
-uv run python -m lawbot.log_summary                      # 상태별 건수, 단계별 중앙값·p95, 오류 유형별 건수
-uv run python -m lawbot.log_summary --caller lawbot-app  # 평가 실행 제외
+uv run python -m lawbot_tools.log_summary                      # 상태별 건수, 단계별 중앙값·p95, 오류 유형별 건수
+uv run python -m lawbot_tools.log_summary --caller lawbot-app  # 평가 실행 제외
 ```
 
 오류 유형은 화면 안내와 같습니다. `model_server`(서버 연결 실패·토큰 불일치·로딩 중)는 "모델 서버가 준비되지 않았습니다", `model_load`(모델 서버의 모델 폴더 없음·형식 오류, 웹앱의 system 파일 없음)는 "모델을 불러오지 못했습니다"로 안내합니다. `model_server_timeout`(질문 처리 중 응답 조각 사이가 `LAWBOT_MODEL_READ_TIMEOUT`을 넘음)은 "모델 서버 응답이 없습니다", `model_server_busy`(모델 서버 대기열이 `LAWBOT_MAX_QUEUED`개로 가득 참)는 "모델 서버가 바쁩니다"로 안내합니다. 요청 로그의 `mode`는 `api`(모델 서버에서 생성) 또는 `external`(외부 생성 API)입니다. 리랭킹·생성 오류는 임베딩 순위로 되돌리지 않고 그대로 오류로 표시합니다.
@@ -308,8 +308,8 @@ uv run python -m lawbot.log_summary --caller lawbot-app  # 평가 실행 제외
 저장한 줄은 바로 학습에 쓰지 않고 검수를 거칩니다.
 
 ```zsh
-uv run python -m lawbot.feedback_review <운영 피드백 폴더> feedback/          # → feedback_review_<날짜>.csv (+ .jsonl)
-uv run python -m lawbot.feedback_export feedback_review_<날짜>.csv --out data/feedback/
+uv run python -m lawbot_tools.feedback_review <운영 피드백 폴더> feedback/          # → feedback_review_<날짜>.csv (+ .jsonl)
+uv run python -m lawbot_tools.feedback_export feedback_review_<날짜>.csv --out data/feedback/
 ```
 
 - `feedback_review`: 같은 답은 마지막 선택만 남기고 해제는 뺍니다. 평가 데이터(v4 test 2,075·val 1,110문항, 하위법령 질문 val 444·test 1,880문항, `oos_eval`, `scope_controls`, `refusal_hard_cases`, `labor_eval_keywords`)와 같은 질문(공백·문장부호 무시)과 유사도 0.9 이상인 질문을 빼고, 뺀 id를 출력합니다. 엑셀·Numbers에서 `h_ok`(맞음/틀림/모름), `h_gold`(`법령명 제N조`, 여러 개면 `;`), `h_scope`(범위 안/범위 밖), `h_note`를 채웁니다. `--keep 이전 CSV`로 채운 칸을 이어받습니다

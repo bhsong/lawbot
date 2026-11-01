@@ -10,9 +10,9 @@ import pandas as pd
 import pytest
 
 import lawbot.app as app_mod
-import lawbot.eval_v4 as ev
 import lawbot.retriever as retriever_mod
 import lawbot.service as service
+import lawbot_tools.eval_v4 as ev
 from lawbot import answer_format, citation, decree, deploy, manifest
 from lawbot.llm import build_prompt
 from lawbot.paths import DATA, V4_ARTICLES, V4_DECREE_ARTICLES
@@ -587,7 +587,7 @@ def test_score_dq():
 
 def test_log_summary_old_and_new_lines():
     """하위법령 필드가 없는 이전 로그와 새 로그를 함께 요약"""
-    from lawbot import log_summary
+    from lawbot_tools import log_summary
 
     base = {
         'status': 'ok',

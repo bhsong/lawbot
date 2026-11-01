@@ -1,7 +1,7 @@
 [project]
 name = "lawbot"
 version = "0.1.0"
-description = "노동법 조문 근거 RAG 챗봇 웹앱 (Gradio). 레포 구조는 docs/architecture.md"
+description = "노동법 조문 근거 RAG 챗봇 웹앱 런타임 (Gradio). 평가·분석 도구는 tools/lawbot-tools. 레포 구조는 docs/architecture.md"
 authors = [
     { name = "bhsong", email = "sbh3003@gmail.com" }
 ]
@@ -16,9 +16,8 @@ dependencies = [   # 모델 라이브러리(mlx·torch)는 쓰지 않음: 모델
 ]
 
 [project.scripts]
-# 레포 최상위에서 uv run lawbot-app / uv run lawbot-eval-v4 로 실행
+# 레포 최상위에서 uv run lawbot-app 으로 실행 (평가 명령 lawbot-eval-v4는 tools/lawbot-tools)
 lawbot-app = "lawbot.app:main"
-lawbot-eval-v4 = "lawbot.eval_v4:main"   # v4 웹앱 구성 전체 재평가 (단계 생략 시 all)
 
 [tool.uv.sources]
 lawbot-common = { workspace = true }
