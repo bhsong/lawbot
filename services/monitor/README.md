@@ -5,7 +5,8 @@
 - 설계: [docs/plans/monitor-collector.md](../../docs/plans/monitor-collector.md) (원 계획서: [monitor-collector-spec.md](../../docs/plans/monitor-collector-spec.md))
 - 지금 있는 수집기: `legalize_law`([legalize-kr](https://github.com/legalize-kr/legalize-kr), 법률·시행령·시행규칙), `legalize_admrule`([admrule-kr](https://github.com/legalize-kr/admrule-kr), 고시 등). 변경은 공개 git 저장소에서 찾고, 이벤트마다 법제처 Open API로 개정문·제개정이유를 채웁니다 ([계획](../../docs/archives/monitor-lawgo.md)).
 - 별표·서식: `forms` 대상 법령과 추적 행정규칙은 신·구판의 별표·서식 텍스트를 비교해 바뀐 것만 `lawgo_forms`·`lawgo_admrul` 이벤트로 만들고, 그 서식의 PDF·HWP 원본을 받습니다.
-- 아직 없는 것: 입법예고·국회 법안(PR 3), 한눈에 보기 5번 전자신고 파일 레이아웃(법제처에 없음, 출처 미정).
+- 요약(2단계): 요약하지 않은 이벤트를 운영 모델 서버의 `qwen3.8-27b-4bit`로 요약해 `data/summaries/YYYY-MM-DD.md`를 만듭니다 ([계획](../../docs/plans/monitor-summary.md)).
+- 아직 없는 것: 입법예고·국회 법안(PR 3). 한눈에 보기 5번 전자신고 파일 레이아웃(지급명세서 전산매체 제출요령)은 수집하지 않고 3단계 연례 리마인드로 합니다 ([결정](../../docs/plans/monitor-collector.md) 9절).
 
 ## 설치
 
@@ -25,6 +26,9 @@ uv run law-monitor bootstrap              # 첫 실행: 저장소 부분 클론 
 uv run law-monitor collect                # 평소 실행: 기준점 이후 변경만 이벤트로
 uv run law-monitor collect --only legalize_law
 uv run law-monitor replay --repo legalize-kr --from <커밋> --to <커밋>   # 과거 구간 → data/replay/ (상태 안 바뀜)
+uv run law-monitor summarize              # 대기 이벤트 → 모델 요약 → data/summaries/YYYY-MM-DD.md
+uv run law-monitor summarize --events-dir data/replay/<구간>   # replay 결과 요약 → 그 폴더의 summary.md (상태 안 바뀜)
+uv run law-monitor daily                  # launchd가 매일 실행: collect 다음 summarize
 ```
 
 - 마지막 줄이 실행 요약입니다: `collectors=2 ok=2 failed=0 events=1`. 같은 줄이 `logs/collector-YYYYMMDD.log` 끝에도 남습니다.
@@ -33,6 +37,17 @@ uv run law-monitor replay --repo legalize-kr --from <커밋> --to <커밋>   # �
 - 법제처 호출이 실패하면(재시도 3회 뒤) 그 수집기가 실패로 끝나고 커서가 그대로라, 다음 실행에서 같은 변경을 다시 처리합니다. 원문이 빠진 이벤트는 저장하지 않습니다.
 - 한 수집기가 3번 연속 실패하면 `collector_failing` 이벤트가 한 번 생깁니다.
 - `bootstrap --force`는 기준점을 다시 잡습니다. 그 사이 변경은 이벤트가 생기지 않으니, 대상 설정을 바꿔서 새 행정규칙을 처음부터 추적할 때만 씁니다 (설정만 바꾸면 이미 있는 행정규칙은 다음 개정부터 잡힘).
+
+## 요약 (2단계)
+
+- 대상: `state.db`의 `events`에서 `processed_at`이 빈 것. 요약이 끝나면 `processed_at`을 적습니다.
+- 법령·행정규칙 이벤트 하나에 모델 호출 하나입니다. 같은 개정의 별표서식 이벤트(`parent_event_id`)는 그 호출에 함께 넣습니다. 입력은 호출당 약 12,000자이고, 넘치면 뒤를 자르고 내용을 못 넣은 서식은 제목만 넣습니다.
+- 모델 설정은 웹앱과 같은 `LAWBOT_MODEL_SERVER`·`LAWBOT_MODEL_TOKEN`입니다. 환경변수 → `services/monitor/.env` → **레포 최상위 `.env`** 순서로 읽어서, 운영 worktree에서는 따로 넣을 것이 없습니다. 모델 id는 `LAW_MONITOR_SUMMARY_MODEL`(기본 `qwen3.8-27b-4bit`). 생성 설정은 temperature 0, 최대 800토큰, thinking 끔.
+- md 구성: 머리(실행 시각·수집 요약 줄·이벤트 수) → 한눈에 보기 번호별 절 → 법령마다 모델 요약 + 바뀐 별표서식 목록 + 원문 이벤트 경로·법제처 링크 → 경고(수집기 연속 실패). 새 이벤트가 없으면 "새 변경 없음".
+- 파일 날짜는 **요약을 실행한 날**입니다. 내용은 "지난 요약 실행(처음이면 bootstrap) ~ 이번 실행" 사이에 저장소에 새로 들어와 감지된 변경이고, md 머리의 `대상:` 줄에 그 구간을 적습니다. 공포일은 항목마다 따로 나옵니다 (legalize-kr은 커밋 날짜가 공포일이라 오늘 들어온 개정이 과거 공포일일 수 있음).
+- 같은 날 두 번 실행하면 두 번째 파일은 `YYYY-MM-DD-HHMMSS.md`입니다 (앞 파일을 덮지 않음).
+- 모델 서버가 실패하면(시도 3번) md에 "요약 실패, 대기 이벤트 N건"을 쓰고 그 이벤트는 대기로 둡니다. 다음 실행에서 밀린 것까지 요약합니다.
+- 요약은 참고용입니다. md 머리에도 "시행일·금액·서식 내용은 원문으로 확인"이라고 씁니다.
 
 ## 이벤트
 
@@ -76,7 +91,7 @@ uv run law-monitor replay --repo legalize-kr --from <커밋> --to <커밋>   # �
 
 ## launchd 등록 (매일 06:30)
 
-`deploy/com.lawbot.monitor.plist.example`의 `__UV__`·`__PROD_DIR__`·`__LOG_DIR__`을 채워 `~/Library/LaunchAgents/com.lawbot.monitor.plist`로 복사한 뒤:
+템플릿은 `law-monitor daily`(collect → summarize)를 실행합니다. `deploy/com.lawbot.monitor.plist.example`의 `__UV__`·`__PROD_DIR__`·`__LOG_DIR__`을 채워 `~/Library/LaunchAgents/com.lawbot.monitor.plist`로 복사한 뒤:
 
 ```bash
 launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.lawbot.monitor.plist

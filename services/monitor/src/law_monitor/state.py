@@ -75,6 +75,43 @@ class State:
     def event_exists(self, event_id: str) -> bool:
         return self.conn.execute('select 1 from events where event_id = ?', (event_id,)).fetchone() is not None
 
+    def pending_events(self) -> list[tuple[str, str | None]]:
+        """요약하지 않은 이벤트 (event_id, json_path), 저장 순서대로 (2단계 입력)."""
+        rows = self.conn.execute(
+            'select event_id, json_path from events where processed_at is null order by created_at, rowid'
+        )
+        return [(r[0], r[1]) for r in rows]
+
+    def pending_count(self) -> int:
+        return self.conn.execute('select count(*) from events where processed_at is null').fetchone()[0]
+
+    def mark_processed(self, event_ids: list[str], now: str) -> None:
+        with self.conn:
+            self.conn.executemany(
+                'update events set processed_at = ? where event_id = ? and processed_at is null',
+                [(now, eid) for eid in event_ids],
+            )
+
+    def last_summary_started(self) -> str | None:
+        """끝난 요약 실행 중 마지막 것의 시작 시각 (다음 요약의 감지 구간 시작)."""
+        row = self.conn.execute(
+            "select started_at from runs where mode = 'summarize' and finished_at is not null "
+            'order by started_at desc, rowid desc limit 1'
+        ).fetchone()
+        return row[0] if row else None
+
+    def first_run_started(self) -> str | None:
+        """첫 수집 실행(보통 bootstrap) 시각."""
+        row = self.conn.execute("select min(started_at) from runs where mode != 'summarize'").fetchone()
+        return row[0] if row else None
+
+    def finish_run(self, run_id: str, finished_at: str, status: str, summary_json: str) -> None:
+        with self.conn:
+            self.conn.execute(
+                'update runs set finished_at = ?, status = ?, summary_json = ? where run_id = ?',
+                (finished_at, status, summary_json, run_id),
+            )
+
     def start_run(self, run_id: str, mode: str, started_at: str) -> None:
         with self.conn:
             self.conn.execute(
