@@ -148,6 +148,22 @@ def test_server_model_load_failure_is_reported(env):
         list(chat('질문', [], 'pro', 'full'))
 
 
+def chat_limits(demo):
+    return {f.concurrency_limit for f in demo.fns.values() if getattr(f, 'name', None) == '_submit_fn'}
+
+
+def test_chat_concurrency_setting(env):
+    """웹앱 동시 질문 수: 기본 1, LAWBOT_CHAT_CONCURRENCY로 바꿈. 범위 밖은 시작 거부"""
+    a = make_app(env)
+    assert chat_limits(app_mod.build_demo(a)) == {1}
+    env.setenv('LAWBOT_CHAT_CONCURRENCY', '4')
+    assert chat_limits(app_mod.build_demo(a)) == {4}
+    for bad in ('0', '17', 'x'):
+        env.setenv('LAWBOT_CHAT_CONCURRENCY', bad)
+        with pytest.raises(ValueError, match='LAWBOT_CHAT_CONCURRENCY는 1–16'):
+            app_mod.chat_concurrency()
+
+
 def test_instance_name_in_title(env):
     # LAWBOT_INSTANCE: 운영/개발 화면을 탭 제목과 맨 위 제목으로 구분
     a = make_app(env)

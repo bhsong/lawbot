@@ -13,25 +13,55 @@ TOKEN = 'test-only-model-token-0123'  # 테스트 전용 가짜 값
 AUTH = {'Authorization': f'Bearer {TOKEN}'}
 
 
+class Compute:
+    """모델 연산 구간 표시. 두 연산이 동시에 돌면 overlaps에 남는다 (GPU 스레드 하나 검사)"""
+
+    lock = threading.Lock()
+    running = 0
+    overlaps = 0
+    threads = set()
+
+    @classmethod
+    def reset(cls):
+        cls.running, cls.overlaps, cls.threads = 0, 0, set()
+
+    def __enter__(self):
+        with self.lock:
+            Compute.running += 1
+            Compute.overlaps += Compute.running > 1
+            Compute.threads.add(threading.get_ident())
+
+    def __exit__(self, *exc):
+        with self.lock:
+            Compute.running -= 1
+
+
 class FakeChat:
-    """ChatModel과 같은 stream 인자. 받은 인자를 기록하고 mlx_lm 응답과 같은 속성을 낸다"""
+    """생성 요청 인자(messages·max_tokens·temperature…)를 기록하고 mlx_lm 응답과 같은 속성을 낸다. 받은 인자를 기록하고 mlx_lm 응답과 같은 속성을 낸다
+    chunks의 문자열 하나가 토큰 하나. 요청마다 다르게 하려면 messages 마지막 내용으로 per_prompt에서 찾는다"""
 
     chunks = ['【결론】', '예고해야', ' 합니다.']
+    per_prompt = {}  # 질문 → chunks
     delay = 0.0
     finish = 'stop'
 
     def __init__(self, path):
         self.path, self.calls, self.closed, self.yielded = path, [], False, 0
-        self.active = threading.Event()  # 생성 중 표시 (동시 실행 검사)
+        self.open = 0  # 진행 중인 스트림 수
+        self.max_open = 0
+        self.engines = []  # engine()에 받은 상한
 
     def stream(self, messages, **kw):
         self.calls.append({'messages': messages, **kw})
-        self.active.set()
+        chunks = self.per_prompt.get(messages[-1]['content'], self.chunks)
+        self.open += 1
+        self.max_open = max(self.max_open, self.open)
         try:
-            for i, c in enumerate(self.chunks):
+            for i, c in enumerate(chunks):
                 if isinstance(c, Exception):
                     raise c
-                time.sleep(self.delay)
+                with Compute():
+                    time.sleep(self.delay)
                 self.yielded += 1
                 yield types.SimpleNamespace(
                     text=c,
@@ -40,21 +70,69 @@ class FakeChat:
                     prompt_tps=100.0,
                     generation_tokens=i + 1,
                     peak_memory=1.5,
-                    finish_reason=self.finish if i == len(self.chunks) - 1 else None,
+                    finish_reason=self.finish if i == len(chunks) - 1 else None,
                 )
         finally:
-            self.active.clear()
+            self.open -= 1
             self.closed = True
+
+    def engine(self, max_concurrent):
+        """ChatModel.engine과 같은 자리. 실제는 BatchEngine, 가짜는 stream을 한 토큰씩 진행하는 FakeEngine"""
+        self.engines.append(max_concurrent)
+        return FakeEngine(self)
+
+
+class FakeEngine:
+    """테스트용 순차 엔진: 요청마다 model.stream 반복자를 두고 step마다 한 토큰씩. BatchEngine과 같은 인터페이스
+    이벤트는 (ticket, 'item'|'end'|'error', 값). 한 요청의 오류는 그 요청만 끝낸다"""
+
+    def __init__(self, model):
+        self.model, self.items = model, {}
+
+    def __len__(self):
+        return len(self.items)
+
+    def tickets(self):
+        return list(self.items)
+
+    def add(self, ticket, messages, kw):
+        self.items[ticket] = self.model.stream(messages, **kw)
+
+    def step(self):
+        events = []
+        for ticket, it in list(self.items.items()):
+            try:
+                events.append((ticket, 'item', next(it)))
+            except StopIteration:
+                del self.items[ticket]
+                events.append((ticket, 'end', None))
+            except Exception as e:
+                del self.items[ticket]
+                events.append((ticket, 'error', e))
+        return events
+
+    def remove(self, ticket):
+        it = self.items.pop(ticket, None)
+        if it is not None:
+            it.close()
+
+    def close(self):
+        for t in self.tickets():
+            self.remove(t)
 
 
 class FakeEmbedder:
     """글자 해시 bag-of-chars (결정적). 받은 인자를 기록"""
+
+    delay = 0.0
 
     def __init__(self, path):
         self.path, self.calls = path, []
 
     def encode(self, texts, input_type='document', max_seq_length=None):
         self.calls.append((list(texts), input_type, max_seq_length))
+        with Compute():
+            time.sleep(self.delay)
         v = np.zeros((len(texts), 8), np.float32)
         for i, t in enumerate(texts):
             for ch in t:
@@ -70,6 +148,8 @@ class FakeReranker:
 
     def score(self, query, docs, instruction=None):
         self.calls.append((query, list(docs), instruction))
+        with Compute():
+            pass
         return [self.scores[d] if self.scores else 1 / (1 + len(d)) for d in docs]
 
 
@@ -79,6 +159,14 @@ ENTRIES = (
     ModelEntry('emb', 'embedding', Path('/models/emb')),
     ModelEntry('rr', 'rerank', Path('/models/rr')),
 )
+
+
+def reset_fakes():
+    FakeChat.chunks, FakeChat.per_prompt = ['【결론】', '예고해야', ' 합니다.'], {}
+    FakeChat.delay, FakeChat.finish = 0.0, 'stop'
+    FakeEmbedder.delay = 0.0
+    FakeReranker.scores = None
+    Compute.reset()
 
 
 def registry(max_resident=1, chat=FakeChat, loads=None):

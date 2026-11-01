@@ -14,13 +14,11 @@ from fastapi.testclient import TestClient
 
 from lawbot_model_server import api
 
-from .ms_fakes import AUTH, TOKEN, FakeChat, FakeReranker, registry
+from .ms_fakes import AUTH, TOKEN, Compute, FakeChat, FakeReranker, registry
 
 
 @pytest.fixture
 def reg():
-    FakeChat.chunks, FakeChat.delay, FakeChat.finish = ['【결론】', '예고해야', ' 합니다.'], 0.0, 'stop'
-    FakeReranker.scores = None
     return registry()
 
 
@@ -345,20 +343,10 @@ def test_rerank_errors(client, reg):
     assert r.status_code == 500 and r.json()['error']['code'] == 'RuntimeError'
 
 
-# ---- 한 번에 하나 ----
+# ---- 모델 연산은 GPU 스레드 하나 ----
 def test_model_calls_never_overlap(reg):
-    """여러 요청이 동시에 와도 모델 연산은 겹치지 않는다 (MLX·MPS를 한 스레드씩)"""
+    """여러 요청이 동시에 와도 모델 연산은 겹치지 않고 한 스레드에서만 돈다 (MLX·MPS)"""
     FakeChat.delay = 0.01
-    overlap = []
-    emb = reg.fixed['emb']
-    encode = emb.encode
-
-    def watched(*a, **kw):
-        if any(m.active.is_set() for m in reg.chat.values()):
-            overlap.append(1)
-        return encode(*a, **kw)
-
-    emb.encode = watched
     with TestClient(api.create_app(TOKEN, reg)) as c:
 
         def chat():
@@ -374,7 +362,8 @@ def test_model_calls_never_overlap(reg):
             t.start()
         for t in ts:
             t.join(10)
-    assert not overlap and len(emb.calls) == 10
+    assert Compute.overlaps == 0 and len(Compute.threads) == 1
+    assert len(reg.fixed['emb'].calls) == 10 and len(reg.chat['chat-a'].calls) == 2
 
 
 def test_package_does_not_import_chatbot_or_ui():

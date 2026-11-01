@@ -61,6 +61,7 @@ v1:
 평가마다 결과 한 줄과 기록 파일 링크만 둡니다. 표·설정·명령은 [`docs/evals/`](docs/evals/)에 있습니다.
 
 - **v4 웹앱 test (2026-10-25)**: 리랭킹 Recall@3 0.940, 조문 인용 정확도 0.905, 범위 밖 거절률 0.96, 질문당 15.1초 · MLX 최대 20.4GB → [기록](docs/evals/2026-10-25-v4-webapp-test.md)
+- **동시 추론 (val answers, 2026-11-01)**: 배치 경로 1건은 답변 200개가 기준과 같음, 동시 2·4는 처리량 ×1.36·×1.67 · 요청당 완료 19.6→28.8·46.8초 · MLX 최대 21.9·23.4GB, 답변 52·56개가 대부분 표현만 다르고 지표는 같거나 조금 나음 → [기록](docs/evals/2026-11-01-batch-generation.md)
 - **OpenAI 호환 모델 서버 전환 (val, 2026-11-01)**: 답변 600개·검색 순위 1,110행·하위법령 첨부가 기준과 글자 단위로 같고, 지연 차이는 0.3초 이내 → [기록](docs/evals/2026-11-01-openai-api.md)
 - **원격 모드 재확인 (2026-10-29)**: 답변 522개가 로컬 모드와 글자 단위로 같고, 지연 차이는 0.3초 이내 → [기록](docs/evals/2026-10-29-model-server.md)
 - **시행령·시행규칙 첨부 실험 (val, 2026-10-29~31)**: 채택 규칙의 정답 하위법령 포함 0.921, 하위법령 질문 정답 인용 0.000 → 0.900, 법률 질문 답변은 그대로 → [기록](docs/evals/2026-10-31-decree-experiment.md)
@@ -208,6 +209,7 @@ LAWBOT_PROFILE=v1 LAWBOT_MODELS= LAWBOT_RERANKER_ENABLED=0 LAWBOT_DECREE_ENABLED
 | `LAWBOT_LLM_ALLOW_EXTERNAL` | 외부 API면 예 | `1`: 질문이 이 맥 밖으로 나가는 것을 허용 (https만) |
 | `LAWBOT_PORT` | 아니요 | 웹앱 포트 (1024–65535). 없으면 기존 기본값. 운영·개발을 함께 띄울 때는 서로 다른 값 |
 | `LAWBOT_INSTANCE` | 아니요 | 화면·탭 제목에 붙일 이름 (예: `운영`, `개발`, 40자 이하) |
+| `LAWBOT_CHAT_CONCURRENCY` | 아니요 | 웹앱이 동시에 처리하는 질문 수 (1–16, 기본 `1`). 모델 서버의 `LAWBOT_MAX_CONCURRENT`보다 크면 넘는 질문은 서버에서 기다림 |
 | `LAWBOT_REQUEST_LOG` | 아니요 | 요청 로그 파일 (기본 레포 최상위 `logs/requests.jsonl`). 빈 값이면 기록하지 않음 |
 | `LAWBOT_FEEDBACK` | 아니요 | `1`이면 답변마다 👍·깃발 버튼을 달고 누른 답을 저장 (기본 `0`, `0`·`1`만) |
 | `LAWBOT_FEEDBACK_DIR` | 아니요 | 피드백 저장 폴더 (기본 레포 최상위 `feedback/`). 레포 안이면 `.gitignore`에 걸리는 경로만 허용. 운영은 레포 밖 절대 경로 권장 |
@@ -221,6 +223,7 @@ LAWBOT_PROFILE=v1 LAWBOT_MODELS= LAWBOT_RERANKER_ENABLED=0 LAWBOT_DECREE_ENABLED
 | `LAWBOT_SERVE_CHAT` / `LAWBOT_SERVE_EMBEDDING` / `LAWBOT_SERVE_RERANK` | 하나 이상 | 제공할 모델 `id=폴더`를 쉼표로 (예: `qwen3.8-27b-4bit=models/v4/qwen3.8_27b_mlx_4bit`) |
 | `LAWBOT_SERVE_PRELOAD` | 아니요 | 시작할 때 올릴 chat 모델 id (기본: chat 목록 앞에서부터 상주 수만큼). 임베딩·리랭커는 항상 시작할 때 |
 | `LAWBOT_MAX_RESIDENT` | 아니요 | 동시에 올려 둘 chat 모델 수 (기본 `2`, LRU로 교체). 32GB에서 27B를 쓰면 `1` |
+| `LAWBOT_MAX_CONCURRENT` | 아니요 | 동시에 생성하는 chat 요청 수 (1–16, 기본 `1`). 생성은 mlx_lm `BatchGenerator`로 하고, 이 값이 배치 크기. `1`이면 이전 순차 생성과 같은 답, `2` 이상은 처리량이 늘지만 요청마다 느려지고 답 표현이 조금 달라질 수 있음([기록](docs/evals/2026-11-01-batch-generation.md)). 넘는 요청은 받은 순서대로 기다림 |
 
 `LAWBOT_USER`와 `LAWBOT_PW`가 하나라도 없거나 비어 있으면 모델을 불러오기 전에 `RuntimeError`로 실행을 거부합니다. 인증 없이 서버를 띄우는 방법은 없습니다.
 
@@ -279,7 +282,8 @@ client.chat.completions.create(
 ```
 
 - 127.0.0.1에만 열고, 모든 요청(`/health` 포함)에 토큰이 필요합니다. 모르는 필드(`tools`, `n`>1 등)는 400으로 거절합니다. 질문·문서 내용은 로그에 남기지 않습니다(경로·모델·상태·시간만).
-- 모델 연산은 한 번에 하나입니다(MLX·MPS를 여러 스레드에서 동시에 돌리지 않음). 겹친 요청은 기다리고, 스트림 중 연결이 끊기면(정지 버튼) 다음 토큰에서 멈추고 바로 다음 요청을 받습니다.
+- 모델 연산은 GPU 스레드 하나가 맡습니다(MLX·MPS를 여러 스레드에서 동시에 돌리지 않음). chat 생성은 `LAWBOT_MAX_CONCURRENT`개까지 동시에(2 이상이면 한 배치로) 하고, 넘는 요청은 받은 순서대로 기다립니다. embeddings·rerank는 생성 스텝 사이에 실행되어 그동안 생성 중인 스트림이 잠깐 멈춥니다. 스트림 중 연결이 끊기면(정지 버튼) 다음 스텝에서 그 요청을 빼고 자리를 비웁니다.
+- 다른 chat 모델 요청이 오면 진행 중인 생성이 끝난 뒤 모델을 바꿉니다(그 뒤에 온 요청도 순서대로 기다림).
 - 웹앱은 임베딩·리랭크를 항상 이 서버에서 쓰고, 생성만 `LAWBOT_LLM_BASE_URL`로 다른 OpenAI 호환 API(클라우드 모델 등)로 바꿀 수 있습니다. 이 맥 밖 주소는 질문이 외부로 나가므로 `LAWBOT_LLM_ALLOW_EXTERNAL=1`과 https가 있어야 허용합니다.
 
 **상시 운영과 개발 동시 실행**
@@ -351,7 +355,7 @@ client.chat.completions.create(
 
 - 웹앱 쪽 코드(`services/chatbot`: 검색·리랭킹 정렬·하위법령 필터·프롬프트 조립·화면, system 파일, 조문 데이터)는 개발 웹앱만 다시 띄워 시험합니다.
 - 모델 서버 코드(`services/model-server`)는 개발용 모델 서버로 시험합니다. 운영 모델 서버를 멈추고(`launchctl bootout …/com.lawbot.model-server`), 개발 레포에서 다른 포트로 띄운 뒤(`LAWBOT_MODEL_SERVER_PORT=<시험 포트> uv run lawbot-model-server`) 개발 웹앱을 그 포트로 연결합니다(`LAWBOT_MODEL_SERVER=http://127.0.0.1:<시험 포트> uv run lawbot-app`). 메모리 때문에 모델 서버는 한 번에 하나만 띄웁니다.
-- 모델 서버는 모델 연산을 한 번에 하나만 합니다. 개발 화면에서 질문하는 동안 휴대폰 질문은 기다립니다. 정지 버튼으로 연결이 끊기면 바로 다음 요청을 받지만, 휴대폰이 연결을 끊지 않고 사라지면 생성이 최대 길이(1024토큰)에서 끝날 때까지 기다립니다.
+- 모델 서버는 기본(`LAWBOT_MAX_CONCURRENT=1`)으로 생성을 한 번에 하나만 합니다. 개발 화면에서 질문하는 동안 휴대폰 질문은 기다립니다. 정지 버튼으로 연결이 끊기면 바로 다음 요청을 받지만, 휴대폰이 연결을 끊지 않고 사라지면 생성이 최대 길이(1024토큰)에서 끝날 때까지 기다립니다.
 - 웹앱은 시작할 때 조문 인덱스를 모델 서버의 임베딩으로 만듭니다(812조문 기준 수십 초). 운영·개발 웹앱이 각자 만듭니다.
 - 같은 브라우저에서 운영·개발 화면에 번갈아 로그인할 때 로그인 쿠키가 겹치면, 개발 화면은 `http://localhost:<개발 포트>`로 접속합니다(호스트가 다르면 쿠키가 분리됨).
 - `eval_v4`도 같은 모델 서버를 씁니다. 결과의 `peak_gb`는 모델 서버 프로세스 값입니다.
@@ -419,7 +423,10 @@ uv run lawbot-eval-v4 refusal               # 표본 중 100문항에 다른 법
 uv run lawbot-eval-v4 summary --tag pro_concise_rr   # 결과 파일로 지표 표만 다시 → results/v4/summary_<tag>.csv
 uv run lawbot-eval-v4 --split val            # 하위법령 첨부 구성이면 retrieval·answers·refusal + decree (tag 끝 _dec_val)
 uv run lawbot-eval-v4 decree --split val     # 하위법령 정답 val 444 첨부 포함률 + 표본 200 답변 (val만)
+uv run lawbot-eval-v4 answers --split val --concurrency 4 --tag <tag>  # 문항을 4개씩 동시에 (처리량 측정, 모델 서버 LAWBOT_MAX_CONCURRENT와 함께)
 ```
+
+- `--concurrency N`(기본 1)은 문항을 N개씩 동시에 보내고 결과 파일에는 문항 순서대로 씁니다. 단계별 문항 수·시간은 `run_<tag>.json`의 `stage_times`에 남고, 끝날 때 문항/분을 출력합니다.
 
 - tag 기본값은 `<모델>_<형식>_<rr|emb>`입니다(예: `pro_concise_rr`). `--fmt full`이면 4항목 system으로 생성합니다.
 - 하위법령 첨부 구성(그 모델이 `LAWBOT_DECREE_MODELS`에 있음)이면 tag에 `_dec`가 붙습니다(예: `pro_concise_rr_dec_val`). retrieval에 법률 질문에 붙은 하위법령(첨부 수, 첨부 중 다른 법 비율), answers에 `decrees` 열이 더해집니다. 열이 다른 기존 결과 파일에는 이어 쓰지 않고 멈춥니다. refusal의 정답 없는 참고 조문은 하위법령을 켜도 법률 415개에서 고릅니다(기준선과 같은 표본).
@@ -492,8 +499,9 @@ services/chatbot/src/lawbot/
 ├── refusal.py         # 거절 판정 (【결론】에 '확인할 수 없'), 범위 밖 답변 판정 (거절·안내·억지적용·미인용)
 └── report.py          # 평가 결과를 metrics.csv 한 행으로 모으고 기준 실행과 비교
 services/model-server/src/lawbot_model_server/
-├── api.py             # OpenAI 호환 API (FastAPI): 인증·크기 제한·로그, 작업 스레드로 한 번에 하나
-├── chat.py            # MLX 채팅 모델 (chat template·생각 블록 처리·탐욕적 생성)
+├── api.py             # OpenAI 호환 API (FastAPI): 인증·크기 제한·로그
+├── scheduler.py       # GPU 스레드 하나: chat 동시 생성 상한·대기열·끊김, 생성 스텝 사이에 embeddings·rerank
+├── chat.py            # MLX 채팅 모델 (chat template·생각 블록 처리·탐욕적 생성), 배치 생성 엔진 (mlx_lm BatchGenerator)
 ├── embeddings.py      # sentence-transformers 임베딩 (MPS, fp16)
 ├── rerank.py          # Qwen3-Reranker 채점 (실험 노트북과 같은 입력)
 ├── registry.py        # 제공 모델 목록, chat 모델 LRU
@@ -612,6 +620,7 @@ Question
 One line per evaluation with a link to its record; tables, settings and commands live in [`docs/evals/`](docs/evals/).
 
 - **v4 web app, test (2026-10-25)**: reranked Recall@3 0.940, citation accuracy 0.905, out-of-scope refusal 0.96, 15.1 s per question, MLX peak 20.4GB → [record](docs/evals/2026-10-25-v4-webapp-test.md)
+- **Concurrent inference (val answers, 2026-11-01)**: batch path with one request gives all 200 answers identical to baseline; concurrency 2/4 gives ×1.36/×1.67 throughput, per-request completion 19.6→28.8/46.8 s, MLX peak 21.9/23.4 GB, 52/56 answers differ, mostly in wording, with equal or slightly better metrics → [record](docs/evals/2026-11-01-batch-generation.md)
 - **Switch to the OpenAI-compatible model server (val, 2026-11-01)**: all 600 answers, 1,110 retrieval rows and decree attachments identical to baseline, latency within 0.3 s → [record](docs/evals/2026-11-01-openai-api.md)
 - **Remote mode recheck (2026-10-29)**: all 522 answers identical to local mode, latency within 0.3 s → [record](docs/evals/2026-10-29-model-server.md)
 - **Enforcement-decree attachment experiment (val, 2026-10-29 to 31)**: chosen rule attaches the gold decree 0.921; gold-decree citation on decree questions 0.000 → 0.900; Act answers unchanged → [record](docs/evals/2026-10-31-decree-experiment.md)
@@ -745,6 +754,7 @@ Web app (`lawbot-app`, `check_deploy`, `eval_v4`):
 | `LAWBOT_LLM_ALLOW_EXTERNAL` | For an external API | `1` allows questions to leave this Mac (https only) |
 | `LAWBOT_PORT` | No | Web app port (1024–65535). Previous default if unset. Use different values when running production and development together |
 | `LAWBOT_INSTANCE` | No | Name appended to the page and tab title (e.g. `운영`, `개발`; at most 40 characters) |
+| `LAWBOT_CHAT_CONCURRENCY` | No | Questions the web app handles at the same time (1–16, default `1`). Above the model server's `LAWBOT_MAX_CONCURRENT`, extra questions wait at the server |
 | `LAWBOT_REQUEST_LOG` | No | Request log file (default `logs/requests.jsonl` at the repo root). Empty disables it |
 | `LAWBOT_FEEDBACK` | No | `1` adds 👍 and flag buttons to each answer and saves the rated answers (default `0`; only `0` or `1`) |
 | `LAWBOT_FEEDBACK_DIR` | No | Feedback folder (default `feedback/` at the repo root). Inside the repo it must be git-ignored. For production, an absolute path outside the repo is recommended |
@@ -758,6 +768,7 @@ Model server (`lawbot-model-server`, `lawbot_model_server.check`):
 | `LAWBOT_SERVE_CHAT` / `LAWBOT_SERVE_EMBEDDING` / `LAWBOT_SERVE_RERANK` | At least one | Comma-separated `id=folder` entries (e.g. `qwen3.8-27b-4bit=models/v4/qwen3.8_27b_mlx_4bit`) |
 | `LAWBOT_SERVE_PRELOAD` | No | Chat model ids loaded at startup (default: the first chat models up to the resident count). Embedding and reranker models always load at startup |
 | `LAWBOT_MAX_RESIDENT` | No | Chat models kept in memory (default `2`, LRU). Use `1` with 27B on 32 GB |
+| `LAWBOT_MAX_CONCURRENT` | No | Chat requests generated at the same time (1–16, default `1`). Generation uses mlx_lm `BatchGenerator` and this is the batch size. `1` gives the same answers as the earlier sequential generation; `2` or more raises throughput but slows each request and may change answer wording slightly ([record](docs/evals/2026-11-01-batch-generation.md)). Extra requests wait in arrival order |
 
 If either `LAWBOT_USER` or `LAWBOT_PW` is missing or empty, the app refuses to start with a `RuntimeError` before loading any model. There is no way to run the server without a login.
 
@@ -814,7 +825,8 @@ client.chat.completions.create(
 ```
 
 - It listens only on 127.0.0.1 and every request (including `/health`) needs the token. Unknown fields (`tools`, `n` > 1, …) are rejected with 400. Questions and documents are never logged (path, model, status and time only).
-- Model computation runs one at a time (MLX and MPS are never driven from several threads at once). Overlapping requests wait; when a stream is disconnected (stop button) generation stops at the next token and the next request starts.
+- One GPU thread runs all model computation (MLX and MPS are never driven from several threads at once). Chat generation runs up to `LAWBOT_MAX_CONCURRENT` requests at a time (as one batch when 2 or more); extra requests wait in arrival order. Embeddings and rerank run between generation steps, pausing active streams briefly. When a stream is disconnected (stop button) the request is dropped at the next step and its slot is freed.
+- A request for a different chat model waits until running generations finish, then the model is swapped (later requests keep their order).
 - The web app always uses this server for embeddings and reranking; only generation can be pointed at another OpenAI-compatible API (e.g. a cloud model) with `LAWBOT_LLM_BASE_URL`. An address outside this Mac sends questions out, so it needs `LAWBOT_LLM_ALLOW_EXTERNAL=1` and https.
 
 **Always-on production plus development**
@@ -860,7 +872,7 @@ Constraints:
 
 - Web app changes (`services/chatbot`: retrieval, rerank ordering, decree filter, prompt assembly, UI, system prompt files, article data) are tested by restarting only the development web app.
 - Model server changes (`services/model-server`) need a development model server: stop the production one, start one from the development repo on another port (`LAWBOT_MODEL_SERVER_PORT=<test port> uv run lawbot-model-server`) and point the development web app at it. Run only one model server at a time because of memory.
-- The model server computes one request at a time, so a phone question waits while a development question is generating. Stop buttons disconnect and free it at once; a phone that disappears without disconnecting holds it until generation reaches the length limit (1024 tokens).
+- By default (`LAWBOT_MAX_CONCURRENT=1`) the model server generates one request at a time, so a phone question waits while a development question is generating. Stop buttons disconnect and free it at once; a phone that disappears without disconnecting holds it until generation reaches the length limit (1024 tokens).
 - The web app builds its article index with the model server's embeddings at startup (tens of seconds for 812 articles); production and development each build their own.
 - If login cookies clash when switching between production and development in one browser, open development at `http://localhost:<dev port>` (a different host keeps separate cookies).
 - `eval_v4` uses the same model server; `peak_gb` in its results is the model server's.
@@ -927,7 +939,10 @@ uv run lawbot-eval-v4 refusal               # 100 sampled questions with only ot
 uv run lawbot-eval-v4 summary --tag pro_concise_rr
 uv run lawbot-eval-v4 --split val            # with decrees on: retrieval, answers, refusal + decree (tag ends in _dec_val)
 uv run lawbot-eval-v4 decree --split val     # decree-answer val 444 attachment rate + 200-question answer sample (val only)
+uv run lawbot-eval-v4 answers --split val --concurrency 4 --tag <tag>  # send 4 questions at a time (throughput, together with the server's LAWBOT_MAX_CONCURRENT)
 ```
+
+- `--concurrency N` (default 1) sends N questions at a time and still writes results in question order. Per-stage counts and times go to `stage_times` in `run_<tag>.json`, and questions per minute are printed at the end.
 
 With decrees attached for the model, the default tag gets `_dec` (e.g. `pro_concise_rr_dec_val`); retrieval adds the decrees attached to Act questions (count, share from another law) and answers adds a `decrees` column. Runs refuse to append to an existing file with different columns. Refusal contexts are still drawn from the 415 Act articles, so the sample matches the baseline. The `decree` stage writes `dqretrieval_<tag>.csv` (gold decree among the 10 candidates / attached, val 444) and `dqanswers_<tag>.csv` (the 200 ids in `data/v4/decree_ctx_dq_val200.csv` answered through the web-app path, scored for gold-decree citation, false refusal and citations outside the context); summary and compare get decree sections.
 
@@ -990,8 +1005,9 @@ services/chatbot/src/lawbot/
 ├── refusal.py         # refusal detection ('확인할 수 없' in the conclusion), out-of-scope verdicts (refusal, referral, forced, uncited)
 └── report.py          # combine evaluation results into a metrics.csv row and compare with a baseline
 services/model-server/src/lawbot_model_server/
-├── api.py             # OpenAI-compatible API (FastAPI): auth, size limit, logging, one computation at a time via a worker thread
-├── chat.py            # MLX chat model (chat template, thinking-block handling, greedy decoding)
+├── api.py             # OpenAI-compatible API (FastAPI): auth, size limit, logging
+├── scheduler.py       # one GPU thread: chat concurrency limit, queue, disconnects; embeddings/rerank between generation steps
+├── chat.py            # MLX chat model (chat template, thinking-block handling, greedy decoding), batched generation engine (mlx_lm BatchGenerator)
 ├── embeddings.py      # sentence-transformers embeddings (MPS, fp16)
 ├── rerank.py          # Qwen3-Reranker scoring (same inputs as the experiment notebook)
 ├── registry.py        # served models, chat-model LRU

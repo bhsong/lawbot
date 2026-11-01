@@ -28,6 +28,7 @@ class Config:
     models: tuple  # ModelEntry
     preload: tuple  # 시작할 때 올릴 chat 모델 id (첫 번째는 실패하면 시작 중단, 나머지는 경고만)
     max_resident: int  # 동시에 올려 두는 chat 모델 수 (LRU). embedding·rerank는 항상 상주
+    max_concurrent: int = 1  # 동시에 생성하는 chat 요청 수 (배치 크기). 1이면 PR 2와 같은 답 (2026-11-01 val 확인)
 
 
 def parse_port(name, value):
@@ -94,6 +95,16 @@ def max_resident():
     return int(raw)
 
 
+MAX_CONCURRENT_LIMIT = 16
+
+
+def max_concurrent():
+    raw = (os.environ.get('LAWBOT_MAX_CONCURRENT') or '1').strip()
+    if not raw.isdigit() or not 1 <= int(raw) <= MAX_CONCURRENT_LIMIT:
+        raise ValueError(f'LAWBOT_MAX_CONCURRENT는 1–{MAX_CONCURRENT_LIMIT} 정수: {raw!r}')
+    return int(raw)
+
+
 def preload(entries, resident):
     """LAWBOT_SERVE_PRELOAD (chat id 쉼표). 없으면 chat 모델 앞에서부터 상주 수만큼"""
     chat = [e.id for e in entries if e.kind == 'chat']
@@ -113,4 +124,4 @@ def load():
     """포트·토큰을 먼저 확인한다 (모델을 올리기 전에 실행 거부)"""
     p, t = port(), token()
     entries, resident = models(), max_resident()
-    return Config(p, t, entries, preload(entries, resident), resident)
+    return Config(p, t, entries, preload(entries, resident), resident, max_concurrent())

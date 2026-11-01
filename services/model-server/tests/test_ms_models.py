@@ -1,5 +1,5 @@
 # services/model-server/tests/test_ms_models.py  →  모델 래퍼 (chat·embedding·rerank). 모델 파일 불필요
-# chat: 가짜 mlx_lm.load·stream_generate / rerank: 작은 무작위 MLX Qwen3 + 가짜 토크나이저 / embedding: 가짜 SentenceTransformer
+# chat: 가짜 mlx_lm.load·BatchGenerator / rerank: 작은 무작위 MLX Qwen3 + 가짜 토크나이저 / embedding: 가짜 SentenceTransformer
 # 챗봇의 이전 llm.py·reranker.py·retriever.py 테스트에서 옮긴 부분은 계산이 그때와 같은지 본다
 import types
 
@@ -12,7 +12,7 @@ from mlx_lm.models import qwen3
 import lawbot_model_server.chat as chat_mod
 import lawbot_model_server.embeddings as emb_mod
 import lawbot_model_server.rerank as rr_mod
-from lawbot_model_server.chat import THINK, ChatModel, close_thinking, hide_thinking
+from lawbot_model_server.chat import THINK, BatchEngine, ChatModel, ThinkFilter, close_thinking
 
 
 # ---- chat: 생각 단계 끄기 (튜닝 전 모델의 chat template이 enable_thinking을 무시할 때) ----
@@ -28,20 +28,48 @@ def chunks(*texts):
     return [types.SimpleNamespace(text=t, generation_tps=1.0) for t in texts]
 
 
+def hide(items, markers):
+    """요청 하나의 응답들에 ThinkFilter (BatchEngine이 생각 끔 요청마다 하나씩 두는 것과 같음)"""
+    if markers is None:
+        return list(items)
+    f = ThinkFilter(markers)
+    return [f.feed(r) for r in items]
+
+
 def test_hide_thinking_block():
-    out = list(hide_thinking(chunks('<thi', 'nk>\n음…', '고민', '</think>\n\n【결론】', ' 답'), THINK))
+    out = hide(chunks('<thi', 'nk>\n음…', '고민', '</think>\n\n【결론】', ' 답'), THINK)
     assert len(out) == 5 and all(o.generation_tps == 1.0 for o in out)  # 토큰마다 응답 유지 (측정값 그대로)
     assert [o.text for o in out] == ['', '', '', '【결론】', ' 답']
 
 
 def test_hide_thinking_passthrough():
     for texts in (('【결론】', '답'), (' ', '\n【결론】', '답'), ('<', 'b>굵게'), ('생각 <think> 아님',)):
-        assert ''.join(o.text for o in hide_thinking(chunks(*texts), THINK)) == ''.join(texts)
-    assert ''.join(o.text for o in hide_thinking(chunks('<think>', '끝나지 않음'), None)) == '<think>끝나지 않음'
-    assert ''.join(o.text for o in hide_thinking(chunks('<think>', '끝나지 않음'), THINK)) == ''
+        assert ''.join(o.text for o in hide(chunks(*texts), THINK)) == ''.join(texts)
+    assert ''.join(o.text for o in hide(chunks('<think>', '끝나지 않음'), THINK)) == ''
+
+
+class FakeDetok:
+    """토큰 = 문자열 그대로 (mlx_lm 스트리밍 detokenizer와 같은 메서드)"""
+
+    def __init__(self):
+        self.text, self.shown = '', 0
+
+    def add_token(self, t):
+        self.text += t
+
+    def finalize(self):
+        pass
+
+    @property
+    def last_segment(self):
+        out, self.shown = self.text[self.shown :], len(self.text)
+        return out
 
 
 class FakeTokenizer:
+    bos_token = None
+    eos_token_ids = {'<eos>'}
+
     def __init__(self, think=None):
         self.calls = []
         if think:
@@ -51,90 +79,120 @@ class FakeTokenizer:
         self.calls.append((messages, kw))
         return 'PROMPT'
 
+    def encode(self, text, add_special_tokens=True):
+        return list(text)
+
+    @property
+    def detokenizer(self):
+        return FakeDetok()
+
+
+class FakeGenerator:
+    """BatchGenerator 대역: insert 인자를 기록하고 seen['gen']의 토큰을 한 스텝에 하나씩 (마지막은 length)"""
+
+    def __init__(self, seen, **kw):
+        self.seen, self.uids = seen, {}
+        seen['generator'] = kw
+
+    def insert(self, prompts, max_tokens, samplers):
+        uid = len(self.seen.setdefault('inserted', []))
+        self.seen['inserted'].append(
+            {'prompt': ''.join(prompts[0]), 'max_tokens': max_tokens[0], 'sampler': samplers[0]}
+        )
+        self.uids[uid] = list(self.seen['gen'])
+        return [uid]
+
+    def next(self):
+        out = []
+        for uid, rest in list(self.uids.items()):
+            t = rest.pop(0)
+            out.append(types.SimpleNamespace(uid=uid, token=t, finish_reason=None if rest else 'length'))
+            if not rest:
+                del self.uids[uid]
+        return [], out
+
+    def close(self):
+        self.seen['closed'] = True
+
 
 @pytest.fixture
 def fake_chat(ms_env, tmp_path):
-    """mlx_lm.load·stream_generate·make_sampler를 가짜로. seen['gen']으로 생성 결과를 바꾼다"""
-    seen = {'tok': FakeTokenizer(), 'gen': lambda: iter(chunks('【결론】', '답'))}
+    """mlx_lm.load·BatchGenerator·make_sampler를 가짜로. seen['gen']으로 생성 토큰을 바꾼다"""
+    seen = {'tok': FakeTokenizer(), 'gen': ['【결론】', '답']}
     ms_env.setattr(chat_mod, 'load', lambda path: seen.update(path=path) or ('MODEL', seen['tok']))
-    ms_env.setattr(chat_mod, 'make_sampler', lambda **kw: seen.update(sampler=kw) or 'SAMPLER')
-
-    def stream_generate(model, tok, prompt, max_tokens, sampler):
-        seen.update(prompt=prompt, max_tokens=max_tokens, used_sampler=sampler)
-        yield from seen['gen']()
-
-    ms_env.setattr(chat_mod, 'stream_generate', stream_generate)
+    ms_env.setattr(chat_mod, 'make_sampler', lambda **kw: seen.setdefault('samplers', []).append(kw) or f'S{kw}')
+    ms_env.setattr(chat_mod, 'BatchGenerator', lambda model, **kw: FakeGenerator(seen, model=model, **kw))
     return tmp_path, seen
 
 
 MESSAGES = [{'role': 'system', 'content': 'SYS'}, {'role': 'user', 'content': '[참고 조문]\n…\n\n[질문]\nq'}]
 
 
+def generate(model, messages=MESSAGES, max_concurrent=1, **kw):
+    """ChatModel.engine으로 요청 하나를 끝까지 → 응답 목록"""
+    eng = model.engine(max_concurrent)
+    eng.add('t', messages, {'max_tokens': 1024, 'temperature': 0.0, 'top_p': None, 'enable_thinking': False} | kw)
+    items = []
+    while len(eng):
+        for _, kind, v in eng.step():
+            if kind == 'item':
+                items.append(v)
+    eng.close()
+    return items
+
+
+def test_engine_is_batch_for_any_limit(fake_chat):
+    """상한 1도 BatchEngine (SequentialEngine 삭제: 배치 경로 1건이 val 답변 200개 동일, 2026-11-01)"""
+    path, seen = fake_chat
+    m = ChatModel(path)
+    for n in (1, 4):
+        eng = m.engine(n)
+        assert isinstance(eng, BatchEngine) and eng.max_concurrent == n
+    generate(m, max_concurrent=1)
+    assert seen['generator']['completion_batch_size'] == seen['generator']['prefill_batch_size'] == 1
+
+
 def test_chat_matches_previous_llm_call(fake_chat):
     """챗봇의 이전 LLM.stream과 같은 호출: 받은 messages 그대로, 생각 끔, 탐욕적 생성(temp 0)"""
     path, seen = fake_chat
     m = ChatModel(path)
-    assert ''.join(r.text for r in m.stream(MESSAGES, max_tokens=1024)) == '【결론】답'
+    assert ''.join(r.text for r in generate(m)) == '【결론】답'
     messages, kw = seen['tok'].calls[0]
     assert messages == MESSAGES
     assert kw == {'add_generation_prompt': True, 'tokenize': False, 'enable_thinking': False}
-    assert seen['prompt'] == 'PROMPT' and seen['max_tokens'] == 1024 and seen['path'] == str(path)
-    assert seen['sampler'] == {'temp': 0.0, 'top_p': 0.0}  # 이전 make_sampler(temp=0.0)와 같은 탐욕적 생성
+    assert seen['inserted'] == [{'prompt': 'PROMPT', 'max_tokens': 1024, 'sampler': "S{'temp': 0.0, 'top_p': 0.0}"}]
+    assert seen['path'] == str(path) and seen['generator']['model'] == 'MODEL'
+    assert seen['generator']['stop_tokens'] == [['<eos>']]
 
 
 def test_chat_closes_thinking_when_template_ignores_it(fake_chat):
     path, seen = fake_chat
     seen['tok'] = FakeTokenizer(THINK)  # Qwen 어휘, 템플릿은 'PROMPT'만 냄 (끄기 무시)
-    seen['gen'] = lambda: iter(chunks('<think>', '생각', '</think>', '【결론】답'))
-    assert ''.join(r.text for r in ChatModel(path).stream(MESSAGES)) == '【결론】답'
-    assert seen['prompt'] == 'PROMPT<think>\n\n</think>\n\n'
+    seen['gen'] = ['<think>', '생각', '</think>', '【결론】답']
+    assert ''.join(r.text for r in generate(ChatModel(path))) == '【결론】답'
+    assert seen['inserted'][0]['prompt'] == 'PROMPT<think>\n\n</think>\n\n'
 
 
 def test_chat_thinking_on_passes_through(fake_chat):
     path, seen = fake_chat
     seen['tok'] = FakeTokenizer(THINK)
-    seen['gen'] = lambda: iter(chunks('<think>', '생각', '</think>', '답'))
-    m = ChatModel(path)
-    assert ''.join(r.text for r in m.stream(MESSAGES, enable_thinking=True, temperature=0.7, top_p=0.9)) == (
-        '<think>생각</think>답'
-    )
-    assert seen['prompt'] == 'PROMPT' and seen['tok'].calls[-1][1]['enable_thinking'] is True
-    assert seen['sampler'] == {'temp': 0.7, 'top_p': 0.9}
+    seen['gen'] = ['<think>', '생각', '</think>', '답']
+    out = generate(ChatModel(path), enable_thinking=True, temperature=0.7, top_p=0.9)
+    assert ''.join(r.text for r in out) == '<think>생각</think>답'
+    assert seen['inserted'][0]['prompt'] == 'PROMPT' and seen['tok'].calls[-1][1]['enable_thinking'] is True
+    assert seen['samplers'] == [{'temp': 0.7, 'top_p': 0.9}]
 
 
-def test_chat_stops_generation_when_closed(fake_chat):
+def test_chat_without_think_tokens_passes_through(fake_chat):
+    """생각 토큰이 없는 모델은 숨기지 않는다 (ThinkFilter 없음)"""
     path, seen = fake_chat
-    state = {'closed': False}
-
-    def gen():
-        try:
-            for i in range(100):
-                yield types.SimpleNamespace(text=str(i))
-        finally:
-            state['closed'] = True
-
-    seen['gen'] = gen
-    s = ChatModel(path).stream(MESSAGES)
-    next(s)
-    s.close()
-    assert state['closed']
+    seen['gen'] = ['<think>', '끝나지 않음']
+    assert ''.join(r.text for r in generate(ChatModel(path))) == '<think>끝나지 않음'
 
 
 def test_chat_missing_folder(tmp_path):
     with pytest.raises(FileNotFoundError, match='모델 폴더 없음'):
         ChatModel(tmp_path / '없음')
-
-
-def test_chat_failure_propagates(fake_chat):
-    path, seen = fake_chat
-
-    def broken():
-        yield types.SimpleNamespace(text='【결론】')
-        raise RuntimeError('generation failed')
-
-    seen['gen'] = broken
-    with pytest.raises(RuntimeError, match='generation failed'):
-        ''.join(r.text for r in ChatModel(path).stream(MESSAGES))
 
 
 # ---- embedding ----

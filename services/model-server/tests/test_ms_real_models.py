@@ -83,18 +83,82 @@ def test_embedding_finds_article():
     assert keys[int(np.argmax(d @ q[0]))] == '근로기준법 제26조'
 
 
-def test_chat_answers_in_format():
+@pytest.fixture(scope='module')
+def chat_model():
     need(CHAT)
     from lawbot_model_server.chat import ChatModel
 
+    return ChatModel(CHAT)
+
+
+def answer_messages(article, question):
     docs = v4_docs()
-    user = f'[참고 조문]\n[1] {docs["근로기준법 제26조"]}\n\n[질문]\n{QUESTION}'
     system = (ROOT / 'data/v4/system_v4.txt').read_text(encoding='utf-8').strip()
-    out = list(
-        ChatModel(CHAT).stream(
-            [{'role': 'system', 'content': system}, {'role': 'user', 'content': user}], max_tokens=512
-        )
+    user = f'[참고 조문]\n[1] {docs[article]}\n\n[질문]\n{question}'
+    return [{'role': 'system', 'content': system}, {'role': 'user', 'content': user}]
+
+
+KW = {'max_tokens': 256, 'temperature': 0.0, 'top_p': None, 'enable_thinking': False}
+
+
+def run_engine(engine, requests):
+    """requests: {이름: messages}. 모두 끝날 때까지 step → {이름: 응답 목록}"""
+    out = {n: [] for n in requests}
+    for n, m in requests.items():
+        engine.add(n, m, KW)
+    ended = set()
+    while len(ended) < len(requests):
+        for t, kind, v in engine.step():
+            if kind == 'item':
+                out[t].append(v)
+            elif kind == 'end':
+                ended.add(t)
+            else:
+                raise v
+    engine.close()
+    return out
+
+
+def answer_text(items):
+    return ''.join(r.text for r in items)
+
+
+def stream_generate_answer(chat, messages):
+    """기준: mlx_lm.stream_generate (PR 2까지 쓰던 순차 생성 경로, 생각 블록 숨김 포함)"""
+    from mlx_lm import stream_generate
+    from mlx_lm.sample_utils import make_sampler
+
+    from lawbot_model_server.chat import ThinkFilter
+
+    f = ThinkFilter(chat.think) if chat.think else None
+    gen = stream_generate(
+        chat.model, chat.tok, chat.prompt(messages), max_tokens=KW['max_tokens'], sampler=make_sampler(temp=0.0)
     )
-    answer = ''.join(r.text for r in out)
+    return ''.join((f.feed(r) if f else r).text for r in gen)
+
+
+def test_chat_answers_in_format(chat_model):
+    out = run_engine(chat_model.engine(1), {'q': answer_messages('근로기준법 제26조', QUESTION)})['q']
+    answer = answer_text(out)
     assert '【결론】' in answer and '제26조' in answer
     assert out[-1].finish_reason in ('stop', 'length') and out[-1].prompt_tokens > 0
+
+
+def test_batch_engine_one_request_matches_stream_generate(chat_model):
+    """BatchEngine 1건이 stream_generate와 같은 답 (SequentialEngine 삭제 근거, mlx_lm 업데이트 때 다시 확인)"""
+    m = answer_messages('근로기준법 제26조', QUESTION)
+    assert answer_text(run_engine(chat_model.engine(1), {'q': m})['q']) == stream_generate_answer(chat_model, m)
+
+
+def test_batch_engine_two_requests_finish(chat_model):
+    from lawbot_model_server.chat import BatchEngine
+
+    out = run_engine(
+        BatchEngine(chat_model, 4),
+        {
+            'a': answer_messages('근로기준법 제26조', QUESTION),
+            'b': answer_messages('근로기준법 제60조', '1년 일하면 연차휴가가 며칠인가요?'),
+        },
+    )
+    out = {k: answer_text(v) for k, v in out.items()}
+    assert all('【결론】' in v for v in out.values()) and '제26조' in out['a'] and '제60조' in out['b']

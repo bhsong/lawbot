@@ -26,7 +26,7 @@ def set_minimal(env, **extra):
 def test_config_minimal(ms_env):
     set_minimal(ms_env, LAWBOT_SERVE_EMBEDDING='lawbot-emb-v4=models/v4/emb_v4_fp16')
     c = config.load()
-    assert c.port == 65535 and c.token == TOKEN and c.max_resident == 2
+    assert c.port == 65535 and c.token == TOKEN and c.max_resident == 2 and c.max_concurrent == 1
     assert [(e.id, e.kind) for e in c.models] == [
         ('qwen3.8-27b-4bit', 'chat'),
         ('lawbot-fast-v4', 'chat'),
@@ -34,6 +34,11 @@ def test_config_minimal(ms_env):
     ]
     assert c.models[0].path == ROOT / 'models/v4/qwen3.8_27b_mlx_4bit' and str(c.models[1].path) == '/abs/fast'
     assert c.preload == ('qwen3.8-27b-4bit', 'lawbot-fast-v4')  # 기본: chat 앞에서부터 상주 수만큼
+
+
+def test_config_max_concurrent(ms_env):
+    set_minimal(ms_env, LAWBOT_MAX_CONCURRENT='4')
+    assert config.load().max_concurrent == 4
 
 
 def test_config_preload_and_resident(ms_env):
@@ -60,6 +65,9 @@ def test_config_preload_and_resident(ms_env):
         ('LAWBOT_SERVE_CHAT', 'a=/x,a=/y', ValueError, '겹칩니다'),
         ('LAWBOT_SERVE_CHAT', '', RuntimeError, '제공할 모델이 없습니다'),
         ('LAWBOT_MAX_RESIDENT', '0', ValueError, 'LAWBOT_MAX_RESIDENT'),
+        ('LAWBOT_MAX_CONCURRENT', '0', ValueError, 'LAWBOT_MAX_CONCURRENT는 1–16'),
+        ('LAWBOT_MAX_CONCURRENT', '17', ValueError, 'LAWBOT_MAX_CONCURRENT는 1–16'),
+        ('LAWBOT_MAX_CONCURRENT', 'x', ValueError, 'LAWBOT_MAX_CONCURRENT는 1–16'),
     ],
 )
 def test_config_errors(ms_env, key, value, exc, msg):
@@ -112,7 +120,7 @@ def test_preload_first_failure_stops_rest_warn(capsys):
 
 def test_load_models_sets_registry():
     app = api.create_app(TOKEN)
-    cfg = config.Config(0, TOKEN, ENTRIES, ('chat-a',), 1)
+    cfg = config.Config(0, TOKEN, ENTRIES, ('chat-a',), 1, 3)
 
     class Reg(Registry):
         def __init__(self, entries, max_resident):
@@ -120,6 +128,7 @@ def test_load_models_sets_registry():
 
     server.load_models(app, cfg, Reg)
     assert app.state.registry.is_loaded('chat-a') and app.state.registry.is_loaded('emb')
+    assert app.state.scheduler.registry is app.state.registry and app.state.scheduler.max_concurrent == 3
 
 
 # ---- 점검 (모델 없이) ----
@@ -136,6 +145,11 @@ def test_check_reports_missing(ms_env, tmp_path):
     assert any(lv == 'FAIL' and 'chat d: 폴더 없음' in m for lv, m in out)
     assert any(lv == 'FAIL' and 'config_sentence_transformers.json 없음' in m for lv, m in out)
     assert all(TOKEN not in m for _, m in out)
+    assert ('INFO', '동시 생성 최대 1개 (mlx_lm BatchGenerator)') in out
+    ms_env.setenv('LAWBOT_MAX_CONCURRENT', '4')
+    assert ('INFO', '동시 생성 최대 4개 (mlx_lm BatchGenerator)') in check.run()
+    ms_env.setenv('LAWBOT_MAX_CONCURRENT', '0')
+    assert any(lv == 'FAIL' and 'LAWBOT_MAX_CONCURRENT' in m for lv, m in check.run())
 
 
 def write_safetensors(path, dtype):
@@ -207,27 +221,25 @@ def running(app):
 
 
 @pytest.mark.integration
-def test_disconnect_stops_generation_and_frees_lock(ms_env):
-    FakeChat.chunks, FakeChat.delay, FakeChat.finish = ['【결론】', '답'] + ['더'] * 2000, 0.002, 'stop'
+def test_disconnect_stops_generation_and_frees_slot(ms_env):
+    FakeChat.chunks, FakeChat.delay = ['【결론】', '답'] + ['더'] * 2000, 0.002
     reg = registry()
     app = api.create_app(TOKEN, reg)
     body = {'model': 'chat-a', 'messages': [{'role': 'user', 'content': 'q'}], 'stream': True}
-    try:
-        with running(app) as url, httpx.Client(trust_env=False, timeout=10) as c:
-            with c.stream('POST', f'{url}/v1/chat/completions', headers=AUTH, json=body) as r:
-                assert r.status_code == 200
-                next(r.iter_lines())  # 첫 토큰을 받고 끊음 (정지 버튼)
-            llm = reg.chat['chat-a']
-            deadline = time.monotonic() + 10
-            while not llm.closed and time.monotonic() < deadline:
-                time.sleep(0.01)
-            assert llm.closed and llm.yielded < 2002  # 끝까지 생성하지 않음
-            assert app.state.lock.acquire(timeout=5)  # 락이 풀림
-            app.state.lock.release()
-            r = c.post(f'{url}/v1/embeddings', headers=AUTH, json={'model': 'emb', 'input': 'x'}, timeout=5)
-            assert r.status_code == 200  # 다음 요청을 바로 받음
-    finally:
-        FakeChat.chunks, FakeChat.delay = ['【결론】', '예고해야', ' 합니다.'], 0.0
+    with running(app) as url, httpx.Client(trust_env=False, timeout=10) as c:
+        with c.stream('POST', f'{url}/v1/chat/completions', headers=AUTH, json=body) as r:
+            assert r.status_code == 200
+            next(r.iter_lines())  # 첫 토큰을 받고 끊음 (정지 버튼)
+        llm = reg.chat['chat-a']
+        deadline = time.monotonic() + 10
+        while not llm.closed and time.monotonic() < deadline:
+            time.sleep(0.01)
+        assert llm.closed and llm.yielded < 2002  # 끝까지 생성하지 않음
+        while app.state.scheduler.pending() and time.monotonic() < deadline:
+            time.sleep(0.01)
+        assert app.state.scheduler.pending() == 0  # 생성 자리가 비었음
+        r = c.post(f'{url}/v1/embeddings', headers=AUTH, json={'model': 'emb', 'input': 'x'}, timeout=5)
+        assert r.status_code == 200  # 다음 요청을 바로 받음
 
 
 @pytest.mark.integration

@@ -197,9 +197,45 @@ def test_external_llm_skips_server_chat_models(env, model_server):
 
 
 # ---- 두 서비스 계약: 챗봇 클라이언트 ↔ 실제 모델 서버 앱 (가짜 모델) ----
+class Engine:
+    """모델 서버 생성 엔진(BatchEngine)과 같은 인터페이스. 요청마다 Chat.stream을 한 토큰씩"""
+
+    def __init__(self, model):
+        self.model, self.items = model, {}
+
+    def __len__(self):
+        return len(self.items)
+
+    def tickets(self):
+        return list(self.items)
+
+    def add(self, ticket, messages, kw):
+        self.items[ticket] = self.model.stream(messages, **kw)
+
+    def step(self):
+        events = []
+        for t, it in list(self.items.items()):
+            r = next(it, None)
+            if r is None:
+                del self.items[t]
+                events.append((t, 'end', None))
+            else:
+                events.append((t, 'item', r))
+        return events
+
+    def remove(self, ticket):
+        self.items.pop(ticket, None)
+
+    def close(self):
+        self.items.clear()
+
+
 class Chat:
     def __init__(self, path):
         self.calls = []
+
+    def engine(self, max_concurrent):
+        return Engine(self)
 
     def stream(self, messages, **kw):
         self.calls.append((messages, kw))
