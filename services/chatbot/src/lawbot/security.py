@@ -4,20 +4,11 @@
 import os
 from urllib.parse import urlsplit
 
+from lawbot_common.ports import parse_port
+
 SERVER_NAME = '127.0.0.1'  # 고정값: 환경변수(GRADIO_SERVER_NAME 등)나 설정으로 바꾸지 않음
 SERVER_PORT = 7860  # LAWBOT_PORT가 없을 때의 기존 기본값 (하위 호환). 운영에서는 .env에 LAWBOT_PORT를 따로 정함
 INSTANCE_MAX = 40
-
-
-def parse_port(name, value):
-    """1024–65535 정수. 아니면 ValueError (변수 이름과 함께)"""
-    try:
-        port = int(value.strip())
-    except ValueError:
-        raise ValueError(f'{name}는 1024–65535 정수: {value!r}') from None
-    if not 1024 <= port <= 65535:
-        raise ValueError(f'{name}는 1024–65535 정수: {port}')
-    return port
 
 
 def server_port():

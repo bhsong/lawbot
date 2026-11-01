@@ -12,6 +12,7 @@ supported-markers = [
 members = [
     "law-monitor",
     "lawbot",
+    "lawbot-common",
     "lawbot-model-server",
 ]
 
@@ -379,6 +380,7 @@ version = "0.1.0"
 source = { editable = "services/monitor" }
 dependencies = [
     { name = "httpx" },
+    { name = "lawbot-common" },
     { name = "pyyaml" },
     { name = "tenacity" },
 ]
@@ -386,6 +388,7 @@ dependencies = [
 [package.metadata]
 requires-dist = [
     { name = "httpx", specifier = ">=0.28.1" },
+    { name = "lawbot-common", editable = "packages/lawbot-common" },
     { name = "pyyaml", specifier = ">=6.0.3" },
     { name = "tenacity", specifier = ">=9.2.1" },
 ]
@@ -397,6 +400,7 @@ source = { editable = "services/chatbot" }
 dependencies = [
     { name = "gradio" },
     { name = "httpx" },
+    { name = "lawbot-common" },
     { name = "numpy" },
     { name = "openai" },
     { name = "pandas" },
@@ -406,10 +410,16 @@ dependencies = [
 requires-dist = [
     { name = "gradio", specifier = ">=6.30.0" },
     { name = "httpx", specifier = ">=0.28.1" },
+    { name = "lawbot-common", editable = "packages/lawbot-common" },
     { name = "numpy", specifier = ">=2.0" },
     { name = "openai", specifier = ">=2.0" },
     { name = "pandas", specifier = ">=3.0.6" },
 ]
+
+[[package]]
+name = "lawbot-common"
+version = "0.1.0"
+source = { editable = "packages/lawbot-common" }
 
 [[package]]
 name = "lawbot-model-server"
@@ -417,6 +427,7 @@ version = "0.1.0"
 source = { editable = "services/model-server" }
 dependencies = [
     { name = "fastapi" },
+    { name = "lawbot-common" },
     { name = "mlx-lm" },
     { name = "numpy" },
     { name = "sentence-transformers" },
@@ -426,6 +437,7 @@ dependencies = [
 [package.metadata]
 requires-dist = [
     { name = "fastapi", specifier = ">=0.143.3" },
+    { name = "lawbot-common", editable = "packages/lawbot-common" },
     { name = "mlx-lm", specifier = ">=0.32.2" },
     { name = "numpy", specifier = ">=2.0" },
     { name = "sentence-transformers", specifier = ">=6.1.0" },

@@ -1,6 +1,7 @@
 """요약 모델 클라이언트: 운영 모델 서버(OpenAI 호환 /v1/chat/completions)를 httpx로 부른다.
 
 주소·토큰은 웹앱과 같은 LAWBOT_MODEL_SERVER·LAWBOT_MODEL_TOKEN (환경변수 → services/monitor/.env → 레포 .env).
+모델 id LAW_MONITOR_SUMMARY_MODEL은 환경변수·services/monitor/.env에서만 (레포 .env는 LAWBOT_*만 허용).
 토큰은 Authorization 헤더에만 넣고 오류·로그에는 남기지 않는다.
 """
 
@@ -36,7 +37,7 @@ def load_config() -> LLMConfig | None:
     token = secrets.get('LAWBOT_MODEL_TOKEN', root=True)
     if not url or not token:
         return None
-    return LLMConfig(url.rstrip('/'), token, secrets.get('LAW_MONITOR_SUMMARY_MODEL', root=True) or DEFAULT_MODEL)
+    return LLMConfig(url.rstrip('/'), token, secrets.get('LAW_MONITOR_SUMMARY_MODEL') or DEFAULT_MODEL)
 
 
 class ChatClient:

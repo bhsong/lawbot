@@ -9,6 +9,7 @@ requires-python = ">=3.14"
 dependencies = [   # 모델 라이브러리(mlx·torch)는 쓰지 않음: 모델은 모두 모델 서버(services/model-server)에
     "gradio>=6.30.0",
     "httpx>=0.28.1",
+    "lawbot-common",
     "numpy>=2.0",
     "openai>=2.0",
     "pandas>=3.0.6",
@@ -18,6 +19,9 @@ dependencies = [   # 모델 라이브러리(mlx·torch)는 쓰지 않음: 모델
 # 레포 최상위에서 uv run lawbot-app / uv run lawbot-eval-v4 로 실행
 lawbot-app = "lawbot.app:main"
 lawbot-eval-v4 = "lawbot.eval_v4:main"   # v4 웹앱 구성 전체 재평가 (단계 생략 시 all)
+
+[tool.uv.sources]
+lawbot-common = { workspace = true }
 
 [build-system]
 requires = ["uv_build>=0.12.19,<0.13.0"]

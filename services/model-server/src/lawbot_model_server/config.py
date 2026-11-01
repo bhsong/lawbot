@@ -6,6 +6,7 @@ import re
 from dataclasses import dataclass
 from pathlib import Path
 
+from lawbot_common.ports import parse_port
 from lawbot_model_server.envfile import ROOT
 
 HOST = '127.0.0.1'  # 고정값: 설정으로 바꾸지 않음 (질문이 맥 밖으로 나가지 않게)
@@ -29,16 +30,6 @@ class Config:
     preload: tuple  # 시작할 때 올릴 chat 모델 id (첫 번째는 실패하면 시작 중단, 나머지는 경고만)
     max_resident: int  # 동시에 올려 두는 chat 모델 수 (LRU). embedding·rerank는 항상 상주
     max_concurrent: int = 1  # 동시에 생성하는 chat 요청 수 (배치 크기). 1이면 PR 2와 같은 답 (2026-11-01 val 확인)
-
-
-def parse_port(name, value):
-    try:
-        port = int(value.strip())
-    except ValueError:
-        raise ValueError(f'{name}는 1024–65535 정수: {value!r}') from None
-    if not 1024 <= port <= 65535:
-        raise ValueError(f'{name}는 1024–65535 정수: {port}')
-    return port
 
 
 def port():
