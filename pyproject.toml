@@ -31,6 +31,7 @@ environments = ["sys_platform == 'darwin'"]   # mlx는 macOS용: 잠금 파일�
 [dependency-groups]
 dev = [
     "pytest>=9.1.1",
+    "ruff==0.17.3",
 ]
 
 [tool.pytest.ini_options]
@@ -39,4 +40,28 @@ addopts = "-ra --strict-markers -m 'not models'"   # 실제 모델 테스트는 
 markers = [
     "models: 실제 모델 파일(models/)과 Apple Silicon이 필요한 테스트",
     "integration: 실제 Gradio 서버를 별도 프로세스로 띄우는 인증 테스트 (127.0.0.1만 접속)",
+]
+
+[tool.ruff]
+line-length = 120   # 포맷터가 줄을 나누는 기준. 줄 길이 검사(E501)는 켜지 않음 (줄 끝 주석이 길어도 됨)
+target-version = "py314"
+src = ["src", "tests"]   # import 정렬에서 lawbot·tests 모듈(conftest·fakes)을 프로젝트 모듈로 봄
+# data_gd/ 등은 .gitignore에 있어 자동으로 건너뜀 (docs/plans/ruff-lint-format.md)
+
+[tool.ruff.lint]
+select = ["E4", "E7", "E9", "F", "I", "B", "UP", "RUF"]
+ignore = [
+    "RUF001", "RUF002", "RUF003",   # 한국어 문장의 전각 기호(【】 등)를 헷갈리는 문자로 오탐
+    "B905",     # zip(strict=): 동작이 바뀔 수 있어 하나씩 판단해야 함
+    "B007",     # for … in ask(...): pass 뒤 마지막 값을 루프 밖에서 씀 → _로 바꾸면 깨짐
+    "E741",     # 짧은 컴프리헨션 변수 l
+    "E731",     # 짧은 함수·테스트 대역에 lambda 대입
+    "RUF005",   # [*a, b] 표기 권장 (취향)
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = [
+    "E402",     # 가짜 모듈을 sys.modules에 넣은 뒤 import, 절마다 import
+    "RUF012",   # 테스트 대역의 공유 기록용 클래스 속성
+    "RUF059",   # 튜플 풀기로 반환 구조를 보여 줌
 ]
