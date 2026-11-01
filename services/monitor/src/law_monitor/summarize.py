@@ -1,4 +1,4 @@
-"""2단계: 대기 이벤트를 모델로 요약해 하루치 md를 만든다 (계획 docs/plans/monitor-summary.md).
+"""2단계: 대기 이벤트를 모델로 요약해 하루치 md를 만든다 (계획 docs/archives/monitor-summary.md).
 
 - 법령·행정규칙 이벤트 하나 = 모델 호출 하나. 같은 개정의 별표서식 이벤트(context.parent_event_id)는 그 호출에 함께
 - collector_failing은 모델 없이 경고로

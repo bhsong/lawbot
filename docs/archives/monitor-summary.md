@@ -1,7 +1,7 @@
 # 계획: 법령 변경 요약 (2단계, qwen3.8-27b-4bit → 요약 md)
 
 - 작성일: 2026-11-01
-- 상위: [monitor-collector.md](monitor-collector.md) (1단계), 원 계획서 9장 "2·3단계와의 연결"
+- 상위: [monitor-collector.md](../plans/monitor-collector.md) (1단계), 원 계획서 9장 "2·3단계와의 연결"
 - 목표: 매일 06:30 수집이 끝나면, 아직 요약하지 않은 이벤트(`events.processed_at`이 빈 것)를 운영 모델 서버의 `qwen3.8-27b-4bit`로 요약해 **그날의 요약 md 파일**을 만든다
 
 ## 1. 동작

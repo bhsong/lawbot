@@ -25,3 +25,19 @@
 ## 되돌리기
 
 `launchctl bootout gui/$(id -u)/com.lawbot.monitor` → plist 삭제 → 운영 worktree `git checkout --detach 33c5565` → `uv sync --frozen`. 실행 데이터(`services/monitor/data/`)와 `.env`는 git 밖이라 checkout과 무관하며, 지우려면 따로 지운다.
+
+## 추가 반영: 요약(2단계) `daily` 전환 (2026-11-01 23:35)
+
+- 운영 worktree: e98c158 → **800e6df** (main, PR #41 병합). 챗봇·모델 서버·`pyproject.toml`·`uv.lock` 차이 없음 → `uv sync --frozen --dry-run` "Would make no changes", 모델 서버·웹앱 재시작 안 함 (PID 그대로)
+- launchd: `bootout` → 템플릿으로 plist 다시 만듦(실행 명령 `collect` → **`daily`** = collect 다음 summarize) → `plutil -lint` → `bootstrap`. 이전 plist는 세션 임시 폴더에 백업
+- 요약 모델 설정: 운영 worktree 최상위 `.env`의 `LAWBOT_MODEL_SERVER`·`LAWBOT_MODEL_TOKEN`을 그대로 읽음 (복사 안 함)
+
+| # | 항목 | 기대값 | 실제값 |
+| --- | --- | --- | --- |
+| 1 | `launchctl kickstart` (daily 1회) | 종료 코드 0, 요약 md 생성 | **OK**. last exit code 0. `collectors=2 ok=2 failed=0 events=0`, `summarize events=0 calls=0 pending=0` |
+| 2 | `services/monitor/data/summaries/2026-11-01.md` | 대상 구간·새 변경 없음 | **OK**. `대상: 2026-11-01 22:28 ~ 2026-11-01 23:35 사이 새로 감지된 변경`, "새 변경 없음" (모델 호출 없음) |
+| 3 | `runs` 테이블 | summarize 실행 기록 | **OK**. bootstrap · normal · normal · summarize |
+
+남은 확인: 2026-11-02 06:30 자동 실행 → `summaries/2026-11-02.md` (대상 11-01 23:35 ~ 11-02 06:30).
+
+되돌리기(요약만): plist의 `daily`를 `collect`로 바꿔 `bootout` → `bootstrap`. 쌓인 이벤트는 `processed_at`이 빈 채로 남아 나중에 `law-monitor summarize`로 요약할 수 있다.

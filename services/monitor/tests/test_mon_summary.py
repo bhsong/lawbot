@@ -1,4 +1,4 @@
-"""2단계: 대기 이벤트 → 모델 서버(가짜) 요약 → data/summaries/YYYY-MM-DD.md (계획 docs/plans/monitor-summary.md)."""
+"""2단계: 대기 이벤트 → 모델 서버(가짜) 요약 → data/summaries/YYYY-MM-DD.md (계획 docs/archives/monitor-summary.md)."""
 
 import json
 
