@@ -5,6 +5,7 @@
 - 모델이 실패하면 거기서 멈추고, 요약하지 못한 이벤트는 processed_at을 비워 둔다 (다음 실행에서 다시)
 """
 
+import html
 import json
 import logging
 import time
@@ -128,7 +129,7 @@ def max_tokens_for(g: Group) -> int:
 
 def _title(event: dict) -> str:
     t = event.get('target') or {}
-    name = str(t.get('item_name') or '')
+    name = html.unescape(str(t.get('item_name') or ''))  # 법제처 제목에 &lt; 같은 문자가 남아 있음
     return name if len(name) <= 60 else name[:60] + '…'
 
 

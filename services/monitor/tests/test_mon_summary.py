@@ -141,6 +141,7 @@ def test_label_from_item_id():
     assert summarize.label({'target': {'item_id': '서식 0024-02'}}) == '서식24의2'
     assert summarize.label({'target': {'item_id': '별지 0002-00'}}) == '별지2'
     assert summarize.label({'target': {'item_id': '이상한 값'}}) == '이상한 값'
+    assert summarize._title({'target': {'item_name': '삭제 &lt;2026. 3. 20.&gt;'}}) == '삭제 <2026. 3. 20.>'
 
 
 def test_failure_keeps_events_pending(tmp_path, legalize):
