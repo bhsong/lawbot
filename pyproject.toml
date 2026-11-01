@@ -1,6 +1,7 @@
 # uv workspace 루트 (가상 루트: 패키지 없음). 서비스는 services/* (docs/plans/monorepo-openai-api.md)
 #   services/chatbot       패키지 lawbot: 웹앱·평가 (uv run lawbot-app)
 #   services/model-server  패키지 lawbot_model_server: OpenAI 호환 모델 서버 (uv run lawbot-model-server)
+#   services/monitor       패키지 law_monitor: 법령 변경 수집기 (uv run law-monitor, docs/plans/monitor-collector.md)
 # 공통 개발 도구(pytest·ruff)와 설정은 여기에 둔다. uv.lock은 workspace 전체에 하나
 [tool.uv.workspace]
 members = ["services/*"]
@@ -8,6 +9,7 @@ members = ["services/*"]
 [tool.uv.sources]
 lawbot = { workspace = true }
 lawbot-model-server = { workspace = true }
+law-monitor = { workspace = true }
 
 [tool.uv]
 environments = ["sys_platform == 'darwin'"]   # mlx는 macOS용: 잠금 파일을 macOS 기준으로만 풀이
@@ -16,14 +18,15 @@ environments = ["sys_platform == 'darwin'"]   # mlx는 macOS용: 잠금 파일�
 dev = [
     "lawbot",   # 루트에서 uv sync·uv run 하면 서비스 패키지가 함께 설치됨
     "lawbot-model-server",
+    "law-monitor",
     "openai>=2.0",   # 모델 서버가 OpenAI SDK로 그대로 쓰이는지 보는 계약 테스트
     "pytest>=9.1.1",
     "ruff==0.17.3",
 ]
 
 [tool.pytest.ini_options]
-testpaths = ["services/chatbot/tests", "services/model-server/tests"]
-addopts = "-ra --strict-markers -m 'not models'"   # 실제 모델 테스트는 -m models로 따로 실행
+testpaths = ["services/chatbot/tests", "services/model-server/tests", "services/monitor/tests"]
+addopts = "-ra --strict-markers -m 'not models and not network'"   # 실제 모델·외부 접속 테스트는 -m models / -m network로 따로 실행
 filterwarnings = [
     # OpenAI SDK가 TestClient(계약 테스트)에 요청마다 timeout을 넘김: 테스트 대역에서만 나는 경고
     "ignore:You should not use the 'timeout' argument with the TestClient",
@@ -31,6 +34,7 @@ filterwarnings = [
 markers = [
     "models: 실제 모델 파일(models/)과 Apple Silicon이 필요한 테스트",
     "integration: 실제 Gradio 서버를 별도 프로세스로 띄우는 인증 테스트 (127.0.0.1만 접속)",
+    "network: 실제 외부 API·git 저장소에 접속하는 테스트 (services/monitor, 기본 실행에서 제외)",
 ]
 
 [tool.ruff]
