@@ -59,9 +59,11 @@ def test_default_fmt_and_disabled(env, log, tmp_path):
     a = local_app(env)
     list(service.ask(a, QUESTION, 'pro'))  # 평가 스크립트처럼 fmt 없이: 모델 기본 형식
     assert lines(log)[0]['fmt'] == 'concise'
-    env.setenv('LAWBOT_REQUEST_LOG', '')  # 빈 값이면 기록하지 않음
+    env.setenv('LAWBOT_REQUEST_LOG', '')  # 빈 값이면 기록하지 않음 (경로는 시작할 때 읽음: 새 앱부터)
     list(service.ask(a, QUESTION, 'fast'))
-    assert len(lines(log)) == 1
+    assert len(lines(log)) == 2
+    list(service.ask(local_app(env), QUESTION, 'fast'))
+    assert len(lines(log)) == 2
 
 
 def test_default_path_is_gitignored():

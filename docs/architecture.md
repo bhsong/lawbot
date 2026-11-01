@@ -45,6 +45,7 @@ services/chatbot/src/lawbot/
 ├── api_client.py      # 모델 서버 클라이언트 (임베딩·리랭크·모델 목록, 프록시 무시)
 ├── service.py         # UI와 무관한 질의응답 흐름 (모델 서버 접속, 검색 → 답변 스트리밍)
 ├── app.py             # Gradio 웹앱
+├── settings.py        # 실행 설정 객체: 시작할 때 한 번 읽어 모두 검증 (틀린 값은 한꺼번에)
 ├── security.py        # 로컬 전용 실행 설정 (127.0.0.1, 로그인 필수, 공유 링크 없음, 포트·모델 서버·생성 API 주소 검증)
 ├── citation.py        # 인용 파싱·형식 검증·거절 판정·비교용 정규화 (웹앱 화면과 eval_v4 채점이 같이 씀)
 ├── check_deploy.py    # 배포 점검 (조문 CSV·system·설정·모델 서버 접속, uv run python -m lawbot.check_deploy)

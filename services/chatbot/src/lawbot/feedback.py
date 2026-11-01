@@ -49,17 +49,19 @@ TIMING_FIELDS = (
 )
 
 
-def enabled():
+def enabled(env=None):
     """LAWBOT_FEEDBACK: '0'(기본)·'1'만"""
-    value = (os.environ.get('LAWBOT_FEEDBACK') or '0').strip()
+    env = os.environ if env is None else env
+    value = (env.get('LAWBOT_FEEDBACK') or '0').strip()
     if value not in ('0', '1'):
         raise ValueError(f'LAWBOT_FEEDBACK은 0 또는 1: {value!r}')
     return value == '1'
 
 
-def feedback_dir():
+def feedback_dir(env=None):
     """LAWBOT_FEEDBACK_DIR (상대 경로는 레포 최상위 기준), 없으면 feedback/"""
-    value = (os.environ.get('LAWBOT_FEEDBACK_DIR') or '').strip()
+    env = os.environ if env is None else env
+    value = (env.get('LAWBOT_FEEDBACK_DIR') or '').strip()
     if not value:
         return DEFAULT_DIR
     p = Path(value).expanduser()
@@ -107,11 +109,11 @@ def commit():
     return _commit or None
 
 
-def from_env():
+def from_env(env=None):
     """LAWBOT_FEEDBACK=1이면 Feedback (저장 폴더를 모델 로딩 전에 확인), 아니면 None"""
-    if not enabled():
+    if not enabled(env):
         return None
-    d = feedback_dir()
+    d = feedback_dir(env)
     check_private(d)
     return Feedback(d)
 

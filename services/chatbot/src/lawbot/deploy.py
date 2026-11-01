@@ -29,65 +29,66 @@ class Profile:
     disabled: tuple = ()  # LAWBOT_MODELS에서 뺀 모델: 화면에 '사용 안 함'으로만 표시하고 올리지 않음
 
 
-def _model(env, default):
-    return (os.environ.get(env) or '').strip() or default
+def _model(name, default, env):
+    return (env.get(name) or '').strip() or default
 
 
-def _path(env, default):
+def _path(name, default, env):
     """환경 변수가 있으면 그 경로 (조문 CSV·system 파일). 상대 경로는 레포 최상위 기준 절대 경로로 바꾼다"""
-    p = Path(os.environ.get(env) or default).expanduser()
+    p = Path(env.get(name) or default).expanduser()
     return p if p.is_absolute() else paths.ROOT / p
 
 
-def get_profile():
+def get_profile(env=None):
     """v4 프로필 + LAWBOT_MODELS로 고른 답변 모델 (예: 'pro'면 Pro만, 'fast,pro'면 둘 다. 첫 번째가 기본 선택)
     고르지 않은 모델은 disabled로 옮겨 화면에 비활성으로 남긴다
     LAWBOT_PROFILE은 없거나 'v4'만 허용한다 (예전 .env의 LAWBOT_PROFILE=v4는 그대로 통과, 다른 값은 조용히 무시하지 않음)"""
-    name = (os.environ.get('LAWBOT_PROFILE') or '').strip()
+    env = os.environ if env is None else env
+    name = (env.get('LAWBOT_PROFILE') or '').strip()
     if name not in ('', 'v4'):
         raise ValueError(f'LAWBOT_PROFILE은 v4만 지원합니다 (v1은 삭제됨): {name!r}. .env에서 이 줄을 지우세요')
-    p = _v4()
-    keys = [k.strip() for k in os.environ.get('LAWBOT_MODELS', '').split(',') if k.strip()]
+    p = _v4(env)
+    keys = [k.strip() for k in env.get('LAWBOT_MODELS', '').split(',') if k.strip()]
     if not keys:
         return p
     specs = {m.key: m for m in p.models}
     bad = [k for k in keys if k not in specs]
     if bad or len(set(keys)) != len(keys):
-        raise ValueError(f'LAWBOT_MODELS는 {", ".join(specs)} 중에서 쉼표로: {os.environ["LAWBOT_MODELS"]!r}')
+        raise ValueError(f'LAWBOT_MODELS는 {", ".join(specs)} 중에서 쉼표로: {env["LAWBOT_MODELS"]!r}')
     return replace(p, models=tuple(specs[k] for k in keys), disabled=tuple(m for m in p.models if m.key not in keys))
 
 
-def _v4():
+def _v4(env):
     """7개 법률 415조문, v4 검색 (MAX_SEQ 2304). Fast(4B LoRA)는 학습한 4섹션 그대로, Pro는 튜닝 전 Qwen3.8-27B 4비트를
     간결형 system으로 처음부터 짧게 생성
     하위법령을 켜면(LAWBOT_DECREE_ENABLED=1) 법률 415 + 시행령·시행규칙 397 = 812조문 CSV. 법률 415행은 같음"""
     articles = (
-        _path('LAWBOT_V4_DECREE_ARTICLES', paths.V4_DECREE_ARTICLES)
-        if decree_enabled()
-        else _path('LAWBOT_V4_ARTICLES', paths.V4_ARTICLES)
+        _path('LAWBOT_V4_DECREE_ARTICLES', paths.V4_DECREE_ARTICLES, env)
+        if decree_enabled(env)
+        else _path('LAWBOT_V4_ARTICLES', paths.V4_ARTICLES, env)
     )
     return Profile(
         'v4',
         '노동법 챗봇',
         articles,
-        _model('LAWBOT_EMB_MODEL', 'lawbot-emb-v4'),
+        _model('LAWBOT_EMB_MODEL', 'lawbot-emb-v4', env),
         2304,
-        _path('LAWBOT_V4_SYSTEM', paths.V4_SYSTEM),
+        _path('LAWBOT_V4_SYSTEM', paths.V4_SYSTEM, env),
         (
             ModelSpec(
                 'fast',
                 'Lawbot Fast',
                 '4B · 빠른 응답, 4항목 답변',
-                _model('LAWBOT_FAST_MODEL', 'lawbot-fast-v4'),
+                _model('LAWBOT_FAST_MODEL', 'lawbot-fast-v4', env),
                 'full',
             ),
             ModelSpec(
                 'pro',
                 'Lawbot Pro',
                 '27B · 큰 모델(튜닝 전), 간결한 답변, 응답이 더 느림',
-                _model('LAWBOT_PRO_MODEL', 'qwen3.8-27b-4bit'),
+                _model('LAWBOT_PRO_MODEL', 'qwen3.8-27b-4bit', env),
                 'concise',
-                _path('LAWBOT_PRO_SYSTEM', paths.V4_SYSTEM_CONCISE),
+                _path('LAWBOT_PRO_SYSTEM', paths.V4_SYSTEM_CONCISE, env),
             ),
         ),
     )
@@ -99,15 +100,18 @@ class RerankerConfig:
     candidates: int  # 리랭커에 넘길 임베딩 상위 후보 수 (v4 실험 10). 최종 조문 수는 service.TOP_K
 
 
-def reranker(profile):
+def reranker(profile, env=None):
     """LAWBOT_RERANKER_ENABLED=1이면 리랭커 설정, 아니면 None (기본 꺼짐: 임베딩 상위 3개를 그대로 씀)"""
-    flag = os.environ.get('LAWBOT_RERANKER_ENABLED', '0')
+    env = os.environ if env is None else env
+    flag = env.get('LAWBOT_RERANKER_ENABLED', '0')
     if flag not in ('0', '1'):
         raise ValueError(f'LAWBOT_RERANKER_ENABLED는 0 또는 1: {flag!r}')
     if flag == '0':
         return None
-    n = int(os.environ.get('LAWBOT_RERANKER_CANDIDATES', '10'))
-    return RerankerConfig(_model('LAWBOT_RERANK_MODEL', 'qwen3-reranker-4b'), n)
+    raw = env.get('LAWBOT_RERANKER_CANDIDATES') or '10'
+    if not raw.strip().isdigit() or int(raw) < 1:
+        raise ValueError(f'LAWBOT_RERANKER_CANDIDATES는 1 이상의 정수: {raw!r}')
+    return RerankerConfig(_model('LAWBOT_RERANK_MODEL', 'qwen3-reranker-4b', env), int(raw))
 
 
 # ---- 시행령·시행규칙(하위법령) 첨부 (docs/archives/decree-attach.md) ----
@@ -127,34 +131,36 @@ class DecreeConfig:
     max_seq: int = DECREE_MAX_SEQ
 
 
-def decree_enabled():
-    flag = os.environ.get('LAWBOT_DECREE_ENABLED', '0')
+def decree_enabled(env=None):
+    env = os.environ if env is None else env
+    flag = env.get('LAWBOT_DECREE_ENABLED', '0')
     if flag not in ('0', '1'):
         raise ValueError(f'LAWBOT_DECREE_ENABLED는 0 또는 1: {flag!r}')
     return flag == '1'
 
 
-def decree(profile):
+def decree(profile, env=None):
     """LAWBOT_DECREE_ENABLED=1이면 하위법령 첨부 설정, 아니면 None (기본 꺼짐: 법률 3개만)
     리랭커 점수로 거르므로 리랭커가 꺼져 있으면 거부"""
-    if not decree_enabled():
+    env = os.environ if env is None else env
+    if not decree_enabled(env):
         return None
-    if reranker(profile) is None:
+    if reranker(profile, env) is None:
         raise ValueError(
             '시행령·시행규칙 첨부는 리랭커 점수로 거르므로 리랭커가 필요합니다. '
             'LAWBOT_RERANKER_ENABLED=1로 켜거나 LAWBOT_DECREE_ENABLED=0으로 끄세요.'
         )
-    raw = os.environ.get('LAWBOT_DECREE_TAU') or str(DECREE_TAU)
+    raw = env.get('LAWBOT_DECREE_TAU') or str(DECREE_TAU)
     try:
         tau = float(raw)
     except ValueError:
         raise ValueError(f'LAWBOT_DECREE_TAU는 0~1 숫자: {raw!r}') from None
     if not 0.0 <= tau <= 1.0:
         raise ValueError(f'LAWBOT_DECREE_TAU는 0~1 숫자: {raw!r}')
-    raw = os.environ.get('LAWBOT_DECREE_K') or str(DECREE_K)
+    raw = env.get('LAWBOT_DECREE_K') or str(DECREE_K)
     if not raw.isdigit() or int(raw) < 1:
         raise ValueError(f'LAWBOT_DECREE_K는 1 이상의 정수: {raw!r}')
-    value = os.environ.get('LAWBOT_DECREE_MODELS')
+    value = env.get('LAWBOT_DECREE_MODELS')
     keys = tuple(k.strip() for k in (value if value is not None else ','.join(DECREE_MODELS)).split(',') if k.strip())
     known = [m.key for m in profile.models + profile.disabled]
     bad = [k for k in keys if k not in known]

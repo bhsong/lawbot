@@ -163,7 +163,7 @@ def test_launch_passes_touch_css_js(env, tmp_path):
     local_app(env)
     launched = []
     env.setattr(app_mod.gr.Blocks, 'launch', lambda demo, **kw: launched.append(kw))
-    env.setattr(app_mod, 'load_app', lambda: local_app(env))
+    env.setattr(app_mod, 'load_app', lambda *a: local_app(env))
     app_mod.main()
     assert 'css' not in launched[-1] and 'js' not in launched[-1]  # 기본: 꺼짐
     env.setenv('LAWBOT_FEEDBACK', '1')

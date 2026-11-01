@@ -15,7 +15,7 @@ import httpx
 from openai import OpenAI
 
 from lawbot import decree as decree_filter
-from lawbot import deploy, manifest, security
+from lawbot import deploy, manifest
 from lawbot.api_client import (
     Embedder,
     ModelLoadError,
@@ -68,6 +68,7 @@ class LawbotApp:
     full_system: str = None  # '전체(4항목)' system: 프로필 system 파일
     decree: object = None  # deploy.DecreeConfig: 시행령·시행규칙 첨부 (None: 법률 3개만, LAWBOT_DECREE_ENABLED=0 기본)
     llm_mode: str = 'api'  # 생성 위치: 'api'(모델 서버) / 'external'(LAWBOT_LLM_BASE_URL의 외부 API)
+    settings: object = None  # lawbot.settings.Settings (load_app이 넣음. 테스트·평가의 가짜 앱은 None)
 
 
 def uses_decrees(app, model_key):
@@ -93,20 +94,22 @@ def check_profile_files(p):
     manifest.check(p.articles)
 
 
-def server_wait():
+def server_wait(env=None):
+    env = os.environ if env is None else env
     try:
-        return float(os.environ.get('LAWBOT_MODEL_SERVER_WAIT') or 300)
+        return float(env.get('LAWBOT_MODEL_SERVER_WAIT') or 300)
     except ValueError:
-        raise ValueError(f'LAWBOT_MODEL_SERVER_WAIT는 초(숫자): {os.environ["LAWBOT_MODEL_SERVER_WAIT"]!r}') from None
+        raise ValueError(f'LAWBOT_MODEL_SERVER_WAIT는 초(숫자): {env["LAWBOT_MODEL_SERVER_WAIT"]!r}') from None
 
 
 READ_TIMEOUT = 300.0  # 질문 처리 중 응답 조각 사이 최대 대기 (27B 교체 로딩·monitor 요약 뒤 대기를 넘는 값)
 
 
-def read_timeout():
+def read_timeout(env=None):
     """LAWBOT_MODEL_READ_TIMEOUT (초, 기본 300): 질문 임베딩·리랭크·생성에서 응답 조각 사이가 이 시간을 넘으면 오류
     (동시 처리 수 1이라 멈춘 요청 하나가 뒤 질문을 모두 막지 않게). 시작할 때 조문 인덱스 인코딩에는 걸지 않음"""
-    raw = (os.environ.get('LAWBOT_MODEL_READ_TIMEOUT') or str(READ_TIMEOUT)).strip()
+    env = os.environ if env is None else env
+    raw = (env.get('LAWBOT_MODEL_READ_TIMEOUT') or str(READ_TIMEOUT)).strip()
     try:
         value = float(raw)
     except ValueError:
@@ -125,25 +128,18 @@ def missing_models(available, p, rr, external):
     return [(kind, mid) for mid, kind in need if (mid, kind) not in have]
 
 
-def load_app(profile=None):
+def load_app(settings=None):
     """웹앱·평가용 LawbotApp: 조문 인덱스(임베딩은 모델 서버) + 켜져 있으면 리랭커 + 답변 모델(Fast/Pro) 레지스트리
-    모델 서버 주소(LAWBOT_MODEL_SERVER)와 토큰(LAWBOT_MODEL_TOKEN)이 필요하다. 서버가 준비될 때까지 기다린 뒤,
-    필요한 모델 id가 서버 /v1/models에 있는지 확인하고 없으면 시작을 거부한다"""
-    p = profile or deploy.get_profile()
+    settings: lawbot.settings.Settings (없으면 지금 환경 변수로 settings.load()). 설정이 틀리면 모델 서버에 접속하기 전에
+    SettingsError로 모두 알린다. 서버가 준비될 때까지 기다린 뒤, 필요한 모델 id가 서버 /v1/models에 없으면 시작을 거부한다"""
+    from lawbot import settings as settings_mod
+
+    cfg = settings or settings_mod.load()
+    p, rr, dc = cfg.profile, cfg.reranker, cfg.decree
     check_profile_files(p)
-    rr = deploy.reranker(p)  # 꺼져 있으면 None
-    if rr and rr.candidates < TOP_K:
-        raise ValueError(f'LAWBOT_RERANKER_CANDIDATES는 {TOP_K} 이상: {rr.candidates}')
-    dc = deploy.decree(p)  # 꺼져 있으면 None. 켰는데 리랭커가 꺼져 있으면 ValueError
-    url = security.model_server_url()
-    if url is None:
-        raise RuntimeError(
-            '모델 서버 주소가 없습니다: .env에 LAWBOT_MODEL_SERVER=http://127.0.0.1:<모델 서버 포트>와 '
-            'LAWBOT_MODEL_TOKEN을 적고, uv run lawbot-model-server로 모델 서버를 띄우세요.'
-        )
-    llm_url, llm_key, external = security.llm_endpoint(url)
-    client = ModelServerClient(url, security.model_token())
-    wait, limit = server_wait(), request_timeout(read_timeout())
+    url, llm_url, llm_key, external = cfg.model_server, cfg.llm_url, cfg.llm_key, cfg.llm_external
+    client = ModelServerClient(url, cfg.model_token)
+    wait, limit = cfg.server_wait, request_timeout(cfg.read_timeout)
     print(f'[lawbot] 모델 서버 {url} 준비 대기 (최대 {wait:g}초)', flush=True)
     wait_ready(client, wait)
     missing = missing_models(client.models(), p, rr, external)
@@ -184,7 +180,7 @@ def load_app(profile=None):
         flush=True,
     )
     full = p.system_file.read_text(encoding='utf-8').strip()
-    return LawbotApp(p, retriever, models, reranker, full, dc, 'external' if external else 'api')
+    return LawbotApp(p, retriever, models, reranker, full, dc, 'external' if external else 'api', cfg)
 
 
 def decree_text(dc):
@@ -267,8 +263,9 @@ REQUEST_LOG = ROOT / 'logs' / 'requests.jsonl'
 MS_FIELDS = ('search', 'rerank', 'decree_search', 'decree_rerank', 'load', 'ttft', 'first_text', 'total')
 
 
-def request_log_path():
-    value = os.environ.get('LAWBOT_REQUEST_LOG')
+def request_log_path(env=None):
+    env = os.environ if env is None else env
+    value = env.get('LAWBOT_REQUEST_LOG')
     if value is None:
         return REQUEST_LOG
     return Path(value).expanduser() if value.strip() else None
@@ -336,8 +333,9 @@ LOG_LOCK = threading.Lock()  # 동시 질문(LAWBOT_CHAT_CONCURRENCY·평가 --c
 
 
 def log_request(app, st, fmt, status, error=None):
-    """JSONL 한 줄. 기록 실패는 답변을 막지 않고 콘솔에 경고만"""
-    path = request_log_path()
+    """JSONL 한 줄. 기록 실패는 답변을 막지 않고 콘솔에 경고만. 경로는 앱의 설정 (가짜 앱이면 지금 환경 변수)"""
+    cfg = getattr(app, 'settings', None)
+    path = cfg.request_log if cfg is not None else request_log_path()
     if path is None:
         return
     try:

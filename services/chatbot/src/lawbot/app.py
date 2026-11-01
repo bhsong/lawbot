@@ -4,10 +4,10 @@ import os
 
 import gradio as gr
 
-from lawbot import envfile, feedback, feedback_ui, manifest
+from lawbot import envfile, feedback, feedback_ui, manifest, settings
 from lawbot.answer_format import answer_citations, render
 from lawbot.decree import is_decree
-from lawbot.security import get_local_launch_config, instance_name
+from lawbot.security import SERVER_NAME, instance_name
 from lawbot.service import ask, load_app, uses_decrees
 
 # v4 Fast로 검색·답변을 확인한 질문 (근로기준법 제26조, 최저임금법 제6조, 남녀고용평등법 제19조)
@@ -202,7 +202,8 @@ def default_fmt(app):
 
 def page_title(app):
     """화면·탭 제목. LAWBOT_INSTANCE가 있으면 붙인다 (예: '노동법 챗봇 · 개발', 운영/개발 구분)"""
-    name = instance_name()
+    cfg = getattr(app, 'settings', None)
+    name = cfg.instance if cfg is not None and cfg.chat_concurrency is not None else instance_name()
     return f'{app.profile.title} · {name}' if name else app.profile.title
 
 
@@ -235,13 +236,20 @@ def make_on_feedback(fb):
 CHAT_CONCURRENCY_LIMIT = 16
 
 
-def chat_concurrency():
+def chat_concurrency(env=None):
     """LAWBOT_CHAT_CONCURRENCY: 웹앱이 동시에 처리하는 질문 수 (기본 1). 모델 서버의 LAWBOT_MAX_CONCURRENT와 따로 둔다
     (서버를 다른 앱과 같이 쓰므로). 서버 상한보다 크면 넘는 질문은 서버에서 기다린다"""
-    raw = (os.environ.get('LAWBOT_CHAT_CONCURRENCY') or '1').strip()
+    env = os.environ if env is None else env
+    raw = (env.get('LAWBOT_CHAT_CONCURRENCY') or '1').strip()
     if not raw.isdigit() or not 1 <= int(raw) <= CHAT_CONCURRENCY_LIMIT:
         raise ValueError(f'LAWBOT_CHAT_CONCURRENCY는 1–{CHAT_CONCURRENCY_LIMIT} 정수: {raw!r}')
     return int(raw)
+
+
+def web_settings(app):
+    """app.main이 읽은 웹 설정이 있으면 True (load_app만 한 테스트·평가 앱은 지금 환경 변수로)"""
+    cfg = getattr(app, 'settings', None)
+    return cfg is not None and cfg.chat_concurrency is not None
 
 
 def build_demo(
@@ -284,7 +292,7 @@ def build_demo(
                     additional_inputs=[model, fmt],
                     additional_outputs=[sources, stats],
                     examples=[[q, None, None] for q in EXAMPLES],  # None: 예시를 눌러도 현재 모델·형식 선택 유지
-                    concurrency_limit=chat_concurrency(),
+                    concurrency_limit=(app.settings.chat_concurrency if web_settings(app) else chat_concurrency()),
                 )  # 동시에 처리하는 질문 수 (기본 1). 모델 교체·동시 생성 순서는 모델 서버가 정한다
                 stats.render()
             with gr.Column(scale=2):
@@ -294,13 +302,15 @@ def build_demo(
 
 
 def main():
-    envfile.load()  # .env (셸에 있는 변수 우선). 인증·모델 설정을 읽기 전에
-    config = get_local_launch_config()  # 인증 정보가 없으면 모델 로딩 전에 실행 거부
-    chat_concurrency()  # 잘못된 값이면 모델 서버에 접속하기 전에 거부
-    fb = feedback.from_env()  # LAWBOT_FEEDBACK=1: 저장 폴더가 gitignore 밖이면 모델 로딩 전에 거부
-    a = load_app()
+    envfile.load()  # .env (셸에 있는 변수 우선). 설정을 읽기 전에
+    cfg = settings.load(
+        web=True
+    )  # 인증·포트·모델·피드백 폴더를 모두 검사: 틀리면 모델 서버에 접속하기 전에 한꺼번에 거부
+    a = load_app(cfg)
+    fb = cfg.feedback  # LAWBOT_FEEDBACK=1이면 저장 폴더를 확인한 Feedback
     demo = build_demo(a, fb) if fb is not None else build_demo(a)  # 꺼져 있으면 기존과 같은 호출
-    demo.launch(**config, **feedback_ui.launch_options(fb))  # 127.0.0.1:<LAWBOT_PORT>, 로그인 필수, 공유 링크 없음
+    launch = {'server_name': SERVER_NAME, 'server_port': cfg.port, 'auth': cfg.auth, 'share': False}
+    demo.launch(**launch, **feedback_ui.launch_options(fb))  # 127.0.0.1:<LAWBOT_PORT>, 로그인 필수, 공유 링크 없음
 
 
 if __name__ == '__main__':
