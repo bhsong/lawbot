@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- 법령 변경 수집기: 매일 06:30 (맥 시간대 KST) law-monitor collect 1회 실행 템플릿
+     자리표시를 채워 ~/Library/LaunchAgents/com.lawbot.monitor.plist로 복사 (services/monitor/README.md "launchd 등록"):
+       __UV__       which uv로 찾은 절대 경로 (launchd의 PATH에는 uv가 없음)
+       __PROD_DIR__ 운영 worktree 절대 경로 (레포 최상위)
+       __LOG_DIR__  로그 폴더 절대 경로 (launchd는 ~를 풀지 않음, 예: /Users/<이름>/Library/Logs/lawbot)
+     StartCalendarInterval: 잠자기 중이라 놓친 실행은 깨어난 뒤 한 번 실행된다 (전원이 꺼져 있던 경우는 실행 안 됨)
+     KeepAlive 없음: 한 번 돌고 끝나는 작업. 수집 로그는 services/monitor/logs/collector-YYYYMMDD.log에도 남는다 -->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.lawbot.monitor</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>__UV__</string>
+    <string>run</string>
+    <string>--frozen</string>
+    <string>law-monitor</string>
+    <string>collect</string>
+  </array>
+  <key>WorkingDirectory</key>
+  <string>__PROD_DIR__</string>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PYTHONUNBUFFERED</key>
+    <string>1</string>
+  </dict>
+  <key>StartCalendarInterval</key>
+  <dict>
+    <key>Hour</key>
+    <integer>6</integer>
+    <key>Minute</key>
+    <integer>30</integer>
+  </dict>
+  <key>StandardOutPath</key>
+  <string>__LOG_DIR__/monitor.log</string>
+  <key>StandardErrorPath</key>
+  <string>__LOG_DIR__/monitor.log</string>
+</dict>
+</plist>

@@ -465,6 +465,7 @@ uv workspace 모노레포입니다. 레포 최상위에서 `uv sync`·`uv run �
 pyproject.toml         # workspace 루트: 멤버 목록, pytest·ruff 설정
 services/chatbot/      # 웹앱·평가 (패키지 lawbot, 모델 라이브러리 없음), 테스트는 services/chatbot/tests/
 services/model-server/ # OpenAI 호환 모델 서버 (패키지 lawbot_model_server, MLX·torch), 테스트는 services/model-server/tests/
+services/monitor/      # 법령 변경 수집기 (패키지 law_monitor, git만 사용). 사용법은 services/monitor/README.md
 ```
 
 ```
@@ -963,6 +964,7 @@ The repository is a uv workspace monorepo. Running `uv sync` or `uv run …` at 
 pyproject.toml         # workspace root: members, pytest and ruff settings
 services/chatbot/      # web app and evaluation (package lawbot, no model libraries); tests in services/chatbot/tests/
 services/model-server/ # OpenAI-compatible model server (package lawbot_model_server, MLX and torch); tests in services/model-server/tests/
+services/monitor/      # Law-change collector (package law_monitor, git only). Usage in services/monitor/README.md
 ```
 
 ```

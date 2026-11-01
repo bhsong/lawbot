@@ -1,0 +1,19 @@
+[project]
+name = "law-monitor"
+version = "0.1.0"
+description = "법령 변경 수집기 (1단계): 법령·행정규칙 변경을 이벤트 JSON으로 저장. 설계는 docs/plans/monitor-collector.md"
+authors = [
+    { name = "bhsong", email = "sbh3003@gmail.com" }
+]
+requires-python = ">=3.14"
+dependencies = [   # PR 1은 git(subprocess)과 YAML만 씀. HTTP·PDF 라이브러리는 법제처 수집기(PR 2)에서 추가
+    "pyyaml>=6.0.3",
+]
+
+[project.scripts]
+# 레포 최상위에서 uv run law-monitor bootstrap / collect / replay
+law-monitor = "law_monitor.cli:main"
+
+[build-system]
+requires = ["uv_build>=0.12.19,<0.13.0"]
+build-backend = "uv_build"

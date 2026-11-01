@@ -1,0 +1,46 @@
+# 추적 대상. 대상 추가·삭제는 이 파일만 고친다 (코드 수정 없음).
+# category 값은 "ERP 법령 변경 모니터링" 한눈에 보기 표의 번호와 같다 (1~7).
+# 근거: docs/plans/monitor-collector.md (원 계획서 4장 + 2.2절 실제 이름)
+
+repos:   # 수집할 git 저장소 (legalize-kr: 법령, admrule-kr: 행정규칙)
+  legalize-kr: https://github.com/legalize-kr/legalize-kr.git
+  admrule-kr: https://github.com/legalize-kr/admrule-kr.git
+
+laws:   # 1, 7번: legalize-kr kr/<name>/ 폴더 (띄어쓰기 없음). 폴더 안의 법률·시행령·시행규칙을 모두 추적
+  - { name: 소득세법,                    category: 1 }
+  - { name: 조세특례제한법,              category: 1 }
+  - { name: 국세기본법,                  category: 1 }
+  - { name: 지방세법,                    category: 1 }
+  - { name: 부가가치세법,                category: 1 }
+  - { name: 근로자퇴직급여보장법,        category: 1 }
+  - { name: 근로기준법,                  category: 1 }
+  - { name: 국민연금법,                  category: 7 }
+  - { name: 국민건강보험법,              category: 7 }
+  - { name: 노인장기요양보험법,          category: 7 }
+  - { name: 고용보험법,                  category: 7 }
+  - { name: 고용보험및산업재해보상보험의보험료징수등에관한법률, category: 7 }
+  - { name: 최저임금법,                  category: 7 }
+
+forms:  # 2번: 별표·서식. 목록은 legalize-kr 머리말 첨부파일에서 읽고 파일은 법제처에서 받는다 (PR 2에서 사용)
+  - { law: 소득세법 시행령,        kinds: [별표] }          # 근로소득 간이세액표 등
+  - { law: 소득세법 시행규칙,      kinds: [별표, 서식] }    # 원천징수영수증·지급명세서·간이지급명세서·공제신고서 등
+  - { law: 부가가치세법 시행규칙,  kinds: [별표, 서식] }    # 부가세 신고서·부속서류
+  - { law: 조세특례제한법 시행규칙, kinds: [서식] }
+
+admrules:  # 3, 5, 7번: admrule-kr 행정규칙. agency는 머리말 소관부처명과 정확히 같아야 한다
+  names:   # 행정규칙명 정규식 (연도가 이름에 들어가는 고시는 해마다 새 폴더가 생김)
+    - { agency: 보건복지부, pattern: '^국민연금 기준소득월액 하한액과 상한액$',         category: 7 }
+    - { agency: 보건복지부, pattern: '^월별 건강보험료액의 상한과 하한에 관한 고시$',   category: 7 }
+    - { agency: 고용노동부, pattern: '^\d{4}년 적용 최저임금(안)? 고시$',              category: 7 }
+    - { agency: 고용노동부, pattern: '^\d{4}년도 사업종류별 산재보험료율$',            category: 7 }
+    - { agency: 국세청,     pattern: '^전자\(세금\)계산서 겸용서식 사용 사업자의 전산매체 제출 절차에 관한 고시$', category: 5 }
+  keyword_rules:   # 행정규칙명에 키워드가 하나라도 들어 있으면 대상
+    - { agency: 국세청,     keywords: [원천징수, 연말정산, 지급명세서, 간이지급명세서, 전산매체, 전자신고, 부가가치세], category: 3 }
+    - { agency: 국세청,     keywords: [전산매체, 제출요령, 레이아웃], category: 5 }
+    - { agency: 고용노동부, keywords: [퇴직연금, 최저임금, 산재보험료율, 사업종류별], category: 7 }
+    - { agency: 보건복지부, keywords: [기준소득월액, 보험료 상한, 보험료 하한, 보수월액], category: 7 }
+
+prelegislation:  # 4번: 입법예고·행정예고·국회 법안 제목 키워드 (PR 3에서 사용)
+  keywords: [소득세법, 조세특례제한법, 국세기본법, 지방세법, 부가가치세법,
+             근로자퇴직급여, 근로기준법, 국민연금, 국민건강보험, 장기요양보험,
+             고용보험, 보험료징수, 최저임금, 원천징수, 연말정산, 지급명세서]
