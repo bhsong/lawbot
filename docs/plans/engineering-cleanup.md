@@ -35,6 +35,10 @@ PR 하나는 한 가지 일만 한다. 동작이 바뀌는 PR은 테스트를 �
 
 PR 1~5는 이 계획에서 자세히 정한다. PR 6~12는 시작하기 전에 각 절에 설계를 덧붙이고 확인을 받는다 (이 문서를 고쳐서).
 
+**진행 (2026-11-02 사용자 지시)**: 하나씩 PR로 하지 않고 커밋 단위로 고친 뒤 PR로 묶는다. PR을 올리기 전마다 개발 웹앱에서 운영 모델 서버에 질문 3개로 확인하고, 모델 서버가 바뀌면 운영에 반영한 뒤 확인한다.
+- 1~5: **PR #43**으로 병합·운영 반영 (2026-11-02, 커밋 5개)
+- 6~12: 두 번째 PR (아래 7절 설계)
+
 ## 2. PR 1: README 최소화 (문서만)
 
 ### 2.1 README 구성 (한국어·영어 같은 구성)
@@ -165,15 +169,73 @@ PR 1~5는 이 계획에서 자세히 정한다. PR 6~12는 시작하기 전에 �
 - 대상 명령: `bootstrap`, `collect`, `replay`, `summarize`, `daily` (모두 같은 `state.db`·저장소 클론을 씀).
 - 테스트 (먼저): 잠금을 잡은 상태에서 두 번째 실행이 종료 코드 2, 첫 실행이 끝나면 다시 실행 가능, 프로세스가 죽으면 잠금이 풀림 (flock 특성).
 
-## 7. PR 6~12 (시작 전에 이 문서에 설계를 덧붙임)
+## 7. 6~12 설계 (두 번째 PR, 커밋 단위)
 
-- **PR 6, 평가 도구 분리:** `eval_v4`, `report`(남는 부분), `score_answers`, `diff_answers`, `smoke_decree`, `feedback_review`, `feedback_export`, `log_summary`, `versions`를 `tools/lawbot-tools`로. 웹앱 런타임 의존성에서 분석용 라이브러리를 뺄 수 있는지 함께 본다. `uv run` 명령 이름은 유지.
-- **PR 7, API 스키마 공통화:** 확장 필드(`input_type`, `max_seq_length`, `timings`, `/v1/rerank`)와 오류 type(`model_load_error`, `server_not_ready`, `server_busy`)을 `lawbot_common`의 pydantic 모델·상수로. 모델 서버는 그것으로 검증하고 웹앱은 그것으로 요청을 만든다. OpenAI SDK 계약 테스트는 유지.
-- **PR 8, 설정 객체:** `security`·`deploy`·`service`·`app`·`feedback`이 각자 읽는 `os.environ`을 시작할 때 한 번 읽어 검증하는 `Settings`로. 테스트의 환경 변수 지우기 목록(`conftest.ENV_KEYS`)이 줄어드는지로 효과를 본다.
-- **PR 9, 타입:** `Hit`(법률·하위법령), `Timing`, 오류 클래스 계층(예외에 `lawbot_error` 속성을 붙이는 방식 대신). CI에 pyright 추가.
-- **PR 10, 로깅:** `print` → `logging`, 웹앱 `request_id`를 `X-Request-Id` 헤더로 모델 서버에 전달해 모델 서버 로그에 남김, `logs/requests.jsonl` 월별 파일.
-- **PR 11, 임베딩 캐시:** 조문 CSV의 매니페스트 sha256 + 임베딩 모델 id + max_seq를 키로 벡터를 저장(gitignore 경로). 키가 같으면 재사용, 다르면 다시 임베딩. 캐시를 쓴 결과가 다시 임베딩한 결과와 비트 단위로 같은지 테스트.
-- **PR 12, 재인덱싱 명령:** 새 조문 CSV → 매니페스트 갱신 → 임베딩 캐시 갱신 → 웹앱 재시작 안내. monitor 이벤트를 자동으로 연결하는 것은 3단계와 함께 다시 정한다 (이번에는 수동 명령까지).
+순서는 의존 관계대로: 6 → 7 → 8 → 9 → 10 → 11 → 12. 커밋마다 테스트를 먼저 쓰고, 기본 테스트·ruff가 통과해야 다음으로 간다.
+
+### 7.1 평가·분석 도구 분리 (6)
+
+- 새 workspace 멤버 `tools/lawbot-tools` (패키지 `lawbot_tools`). 옮기는 모듈: `eval_v4`, `score_answers`, `diff_answers`, `smoke_decree`, `feedback_review`, `feedback_export`, `log_summary`, `versions`, `refusal`.
+- 웹앱 런타임(`lawbot`)에 남는 것: `app`, `service`, `api_client`, `llm`, `retriever`, `reranker`, `decree`, `deploy`, `security`, `citation`, `answer_format`, `feedback`, `feedback_ui`, `manifest`, `envfile`, `paths`, `check_deploy`.
+- 막히는 곳 하나: 런타임 `citation`이 `score_answers`의 `norm`·`conclusion_part`를 import한다 → 이 두 함수를 `citation`으로 옮기고 `score_answers`가 `citation`에서 가져온다 (도구 → 런타임 방향만 허용).
+- 방향 규칙: `lawbot_tools`는 `lawbot`을 import해도 되고, `lawbot`은 `lawbot_tools`를 import하지 않는다. 테스트로 고정 (런타임 모듈을 import한 뒤 `sys.modules`에 `lawbot_tools`가 없음).
+- 명령: `lawbot-eval-v4` 이름 유지 (엔트리포인트만 `lawbot_tools.eval_v4:main`으로). `python -m lawbot.log_summary` 같은 모듈 명령은 `python -m lawbot_tools.log_summary`로 바뀐다 → `docs/`·주석 일괄 수정.
+- 테스트 파일은 `services/chatbot/tests`에 그대로 둔다 (공통 `conftest`·`fakes`를 같이 쓰므로). import 경로만 바꾼다.
+- 웹앱 의존성: pandas는 `retriever`·`manifest`가 쓰므로 남는다. 줄어드는 의존성은 없고, 목적은 경계를 분명히 하는 것.
+
+### 7.2 API 계약 공통화 (7)
+
+- `lawbot_common.api` (pydantic 의존 추가, 웹앱·모델 서버 모두 이미 pydantic 사용):
+  - 요청 모델: `EmbeddingRequest`, `RerankRequest` (지금 `api.py`에 있는 것을 옮김). `ChatRequest`는 웹앱이 openai SDK로 보내므로 서버 쪽 검증용으로만 옮김.
+  - 응답 모델: `EmbeddingResponse`, `RerankResponse`, `ModelsResponse`(확장 필드 `type`·`loaded`), `HealthResponse`.
+  - 오류 type 상수: `invalid_request_error`, `authentication_error`, `model_load_error`, `server_not_ready`, `server_busy`, `server_error`.
+- 모델 서버는 요청을 이 모델로 검증하고 응답을 이 모델로 만든다. 웹앱 `api_client`는 요청 본문을 이 모델로 만들고(`model_dump(exclude_none=True)`) 응답을 이 모델로 검증한다.
+- 바뀌지 않는 것: HTTP 경로·필드 이름·값. 기존 계약 테스트(openai SDK ↔ 실제 서버 앱)를 그대로 통과해야 한다.
+- 새 테스트: 웹앱이 만드는 요청 본문이 서버 모델 검증을 통과, 서버 응답이 웹앱 응답 모델 검증을 통과 (가짜 모델로 왕복).
+
+### 7.3 설정 객체 (8)
+
+- `lawbot.settings.Settings` (frozen dataclass)와 `load(environ=os.environ)`: 시작할 때 한 번 읽어 모두 검증하고, 틀린 값은 **한꺼번에** 알린다 (지금은 첫 오류에서 멈춤).
+- 묶는 값: 인증·포트·인스턴스(`security`), 모델 서버 주소·토큰·생성 API(`security`), 프로필·모델 선택·리랭커·하위법령(`deploy`), 서버 대기·읽기 상한(`service`), 동시 처리 수(`app`), 피드백·요청 로그 경로(`feedback`·`service`).
+- 지금 함수들(`security.server_port()` 등)은 값을 받아 검증하는 순수 함수로 바꾸고, `os.environ`은 `settings.load`에서만 읽는다. `app.main` → `settings.load()` → `load_app(settings)` → `build_demo(app, settings)`.
+- 평가·점검 명령(`eval_v4`, `check_deploy`, `smoke_decree`)도 같은 `settings.load()`를 쓴다.
+- 테스트: 지금 환경 변수 테스트는 `settings.load({...})`에 dict를 넘기는 형태로 바꾼다. 효과 확인: `conftest.ENV_KEYS`(환경 변수 지우기 목록)가 없어지거나 크게 준다.
+- 동작 변화: 오류 문구 모음 방식만 (한 번에 여러 개). 기본값·허용 범위는 그대로 (테스트로 고정).
+
+### 7.4 타입과 타입 검사 (9)
+
+- 검색 결과는 `TypedDict`로 정의한다: `Hit`(`law`·`article_id`·`title`·`doc`·`score`, 선택 `rerank_score`·`emb_rank`·`kind`·`parent_law`), 측정값 `Timing`. dict 그대로라 피드백 JSON·평가 CSV·화면 코드가 바뀌지 않고, 타입 검사만 붙는다 (dataclass로 바꾸면 dict 접근 수백 곳과 저장 형식이 바뀌어 위험만 큼).
+- 오류: 예외 객체에 `lawbot_error` 속성을 붙이는 방식 대신 `service.AskError(kind, stage)`로 감싸 `raise … from e`. 화면은 `AskError.kind`로 안내하고, 안내가 없는 종류는 원래 예외를 보여 준다. 요청 로그 `error_type`은 그대로.
+- 타입 검사: pyright `basic` 모드를 CI에 추가. 범위는 `packages/lawbot-common`, `services/model-server`, `services/monitor`, 웹앱 런타임 모듈. 평가 도구(`tools/`)는 pandas 위주라 제외.
+- 2026-11-02 측정 (pyright 1.1.408, 고치기 전): lawbot-common 3, 모델 서버 20, monitor 18, 웹앱 런타임 71개. 평가 도구까지 넣으면 웹앱 943개라 제외한다.
+
+### 7.5 로깅과 요청 id (10)
+
+- 세 서비스 모두 `logging` (logger `lawbot`·`lawbot_model_server`·`law_monitor`). 형식은 지금 launchd 로그와 같은 `[lawbot] …` 한 줄로 두어 운영 로그 보는 법이 바뀌지 않게 한다. 각 `main`에서만 설정.
+- 요청 id: `service.ask`가 만든 `request_id`를 `contextvars`에 두고, `api_client`(임베딩·리랭크)와 `llm`(생성, `extra_headers`)이 `X-Request-Id` 헤더로 보낸다. 모델 서버 `Guard`는 접근 로그 줄에 그 id를 남긴다 (질문 내용은 여전히 남기지 않음). 헤더 값은 영숫자 32자 이하만 받아 로그에 넣는다.
+- 요청 로그 파일: 기본 경로를 `logs/requests-YYYY-MM.jsonl`(월별)로. `LAWBOT_REQUEST_LOG`로 파일을 직접 정하면 지금처럼 그 파일 하나. `log_summary`는 기본 폴더의 월별 파일과 옛 `requests.jsonl`을 함께 읽는다.
+- 테스트: 질문 하나의 임베딩·리랭크·생성 요청이 모두 같은 `X-Request-Id`를 보냄 (실제 서버 앱 + 가짜 모델), 서버 로그 줄에 id, 월이 바뀌면 새 파일.
+
+### 7.6 조문 임베딩 캐시 (11)
+
+- 지금 웹앱은 시작할 때마다 812조문을 다시 임베딩한다 (운영 35~42초).
+- 캐시 키: 조문 문서 문자열 전체의 sha256 + 임베딩 모델 id + max_seq (법률·하위법령 각각). 파일: `cache/embeddings/<키>.npy` (레포 최상위, gitignore).
+- 같은 id로 모델 폴더가 바뀌는 경우를 막기 위해, 시작할 때 **조문 1개만 임베딩해 캐시의 같은 행과 비트 단위로 비교**하고 다르면 전체를 다시 임베딩해 캐시를 바꾼다.
+- 캐시 쓰기 실패는 경고만 하고 계속한다 (지금처럼 매번 임베딩). `LAWBOT_EMBED_CACHE=0`으로 끌 수 있다.
+- 테스트: 캐시를 쓴 벡터가 다시 임베딩한 벡터와 비트 단위로 같음, 문서가 한 글자 바뀌면 새 키, 확인용 1개가 다르면 다시 임베딩, 캐시 폴더에 못 쓰면 경고만.
+- 운영 확인: 재시작 시간 (조문 인덱스 줄) 전후 비교.
+
+### 7.7 재인덱싱 명령 (12)
+
+- `uv run lawbot-reindex <새 조문 CSV> [--decree]`: ① `check_deploy`의 조문 CSV 검사(열·중복·번호 형식·법령별 수) ② 매니페스트 새로 쓰기(데이터 버전·기준일·조문 수·sha256, 이전 매니페스트는 `manifest.prev.json`으로) ③ 모델 서버로 임베딩 캐시 미리 만들기 ④ 웹앱 재시작 안내 출력. 웹앱을 직접 재시작하지는 않는다.
+- 이번 범위 밖: 법령 원문(legalize-kr)에서 조문 CSV를 만드는 것. 지금 방법은 `docs/data-provenance.md`대로 두고, monitor 이벤트를 받아 자동으로 CSV를 만드는 것은 monitor 3단계와 함께 정한다.
+- 테스트: 검사 실패면 아무것도 쓰지 않음, 성공하면 매니페스트가 `manifest.check`를 통과하고 캐시가 생김, 이전 매니페스트 보관.
+
+### 7.8 두 번째 PR 확인
+
+- 기본 테스트·ruff·pyright 통과.
+- 모델 서버가 바뀌므로(7·10) 운영 모델 서버에 반영한 뒤, 개발 웹앱에서 운영 모델 서버로 질문 3개. 서버 로그에 요청 id가 남는지, 웹앱 재시작 시간이 줄었는지 함께 본다.
+- 운영 웹앱 재시작은 권한 확인에 막힐 수 있음 → 막히면 사용자에게 요청.
 
 ## 8. 정리할 문서
 
