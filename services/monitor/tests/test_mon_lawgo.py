@@ -295,4 +295,4 @@ def test_real_law_search():
         pytest.skip('LAW_OC 없음')
     client = LawGoClient(oc)
     body = client.law_body(NEW_MST)
-    assert '퇴직소득' in json.dumps(body['법령']['제개정이유'], ensure_ascii=False)   # 응답은 {'법령': {...}}
+    assert '퇴직소득' in json.dumps(body['법령']['제개정이유'], ensure_ascii=False)  # 응답은 {'법령': {...}}
