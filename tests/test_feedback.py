@@ -302,8 +302,8 @@ def test_review_excludes_val_and_decree_sets():
     from lawbot.eval_v4 import load_test
     v = load_test('val').iloc[0]
     assert ov.match(v.question) == (f'v4_val:{v.id}', 'exact')
-    qa = pd.read_csv(ROOT / 'data/v4/qa_decree_v4.csv', encoding='utf-8-sig').merge(
-        pd.read_csv(ROOT / 'data/v4/split_decree_v4.csv', encoding='utf-8-sig')[['id', 'split_emb']], on='id')
+    qa = pd.read_csv(ROOT / 'data/decree_exp/qa_decree_v4.csv', encoding='utf-8-sig').merge(
+        pd.read_csv(ROOT / 'data/decree_exp/split_decree_v4.csv', encoding='utf-8-sig')[['id', 'split_emb']], on='id')
     for split in ('val', 'test'):
         q = qa[qa.split_emb == split].iloc[0]
         assert ov.match(q.question)[0].startswith('decree_')
