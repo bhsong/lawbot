@@ -203,18 +203,44 @@ LAWBOT_FAST_MODEL=lawbot-fast-v4
 
 ## 4. PR 3: 동시 추론 (continuous batching)
 
-- `mlx-lm 0.32.2`의 `BatchGenerator`를 쓴다 (`mlx_lm.server`도 이걸로 배치 생성을 한다).
-- MLX는 여러 스레드에서 동시에 연산하면 안전하지 않다. 그래서 **GPU 스케줄러 스레드 하나**가 모든 모델 연산을 맡는다.
-  - chat 요청은 큐로 받아 배치에 넣고, 한 스텝마다 요청별 토큰을 각 SSE 큐로 나눠 보낸다.
-  - embeddings·rerank 요청은 생성 스텝 사이에 끼워 실행한다. 생성 중인 스트림이 그 시간만큼 잠깐 멈춘다.
-  - 끊긴 요청은 배치에서 뺀다 (`remove(uid)`).
-- 상한: `LAWBOT_MAX_CONCURRENT`(기본 4). 넘는 요청은 대기열에서 기다린다. 요청마다 KV 캐시가 늘어나므로 32GB에서 실측해 기본값을 정한다.
-- 모델 교체(LRU): 내리려는 모델에 진행 중인 요청이 있으면 끝날 때까지 기다렸다가 교체한다.
-- `hide_thinking`은 요청마다 상태를 따로 둔다.
-- 검증 (승인 후 실행)
-  - 동시 1건: val 답변이 PR 2 결과와 같은지 (배치 경로라 다를 수 있음 → 다른 문항 수와 채점 지표 차이를 기록)
-  - 동시 2·4건: 처리량(문항/분), 요청별 완료 시간, MLX 최대 메모리, 채점 지표
-  - 결과에 따라 기본값을 정하거나, 얻는 것이 적으면 배치를 끄는 설정(`LAWBOT_MAX_CONCURRENT=1`)을 기본으로 둔다.
+### 4.1 구조
+- MLX는 여러 스레드에서 동시에 연산하면 안전하지 않다. 그래서 **GPU 스레드 하나**(`scheduler.py`의 `Scheduler`)가 모든 모델 연산을 맡는다. PR 2의 `Job`·락을 대체한다.
+  - HTTP 핸들러는 요청을 스레드 안전한 수신함에 넣고, 결과는 지금처럼 요청별 asyncio 큐로 받는다(`Ticket`: `next()`·`cancel()`).
+  - 루프 한 바퀴: 수신함 비우기 → 대기 중인 embeddings·rerank를 하나씩 실행 → 자리가 있으면 chat 요청을 생성 엔진에 넣기 → 생성 한 스텝 → 끊긴 요청 빼기.
+  - embeddings·rerank는 생성 스텝 사이에 실행된다. 그동안 생성 중인 스트림은 잠깐 멈춘다(리랭크 한 번 약 2초).
+- **생성 엔진** (`chat.py`): 모델 하나에 엔진 하나. `add`·`step`·`remove`·`close`.
+  - `SequentialEngine`: 지금의 `ChatModel.stream`(mlx_lm `stream_generate`)을 한 토큰씩 진행한다. 가짜 모델 테스트도 이 엔진을 쓴다.
+  - `BatchEngine`: mlx_lm `BatchGenerator`(`mlx_lm.server`가 쓰는 것). 요청마다 detokenizer, 생각 블록 숨김 상태, 측정 시각을 따로 둔다. eos는 `stop`(글자 안 냄), `max_tokens`는 `length`(마지막 토큰 포함)로 `stream_generate`와 같게 끝낸다. 같은 (temperature, top_p)는 sampler 객체를 공유해 한 번에 샘플링한다.
+  - 27B(`qwen3_5`: linear attention `ArraysCache` + `KVCache`)는 두 캐시 모두 `merge`가 있어 배치가 된다(mlx_lm.server의 `is_batchable` 조건).
+- **상한** `LAWBOT_MAX_CONCURRENT` (모델 서버, 기본 **1**, 1~16).
+  - 1이면 `SequentialEngine`: PR 2와 같은 계산이라 답변이 글자 단위로 같다(검증 끝난 경로).
+  - 2 이상이면 `BatchEngine`. 넘는 요청은 수신 순서대로 기다린다.
+  - 기본값은 측정 뒤 정한다. 배치 경로가 1건일 때도 PR 2와 같은 답을 내면 `SequentialEngine`은 지운다.
+- **모델 교체(LRU)**: 다른 chat 모델 요청이 대기열 맨 앞에 오면 새 요청을 더 넣지 않고, 진행 중인 생성이 다 끝난 뒤 엔진을 닫고 모델을 바꾼다(수신 순서 유지). 운영은 Pro 하나라 교체가 없다.
+- **끊김**: `cancel()` → 다음 루프에서 엔진에서 뺀다(`BatchGenerator.remove`). 대기 중이면 넣지 않고 버린다.
+- **오류**: `SequentialEngine`은 그 요청만 실패. `BatchEngine`의 스텝 오류는 같은 배치의 요청이 모두 실패하고 엔진을 새로 만든다.
+- **측정값**(`timings`): 프리필 속도는 엔진에 넣은 때부터 첫 토큰까지, 생성 속도는 첫 토큰 이후 요청별 토큰 수 기준, `peak_memory`는 MLX 전체 최대값. 동시 실행 중에는 요청별 속도가 서로 영향을 받는다.
+
+### 4.2 챗봇 쪽
+- 웹앱 `LAWBOT_CHAT_CONCURRENCY` (Gradio `concurrency_limit`, 기본 1). 모델 서버 상한과 따로 둔다(다른 앱도 서버를 같이 쓰므로).
+- `eval_v4 --concurrency N` (기본 1): 문항을 N개씩 동시에 보내 처리량을 잰다. 결과 파일은 문항 순서대로 쓴다(이어 쓰기 유지).
+
+### 4.3 테스트 (구현 전에 먼저, 모델 없이)
+- 스케줄러(가짜 모델 + `SequentialEngine`): 상한 2에서 두 스트림이 번갈아 진행, 세 번째는 하나가 끝날 때까지 대기, 생성 중 embeddings가 스트림이 끝나기 전에 응답, 끊긴 요청이 자리를 비움, 다른 모델 요청은 진행 중 생성이 끝난 뒤 교체(수신 순서), 한 요청의 오류가 다른 요청에 영향 없음, 상한 1은 PR 2와 같은 동작(기존 테스트 그대로 통과).
+- `BatchEngine`(가짜 `BatchGenerator`·토크나이저): stop/length 처리와 글자, 생각 블록 숨김, 측정값, sampler 공유, `remove`, 스텝 오류 시 전체 실패.
+- 설정: `LAWBOT_MAX_CONCURRENT` 검사(범위 밖 거부), 시작 로그·`check`에 표시.
+- 챗봇: `--concurrency` 결과 순서·이어 쓰기, `LAWBOT_CHAT_CONCURRENCY` 검사.
+- 실제 모델(`-m models`): 배치 엔진으로 두 요청 동시 생성이 끝나고 글이 비지 않음.
+
+### 4.4 검증 (맥 미니, 사용자 승인 후 실행)
+| # | 설정 | 측정 |
+| --- | --- | --- |
+| 1 | 서버 상한 4, 평가 동시 1 (배치 경로 1건) | val 답변이 PR 2 결과와 같은지. 다르면 다른 문항 수와 채점 지표 차이 |
+| 2 | 서버 상한 4, 평가 동시 2 | 처리량(문항/분), 요청별 완료·첫 토큰, MLX 최대 메모리, 채점 지표 |
+| 3 | 서버 상한 4, 평가 동시 4 | 같음 |
+
+- 답변 단계(answers 200문항)만 돌린다. 결과에 따라 기본값을 정하거나, 얻는 것이 적으면 기본 1을 유지한다.
+- 기록: `docs/evals/<날짜>-batch-generation.md`, README 한 줄.
 
 ---
 
@@ -235,8 +261,8 @@ LAWBOT_FAST_MODEL=lawbot-fast-v4
 | PR | 상태 |
 | --- | --- |
 | 1 `chore/monorepo` | #33 병합 (2026-11-01) |
-| 2 `feat/openai-api` | 구현·테스트·실제 모델 검증 완료 (답변 600개 동일, [기록](../evals/2026-11-01-openai-api.md)), 병합 전 |
-| 3 `feat/batch-generation` | 시작 전 |
+| 2 `feat/openai-api` | #34 병합 (2026-11-01). 답변 600개 동일 ([기록](../evals/2026-11-01-openai-api.md)) |
+| 3 `feat/batch-generation` | 계획 확정(§4), 구현 중 |
 
 ### PR 2 구현 중 계획과 달라진 점
 
@@ -249,6 +275,13 @@ LAWBOT_FAST_MODEL=lawbot-fast-v4
 - `LLM_PATH`는 삭제했다. 실제 모델 스모크 테스트는 모델 서버 쪽 `-m models`로 옮겼다 (`LAWBOT_SERVE_*` 첫 항목 또는 기본 폴더).
 - 모델 폴더 점검(`lawbot_model_server.check`)에서 chat 모델이 4비트가 아니면 FAIL 대신 WARN으로 했다 (범용 서버라 8비트 모델도 올 수 있음). 리랭커는 그대로 FAIL.
 - 개발 웹앱 `.env`에도 검색 설정(`LAWBOT_RERANKER_ENABLED` 등)이 필요하다 (예전에는 모델 서버 설정을 따랐음). 배포 때 운영·개발 `.env`를 새 예시대로 고쳐야 한다.
+
+### PR 3 구현 중 계획과 달라진 점
+
+- 작은 무작위 모델(qwen3, 27B와 같은 구조의 qwen3_5)로 `BatchGenerator`가 순차 생성과 같은 토큰을 내는지 먼저 확인했다. 배치 1·3개와 중간 투입 모두 같았다. 그래서 이 비교를 단위 테스트로 넣었다(`test_ms_scheduler.py`). 27B 4비트에서 같은지는 §4.4 검증으로 본다.
+- `hide_thinking`의 상태를 `ThinkFilter` 클래스로 옮겼다(요청마다 하나). 동작은 같고 기존 테스트가 그대로 통과한다.
+- 웹앱 요청 로그(JSONL)는 동시 질문의 줄이 섞이지 않게 잠금을 걸고 쓴다.
+- `eval_v4`는 단계별 문항 수·시간을 `run_<tag>.json`의 `stage_times`에 남기고, 끝날 때 문항/분을 출력한다(처리량 비교용).
 
 ## 7. 사용자 확인 (2026-11-01 답변 완료)
 
