@@ -20,8 +20,8 @@ TOKEN = 'MODELTOKEN123'
 class FakeLLM:
     """OpenAI 호환 /v1/chat/completions. 사용자 메시지의 '이름:' 줄을 요약에 되돌려 준다."""
 
-    def __init__(self, *, fail: int = 0, status: int = 500):
-        self.fail, self.status = fail, status
+    def __init__(self, *, fail: int = 0, status: int = 500, finish: str = 'stop'):
+        self.fail, self.status, self.finish = fail, status, finish
         self.bodies: list[dict] = []
         self.headers: list[httpx.Headers] = []
 
@@ -42,7 +42,7 @@ class FakeLLM:
                 'object': 'chat.completion',
                 'model': body['model'],
                 'choices': [
-                    {'index': 0, 'message': {'role': 'assistant', 'content': content}, 'finish_reason': 'stop'}
+                    {'index': 0, 'message': {'role': 'assistant', 'content': content}, 'finish_reason': self.finish}
                 ],
                 'usage': {'prompt_tokens': 100, 'completion_tokens': 20, 'total_tokens': 120},
                 'timings': {'prompt_tps': 300.0, 'generation_tps': 15.0, 'peak_memory_gb': 19.9},
@@ -87,7 +87,10 @@ def test_one_call_per_amendment_and_md(tmp_path, legalize):
     assert len(llm.bodies) == 1  # 별표서식 2건은 부모 법령 호출에 함께
     prompt = llm.bodies[0]['messages'][-1]['content']
     assert '이름: 소득세법 시행규칙' in prompt and '퇴직소득' in prompt  # 제·개정 이유
-    assert '서식 0021-00' in prompt and '서식 0100-02' in prompt
+    assert (
+        '서식21 ' in prompt and '서식100의2 ' in prompt
+    )  # 법제처 원문과 같은 표기 (0024-02 같은 묶음 번호는 모델이 헷갈림)
+    assert '0021-00' not in prompt
     assert '+[별지 제21호서식] <개정 2026. 5. 22.>' in prompt  # 서식 텍스트 diff
 
     assert result.path == mon.paths.home / 'data' / 'summaries' / '2026-11-02.md'
@@ -96,7 +99,7 @@ def test_one_call_per_amendment_and_md(tmp_path, legalize):
     assert '자동 요약' in md and 'collectors=1 ok=1 failed=0 events=3' in md
     assert '## 1. 법률·시행령·시행규칙' in md and '### 소득세법 시행규칙' in md
     assert '가짜 요약 (이름: 소득세법 시행규칙' in md
-    assert '바뀐 별표·서식 2개' in md and '서식 0021-00' in md
+    assert '바뀐 별표·서식 2개' in md and '`서식21`' in md
     assert 'data/events/2026-11-02/' in md  # 원문 이벤트 경로
     assert all(row is not None for row in mon.state.conn.execute('select processed_at from events').fetchall()[0])
 
@@ -112,13 +115,32 @@ def test_request_shape_and_token_not_saved(tmp_path, legalize):
     mon = monitor_with_events(tmp_path, legalize, llm.client())
     result = mon.summarize()
     body = llm.bodies[0]
-    assert body['model'] == 'qwen3.8-27b-4bit' and body['temperature'] == 0 and body['max_tokens'] == 800
+    assert (
+        body['model'] == 'qwen3.8-27b-4bit' and body['temperature'] == 0 and body['max_tokens'] == 1200
+    )  # 별표서식이 붙은 묶음
     assert body['chat_template_kwargs'] == {'enable_thinking': False} and body['stream'] is False
     assert body['messages'][0]['role'] == 'system' and '지어내지' in body['messages'][0]['content']
     assert llm.headers[0]['authorization'] == f'Bearer {TOKEN}'
     for path in [result.path, *mon.paths.logs.glob('*.log')]:
         assert TOKEN not in path.read_text(encoding='utf-8')
     assert '19.9' in next(mon.paths.logs.glob('*.log')).read_text(encoding='utf-8')  # MLX peak를 로그에
+
+
+def test_truncated_summary_is_marked(tmp_path, legalize):
+    mon = monitor_with_events(tmp_path, legalize, FakeLLM(finish='length').client())
+    md = mon.summarize().path.read_text(encoding='utf-8')
+    assert '길이 제한으로 잘림' in md
+
+
+def test_lone_law_uses_smaller_limit():
+    assert summarize.max_tokens_for(summarize.Group({'event_id': 'p'}, [])) == 800
+    assert summarize.max_tokens_for(summarize.Group({'event_id': 'p'}, [{'event_id': 'c'}])) == 1200
+
+
+def test_label_from_item_id():
+    assert summarize.label({'target': {'item_id': '서식 0024-02'}}) == '서식24의2'
+    assert summarize.label({'target': {'item_id': '별지 0002-00'}}) == '별지2'
+    assert summarize.label({'target': {'item_id': '이상한 값'}}) == '이상한 값'
 
 
 def test_failure_keeps_events_pending(tmp_path, legalize):

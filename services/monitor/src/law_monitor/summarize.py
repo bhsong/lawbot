@@ -19,12 +19,16 @@ MAX_INPUT = 12_000  # 한 호출의 사용자 메시지 최대 글자 수 (27B �
 REASON_LIMIT, AMENDMENT_LIMIT, ARTICLE_LIMIT, FORM_LIMIT = 3_000, 2_000, 5_000, 1_500
 TITLE_RESERVE = 2_000  # 길이 때문에 내용을 못 넣은 별표서식의 제목 목록 자리
 LIST_LIMIT = 15  # md에 나열할 별표서식 수
+MAX_TOKENS, MAX_TOKENS_WITH_FORMS = 800, 1200  # 서식이 붙으면 요약이 길어짐 (실제 확인: 서식 46개에서 800토큰에 잘림)
 
 SYSTEM = """너는 ERP(급여 계산·원천징수·4대보험·부가가치세 신고) 담당 개발자에게 법령 변경을 알려 주는 요약가다.
 아래 규칙을 지켜 한국어로 요약한다.
 - 주어진 원문(제·개정 이유, 개정문, 바뀐 조문·서식 diff)에 있는 내용만 쓴다. 원문에 없는 금액·날짜·조문을 지어내지 않는다.
 - 조문 번호, 서식 번호, 금액, 날짜는 원문 그대로 쓴다.
 - 원문만으로 판단하기 어려우면 "원문 확인 필요"라고 쓴다.
+- 적용 대상·기준일(예: "언제 이후 퇴직하는 사람")은 원문에 그 표현이 있을 때만 쓰고, 추정하지 않는다.
+- 서식 번호는 입력에 적힌 표기(예: 서식21, 서식24의2) 그대로 쓴다. 별지 제24호서식(2)처럼 괄호 번호는 같은 서식의 다른 쪽이다.
+- 별표·서식이 많으면 시행일 항목에는 날짜별 개수와 대표 서식 몇 개만 쓰고 번호를 모두 나열하지 않는다.
 - 다음 네 항목만, 각 항목은 짧은 글머리표로 쓴다:
 **무엇이 바뀌었나** (2~4줄)
 **시행일** (조문·서식별 시행일이 다르면 나눠서)
@@ -108,6 +112,20 @@ def _cut(text: str | None, limit: int) -> str:
     return text if len(text) <= limit else text[:limit].rstrip() + '\n(이하 생략)'
 
 
+def label(event: dict) -> str:
+    """'서식 0024-02' → '서식24의2' (법제처 원문 표기). 모양이 다르면 그대로."""
+    item = str((event.get('target') or {}).get('item_id') or '')
+    kind, _, rest = item.partition(' ')
+    number, _, branch = rest.partition('-')
+    if not (kind and number.isdigit() and branch.isdigit()):
+        return item
+    return f'{kind}{int(number)}' + (f'의{int(branch)}' if int(branch) else '')
+
+
+def max_tokens_for(g: Group) -> int:
+    return MAX_TOKENS_WITH_FORMS if g.children else MAX_TOKENS
+
+
 def _title(event: dict) -> str:
     t = event.get('target') or {}
     name = str(t.get('item_name') or '')
@@ -148,7 +166,7 @@ def build_prompt(g: Group, home: Path) -> str:
     for k in kids:
         kd = k.get('dates') or {}
         header = (
-            f'\n#### {(k.get("target") or {}).get("item_id")} {_title(k)} '
+            f'\n#### {label(k)} {_title(k)} '
             f'({CHANGE_NAMES.get(k.get("change_type"), k.get("change_type"))}, 시행 {kd.get("effective")})\n'
         )
         part = header + _cut(_changed_lines(_diff_file(k, home)), FORM_LIMIT)
@@ -159,7 +177,7 @@ def build_prompt(g: Group, home: Path) -> str:
     titles = ''
     if titles_only:
         titles = f'\n\n[길이 때문에 제목만 넣은 별표·서식 {len(titles_only)}개]\n' + '\n'.join(
-            f'- {(k.get("target") or {}).get("item_id")} {_title(k)}' for k in titles_only
+            f'- {label(k)} {_title(k)}' for k in titles_only
         )
         titles = _cut(titles, TITLE_RESERVE)
     return _cut(body, MAX_INPUT - len(titles)) + titles
@@ -169,17 +187,18 @@ def _section(g: Group) -> int:
     return int(g.head.get('category') or 99)
 
 
-def _render(g: Group, text: str | None, paths: dict[str, str]) -> str:
+def _render(g: Group, text: str | None, paths: dict[str, str], truncated: bool = False) -> str:
     head = g.head
     t, d = head.get('target') or {}, head.get('dates') or {}
     kind = CHANGE_NAMES.get(head.get('change_type'), head.get('change_type'))
     out = f'### {t.get("law_name")} ({kind}, 공포 {d.get("promulgation")}, 시행 {d.get("effective")})\n\n'
     out += (text or '(요약 없음)') + '\n'
+    if truncated:
+        out += '\n(요약이 길이 제한으로 잘림: 원문을 확인하세요)\n'
     kids = g.children if g.parent is not None else g.events
     if kids:
         shown = ', '.join(
-            f'`{(k.get("target") or {}).get("item_id")}` {_title(k)} (시행 {(k.get("dates") or {}).get("effective")})'
-            for k in kids[:LIST_LIMIT]
+            f'`{label(k)}` {_title(k)} (시행 {(k.get("dates") or {}).get("effective")})' for k in kids[:LIST_LIMIT]
         )
         more = f' 외 {len(kids) - LIST_LIMIT}개' if len(kids) > LIST_LIMIT else ''
         out += f'\n- 바뀐 별표·서식 {len(kids)}개: {shown}{more}\n'
@@ -208,7 +227,7 @@ def write_summary(
     for g in groups:
         try:
             started = time.monotonic()
-            reply = client.complete(SYSTEM, build_prompt(g, home))
+            reply = client.complete(SYSTEM, build_prompt(g, home), max_tokens=max_tokens_for(g))
         except LLMError as e:
             failed = str(e)
             log.error('요약 실패 (%s): %s', (g.head.get('target') or {}).get('law_name'), e)
@@ -224,7 +243,7 @@ def write_summary(
             tm.get('peak_memory_gb'),
             reply.finish_reason,
         )
-        rendered.append((_section(g), _render(g, reply.text, paths)))
+        rendered.append((_section(g), _render(g, reply.text, paths, truncated=reply.finish_reason == 'length')))
         done += [e['event_id'] for e in g.events]
 
     pending = len(events) - len(done)
