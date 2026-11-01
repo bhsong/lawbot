@@ -459,3 +459,31 @@ def test_compare_warns(tmp_path, env, capsys):
     with pytest.raises(SystemExit) as e:
         ev.main()
     assert e.value.code == 1
+
+
+def test_resume_concurrent_keeps_order_and_resumes(tmp_path, monkeypatch):
+    """--concurrency: 동시에 풀어도 파일에는 문항 순서대로, 이미 있는 id는 건너뜀, 처리량 기록"""
+    import threading
+    import time as _time
+
+    monkeypatch.setattr(ev, 'WORKERS', 3)
+    monkeypatch.setattr(ev, 'STAGE_TIMES', {})
+    running, peak, lock = [0], [0], threading.Lock()
+
+    def fn(i, delay):
+        with lock:
+            running[0] += 1
+            peak[0] = max(peak[0], running[0])
+        _time.sleep(delay)  # 앞 문항이 더 늦게 끝남
+        with lock:
+            running[0] -= 1
+        return {'id': i, 'v': int(i[1:]) * 10}
+
+    path = tmp_path / 'r.csv'
+    items = [(f'q{i}', 0.03 * (6 - i)) for i in range(6)]
+    ev.resume(path, items[:4], fn, 'answers')
+    ev.resume(path, items, fn, 'answers')
+    df = pd.read_csv(path, encoding='utf-8-sig')
+    assert df['id'].tolist() == [f'q{i}' for i in range(6)] and df['v'].tolist() == [0, 10, 20, 30, 40, 50]
+    assert peak[0] == 3
+    assert ev.STAGE_TIMES['answers']['n'] == 2  # 두 번째 실행에서 남은 2개

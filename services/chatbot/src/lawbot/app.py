@@ -1,5 +1,6 @@
 # src/lawbot/app.py  →  uv run lawbot-app
 import html
+import os
 
 import gradio as gr
 
@@ -227,6 +228,18 @@ def make_on_feedback(fb):
     return on_feedback
 
 
+CHAT_CONCURRENCY_LIMIT = 16
+
+
+def chat_concurrency():
+    """LAWBOT_CHAT_CONCURRENCY: 웹앱이 동시에 처리하는 질문 수 (기본 1). 모델 서버의 LAWBOT_MAX_CONCURRENT와 따로 둔다
+    (서버를 다른 앱과 같이 쓰므로). 서버 상한보다 크면 넘는 질문은 서버에서 기다린다"""
+    raw = (os.environ.get('LAWBOT_CHAT_CONCURRENCY') or '1').strip()
+    if not raw.isdigit() or not 1 <= int(raw) <= CHAT_CONCURRENCY_LIMIT:
+        raise ValueError(f'LAWBOT_CHAT_CONCURRENCY는 1–{CHAT_CONCURRENCY_LIMIT} 정수: {raw!r}')
+    return int(raw)
+
+
 def build_demo(
     app, fb=None
 ):  # 화면만 만든다: 인증 검사·모델 로딩은 main에서. fb: feedback.from_env() (None이면 버튼 없음)
@@ -267,8 +280,8 @@ def build_demo(
                     additional_inputs=[model, fmt],
                     additional_outputs=[sources, stats],
                     examples=[[q, None, None] for q in EXAMPLES],  # None: 예시를 눌러도 현재 모델·형식 선택 유지
-                    concurrency_limit=1,
-                )  # 생성은 한 번에 하나 (두 모델 동시 생성 금지)
+                    concurrency_limit=chat_concurrency(),
+                )  # 동시에 처리하는 질문 수 (기본 1). 모델 교체·동시 생성 순서는 모델 서버가 정한다
                 stats.render()
             with gr.Column(scale=2):
                 gr.Markdown(sources_heading(app))
@@ -279,6 +292,7 @@ def build_demo(
 def main():
     envfile.load()  # .env (셸에 있는 변수 우선). 인증·모델 설정을 읽기 전에
     config = get_local_launch_config()  # 인증 정보가 없으면 모델 로딩 전에 실행 거부
+    chat_concurrency()  # 잘못된 값이면 모델 서버에 접속하기 전에 거부
     fb = feedback.from_env()  # LAWBOT_FEEDBACK=1: 저장 폴더가 gitignore 밖이면 모델 로딩 전에 거부
     a = load_app()
     demo = build_demo(a, fb) if fb is not None else build_demo(a)  # 꺼져 있으면 기존과 같은 호출

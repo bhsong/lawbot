@@ -5,6 +5,7 @@
 import json
 import os
 import sys
+import threading
 import time
 import uuid
 from dataclasses import dataclass
@@ -303,6 +304,9 @@ def answer_check(app, raw, hits):
         return {}
 
 
+LOG_LOCK = threading.Lock()  # 동시 질문(LAWBOT_CHAT_CONCURRENCY·평가 --concurrency)의 줄이 섞이지 않게
+
+
 def log_request(app, st, fmt, status, error=None):
     """JSONL 한 줄. 기록 실패는 답변을 막지 않고 콘솔에 경고만"""
     path = request_log_path()
@@ -310,7 +314,7 @@ def log_request(app, st, fmt, status, error=None):
         return
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
-        with path.open('a', encoding='utf-8') as f:
+        with LOG_LOCK, path.open('a', encoding='utf-8') as f:
             f.write(json.dumps(request_record(app, st, fmt, status, error), ensure_ascii=False, default=str) + '\n')
     except OSError as e:
         print(f'[lawbot] 경고: 요청 로그를 쓰지 못했습니다 ({path}: {type(e).__name__})')

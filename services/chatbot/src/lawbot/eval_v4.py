@@ -19,6 +19,7 @@
 # 실행마다 설정(생성 위치·모델 서버 /v1/models·모델 id·데이터 버전·커밋)을 results/v4/run_<tag>.json에 남긴다
 # test 문항은 평가 전용 (README '평가 데이터 사용 제한'): 설정·프롬프트·규칙은 --split val 결과로 고른다
 import argparse
+import concurrent.futures
 import datetime
 import json
 import subprocess
@@ -140,27 +141,34 @@ def score_a(row, answer):
 
 
 # ---- 실행 도우미 ----
+WORKERS = 1  # --concurrency: 문항을 동시에 몇 개씩 보낼지 (main이 정함)
+STAGE_TIMES = {}  # label → {'n': 이번 실행에서 푼 문항 수, 'sec': 걸린 시간}. 처리량(문항/분) 기록용
+
+
 def resume(path, items, fn, label):
-    """items: (id, ...) 목록. path에 이미 있는 id는 건너뛰고 한 행씩 이어 쓴다"""
+    """items: (id, ...) 목록. path에 이미 있는 id는 건너뛰고 한 행씩 이어 쓴다
+    WORKERS가 2 이상이면 그만큼 동시에 풀고, 파일에는 문항 순서대로 쓴다 (중간에 멈춰도 이어 쓰기 가능)"""
     done = set(pd.read_csv(path, **E)['id'].astype(str)) if path.exists() else set()
     cols = pd.read_csv(path, nrows=0, **E).columns.tolist() if path.exists() else None
     todo = [x for x in items if str(x[0]) not in done]
     print(f'[{label}] {len(items) - len(todo)}/{len(items)} 완료 → 남은 {len(todo)}', flush=True)
     t0 = time.perf_counter()
-    for j, x in enumerate(todo, 1):
-        row = fn(*x)
-        if cols is not None:  # 이어 쓰기: 기존 파일의 열 순서에 맞춘다 (열이 다르면 값이 밀리므로 멈춤)
-            extra = [c for c in row if c not in cols]
-            if extra:
-                raise SystemExit(
-                    f'{path.name}에 없는 열 {extra}: 다른 설정(예: 하위법령 켜짐)으로 만든 파일입니다. '
-                    '다른 --tag로 실행하세요'
-                )
-            row = {c: row.get(c) for c in cols}
-        pd.DataFrame([row]).to_csv(path, mode='a', index=False, header=cols is None and not path.exists(), **E)
-        cols = cols or list(row)
-        if j % 10 == 0 or j == len(todo):
-            print(f'[{label}] {j}/{len(todo)} · 평균 {(time.perf_counter() - t0) / j:.1f}초', flush=True)
+    with concurrent.futures.ThreadPoolExecutor(max_workers=WORKERS) as ex:
+        rows = ex.map(lambda x: fn(*x), todo) if WORKERS > 1 else (fn(*x) for x in todo)
+        for j, row in enumerate(rows, 1):
+            if cols is not None:  # 이어 쓰기: 기존 파일의 열 순서에 맞춘다 (열이 다르면 값이 밀리므로 멈춤)
+                extra = [c for c in row if c not in cols]
+                if extra:
+                    raise SystemExit(
+                        f'{path.name}에 없는 열 {extra}: 다른 설정(예: 하위법령 켜짐)으로 만든 파일입니다. '
+                        '다른 --tag로 실행하세요'
+                    )
+                row = {c: row.get(c) for c in cols}
+            pd.DataFrame([row]).to_csv(path, mode='a', index=False, header=cols is None and not path.exists(), **E)
+            cols = cols or list(row)
+            if j % 10 == 0 or j == len(todo):
+                print(f'[{label}] {j}/{len(todo)} · 평균 {(time.perf_counter() - t0) / j:.1f}초', flush=True)
+    STAGE_TIMES[label] = {'n': len(todo), 'sec': round(time.perf_counter() - t0, 1)}
 
 
 def answer(app, model, fmt, question):
@@ -729,6 +737,14 @@ def run_meta(app, model, fmt, split, n, stages):
     }
 
 
+def update_last_run(tag, **fields):
+    """run_<tag>.json의 마지막 실행 항목에 값 추가 (끝난 뒤 처리량 등)"""
+    p = OUT / f'run_{tag}.json'
+    d = json.loads(p.read_text(encoding='utf-8'))
+    d['runs'][-1].update(fields)
+    p.write_text(json.dumps(d, ensure_ascii=False, indent=2, default=str) + '\n', encoding='utf-8')
+
+
 def write_run_meta(tag, meta):
     """results/v4/run_<tag>.json의 runs 목록에 추가 (이어서 실행하면 실행마다 한 항목)"""
     p = OUT / f'run_{tag}.json'
@@ -865,7 +881,17 @@ def main():
     ap.add_argument('--model', default=None, help='답변 모델 key (기본: .env의 첫 번째 모델)')
     ap.add_argument('--fmt', choices=['concise', 'full'], default=None, help='답변 형식 (기본: 그 모델의 기본 형식)')
     ap.add_argument('--no-rerank', action='store_true', help='retrieval 단계에서 리랭킹 순위를 재지 않음')
+    ap.add_argument(
+        '--concurrency',
+        type=int,
+        default=1,
+        help='문항을 동시에 몇 개씩 보낼지 (기본 1). 모델 서버의 LAWBOT_MAX_CONCURRENT와 함께 처리량 측정용',
+    )
     args = ap.parse_args()
+    if not 1 <= args.concurrency <= 16:
+        raise SystemExit('--concurrency는 1–16')
+    global WORKERS
+    WORKERS = args.concurrency
     envfile.load()
     OUT.mkdir(parents=True, exist_ok=True)
     if args.stage == 'compare':
@@ -908,12 +934,12 @@ def main():
     print(
         f'[eval_v4] tag {tag} · 모델 {model} · 형식 {fmt} · 리랭커 {"켜짐" if app.reranker else "꺼짐"} · '
         f'하위법령 {"첨부" if decree else "없음"} · '
-        f'{args.split} {len(test)} · 표본 {len(sample)}'
+        f'{args.split} {len(test)} · 표본 {len(sample)} · 동시 {WORKERS}'
     )
     stages = ['retrieval', 'answers', 'oos', 'refusal'] if args.stage == 'all' else [args.stage]
     if args.split == 'val':
         stages = [s for s in stages if s != 'oos'] + (['decree'] if args.stage == 'all' and decree else [])
-    write_run_meta(tag, run_meta(app, model, fmt, args.split, args.n, stages))
+    write_run_meta(tag, run_meta(app, model, fmt, args.split, args.n, stages) | {'concurrency': WORKERS})
     t0 = time.perf_counter()
     for s in stages:
         if s == 'retrieval':
@@ -930,6 +956,13 @@ def main():
             dq = load_decree_questions('val')
             run_decree_retrieval(app, model, dq, OUT / f'dqretrieval_{tag}.csv')
             run_decree_answers(app, model, fmt, dq, OUT / f'dqanswers_{tag}.csv')
+    update_last_run(tag, stage_times=STAGE_TIMES)
+    for label, t in STAGE_TIMES.items():
+        if t['n'] and t['sec']:
+            print(
+                f'[eval_v4] {label}: {t["n"]}문항 {t["sec"] / 60:.1f}분 · {t["n"] / t["sec"] * 60:.2f}문항/분',
+                flush=True,
+            )
     summarize(tag, test)
     classify(tag)
     print(f'[eval_v4] {", ".join(stages)} 완료 · {(time.perf_counter() - t0) / 60:.1f}분 · 결과 {OUT}/*_{tag}.csv')
