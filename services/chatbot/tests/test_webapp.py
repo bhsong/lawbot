@@ -631,7 +631,7 @@ def test_status_steps(env):
 
 
 def test_writing_placeholder_while_marker():
-    """간결형은 표시 기호를 쓰는 동안 빈 화면 대신 처리 중 문구 ('⏳': bench_ui가 첫 글자로 세지 않음)"""
+    """간결형은 표시 기호를 쓰는 동안 빈 화면 대신 처리 중 문구 ('⏳': 첫 글자 측정에서 제외)"""
     assert app_mod.WRITING.startswith('⏳') and app_mod.SEARCHING.startswith('⏳')
 
 
@@ -665,7 +665,7 @@ def test_data_notice(env):
 
 
 def test_chat_api_unchanged(env):
-    """bench_ui 호환: API 이름 chat, 입력 [질문, 모델, 형식]"""
+    """Gradio API 호환: API 이름 chat, 입력 [질문, 모델, 형식]"""
     demo = app_mod.build_demo(make_app(env))
     cfg = demo.get_config_file()
     deps = [d for d in cfg['dependencies'] if d.get('api_name') == 'chat']

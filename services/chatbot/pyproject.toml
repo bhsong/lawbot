@@ -1,0 +1,24 @@
+[project]
+name = "lawbot"
+version = "0.1.0"
+description = "노동법 조문 근거 RAG 챗봇 웹앱 (Gradio). 레포 구조는 최상위 README 참고"
+authors = [
+    { name = "bhsong", email = "sbh3003@gmail.com" }
+]
+requires-python = ">=3.14"
+dependencies = [
+    "gradio>=6.30.0",
+    "mlx-lm>=0.32.2",
+    "pandas>=3.0.6",
+    "sentence-transformers>=6.1.0",
+]
+
+[project.scripts]
+# 레포 최상위에서 uv run lawbot-app / uv run lawbot-eval-v4 로 실행
+lawbot-app = "lawbot.app:main"
+lawbot-eval-v4 = "lawbot.eval_v4:main"   # v4 웹앱 구성 전체 재평가 (단계 생략 시 all)
+lawbot-model-server = "lawbot.model_server:main"   # 운영·개발 웹앱이 함께 쓰는 내부 모델 서버 (127.0.0.1, 토큰 필수)
+
+[build-system]
+requires = ["uv_build>=0.12.19,<0.13.0"]
+build-backend = "uv_build"

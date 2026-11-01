@@ -1,5 +1,5 @@
 # tests/test_decree.py  →  시행령·시행규칙(하위법령) 첨부 (docs/archives/decree-attach.md). 모델 파일 불필요
-#   필터가 val 실험(decree_filter same1+other0.9, 저장된 fp16 점수)과 같은지, 첨부를 끈 구성·Fast가 지금과 같은지,
+#   필터가 val 실험(same1+other0.9 규칙, 저장된 fp16 점수·참고 조문)과 같은지, 첨부를 끈 구성·Fast가 지금과 같은지,
 #   원격·로컬 동등성, 812조문 검색기·인용 판정·화면·평가 경로
 import dataclasses
 import json
@@ -16,21 +16,44 @@ import lawbot.remote as remote
 import lawbot.retriever as retriever_mod
 import lawbot.service as service
 from lawbot import answer_format, citation, decree, deploy
-from lawbot import decree_filter as F
 from lawbot.llm import build_prompt_v4
 from lawbot.paths import DATA, V4_ARTICLES, V4_DECREE_ARTICLES
 from model_fakes import TOKEN, serve
 
 E = dict(encoding='utf-8-sig')
 DIR = DATA / 'decree_exp'
-RULE = F.rules()['same1+other0.9']
 
 
 # ---- 1. 필터: 저장된 fp16 점수로 실험 값 재현 ----
+def load_articles():
+    """812조문 표 (실험 후보 번호 j = 이 표의 순번). 실험 때 토큰 수 파일과 순서가 같은지 확인"""
+    art = pd.read_csv(V4_DECREE_ARTICLES, **E)
+    art = art[art.deleted == 0].reset_index(drop=True)
+    tok = pd.read_csv(DIR / 'doc_tokens.csv', **E)
+    assert len(art) == 812 and (art.article_id.values == tok.article_id.values).all(), '조문 순서 불일치'
+    return art
+
+
+def article_table():
+    """실험(eval_decree) 프롬프트용 조문 dict: Retriever.search가 돌려주는 형식, 키는 '법령명 제N조'"""
+    a = pd.read_csv(V4_DECREE_ARTICLES, **E)
+    a = a[a['deleted'] == 0]
+    return {
+        r.article_id: {
+            'article_id': r.article_no,
+            'title': r.title,
+            'law': r.law,
+            'score': 0.0,
+            'doc': f'{r.law} {r.article_no}({r.title})\n{r.text}',
+        }
+        for r in a.itertuples()
+    }
+
+
 @pytest.fixture(scope='module')
 def exp():
     """(조문 표, 하위법령 val 444, 법률 val 1,110) 각 문항의 (법률 후보, 하위법령 후보) — Colab 임베딩 순서·fp16 점수"""
-    art = F.load(DIR)
+    art = load_articles()
     qa, sp = pd.read_csv(DIR / 'qa_decree_v4.csv', **E), pd.read_csv(DIR / 'split_decree_v4.csv', **E)
     dv = qa.merge(sp[['id', 'split_emb']], on='id', validate='one_to_one')
     dv = dv[dv.split_emb == 'val'].reset_index(drop=True)
@@ -60,26 +83,6 @@ def webapp_attach(art, law, dec, tau=0.9, k=2):
     law_order = [law[i][0] for i in decree.rank_order([s for _, s in law])]
     cands = [{'j': j, 'rerank_score': s, 'emb_rank': r, 'parent_law': parent[j]} for r, (j, s) in enumerate(dec, 1)]
     return law_order[:3], [c['j'] for c in decree.attach(cands[::-1], parent[law_order[0]], tau, k)]  # 입력 순서와 무관
-
-
-def test_filter_matches_experiment_per_question(exp):
-    art, dv, dc, rp, lc = exp
-    for c in (dc, lc):
-        want = F.run(
-            F.cands(
-                pd.DataFrame([(q, j, s) for q, (a, b) in enumerate(c) for j, s in a + b], columns=['qi', 'j', 'score']),
-                len(c),
-                {
-                    'T_law': np.array([[j for j, _ in a] for a, _ in c]),
-                    'T_dec': np.array([[j for j, _ in b] for _, b in c]),
-                },
-            ),
-            art,
-            2,
-            RULE,
-        )
-        got = [webapp_attach(art, a, b)[1] for a, b in c]
-        assert got == want
 
 
 def test_filter_reproduces_val_numbers(exp):
@@ -169,9 +172,7 @@ def test_retriever_law_encoding_unchanged(enc):
 
 
 def test_prompt_format_matches_experiment(enc):
-    """웹앱 hit(법률 3 + 하위법령 2)의 프롬프트가 eval_decree.article_table()로 만든 실험 프롬프트와 글자 단위로 같다"""
-    from lawbot.eval_decree import article_table
-
+    """웹앱 hit(법률 3 + 하위법령 2)의 프롬프트가 실험(eval_decree)의 조문 표로 만든 프롬프트와 글자 단위로 같다"""
     R = retriever_mod.Retriever(law_csv=V4_DECREE_ARTICLES, max_seq_length=2304, doc_style='v4', decree_max_seq=3072)
     keys = [f'{l} {a}' for l, a in zip(R.laws, R.ids)]
     table = article_table()

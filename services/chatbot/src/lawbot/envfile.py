@@ -1,4 +1,4 @@
-# src/lawbot/envfile.py  →  실행 설정 파일(.env)을 환경 변수로 읽는다 (app·model_server·check_deploy·bench_models의 main이 맨 먼저 호출)
+# src/lawbot/envfile.py  →  실행 설정 파일(.env)을 환경 변수로 읽는다 (app·model_server·check_deploy 등의 main이 맨 먼저 호출)
 # 파일: LAWBOT_ENV_FILE이 가리키는 파일, 없으면 레포 최상위 .env (없으면 아무것도 안 함). LAWBOT_ENV_FILE=''이면 읽지 않음
 # 셸에 이미 있는 변수가 우선한다 (파일 값으로 덮어쓰지 않음). 형식: KEY=VALUE 한 줄씩, # 주석, 'export ' 앞머리·따옴표 허용
 # 읽는 변수는 LAWBOT_* 와 LLM_PATH만: GRADIO_* 같은 서버 설정은 security.py가 고정하므로 파일로도 바꾸지 않음

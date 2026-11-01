@@ -20,6 +20,14 @@ FORCED = (
 )
 
 
+def test_paths_root_is_repo_top():
+    """모노레포로 옮긴 뒤에도 ROOT는 레포 최상위 (data/·models/·results/가 그 아래)"""
+    from lawbot.paths import ROOT
+
+    assert (ROOT / 'pyproject.toml').is_file() and (ROOT / 'services' / 'chatbot').is_dir()
+    assert DATA == ROOT / 'data' and RESULTS == ROOT / 'results'
+
+
 @pytest.fixture(scope='module')
 def oos():
     return pd.read_csv(DATA / 'oos_eval.csv', **E)

@@ -16,7 +16,7 @@ EXAMPLES = [
     '육아휴직을 썼다고 불이익을 줘도 되나요?',
 ]
 EMPTY = '답변을 생성하지 못했습니다. 다시 질문해 주세요.'
-SEARCHING = '⏳ 조문을 찾는 중…'  # '⏳'로 시작하는 문구는 bench_ui가 첫 글자로 세지 않음
+SEARCHING = '⏳ 조문을 찾는 중…'  # '⏳'로 시작하는 문구는 첫 글자 측정에서 제외 (화면 지연 측정 기준)
 WRITING = '⏳ 답변을 쓰는 중…'
 
 
@@ -100,7 +100,7 @@ def searching_stats(app, model_key=None):
 
 
 def fmt_stats(label, stage, st):
-    """측정 칸: 서버 기준 시간. 브라우저 표시 지연은 lawbot.bench_ui로 따로 잰다"""
+    """측정 칸: 서버 기준 시간 (브라우저 표시 지연은 포함하지 않음)"""
     if stage == 'load':
         return f'⏳ {label} 불러오는 중… (모델 전환 대기, 검색 {st["search"]:.2f}초)'
     parts = [label, f'검색 {st["search"]:.2f}초']

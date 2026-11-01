@@ -1,5 +1,5 @@
 # tests/test_models.py  →  uv run pytest -m models   (맥 + models/ 필요, 기본 실행·CI에서는 제외)
-# 실제 튜닝 임베딩·sLLM으로 한 질문을 끝까지 처리하는 스모크 테스트. 품질 수치는 lawbot-eval로 잰다
+# 실제 튜닝 임베딩·sLLM으로 한 질문을 끝까지 처리하는 스모크 테스트. 품질 수치는 docs/evals 기록 참고
 import os
 
 import pytest

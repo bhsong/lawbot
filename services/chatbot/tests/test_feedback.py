@@ -228,14 +228,14 @@ def test_dir_must_be_ignored(env, tmp_path):
     feedback.check_private(ROOT / 'feedback')  # gitignore
     feedback.check_private(tmp_path / 'fb')  # 레포 밖
     with pytest.raises(RuntimeError, match='gitignore'):
-        feedback.check_private(ROOT / 'src' / 'fb_test')
+        feedback.check_private(ROOT / 'services' / 'fb_test')
     env.setenv('LAWBOT_FEEDBACK', '1')
     env.setenv('LAWBOT_FEEDBACK_DIR', 'docs/fb')  # 상대 경로는 레포 최상위 기준
     with pytest.raises(RuntimeError, match='실행을 거부'):
         feedback.from_env()
     env.delenv('LAWBOT_FEEDBACK_DIR')
     assert feedback.from_env().folder == ROOT / 'feedback'
-    assert not (ROOT / 'src' / 'fb_test').exists()
+    assert not (ROOT / 'services' / 'fb_test').exists()
 
 
 def test_file_mode_600(env, tmp_path):
