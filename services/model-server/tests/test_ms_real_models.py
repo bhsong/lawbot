@@ -98,3 +98,58 @@ def test_chat_answers_in_format():
     answer = ''.join(r.text for r in out)
     assert '【결론】' in answer and '제26조' in answer
     assert out[-1].finish_reason in ('stop', 'length') and out[-1].prompt_tokens > 0
+
+
+@pytest.fixture(scope='module')
+def chat_model():
+    need(CHAT)
+    from lawbot_model_server.chat import ChatModel
+
+    return ChatModel(CHAT)
+
+
+def answer_messages(article, question):
+    docs = v4_docs()
+    system = (ROOT / 'data/v4/system_v4.txt').read_text(encoding='utf-8').strip()
+    user = f'[참고 조문]\n[1] {docs[article]}\n\n[질문]\n{question}'
+    return [{'role': 'system', 'content': system}, {'role': 'user', 'content': user}]
+
+
+def run_engine(engine, requests):
+    """requests: {이름: messages}. 모두 끝날 때까지 step → {이름: 답변}"""
+    out = {n: '' for n in requests}
+    kw = {'max_tokens': 256, 'temperature': 0.0, 'top_p': None, 'enable_thinking': False}
+    for n, m in requests.items():
+        engine.add(n, m, kw)
+    ended = set()
+    while len(ended) < len(requests):
+        for t, kind, v in engine.step():
+            if kind == 'item':
+                out[t] += v.text
+            elif kind == 'end':
+                ended.add(t)
+            else:
+                raise v
+    engine.close()
+    return out
+
+
+def test_batch_engine_one_request_matches_sequential(chat_model):
+    """배치 경로 1건이 순차(stream_generate)와 같은 답인지. 같으면 SequentialEngine을 지울 수 있다 (계획 §4.1)"""
+    from lawbot_model_server.chat import BatchEngine, SequentialEngine
+
+    m = {'q': answer_messages('근로기준법 제26조', QUESTION)}
+    assert run_engine(BatchEngine(chat_model, 4), m) == run_engine(SequentialEngine(chat_model), m)
+
+
+def test_batch_engine_two_requests_finish(chat_model):
+    from lawbot_model_server.chat import BatchEngine
+
+    out = run_engine(
+        BatchEngine(chat_model, 4),
+        {
+            'a': answer_messages('근로기준법 제26조', QUESTION),
+            'b': answer_messages('근로기준법 제60조', '1년 일하면 연차휴가가 며칠인가요?'),
+        },
+    )
+    assert all('【결론】' in v for v in out.values()) and '제26조' in out['a'] and '제60조' in out['b']

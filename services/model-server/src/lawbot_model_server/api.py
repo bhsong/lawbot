@@ -2,14 +2,12 @@
 #   POST /v1/chat/completions  (stream: SSE)   POST /v1/embeddings   POST /v1/rerank (Cohere/Jina 형식)
 #   GET  /v1/models            GET /health (모델을 불러오는 중에도 응답)
 # 모든 요청에 Bearer 토큰이 필요하다 (/health 포함). 질문·문서 내용은 로그에 남기지 않는다
-# 모델 연산은 락 하나로 한 번에 하나 (MLX·MPS를 여러 스레드에서 동시에 돌리지 않음). 작업 스레드가 락을 잡고 계산해
-# 결과를 asyncio 큐로 넘긴다. 스트림 중 클라이언트가 끊으면 다음 토큰에서 멈추고 락을 푼다
+# 모델 연산은 GPU 스레드 하나가 맡는다 (scheduler.py). chat은 LAWBOT_MAX_CONCURRENT개까지 동시에 생성하고,
+# embeddings·rerank는 생성 스텝 사이에 실행한다. 스트림 중 클라이언트가 끊으면 다음 스텝에서 그 요청을 뺀다
 # 확장 필드: chat_template_kwargs.enable_thinking, 응답의 timings / embeddings의 input_type·max_seq_length / rerank의 instruction
-import asyncio
 import base64
 import hmac
 import json
-import threading
 import time
 import uuid
 from typing import Literal
@@ -20,6 +18,7 @@ from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from lawbot_model_server.registry import UnknownModel
+from lawbot_model_server.scheduler import ModelLoadError, Scheduler
 
 MAX_BODY = 8 * 1024 * 1024  # 요청 본문 최대 (조문 415개 인코딩, 질문 2,075개 rank가 들어감)
 DEFAULT_MAX_TOKENS = 1024  # max_tokens가 없을 때 (챗봇은 항상 1024를 보냄)
@@ -91,10 +90,6 @@ class ApiError(Exception):
         self.status, self.message, self.kind, self.code = status, message, kind, code
 
 
-class ModelLoadError(RuntimeError):
-    """chat 모델을 불러오지 못함 (폴더 없음·형식 오류). 원래 예외 이름을 code로 보낸다"""
-
-
 def error_body(message, kind, code=None):
     return {'error': {'message': message, 'type': kind, 'param': None, 'code': code}}
 
@@ -142,63 +137,19 @@ def ready(request):
     return reg
 
 
-# ---- 작업 스레드 ----
-class Job:
-    """work()가 돌려주는 반복자를 작업 스레드에서 lock을 잡고 돌려, 항목을 ('item', x)로 큐에 넣는다
-    끝은 ('end', None), 오류는 ('error', 예외). cancel() 뒤에는 다음 항목에서 멈추고 반복자를 닫는다 (락이 풀림)"""
-
-    def __init__(self, lock, work):
-        self.loop, self.q = asyncio.get_running_loop(), asyncio.Queue()
-        self.cancelled = threading.Event()
-        self.thread = threading.Thread(target=self._run, args=(lock, work), daemon=True)
-        self.thread.start()
-
-    def _put(self, item):
-        try:
-            self.loop.call_soon_threadsafe(self.q.put_nowait, item)
-        except RuntimeError:  # 이벤트 루프가 이미 닫힘 (서버 종료)
-            pass
-
-    def _run(self, lock, work):
-        try:
-            with lock:
-                if self.cancelled.is_set():
-                    return
-                it = work()
-                try:
-                    for x in it:
-                        self._put(('item', x))
-                        if self.cancelled.is_set():
-                            break
-                finally:
-                    close = getattr(it, 'close', None)
-                    if close is not None:
-                        close()
-        except Exception as e:
-            self._put(('error', e))
-            return
-        self._put(('end', None))
-
-    async def next(self):
-        return await self.q.get()
-
-    def cancel(self):
-        self.cancelled.set()
-
-
-async def run_locked(request, fn):
-    """embeddings·rerank처럼 한 번에 끝나는 연산 (스트림 없음)"""
-    job = Job(request.app.state.lock, lambda: iter([fn()]))
+async def run_call(request, fn):
+    """embeddings·rerank처럼 한 번에 끝나는 연산 (GPU 스레드에서 생성 스텝 사이에 실행)"""
+    t = request.app.state.scheduler.call(fn)
     try:
-        kind, value = await job.next()
+        kind, value = await t.next()
         if kind == 'error':  # 리랭커 점수 NaN 등 모델 연산 오류: 예외 이름을 code로 500
             if isinstance(value, (ApiError, UnknownModel)):
                 raise value
             raise ApiError(500, f'{type(value).__name__}: {value}', 'server_error', type(value).__name__) from value
-        await job.next()  # ('end', None): 락이 풀린 뒤 응답
+        await t.next()  # ('end', None)
         return value
     finally:
-        job.cancel()
+        t.cancel()
 
 
 # ---- chat completions ----
@@ -241,14 +192,7 @@ async def chat_completions(request: Request):
         'enable_thinking': bool(req.chat_template_kwargs and req.chat_template_kwargs.enable_thinking),
     }
 
-    def work():
-        try:
-            model, _ = reg.get(req.model, 'chat')  # 처음 쓰는 모델은 여기서 불러옴 (LRU 교체)
-        except Exception as e:
-            raise ModelLoadError(str(e)) from e
-        return model.stream(messages, **kw)
-
-    job = Job(request.app.state.lock, work)
+    job = request.app.state.scheduler.chat(req.model, messages, kw)  # 처음 쓰는 모델은 GPU 스레드가 불러옴 (LRU 교체)
     try:
         kind, value = await job.next()  # 첫 토큰 전 오류(모델 불러오기 실패 등)는 HTTP 상태로 알린다
     except BaseException:
@@ -314,7 +258,7 @@ async def chat_completions(request: Request):
                 yield sse(base | {'object': 'chat.completion.chunk', 'choices': [], 'usage': usage_of(last)})
             yield 'data: [DONE]\n\n'
         finally:
-            job.cancel()  # 끊긴 경우: 다음 토큰에서 생성을 멈추고 락을 푼다
+            job.cancel()  # 끊긴 경우: 다음 스텝에서 생성을 멈추고 자리를 비운다
 
     return StreamingResponse(events(), media_type='text/event-stream', headers={'Cache-Control': 'no-cache'})
 
@@ -332,7 +276,7 @@ async def embeddings(request: Request):
     reg.entry(req.model, 'embedding')
     request.state.model = req.model
     texts = [req.input] if isinstance(req.input, str) else req.input
-    v = await run_locked(
+    v = await run_call(
         request, lambda: reg.get(req.model, 'embedding')[0].encode(texts, req.input_type, req.max_seq_length)
     )
     return {
@@ -352,7 +296,7 @@ async def rerank(request: Request):
     reg = ready(request)
     reg.entry(req.model, 'rerank')
     request.state.model = req.model
-    scores = await run_locked(
+    scores = await run_call(
         request, lambda: reg.get(req.model, 'rerank')[0].score(req.query, req.documents, req.instruction)
     )
     order = sorted(range(len(scores)), key=lambda i: -scores[i])  # 점수 내림차순, 동점은 입력 순서
@@ -405,10 +349,19 @@ class Guard:
                 )
 
 
-def create_app(token, registry=None, max_body=MAX_BODY):
-    """registry가 None이면 /health가 ready:false이고 나머지는 503 (모델을 불러오는 중). 다 불러오면 app.state.registry에 넣는다"""
+def set_registry(app, registry):
+    """모델을 다 불러온 뒤: 레지스트리와 GPU 스레드 스케줄러를 붙인다 (이때부터 ready)"""
+    app.state.scheduler = Scheduler(registry, app.state.max_concurrent)
+    app.state.registry = registry
+
+
+def create_app(token, registry=None, max_body=MAX_BODY, max_concurrent=1):
+    """registry가 None이면 /health가 ready:false이고 나머지는 503 (모델을 불러오는 중). 다 불러오면 set_registry"""
     app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
-    app.state.registry, app.state.lock, app.state.max_body = registry, threading.Lock(), max_body
+    app.state.registry, app.state.scheduler = None, None
+    app.state.max_body, app.state.max_concurrent = max_body, max_concurrent
+    if registry is not None:
+        set_registry(app, registry)
 
     @app.exception_handler(ApiError)
     @app.exception_handler(UnknownModel)
