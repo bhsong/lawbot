@@ -8,9 +8,11 @@ import logging
 import sys
 from pathlib import Path
 
-from law_monitor.app import AlreadyBootstrapped, BootstrapRequired, Monitor
+from law_monitor import secrets
+from law_monitor.app import AlreadyBootstrapped, BootstrapRequired, MissingSecret, Monitor
 from law_monitor.config import CONFIG_FILE, REPOS, ConfigError, load
 from law_monitor.gitrepo import GitError
+from law_monitor.lawgo import LawGoClient
 from law_monitor.paths import Paths, default_home
 
 
@@ -43,7 +45,9 @@ def main(argv: list[str] | None = None) -> int:
     root = logging.getLogger('law_monitor')
     root.addHandler(console)
     try:
-        monitor = Monitor(Paths(args.home or default_home()), load(args.config))
+        oc = secrets.law_oc()
+        lawgo = LawGoClient(oc) if oc else None
+        monitor = Monitor(Paths(args.home or default_home()), load(args.config), lawgo=lawgo)
         if args.command == 'replay':
             events = monitor.replay(args.repo, args.since, args.until)
             print(f'replay events={len(events)} → {monitor.paths.replay}')
@@ -54,7 +58,7 @@ def main(argv: list[str] | None = None) -> int:
             summary = monitor.collect(only=args.only)
         print(summary.line)
         return 1 if summary.failed else 0
-    except (ConfigError, BootstrapRequired, AlreadyBootstrapped, ValueError, GitError, OSError) as e:
+    except (ConfigError, BootstrapRequired, AlreadyBootstrapped, MissingSecret, ValueError, GitError, OSError) as e:
         print(f'law-monitor: {e}', file=sys.stderr)
         return 2
     finally:

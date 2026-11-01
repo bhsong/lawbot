@@ -6,8 +6,10 @@ authors = [
     { name = "bhsong", email = "sbh3003@gmail.com" }
 ]
 requires-python = ">=3.14"
-dependencies = [   # PR 1은 git(subprocess)과 YAML만 씀. HTTP·PDF 라이브러리는 법제처 수집기(PR 2)에서 추가
+dependencies = [   # git은 subprocess. 법제처 API는 JSON + 서식 텍스트가 응답에 있어 PDF·XML 라이브러리는 쓰지 않음
+    "httpx>=0.28.1",
     "pyyaml>=6.0.3",
+    "tenacity>=9.2.1",
 ]
 
 [project.scripts]

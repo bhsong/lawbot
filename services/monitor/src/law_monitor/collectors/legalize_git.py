@@ -30,6 +30,7 @@ class Version:
 
 
 class LawMatcher:
+    kind = 'law'
     """legalize-kr kr/<법령명>/<법률|시행령|시행규칙...>.md. 같은 법령인지는 경로로 판단한다."""
 
     def __init__(self, config: Config):
@@ -70,6 +71,7 @@ class LawMatcher:
 
 
 class AdmruleMatcher:
+    kind = 'admrule'
     """admrule-kr {기관경로}/{종류}/{행정규칙명}/본문.md. 같은 규칙인지는 행정규칙ID로 판단한다 (부처 이름이 바뀌면 경로가 바뀜)."""
 
     def __init__(self, config: Config):
@@ -105,8 +107,11 @@ class AdmruleMatcher:
 
 
 class LegalizeGitCollector:
-    def __init__(self, name: str, repo_key: str, matcher: LawMatcher | AdmruleMatcher):
+    needs_lawgo = True  # collect·replay는 법제처 보강이 필요 (bootstrap은 아님)
+
+    def __init__(self, name: str, repo_key: str, matcher: LawMatcher | AdmruleMatcher, enricher=None):
         self.name, self.repo_key, self.matcher = name, repo_key, matcher
+        self.enricher = enricher  # law_monitor.enrich.LawGoEnricher (없으면 보강 없이)
 
     def has_baseline(self, state: State) -> bool:
         return state.cursor(self.repo_key) is not None
@@ -290,9 +295,16 @@ class _Builder:
         }
         if self.replay:
             event['replay'] = True
+        extra = []
+        if self.collector.enricher is not None:  # 법제처 원문·별표서식 (실패하면 예외 → 수집기 실패, 커서 그대로)
+            extra = self.collector.enricher.enrich(self.m.kind, event, old, new, self.ctx.paths)
         self.events[event_id] = event
         if diff_text:
             self.diffs[event_id] = diff_text
+        for ev, text in extra:
+            self.events[ev['event_id']] = ev
+            if text:
+                self.diffs[ev['event_id']] = text
         if new:
             self._track(key, new)
         else:
@@ -326,8 +338,8 @@ def _attachments(old: Version | None, new: Version | None) -> dict:
     )
 
 
-def default_collectors(config: Config) -> list[LegalizeGitCollector]:
+def default_collectors(config: Config, enricher=None) -> list[LegalizeGitCollector]:
     return [
-        LegalizeGitCollector('legalize_law', 'legalize-kr', LawMatcher(config)),
-        LegalizeGitCollector('legalize_admrule', 'admrule-kr', AdmruleMatcher(config)),
+        LegalizeGitCollector('legalize_law', 'legalize-kr', LawMatcher(config), enricher),
+        LegalizeGitCollector('legalize_admrule', 'admrule-kr', AdmruleMatcher(config), enricher),
     ]
