@@ -1,4 +1,4 @@
-"""별표·서식 비교 (계획 docs/plans/monitor-lawgo.md 2.3).
+"""별표·서식 비교 (계획 docs/archives/monitor-lawgo.md 2.3).
 
 파일 바이트는 판마다 달라 쓸 수 없고(링크·PDF 모두 다시 만들어짐), 본문 API의 별표내용 텍스트로 비교한다.
 """

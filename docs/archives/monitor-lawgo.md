@@ -1,7 +1,7 @@
 # 계획: 법령 변경 수집기 PR 2 (법제처 API: 개정이유·별표서식)
 
 - 작성일: 2026-11-01
-- 상위 계획: [monitor-collector.md](monitor-collector.md) 3절의 PR 2. 근거: [스파이크 기록](../evals/2026-11-01-monitor-spike.md)
+- 상위 계획: [monitor-collector.md](../plans/monitor-collector.md) 3절의 PR 2. 근거: [스파이크 기록](../evals/2026-11-01-monitor-spike.md)
 - 목표: 원 계획서의 "이벤트 하나에 요약에 필요한 원문(diff, 개정문, 제·개정 이유, 공포일, 시행일)이 모두 들어 있다"를 법령·행정규칙·별표서식에서 채운다
 
 ## 1. 스파이크로 바뀐 설계

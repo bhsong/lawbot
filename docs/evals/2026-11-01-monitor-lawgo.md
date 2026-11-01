@@ -1,7 +1,7 @@
 # 기록: 법령 변경 수집기 PR 2 실제 법제처 확인
 
 - 날짜: 2026-11-01
-- 코드: `feat/monitor-lawgo` (PR #39). 계획: [docs/plans/monitor-lawgo.md](../plans/monitor-lawgo.md) 6절
+- 코드: `feat/monitor-lawgo` (PR #39). 계획: [docs/archives/monitor-lawgo.md](../archives/monitor-lawgo.md) 6절
 - 장소: 맥미니, 개발 레포. `LAW_MONITOR_HOME`은 임시 폴더 (PR 1 확인 때 받은 저장소 클론을 다시 씀)
 - 법제처: `services/monitor/.env`의 `LAW_OC`. 모델·운영 서비스와는 관계없음
 

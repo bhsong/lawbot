@@ -1,4 +1,4 @@
-"""legalize_git 이벤트 보강 (계획 docs/plans/monitor-lawgo.md 2.1·2.2·2.3).
+"""legalize_git 이벤트 보강 (계획 docs/archives/monitor-lawgo.md 2.1·2.2·2.3).
 
 법령: 신판 법령MST 본문 → 개정문·제개정이유. forms 대상이면 구판 본문과 별표내용 텍스트를 비교해 lawgo_forms 이벤트.
 행정규칙: 신판 행정규칙일련번호 상세 → 개정문·제개정이유·부칙·첨부파일 목록. 구판과 별표를 비교해 lawgo_admrul 이벤트.
