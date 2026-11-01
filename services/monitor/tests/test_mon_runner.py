@@ -101,6 +101,7 @@ def test_replay_folder_uses_resolved_commits(tmp_path, legalize):
 
 
 def test_cli_end_to_end(tmp_path, legalize, capsys, monkeypatch):
+    monkeypatch.setenv('LAW_OC', 'TESTOC77')  # 실제 .env에 기대지 않음 (머리말에 법령MST가 없어 호출은 없음)
     cfg = tmp_path / 'targets.yaml'
     cfg.write_text(
         f'repos: {{legalize-kr: "{legalize.url}", admrule-kr: "file:///none"}}\n'

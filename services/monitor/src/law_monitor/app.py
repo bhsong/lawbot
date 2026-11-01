@@ -15,7 +15,9 @@ from datetime import datetime, timedelta, timezone
 from law_monitor.collectors.base import Collector, CollectResult, RunContext
 from law_monitor.collectors.legalize_git import LegalizeGitCollector, default_collectors
 from law_monitor.config import Config
+from law_monitor.enrich import LawGoEnricher
 from law_monitor.events import EventStore, make_event_id
+from law_monitor.lawgo import LawGoClient
 from law_monitor.paths import Paths
 from law_monitor.state import State
 
@@ -29,6 +31,10 @@ class BootstrapRequired(RuntimeError):
 
 
 class AlreadyBootstrapped(RuntimeError):
+    pass
+
+
+class MissingSecret(RuntimeError):
     pass
 
 
@@ -50,9 +56,12 @@ class Monitor:
         *,
         collectors: list[Collector] | None = None,
         now: Callable[[], datetime] | None = None,
+        lawgo: LawGoClient | None = None,
     ):
-        self.paths, self.config = paths, config
-        self.collectors = collectors if collectors is not None else default_collectors(config)
+        """lawgo가 없으면 bootstrap만 된다 (collect·replay는 법제처 원문 보강이 필요해 거부)."""
+        self.paths, self.config, self.lawgo = paths, config, lawgo
+        enricher = LawGoEnricher(lawgo, config) if lawgo is not None else None
+        self.collectors = collectors if collectors is not None else default_collectors(config, enricher)
         self.now = now or (lambda: datetime.now(KST))
         self.state = State(paths.state_db)
 
@@ -64,6 +73,13 @@ class Monitor:
             raise ValueError(f'없는 수집기: {only} (있는 것: {", ".join(c.name for c in self.collectors)})')
         return chosen
 
+    def _require_lawgo(self, chosen: list[Collector]) -> None:
+        need = [c.name for c in chosen if getattr(c, 'needs_lawgo', False)]
+        if need and self.lawgo is None:
+            raise MissingSecret(
+                f'법제처 인증키 LAW_OC가 없습니다 ({", ".join(need)}). 환경변수나 services/monitor/.env에 넣으세요'
+            )
+
     def bootstrap(self, only: str | None = None, force: bool = False) -> RunSummary:
         """현재 상태를 기준점으로 저장만 한다 (이벤트 없음)."""
         chosen = self._select(only)
@@ -74,6 +90,7 @@ class Monitor:
 
     def collect(self, only: str | None = None) -> RunSummary:
         chosen = self._select(only)
+        self._require_lawgo(chosen)
         missing = [c.name for c in chosen if not c.has_baseline(self.state)]
         if missing:
             raise BootstrapRequired(f'기준점이 없습니다: {", ".join(missing)}. 먼저 law-monitor bootstrap을 실행하세요')
@@ -86,6 +103,7 @@ class Monitor:
         )
         if collector is None:
             raise ValueError(f'replay할 수 있는 저장소가 아닙니다: {repo_key}')
+        self._require_lawgo([collector])
         ctx = RunContext(self.config, self.state, self.paths, 'replay', 'replay', self.now)
         with _file_log(self.paths, self.now()):
             result, since_sha, until_sha = collector.replay(ctx, since, until)

@@ -3,8 +3,9 @@
 매일 한 번 추적 대상 법령·행정규칙을 확인해 **지난 실행과 달라진 것만** 변경 이벤트(JSON)로 저장합니다. 요약(2단계)과 전송(3단계)은 이 이벤트만 읽으면 됩니다.
 
 - 설계: [docs/plans/monitor-collector.md](../../docs/plans/monitor-collector.md) (원 계획서: [monitor-collector-spec.md](../../docs/plans/monitor-collector-spec.md))
-- 지금 있는 수집기: `legalize_law`([legalize-kr](https://github.com/legalize-kr/legalize-kr), 법률·시행령·시행규칙), `legalize_admrule`([admrule-kr](https://github.com/legalize-kr/admrule-kr), 고시 등). 둘 다 공개 git 저장소라 키가 필요 없습니다.
-- 아직 없는 것: 별표·서식 파일 비교와 개정이유(법제처 API, PR 2), 입법예고·국회 법안(PR 3).
+- 지금 있는 수집기: `legalize_law`([legalize-kr](https://github.com/legalize-kr/legalize-kr), 법률·시행령·시행규칙), `legalize_admrule`([admrule-kr](https://github.com/legalize-kr/admrule-kr), 고시 등). 변경은 공개 git 저장소에서 찾고, 이벤트마다 법제처 Open API로 개정문·제개정이유를 채웁니다 ([계획](../../docs/plans/monitor-lawgo.md)).
+- 별표·서식: `forms` 대상 법령과 추적 행정규칙은 신·구판의 별표·서식 텍스트를 비교해 바뀐 것만 `lawgo_forms`·`lawgo_admrul` 이벤트로 만들고, 그 서식의 PDF·HWP 원본을 받습니다.
+- 아직 없는 것: 입법예고·국회 법안(PR 3), 한눈에 보기 5번 전자신고 파일 레이아웃(법제처에 없음, 출처 미정).
 
 ## 설치
 
@@ -12,7 +13,7 @@
 
 ```bash
 uv sync
-cp services/monitor/.env.example services/monitor/.env   # PR 1은 키를 쓰지 않음
+cp services/monitor/.env.example services/monitor/.env   # LAW_OC(법제처 Open API 인증키)를 채움
 ```
 
 실행 데이터는 `services/monitor/data/`(저장소 클론, `state.db`, 이벤트)와 `services/monitor/logs/`에 생기고 git에 올라가지 않습니다. 다른 곳에 두려면 `LAW_MONITOR_HOME` 또는 `--home`을 씁니다.
@@ -27,7 +28,9 @@ uv run law-monitor replay --repo legalize-kr --from <커밋> --to <커밋>   # �
 ```
 
 - 마지막 줄이 실행 요약입니다: `collectors=2 ok=2 failed=0 events=1`. 같은 줄이 `logs/collector-YYYYMMDD.log` 끝에도 남습니다.
-- 종료 코드: 0 성공, 1 수집기 일부 실패(나머지는 저장됨), 2 실행 전 거부(설정 오류, bootstrap 전 collect 등).
+- 종료 코드: 0 성공, 1 수집기 일부 실패(나머지는 저장됨), 2 실행 전 거부(설정 오류, bootstrap 전 collect, `LAW_OC` 없음 등).
+- `LAW_OC`는 환경변수가 먼저이고, 없으면 `services/monitor/.env`에서 읽습니다. `bootstrap`은 법제처를 부르지 않아 키 없이도 됩니다. 로그·이벤트·오류 메시지에는 `OC=***`로만 남습니다.
+- 법제처 호출이 실패하면(재시도 3회 뒤) 그 수집기가 실패로 끝나고 커서가 그대로라, 다음 실행에서 같은 변경을 다시 처리합니다. 원문이 빠진 이벤트는 저장하지 않습니다.
 - 한 수집기가 3번 연속 실패하면 `collector_failing` 이벤트가 한 번 생깁니다.
 - `bootstrap --force`는 기준점을 다시 잡습니다. 그 사이 변경은 이벤트가 생기지 않으니, 대상 설정을 바꿔서 새 행정규칙을 처음부터 추적할 때만 씁니다 (설정만 바꾸면 이미 있는 행정규칙은 다음 개정부터 잡힘).
 
@@ -37,7 +40,7 @@ uv run law-monitor replay --repo legalize-kr --from <커밋> --to <커밋>   # �
 
 | 필드 | 내용 |
 | --- | --- |
-| `change_type` | `law_amended` · `law_new` · `law_repealed` · `admrule_amended` · `admrule_new` · `collector_failing`. 행정규칙 삭제는 `admrule_amended` + `removed: true` |
+| `change_type` | `law_amended` · `law_new` · `law_repealed` · `admrule_amended` · `admrule_new` · `attachment_changed` · `attachment_added` · `attachment_removed` · `collector_failing`. 행정규칙 삭제는 `admrule_amended` + `removed: true` |
 | `category` · `categories` | 한눈에 보기 번호 (행정규칙은 여러 규칙에 맞을 수 있어 목록도 둠) |
 | `target` | 법령: `law_name`·`item_id`(저장소 경로)·`law_id`·`status`. 행정규칙: `law_name`·`item_id`(행정규칙ID)·`agency` |
 | `dates` | `promulgation`(법령 공포일자, 행정규칙 발령일자) · `effective`(시행일자) |
@@ -45,9 +48,21 @@ uv run law-monitor replay --repo legalize-kr --from <커밋> --to <커밋>   # �
 | `diff` | `path`(본문 unified diff, 머리말 제외), `chunks`(조문·부칙 블록 단위 diff: `article`, `kind` added/changed/removed) |
 | `meta_changes` | 머리말에서 바뀐 값 (시행일자·발령번호 등, 첨부 제외) |
 | `attachments` | 첨부(별표·서식) 목록의 추가·삭제·제목 변경. 링크(flSeq)는 개정마다 전부 바뀌므로 비교하지 않음 |
-| `context` | `source_url`, `commit`(sha·subject·date, 커밋 날짜는 공포일), `addenda_added`(새 부칙 원문: 조문별 시행일), `fallback`, `amendment_text`·`amendment_reason`(PR 2 전에는 `null`) |
+| `context` | `amendment_text`(개정문)·`amendment_reason`(제·개정 이유, 법제처), `source_url`, `commit`(sha·subject·date, 커밋 날짜는 공포일), `addenda_added`(새 부칙 원문: 조문별 시행일), `fallback`, `lawgo`(법령: `mst_old`·`mst_new`·`attachment_effective`(서식별 시행일 원문), 행정규칙: 일련번호·`files`(고시 원문·개정 이유서 링크)), 행정규칙은 `addenda`(부칙) |
 
 같은 실행에 개정 커밋이 둘 들어오면 이벤트도 둘입니다 (공포일·시행일이 섞이지 않게).
+
+별표·서식 이벤트(`lawgo_forms`·`lawgo_admrul`)는 부모 이벤트와 같은 개정에서 나옵니다.
+
+| 필드 | 내용 |
+| --- | --- |
+| `target` | `law_name`, `item_name`(별표 제목), `item_id`(`서식 0021-00` = 구분·번호·가지번호), `kind` |
+| `dates` | `promulgation`(부모와 같음), `effective`(그 서식의 시행일, 본문의 별표시행일자문자열. 없으면 부모 시행일), `effective_dates` |
+| `old` · `new` | `version_key`(텍스트 sha256), `text`(`data/files/<sha256>.txt`). 신판에만 `file`(PDF)·`hwp` 원본 |
+| `diff.path` | 서식 텍스트 unified diff (표는 상자 그리기 문자 그대로) |
+| `context` | `parent_event_id`, 부모와 같은 `amendment_text`·`amendment_reason`, `source_url`(PDF 링크) |
+
+서식은 PDF 바이트가 아니라 법제처 본문 API의 서식 텍스트로 비교합니다. 바뀌지 않은 서식도 PDF는 판마다 다시 만들어지기 때문입니다 ([스파이크](../../docs/evals/2026-11-01-monitor-spike.md)). 그래서 개정 때 바뀐 서식의 파일만 받습니다.
 
 ## 추적 대상 바꾸기
 
@@ -57,6 +72,7 @@ uv run law-monitor replay --repo legalize-kr --from <커밋> --to <커밋>   # �
 - `admrules.names`: 소관부처명 + 행정규칙명 정규식. 최저임금처럼 이름에 연도가 들어가는 고시는 `^\d{4}년 적용 최저임금(안)? 고시$`처럼 씁니다.
 - `admrules.keyword_rules`: 소관부처명 + 이름 키워드 (하나라도 들어 있으면 대상).
 - `agency`는 파일 머리말 `소관부처명`과 정확히 같아야 합니다 (국세청 고시는 경로가 `재정경제부/국세청/...`이지만 소관부처명은 `국세청`).
+- `forms`: 별표·서식을 비교할 법령(머리말 `제목`, 띄어쓰기 있음)과 구분(`별표`·`서식`). 추적 행정규칙의 별지·별표는 설정 없이 모두 비교합니다.
 
 ## launchd 등록 (매일 06:30)
 
@@ -73,7 +89,8 @@ launchctl bootout gui/$(id -u)/com.lawbot.monitor       # 해제
 ## 테스트·린트
 
 ```bash
-uv run pytest services/monitor          # 임시 git 저장소만 사용 (네트워크 없음)
+uv run pytest services/monitor          # 임시 git 저장소 + 가짜 법제처(tests/fixtures/lawgo, 스파이크 응답을 줄인 것)
+uv run pytest -m network services/monitor   # 실제 법제처 1회 (LAW_OC 필요)
 uv run ruff check && uv run ruff format --check
 ```
 
