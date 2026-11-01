@@ -14,7 +14,6 @@ import lawbot.service as service
 from fakes import FakeLLM, FakeRetriever
 from lawbot import feedback, feedback_export, feedback_review, feedback_ui
 from lawbot.paths import ROOT
-from model_fakes import TOKEN, GenLLM, Ret, serve
 
 QUESTION = '해고 예고 없이 해고되면 어떻게 하나요 고유문구XYZ'
 CHUNKS = ['【결론】\n예고해야', ' 합니다.\n\n【근거 조문】\n근로기준법 제26조\n\n【설명】\n- 설명']
@@ -115,7 +114,7 @@ def test_like_saves_full_turn(env, tmp_path):
     assert row['refused'] is False and row['citations'] == [
         {'law': '근로기준법', 'article_id': '제26조', 'verdict': 'ok'}
     ]
-    assert (row['mode'], row['profile'], row['dataset_version']) == ('local', 'v1', 'v1')
+    assert (row['mode'], row['profile'], row['dataset_version']) == ('api', 'v1', 'v1')
     assert row['request_id'] and row['timing']['total'] is not None and row['commit']
 
 
@@ -246,27 +245,7 @@ def test_file_mode_600(env, tmp_path):
     assert stat.S_IMODE((tmp_path / 'fb').stat().st_mode) == 0o700
 
 
-# ---- T8: 원격 모드·import ----
-@pytest.mark.integration  # 127.0.0.1 접속 허용 (conftest)
-def test_remote_mode_same_record(env, tmp_path):
-    env.setattr(GenLLM, 'chunks', CHUNKS)
-    env.setattr(service, 'Retriever', Ret)
-    env.setattr(service, 'LLM', GenLLM)
-    env.setenv('LAWBOT_MAX_RESIDENT', '2')
-    srv = service.load_app(local=True)
-    loc = feedback.Feedback(tmp_path / 'local')
-    h = turn(app_mod.make_chat(srv, loc), [], model='pro', fmt='concise')
-    with serve(srv) as (_, url):
-        env.setenv('LAWBOT_MODEL_SERVER', url)
-        env.setenv('LAWBOT_MODEL_TOKEN', TOKEN)
-        rem = feedback.Feedback(tmp_path / 'remote')
-        hr = turn(app_mod.make_chat(service.load_app(), rem), [], model='pro', fmt='concise')
-    a = loc.on_like('s1', h, 1, h[1]['content'], True)
-    b = rem.on_like('s1', hr, 1, hr[1]['content'], True)
-    assert b['mode'] == 'remote' and a['mode'] == 'local'
-    for k in ('question', 'hits', 'system', 'answer_raw', 'answer_shown', 'refused', 'citations', 'model', 'fmt'):
-        assert a[k] == b[k], k
-    assert srv.models.loaded['pro'].calls[-1]['system'] == b['system']  # 서버가 실제로 쓴 system
+# ---- T8: import ----
 
 
 def test_feedback_module_has_no_model_imports():

@@ -4,7 +4,7 @@
 #   fb_emb_pairs.csv : h_gold가 있는 행의 (질문, 정답 조문) positive. reason=retrieval이면 그때 검색 1위 조문을 hard negative로
 #   fb_sft.csv       : h_ok=맞음 + label=like (system, 프롬프트, 답변 원문)
 #   fb_kto.csv       : h_ok가 맞음/틀림인 행, 좋음(True)/나쁨(False) 라벨 (TRL KTOTrainer처럼 짝 없는 라벨)
-# 프롬프트는 저장한 hits로 llm.build_prompt_v4를 다시 불러 만든다 (llm.py가 mlx_lm을 import하므로 맥에서 실행)
+# 프롬프트는 저장한 hits로 llm.build_prompt_v4를 다시 불러 만든다 (모델 불필요)
 # 분할: 피드백 안에서 random_state=42로 val을 뗀다 (split 열). 평가는 계속 기존 test로만 하고, 피드백을 test에 섞지 않는다
 # 출력에는 질문 원문이 있다: 레포 안이면 .gitignore에 걸리는 폴더만 허용 (data/feedback/는 gitignore). 파일 권한 600
 import argparse

@@ -1,5 +1,6 @@
-# src/lawbot/security.py  →  로컬 전용 실행 설정 (app.py·model_server.py가 모델 로딩 전에 호출)
-# 주소는 127.0.0.1 고정. 포트는 .env의 LAWBOT_PORT(웹앱)·LAWBOT_MODEL_SERVER_PORT(모델 서버)
+# lawbot/security.py  →  로컬 전용 실행 설정 (app.py가 모델 서버에 접속하기 전에 호출)
+# 웹앱 주소는 127.0.0.1 고정, 포트는 .env의 LAWBOT_PORT. 모델 서버(임베딩·리랭크·생성)는 http://127.0.0.1:<포트>만
+# 생성(chat completions)만 다른 OpenAI 호환 주소로 바꿀 수 있다: LAWBOT_LLM_BASE_URL + LAWBOT_LLM_ALLOW_EXTERNAL=1 (https만)
 import os
 from urllib.parse import urlsplit
 
@@ -29,16 +30,8 @@ def server_port():
     return port
 
 
-def model_server_port():
-    """모델 서버 포트: LAWBOT_MODEL_SERVER_PORT 필수 (코드 기본값 없음)"""
-    value = (os.environ.get('LAWBOT_MODEL_SERVER_PORT') or '').strip()
-    if not value:
-        raise RuntimeError('모델 서버 포트가 없어 실행을 거부합니다: .env에 LAWBOT_MODEL_SERVER_PORT를 적으세요.')
-    return parse_port('LAWBOT_MODEL_SERVER_PORT', value)
-
-
 def model_server_url():
-    """원격 모드 모델 서버 주소 (LAWBOT_MODEL_SERVER). 비어 있으면 None(로컬 모드)
+    """모델 서버 주소 (LAWBOT_MODEL_SERVER). 비어 있으면 None (웹앱은 시작을 거부)
     질문이 맥 밖으로 나가지 않도록 http://127.0.0.1:<포트>만 허용한다"""
     value = (os.environ.get('LAWBOT_MODEL_SERVER') or '').strip()
     if not value:
@@ -73,6 +66,40 @@ def model_token(min_len=0):
     if len(token) < min_len:
         raise RuntimeError(f'LAWBOT_MODEL_TOKEN이 너무 짧아 실행을 거부합니다 ({min_len}자 이상)')
     return token
+
+
+def llm_endpoint(server_url):
+    """생성 API (base_url, api_key, 외부 여부). LAWBOT_LLM_BASE_URL이 없으면 모델 서버의 /v1 + LAWBOT_MODEL_TOKEN
+    127.0.0.1 밖 주소는 질문이 맥 밖으로 나가므로 LAWBOT_LLM_ALLOW_EXTERNAL=1과 https가 있어야 허용 (키 값은 출력하지 않음)"""
+    value = (os.environ.get('LAWBOT_LLM_BASE_URL') or '').strip().rstrip('/')
+    if not value:
+        return f'{server_url}/v1', model_token(), False
+    try:
+        u = urlsplit(value)
+        host, port = u.hostname, u.port
+    except ValueError:
+        host = port = None
+    if host is None or u.username or u.password or u.query or u.fragment:
+        raise ValueError(f'LAWBOT_LLM_BASE_URL 형식 오류: {value!r}')
+    if host == SERVER_NAME:
+        if u.scheme != 'http' or port is None:
+            raise ValueError(f'LAWBOT_LLM_BASE_URL이 이 맥이면 http://{SERVER_NAME}:<포트>/v1 형식: {value!r}')
+        external = False
+    else:
+        if (os.environ.get('LAWBOT_LLM_ALLOW_EXTERNAL') or '').strip() != '1':
+            raise ValueError(
+                f'LAWBOT_LLM_BASE_URL({host})은 이 맥 밖이라 질문이 외부로 나갑니다. '
+                '허용하려면 LAWBOT_LLM_ALLOW_EXTERNAL=1을 함께 적으세요.'
+            )
+        if u.scheme != 'https':
+            raise ValueError(f'외부 LAWBOT_LLM_BASE_URL은 https만 허용합니다: {value!r}')
+        external = True
+    key = (os.environ.get('LAWBOT_LLM_API_KEY') or '').strip()
+    if not key and not external:
+        key = model_token()
+    if not key:
+        raise RuntimeError('외부 LAWBOT_LLM_BASE_URL에는 LAWBOT_LLM_API_KEY가 필요합니다')
+    return value, key, external
 
 
 def instance_name():

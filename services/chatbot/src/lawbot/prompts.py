@@ -1,4 +1,4 @@
-# src/lawbot/prompts.py  →  v1 기본 system 문구 (모델 라이브러리를 import하지 않음: 원격 모드 웹앱이 mlx_lm 없이 읽음)
+# lawbot/prompts.py  →  v1 기본 system 문구
 # llm.py가 다시 export한다 (from lawbot.llm import SYSTEM 그대로 동작)
 
 # labor_sft_train.csv의 system 열과 동일 (전 문항 같은 값)

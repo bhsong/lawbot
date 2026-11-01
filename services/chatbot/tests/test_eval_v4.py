@@ -150,8 +150,8 @@ class Bot:
 
 def fake_app(rerank=True):
     p = deploy.get_profile('v4')
-    models = service.ModelManager(p.models, Bot, 1)
-    return service.LawbotApp(p, Ret(), models, False, RR() if rerank else None, 'FULL SYSTEM')
+    models = service.ChatModels(p.models, Bot)
+    return service.LawbotApp(p, Ret(), models, RR() if rerank else None, 'FULL SYSTEM')
 
 
 def frame(n=6):
@@ -228,15 +228,6 @@ def test_main_refuses_v1(env, monkeypatch):
     monkeypatch.setattr('sys.argv', ['eval_v4', 'answers'])
     with pytest.raises(SystemExit, match='v4 프로필'):
         ev.main()
-
-
-def test_eval_concise_refuses_v4_test_files(env):
-    import lawbot.eval_concise as ec
-
-    for f in ('qa_full_v4.csv', 'split_v4.csv'):
-        env.setattr('sys.argv', ['eval_concise', '--val', str(DATA / 'v4' / f), '--tag', 'x'])
-        with pytest.raises(SystemExit, match='평가 전용'):
-            ec.main()
 
 
 def test_default_stage_is_all(env, monkeypatch, tmp_path):
@@ -422,9 +413,9 @@ def test_val_skips_oos_and_records_run(env, monkeypatch, tmp_path):
     assert calls[-1] == ('summary', 'pro_concise_rr_val', 1110)
     meta = json.loads((tmp_path / 'run_pro_concise_rr_val.json').read_text(encoding='utf-8'))
     run = meta['runs'][0]
-    assert (run['mode'], run['split'], run['model'], run['fmt']) == ('local', 'val', 'pro', 'concise')
-    assert run['model_dir'] == deploy.get_profile('v4').models[0].path.name
-    assert run['info']['api_version'] == 2 and run['info']['reranker'] == {'candidates': 6}
+    assert (run['mode'], run['split'], run['model'], run['fmt']) == ('api', 'val', 'pro', 'concise')
+    assert run['model_id'] == 'qwen3.8-27b-4bit' and run['emb_model'] == 'lawbot-emb-v4'
+    assert run['info'] is None  # 가짜 검색기에는 모델 서버 클라이언트가 없음 (실제는 /v1/models 목록)
     assert run['dataset']['dataset_version'] == 'v4' and 'commit' in run
     ev.main()  # 이어서 실행하면 실행 기록이 하나 더
     assert len(json.loads((tmp_path / 'run_pro_concise_rr_val.json').read_text(encoding='utf-8'))['runs']) == 2

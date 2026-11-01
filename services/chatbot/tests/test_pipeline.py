@@ -1,33 +1,33 @@
-# tests/test_pipeline.py  →  검색(Retriever)·생성(LLM)·웹앱(app) 흐름 테스트
-# 실제 임베딩·sLLM 대신 가짜 모델을 넣는다: 모델 파일·MPS·Metal·네트워크 불필요
+# tests/test_pipeline.py  →  검색(Retriever)·생성(LLM: openai SDK 스트림 → 응답)·웹앱(app) 흐름 테스트
+# 모델 서버 대신 가짜 인코더·가짜 OpenAI 클라이언트(SDK의 실제 응답 타입)를 쓴다: 네트워크 불필요
 import subprocess
 import sys
 import types
 
+import httpx
 import numpy as np
+import openai
 import pandas as pd
 import pytest
+from openai.types.chat import ChatCompletionChunk
 
-import lawbot.llm as llm_mod
 import lawbot.retriever as retriever_mod
 import lawbot.service as service
 from conftest import set_auth
 from fakes import HITS, FakeLLM, FakeRetriever
+from lawbot.api_client import ModelLoadError, ModelServerError
 from lawbot.llm import LLM, SYSTEM, build_prompt, build_prompt_v4
 from lawbot.paths import ARTICLES, EVAL
 
 
 # ---- 검색 ----
 class FakeEncoder:
-    """글자 해시 bag-of-chars 임베딩. 같은 글자를 많이 공유할수록 유사도가 높다"""
+    """api_client.Embedder 대역: 글자 해시 bag-of-chars. 같은 글자를 많이 공유할수록 유사도가 높다"""
 
     calls = []
 
-    def __init__(self, path, device=None, model_kwargs=None):
-        self.path = path
-
-    def encode(self, texts, prompt_name=None, normalize_embeddings=False, **kw):
-        FakeEncoder.calls.append((len(texts), prompt_name))
+    def encode(self, texts, input_type='document', max_seq_length=None):
+        FakeEncoder.calls.append((len(texts), input_type, max_seq_length))
         v = np.zeros((len(texts), 512), np.float32)
         for i, t in enumerate(texts):
             for ch in t:
@@ -38,9 +38,7 @@ class FakeEncoder:
 @pytest.fixture
 def retriever(env):
     FakeEncoder.calls = []
-    env.setattr(retriever_mod, 'SentenceTransformer', FakeEncoder)
-    env.setattr(retriever_mod.torch.mps, 'empty_cache', lambda: None)
-    return retriever_mod.Retriever()
+    return retriever_mod.Retriever(FakeEncoder())
 
 
 def test_retriever_indexes_only_current_articles(retriever):
@@ -49,7 +47,7 @@ def test_retriever_indexes_only_current_articles(retriever):
     assert len(retriever.ids) == 130 == len(retriever.docs)
     assert set(retriever.ids) == set(live)
     assert retriever.D.shape == (130, 512)
-    assert FakeEncoder.calls[0] == (130, None)  # 조문은 query 프롬프트 없이 인코딩
+    assert FakeEncoder.calls == [(130, 'document', 512)]  # 조문 목록 하나를 한 번에 (query 프롬프트 없이)
 
 
 def test_search_returns_top_k_sorted(retriever):
@@ -61,7 +59,7 @@ def test_search_returns_top_k_sorted(retriever):
     assert len({h['article_id'] for h in hits}) == 3
     for h in hits:
         assert h['doc'].startswith(f'{h["article_id"]} {h["title"]}\n')
-    assert FakeEncoder.calls[-1] == (1, 'query')  # 질문은 query 프롬프트로 인코딩
+    assert FakeEncoder.calls[-1] == (1, 'query', 512)  # 질문은 query 프롬프트, 조문과 같은 max_seq
 
 
 def test_search_finds_exact_article(retriever):
@@ -94,65 +92,88 @@ def test_build_prompt_unknown_article_fails():
         build_prompt(['제999조'], '질문')
 
 
-class FakeTokenizer:
-    def __init__(self):
-        self.calls = []
-
-    def apply_chat_template(self, messages, **kw):
-        self.calls.append((messages, kw))
-        return 'PROMPT'
-
-
-@pytest.fixture
-def fake_llm(env):
-    """mlx_lm.load·stream_generate를 가짜로 바꾼 LLM. gen에 생성 함수를 넣어 동작을 바꾼다"""
-    tok, seen = FakeTokenizer(), {}
-
-    def load(path):
-        seen['path'] = path
-        return 'MODEL', tok
-
-    env.setattr(llm_mod, 'load', load)
-
-    def stream_generate(model, tk, prompt, max_tokens, sampler):
-        seen.update(model=model, prompt=prompt, max_tokens=max_tokens)
-        yield from seen['gen']()
-
-    env.setattr(llm_mod, 'stream_generate', stream_generate)
-    seen['gen'] = lambda: iter([types.SimpleNamespace(text='【결론】'), types.SimpleNamespace(text='답')])
-    return LLM('models/fake'), tok, seen
+def chunk(content=None, finish=None, usage=None, timings=None, role=False):
+    """모델 서버가 보내는 SSE 청크와 같은 SDK 객체"""
+    delta = ({'role': 'assistant'} if role else {}) | ({'content': content} if content is not None else {})
+    d = {
+        'id': 'chatcmpl-x',
+        'object': 'chat.completion.chunk',
+        'created': 0,
+        'model': 'm',
+        'choices': [] if usage else [{'index': 0, 'delta': delta, 'finish_reason': finish}],
+    }
+    if usage:
+        d['usage'] = {'prompt_tokens': usage[0], 'completion_tokens': usage[1], 'total_tokens': sum(usage)}
+    if timings:
+        d['timings'] = timings
+    return ChatCompletionChunk.model_validate(d)
 
 
-def test_llm_stream_success(fake_llm):
-    m, tok, seen = fake_llm
+SERVER_CHUNKS = [
+    chunk('【결론】', role=True),
+    chunk('답'),
+    chunk(finish='length', timings={'prompt_tps': 100.0, 'generation_tps': 20.0, 'peak_memory_gb': 1.5}),
+    chunk(usage=(11, 2)),
+]
+
+
+class FakeStream:
+    def __init__(self, items):
+        self.items, self.closed = items, False
+
+    def __iter__(self):
+        for x in self.items:
+            if isinstance(x, Exception):
+                raise x
+            yield x
+
+    def close(self):
+        self.closed = True
+
+
+class FakeClient:
+    """openai.OpenAI 대역: chat.completions.create 인자를 기록하고 FakeStream을 돌려준다"""
+
+    def __init__(self, items=SERVER_CHUNKS, error=None):
+        self.calls, self.items, self.error, self.streams = [], items, error, []
+        self.chat = types.SimpleNamespace(completions=types.SimpleNamespace(create=self.create))
+
+    def create(self, **kw):
+        self.calls.append(kw)
+        if self.error:
+            raise self.error
+        self.streams.append(FakeStream(self.items))
+        return self.streams[-1]
+
+
+def test_llm_request_and_responses():
+    c = FakeClient()
+    m = LLM('qwen3.8-27b-4bit', client=c)
     hits = [{'article_id': '제26조'}, {'article_id': '제36조'}]
-    out = ''.join(r.text for r in m.stream('해고 예고?', hits))
-    assert out == '【결론】답'
-    assert seen['path'] == 'models/fake' and seen['prompt'] == 'PROMPT'
-    messages, kw = tok.calls[0]
-    assert messages == [
-        {'role': 'system', 'content': SYSTEM},
-        {'role': 'user', 'content': build_prompt(['제26조', '제36조'], '해고 예고?')},
-    ]
-    assert kw['add_generation_prompt'] is True and kw['enable_thinking'] is False
+    out = list(m.stream('해고 예고?', hits))
+    assert ''.join(r.text for r in out) == '【결론】답' and [r.text for r in out] == ['【결론】', '답', '']
+    last = out[-1]  # 측정값은 마지막 응답에 (service.ask가 읽음)
+    assert (last.prompt_tokens, last.generation_tokens, last.finish_reason) == (11, 2, 'length')
+    assert (last.prompt_tps, last.generation_tps, last.peak_memory) == (100.0, 20.0, 1.5)
+    assert out[0].generation_tps is None  # 토큰 응답은 받는 즉시 (첫 토큰 시간 그대로)
+    assert c.calls[0] == {
+        'model': 'qwen3.8-27b-4bit',
+        'messages': [
+            {'role': 'system', 'content': SYSTEM},
+            {'role': 'user', 'content': build_prompt(['제26조', '제36조'], '해고 예고?')},
+        ],
+        'max_tokens': 1024,
+        'temperature': 0,
+        'stream': True,
+        'stream_options': {'include_usage': True},
+    }
+    assert c.streams[0].closed
 
 
-def test_llm_stream_failure_propagates(fake_llm):
-    m, _, seen = fake_llm
-
-    def broken():
-        yield types.SimpleNamespace(text='【결론】')
-        raise RuntimeError('generation failed')
-
-    seen['gen'] = broken
-    with pytest.raises(RuntimeError, match='generation failed'):
-        ''.join(r.text for r in m.stream('질문', [{'article_id': '제1조'}]))
-
-
-def test_llm_v4_prompt_and_system(fake_llm, env):
+def test_llm_v4_prompt_and_system():
     # v4: 프로필의 system 문자열과 법령명이 붙은 참고 조문을 쓴다 (v1 기본값은 위 테스트)
-    _, tok, _ = fake_llm
-    m = LLM('models/fake', system='V4 SYSTEM', prompt_style='v4')
+    c = FakeClient()
+    m = LLM('m', client=c, system='V4 SYSTEM', prompt_style='v4')
     hits = [
         {
             'law': '최저임금법',
@@ -162,7 +183,7 @@ def test_llm_v4_prompt_and_system(fake_llm, env):
         }
     ]
     list(m.stream('최저임금?', hits))
-    messages, _ = tok.calls[-1]
+    messages = c.calls[-1]['messages']
     assert messages[0] == {'role': 'system', 'content': 'V4 SYSTEM'}
     assert messages[1]['content'] == (
         '[참고 조문]\n[1] 최저임금법 제6조(최저임금의 효력)\n① 사용자는 지급하여야 한다.\n\n[질문]\n최저임금?'
@@ -170,13 +191,72 @@ def test_llm_v4_prompt_and_system(fake_llm, env):
     assert messages[1]['content'] == build_prompt_v4(hits, '최저임금?')
 
 
-def test_llm_load_failure_propagates(env):
-    def missing(path):
-        raise FileNotFoundError(path)
+def test_llm_system_override():
+    c = FakeClient()
+    m = LLM('m', client=c)
+    list(m.stream('질문', [{'article_id': '제1조'}], system='4항목 SYSTEM'))
+    assert c.calls[-1]['messages'][0] == {'role': 'system', 'content': '4항목 SYSTEM'}
+    list(m.stream('질문', [{'article_id': '제1조'}]))
+    assert c.calls[-1]['messages'][0] == {'role': 'system', 'content': SYSTEM}  # 다음 요청은 기본 system
 
-    env.setattr(llm_mod, 'load', missing)
-    with pytest.raises(FileNotFoundError):
-        LLM('models/없는폴더')
+
+def test_llm_closing_stops_stream():
+    # 정지 버튼: 생성기를 닫으면 SDK 스트림(HTTP 연결)을 닫는다 → 서버가 생성을 멈춤
+    c = FakeClient([chunk('a', role=True)] + [chunk('b')] * 100)
+    g = LLM('m', client=c).stream('질문', [{'article_id': '제1조'}])
+    next(g)
+    g.close()
+    assert c.streams[0].closed
+
+
+def test_llm_no_content_still_yields_one():
+    out = list(
+        LLM('m', client=FakeClient([chunk(finish='stop'), chunk(usage=(5, 0))])).stream('q', [{'article_id': '제1조'}])
+    )
+    assert len(out) == 1 and out[0].text == '' and out[0].finish_reason == 'stop'
+
+
+REQ = httpx.Request('POST', 'http://127.0.0.1:9/v1/chat/completions')
+
+
+def status_error(status, body):
+    return openai.APIStatusError('x', response=httpx.Response(status, request=REQ, json=body), body=body.get('error'))
+
+
+@pytest.mark.parametrize(
+    'error,kind,match',
+    [
+        (openai.APIConnectionError(request=REQ), ConnectionError, '연결할 수 없습니다'),
+        (
+            status_error(
+                500, {'error': {'message': '모델 폴더 없음', 'type': 'model_load_error', 'code': 'FileNotFoundError'}}
+            ),
+            ModelLoadError,
+            '모델 폴더 없음',
+        ),
+        (status_error(401, {'error': {'message': 'x', 'type': 'authentication_error'}}), ModelServerError, '토큰'),
+        (
+            status_error(
+                404, {'error': {'message': '없는 모델', 'type': 'invalid_request_error', 'code': 'model_not_found'}}
+            ),
+            ModelServerError,
+            '없는 모델',
+        ),
+    ],
+)
+def test_llm_errors_before_stream(error, kind, match):
+    with pytest.raises(kind, match=match):
+        list(LLM('m', client=FakeClient(error=error)).stream('q', [{'article_id': '제1조'}]))
+
+
+def test_llm_error_mid_stream():
+    err = openai.APIError('생성 실패', request=REQ, body={'message': '생성 실패'})
+    c = FakeClient([chunk('【결론】', role=True), err])
+    g = LLM('m', client=c).stream('q', [{'article_id': '제1조'}])
+    assert next(g).text == '【결론】'
+    with pytest.raises(RuntimeError, match='생성 오류: 생성 실패'):
+        next(g)
+    assert c.streams[0].closed
 
 
 # ---- 질의응답 흐름 (service) ----
@@ -209,8 +289,8 @@ def app(env, fake_models):
 def test_import_does_not_check_auth_or_load_models(env):
     # import만으로는 인증 검사·모델 로딩을 하지 않는다 (둘 다 main에서)
     FakeRetriever.created = FakeLLM.created = 0
-    env.setattr(retriever_mod, 'Retriever', FakeRetriever)
-    env.setattr(llm_mod, 'LLM', FakeLLM)
+    env.setattr(service, 'Retriever', FakeRetriever)
+    env.setattr(service, 'LLM', FakeLLM)
     sys.modules.pop('lawbot.app', None)
     try:
         import lawbot.app
@@ -250,19 +330,19 @@ def test_app_launches_local_only(app, env):
         'auth': ('tester', 'test-only-pw'),
         'share': False,
     }
-    assert FakeRetriever.created == 1 and FakeLLM.created == 2  # 검색기 1개 + Fast·Pro (기본 2개 상주)
+    assert FakeRetriever.created == 1 and FakeLLM.created == 0  # 검색기 1개. 답변 모델 클라이언트는 첫 질문 때
 
 
 def test_app_loads_models_via_service(app, env):
-    # main은 service.load_app으로 불러온 검색기·모델(LAWBOT_FAST_PATH 반영)을 화면에 넘긴다
+    # main은 service.load_app으로 만든 검색기·모델(LAWBOT_FAST_MODEL 반영)을 화면에 넘긴다
     set_auth(env)
-    env.setenv('LAWBOT_FAST_PATH', 'models/sllm_mlx_8bit')
+    env.setenv('LAWBOT_FAST_MODEL', 'lawbot-fast-8bit')
     build, apps = app.build_demo, []
     env.setattr(app, 'build_demo', lambda a: apps.append(a) or build(a))
     app.main()
     [a] = apps
     assert isinstance(a.retriever, FakeRetriever)
-    assert a.models.loaded['fast'].path == service.deploy.paths.ROOT / 'models/sllm_mlx_8bit'
+    assert a.models.get('fast')[0].path == 'lawbot-fast-8bit'  # FakeLLM의 첫 인자 = API 모델 id
     assert len(app.launched) == 1
 
 
@@ -286,7 +366,7 @@ def test_chat_streams_answer_with_sources(app):
     assert '30일 전에 예고' in src
     assert src.count('제26조 해고의 예고') == 1  # 조문 본문 첫 줄(제목 줄)은 중복 표시 안 함
     assert lawbot.retriever.query == '수습 기간에도 해고 예고?'
-    assert lawbot.models.loaded['fast'].args == ('수습 기간에도 해고 예고?', HITS)
+    assert lawbot.models.llms['fast'].args == ('수습 기간에도 해고 예고?', HITS)
     assert steps[-1][2].startswith('Lawbot Fast · 검색') and '완료' in steps[-1][2]
 
 
@@ -296,59 +376,3 @@ def test_chat_generation_failure_is_not_hidden(app):
     chat = app.make_chat(service.load_app())
     with pytest.raises(RuntimeError, match='generation failed'):
         list(chat('질문', [], 'fast', 'full'))
-
-
-# ---- 생각 단계 끄기 (튜닝 전 모델의 chat template이 enable_thinking을 무시할 때) ----
-from lawbot.llm import THINK, close_thinking, hide_thinking
-
-
-def test_close_thinking_prompt():
-    ok = '<|im_start|>assistant\n<think>\n\n</think>\n\n'
-    assert close_thinking(ok, THINK) == ok  # Qwen3 템플릿이 이미 끈 경우: 프롬프트 그대로
-    assert close_thinking('<|im_start|>assistant\n', THINK) == '<|im_start|>assistant\n<think>\n\n</think>\n\n'
-    assert close_thinking('<|im_start|>assistant\n<think>\n', THINK) == '<|im_start|>assistant\n<think>\n\n</think>\n\n'
-    assert close_thinking('<|im_start|>assistant\n', None) == '<|im_start|>assistant\n'  # 생각 토큰이 없는 모델
-
-
-def chunks(*texts):
-    return [types.SimpleNamespace(text=t, generation_tps=1.0) for t in texts]
-
-
-def test_hide_thinking_block():
-    out = list(hide_thinking(chunks('<thi', 'nk>\n음…', '고민', '</think>\n\n【결론】', ' 답'), THINK))
-    assert len(out) == 5 and all(o.generation_tps == 1.0 for o in out)  # 토큰마다 응답 유지 (측정값 그대로)
-    assert [o.text for o in out] == ['', '', '', '【결론】', ' 답']
-
-
-def test_hide_thinking_passthrough():
-    for texts in (
-        ('【결론】', '답'),
-        (' ', '\n【결론】', '답'),
-        (
-            '<',
-            'b>굵게',
-        ),
-        ('생각 <think> 아님',),
-    ):
-        assert ''.join(o.text for o in hide_thinking(chunks(*texts), THINK)) == ''.join(texts)
-    src = chunks('<think>', '끝나지 않음')
-    assert ''.join(o.text for o in hide_thinking(src, None)) == '<think>끝나지 않음'  # 생각 토큰이 없는 모델은 그대로
-    assert ''.join(o.text for o in hide_thinking(chunks('<think>', '끝나지 않음'), THINK)) == ''
-
-
-def test_llm_closes_thinking_when_template_ignores_it(fake_llm, env):
-    _, tok, seen = fake_llm
-    tok.think_start, tok.think_end = THINK  # Qwen 어휘, 템플릿은 'PROMPT'만 냄 (끄기 무시)
-    seen['gen'] = lambda: iter(chunks('<think>', '생각', '</think>', '【결론】답'))
-    m = LLM('models/fake', prompt_style='v1')
-    assert ''.join(r.text for r in m.stream('질문', [{'article_id': '제1조'}])) == '【결론】답'
-    assert seen['prompt'] == 'PROMPT<think>\n\n</think>\n\n'
-    assert tok.calls[-1][1]['enable_thinking'] is False
-
-
-def test_llm_system_override(fake_llm):
-    m, tok, _ = fake_llm
-    list(m.stream('질문', [{'article_id': '제1조'}], system='4항목 SYSTEM'))
-    assert tok.calls[-1][0][0] == {'role': 'system', 'content': '4항목 SYSTEM'}
-    list(m.stream('질문', [{'article_id': '제1조'}]))
-    assert tok.calls[-1][0][0] == {'role': 'system', 'content': SYSTEM}  # 다음 요청은 기본 system

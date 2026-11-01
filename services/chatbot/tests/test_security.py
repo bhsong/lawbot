@@ -116,21 +116,6 @@ def test_port_same_as_model_server_rejected(env):
         security.server_port()
 
 
-def test_model_server_port_required(env):
-    with pytest.raises(RuntimeError, match='LAWBOT_MODEL_SERVER_PORT'):
-        security.model_server_port()
-    env.setenv('LAWBOT_MODEL_SERVER_PORT', ' ')
-    with pytest.raises(RuntimeError, match='LAWBOT_MODEL_SERVER_PORT'):
-        security.model_server_port()
-    for bad in ('1023', '65536', 'x'):
-        env.setenv('LAWBOT_MODEL_SERVER_PORT', bad)
-        with pytest.raises(ValueError, match='LAWBOT_MODEL_SERVER_PORT'):
-            security.model_server_port()
-    port = free_port()
-    env.setenv('LAWBOT_MODEL_SERVER_PORT', str(port))
-    assert security.model_server_port() == port
-
-
 def test_instance_name(env):
     assert security.instance_name() is None
     env.setenv('LAWBOT_INSTANCE', '  개발 ')

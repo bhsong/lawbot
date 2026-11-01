@@ -153,7 +153,7 @@ def text_of(value):
 
 def model_system(app, model_key, fmt):
     """이번 요청에 쓴 system 전문: format_system(화면 형식) → 모델·프로필 system 파일 → 기본(prompts.SYSTEM)
-    service.load_app의 loader·load_remote와 같은 순서"""
+    service.load_app의 factory와 같은 순서"""
     from lawbot import service
     from lawbot.prompts import SYSTEM
 
@@ -206,7 +206,7 @@ def turn_record(app, question, hits, raw, shown, model_key, fmt, st):
         'decree': decree_settings(app, model_key),
         'n_decree': st.get('n_decree'),
         'instance': security.instance_name(),
-        'mode': 'remote' if getattr(app.retriever, 'client', None) is not None else 'local',
+        'mode': getattr(app, 'llm_mode', 'api'),
         'profile': app.profile.name,
         'dataset_version': m.get('dataset_version') if m else None,
         'commit': commit(),

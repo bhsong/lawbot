@@ -5,11 +5,10 @@ import json
 import pytest
 
 import lawbot.app as app_mod
-import lawbot.remote as remote
 import lawbot.service as service
 from fakes import FakeLLM, FakeRetriever
 from lawbot import log_summary
-from model_fakes import TOKEN, GenLLM, Ret, serve
+from lawbot.api_client import ModelLoadError, ModelServerError
 
 QUESTION = '해고 예고 없이 해고되면 어떻게 하나요 고유문구XYZ'  # 로그에 남으면 안 되는 질문 원문
 
@@ -32,7 +31,6 @@ def local_app(env, llm=FakeLLM, resident=2):
     env.setattr(FakeLLM, 'chunks', CHUNKS)  # 다른 테스트가 바꿔 둔 값에 영향받지 않게
     env.setattr(service, 'Retriever', FakeRetriever)
     env.setattr(service, 'LLM', llm)
-    env.setenv('LAWBOT_MAX_RESIDENT', str(resident))
     return service.load_app()
 
 
@@ -46,7 +44,7 @@ def test_one_line_per_question_without_text(env, log):
     assert (r['status'], r['error_type'], r['mode'], r['profile'], r['model'], r['fmt']) == (
         'ok',
         None,
-        'local',
+        'api',
         'v1',
         'fast',
         'full',
@@ -115,10 +113,11 @@ def test_cancelled(env, log):
     'e,stage,kind',
     [
         (ConnectionError('x'), 'load', 'model_server'),
-        (remote.ModelServerError('Unauthorized', 'x', 401), 'search', 'model_server'),
-        (remote.ModelServerError('NotReady', 'x', 503), 'generation', 'model_server'),
-        (remote.ModelServerError('RuntimeError', 'x', 500), 'rerank', 'rerank'),  # 서버 쪽 연산 오류는 단계로
-        (remote.RemoteLoadError('x'), 'load', 'model_load'),
+        (ModelServerError('x', 401), 'search', 'model_server'),
+        (ModelServerError('x', 503), 'generation', 'model_server'),
+        (ModelServerError('x', 500), 'rerank', 'rerank'),  # 서버 쪽 연산 오류는 단계로
+        (ModelLoadError('x'), 'generation', 'model_load'),  # 서버가 첫 요청 때 모델을 못 불러옴
+        (ModelServerError('x', 404), 'generation', 'config'),  # 서버에 없는 모델 id
         (FileNotFoundError('x'), 'load', 'model_load'),
         (KeyError('ultra'), 'load', 'config'),
         (RuntimeError('x'), 'generation', 'generation'),
@@ -128,22 +127,16 @@ def test_error_type(e, stage, kind):
     assert service.error_type(e, stage) == kind
 
 
-@pytest.mark.integration  # 127.0.0.1 접속 허용 (conftest)
 def test_server_down_is_model_server(env, log):
-    env.setattr(service, 'Retriever', Ret)
-    env.setattr(service, 'LLM', GenLLM)
-    srv = service.load_app(local=True)
-    with serve(srv) as (_, url):
-        env.setenv('LAWBOT_MODEL_SERVER', url)
-        env.setenv('LAWBOT_MODEL_TOKEN', TOKEN)
-        rem = service.load_app()
-        chat = app_mod.make_chat(rem)
-        list(chat(QUESTION, [], 'fast', 'full'))
-    assert lines(log)[-1]['mode'] == 'remote' and lines(log)[-1]['status'] == 'ok'
-    with pytest.raises(app_mod.gr.Error, match='모델 서버가 준비되지 않았습니다'):  # 서버를 끈 뒤
+    """생성 중 모델 서버 연결이 끊기면 오류 유형 model_server (화면은 '모델 서버가 준비되지 않았습니다')"""
+    chat = app_mod.make_chat(local_app(env))
+    list(chat(QUESTION, [], 'fast', 'full'))
+    assert lines(log)[-1]['mode'] == 'api' and lines(log)[-1]['status'] == 'ok'
+    env.setattr(FakeLLM, 'chunks', [ConnectionError('모델 서버에 연결할 수 없습니다')])
+    with pytest.raises(app_mod.gr.Error, match='모델 서버가 준비되지 않았습니다'):
         list(chat(QUESTION, [], 'fast', 'full'))
     r = lines(log)[-1]
-    assert (r['status'], r['error_type'], r['mode']) == ('error', 'model_server', 'remote')
+    assert (r['status'], r['error_type'], r['mode']) == ('error', 'model_server', 'api')
 
 
 # ---- log_summary ----
@@ -171,7 +164,7 @@ def test_log_summary(env, log, capsys):
     log_summary.main([str(log)])
     out = capsys.readouterr().out
     assert '요청 4건' in out and 'ok 3' in out and 'error 1' in out and '읽지 못한 줄 1' in out
-    assert '[local · fast] 성공 3건' in out and 'search' in out and 'p95' in out
+    assert '[api · fast] 성공 3건' in out and 'search' in out and 'p95' in out
     assert '오류 유형: model_server 1' in out
     log_summary.main([str(log), '--caller', 'lawbot-app'])
     out = capsys.readouterr().out

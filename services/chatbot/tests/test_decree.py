@@ -1,6 +1,6 @@
 # tests/test_decree.py  →  시행령·시행규칙(하위법령) 첨부 (docs/archives/decree-attach.md). 모델 파일 불필요
 #   필터가 val 실험(same1+other0.9 규칙, 저장된 fp16 점수·참고 조문)과 같은지, 첨부를 끈 구성·Fast가 지금과 같은지,
-#   원격·로컬 동등성, 812조문 검색기·인용 판정·화면·평가 경로
+#   812조문 검색기·인용 판정·화면·평가 경로
 import dataclasses
 import json
 import types
@@ -11,14 +11,11 @@ import pytest
 
 import lawbot.app as app_mod
 import lawbot.eval_v4 as ev
-import lawbot.model_server as model_server
-import lawbot.remote as remote
 import lawbot.retriever as retriever_mod
 import lawbot.service as service
-from lawbot import answer_format, citation, decree, deploy
+from lawbot import answer_format, citation, decree, deploy, manifest
 from lawbot.llm import build_prompt_v4
 from lawbot.paths import DATA, V4_ARTICLES, V4_DECREE_ARTICLES
-from model_fakes import TOKEN, serve
 
 E = dict(encoding='utf-8-sig')
 DIR = DATA / 'decree_exp'
@@ -125,13 +122,12 @@ def test_attach_ties_and_empty():
 
 # ---- 3. 검색기: 법률 임베딩은 그대로, 하위법령은 따로 3,072 ----
 class Encoder:
+    """api_client.Embedder 대역: (문서 목록, max_seq, 'query' 또는 None)을 기록"""
+
     calls = []
 
-    def __init__(self, path, device=None, model_kwargs=None):
-        self.max_seq_length = None
-
-    def encode(self, texts, prompt_name=None, **kw):
-        Encoder.calls.append((list(texts), self.max_seq_length, prompt_name))
+    def encode(self, texts, input_type='document', max_seq_length=None):
+        Encoder.calls.append((list(texts), max_seq_length, 'query' if input_type == 'query' else None))
         v = np.zeros((len(texts), 64), np.float32)
         for i, t in enumerate(texts):
             for ch in t:
@@ -142,19 +138,19 @@ class Encoder:
 @pytest.fixture
 def enc(env):
     Encoder.calls = []
-    env.setattr(retriever_mod, 'SentenceTransformer', Encoder)
-    env.setattr(retriever_mod.torch.mps, 'empty_cache', lambda: None)
-    return env
+    return Encoder()
 
 
 def test_retriever_law_encoding_unchanged(enc):
-    off = retriever_mod.Retriever(law_csv=V4_ARTICLES, max_seq_length=2304, doc_style='v4')
+    off = retriever_mod.Retriever(enc, law_csv=V4_ARTICLES, max_seq_length=2304, doc_style='v4')
     off_calls, Encoder.calls = Encoder.calls, []
-    on = retriever_mod.Retriever(law_csv=V4_DECREE_ARTICLES, max_seq_length=2304, doc_style='v4', decree_max_seq=3072)
+    on = retriever_mod.Retriever(
+        enc, law_csv=V4_DECREE_ARTICLES, max_seq_length=2304, doc_style='v4', decree_max_seq=3072
+    )
     assert len(off_calls) == 1 and len(Encoder.calls) == 2
     assert Encoder.calls[0] == off_calls[0] and off_calls[0][1] == 2304  # 같은 문서 목록·같은 max_seq
     assert len(Encoder.calls[1][0]) == 397 and Encoder.calls[1][1] == 3072
-    assert np.array_equal(off.D, on.D) and on.D_dec.shape[0] == 397 and on.m.max_seq_length == 2304
+    assert np.array_equal(off.D, on.D) and on.D_dec.shape[0] == 397 and on.max_seq_length == 2304
     assert (on.n_law, len(on.ids)) == (415, 812) and list(on.ids[:415]) == list(off.ids)
     assert set(on.kinds[:415]) == {'법률'} and set(on.kinds[415:]) == {'시행령', '시행규칙'}
     q = '체불 융자 이자 몇프로 이하에요?'
@@ -167,13 +163,15 @@ def test_retriever_law_encoding_unchanged(enc):
     assert (on.rank_all([q]) < 415).all()
     with pytest.raises(ValueError, match='하위법령 검색 인덱스'):
         off.search_decrees(q)
-    law_only = retriever_mod.Retriever(law_csv=V4_DECREE_ARTICLES, max_seq_length=2304, doc_style='v4')
+    law_only = retriever_mod.Retriever(enc, law_csv=V4_DECREE_ARTICLES, max_seq_length=2304, doc_style='v4')
     assert len(law_only.ids) == 415 and np.array_equal(law_only.D, off.D)  # 하위법령을 끄면 812 CSV도 법률만
 
 
 def test_prompt_format_matches_experiment(enc):
     """웹앱 hit(법률 3 + 하위법령 2)의 프롬프트가 실험(eval_decree)의 조문 표로 만든 프롬프트와 글자 단위로 같다"""
-    R = retriever_mod.Retriever(law_csv=V4_DECREE_ARTICLES, max_seq_length=2304, doc_style='v4', decree_max_seq=3072)
+    R = retriever_mod.Retriever(
+        enc, law_csv=V4_DECREE_ARTICLES, max_seq_length=2304, doc_style='v4', decree_max_seq=3072
+    )
     keys = [f'{l} {a}' for l, a in zip(R.laws, R.ids)]
     table = article_table()
     row = pd.read_csv(DATA / 'v4' / 'decree_ctx_dq_val200.csv', dtype=str, **E).iloc[0]
@@ -282,8 +280,8 @@ DC = deploy.DecreeConfig(0.9, 2, ('pro',))
 
 def make(dc=DC, ret=None):
     p = deploy.get_profile('v4')
-    models = service.ModelManager(p.models, Bot, 2)
-    return service.LawbotApp(p, ret or DecRet(decree=dc is not None), models, False, RR(), 'FULL', dc)
+    models = service.ChatModels(p.models, Bot)
+    return service.LawbotApp(p, ret or DecRet(decree=dc is not None), models, RR(), 'FULL', dc)
 
 
 def ask(a, q, model, **kw):
@@ -339,7 +337,7 @@ def test_attached_order_and_prompt(rr):
     want = decree.attach(st['decree_candidates'], top1, 0.9, 2)
     assert dec == want and len(dec) == 2
     assert [h['parent_law'] == top1 or h['rerank_score'] >= 0.9 for h in dec] == [True, True]
-    assert on.models.loaded['pro'].calls[-1] == hits  # LLM에 넘긴 참고 조문 = 화면 hits
+    assert on.models.llms['pro'].calls[-1] == hits  # LLM에 넘긴 참고 조문 = 화면 hits
     prompt = build_prompt_v4(hits, q)
     assert prompt.index('[3] ') < prompt.index('[4] ' + dec[0]['law']) < prompt.index('[5] ' + dec[1]['law'])
 
@@ -354,7 +352,7 @@ def test_no_decree_passes_prompt_unchanged(rr):
     _, h_off, _, _ = ask(off, q, 'pro')
     assert st['n_decree'] == 0 and len(st['decree_candidates']) == 4 and h_on == h_off
     assert build_prompt_v4(h_on, q) == build_prompt_v4(h_off, q)
-    assert on.models.loaded['pro'].calls[-1] == off.models.loaded['pro'].calls[-1]
+    assert on.models.llms['pro'].calls[-1] == off.models.llms['pro'].calls[-1]
 
 
 def test_decree_rerank_error_not_hidden(rr, tmp_path):
@@ -406,85 +404,17 @@ def test_load_app_with_decree(env, tmp_path):
     env.setattr(service, 'Retriever', lambda *a, **kw: made.append(kw) or DecRet())
     env.setattr(service, 'LLM', lambda *a, **kw: Bot(None))
     env.setattr(service, 'Reranker', lambda *a: RR())
-    with pytest.raises(ValueError, match='리랭커가 필요'):  # 모델을 올리기 전에 거부
-        service.load_app(local=True)
+    with pytest.raises(ValueError, match='리랭커가 필요'):  # 모델 서버에 접속하기 전에 거부
+        service.load_app()
     assert made == []
     env.setenv('LAWBOT_RERANKER_ENABLED', '1')
-    env.setenv('LAWBOT_RERANKER_MODEL_PATH', str(tmp_path))
-    a = service.load_app(local=True)
+    a = service.load_app()
     assert made == [{'max_seq_length': 2304, 'doc_style': 'v4', 'decree_max_seq': 3072}]
     assert a.decree == DC and service.uses_decrees(a, 'pro') and not service.uses_decrees(a, 'fast')
-    info = model_server.info(a)
-    assert info['decree'] == {'tau': 0.9, 'k': 2, 'candidates': 10, 'max_seq': 3072, 'models': ['pro'], 'n_articles': 4}
-    assert info['dataset']['dataset_version'] == 'v4-decree'
+    assert manifest.summary(manifest.load(a.profile.articles))['dataset_version'] == 'v4-decree'
     env.setenv('LAWBOT_DECREE_ENABLED', '0')
     made.clear()
-    assert service.load_app(local=True).decree is None and made == [{'max_seq_length': 2304, 'doc_style': 'v4'}]
-
-
-# ---- 6. 원격 모드: 로컬과 같은 결과, 설정·버전 불일치 거부 ----
-@pytest.fixture
-def server_env(rr):
-    """원격 모드 웹앱 설정 (.env.dev.example처럼 리랭커 변수 없이: 리랭커는 서버가 정함)"""
-    rr.setenv('LAWBOT_PROFILE', 'v4')
-    rr.setenv('LAWBOT_DECREE_ENABLED', '1')
-    rr.setattr(remote, 'WAIT_INTERVAL', 0.05)
-    return rr
-
-
-def connect(env, url):
-    env.setenv('LAWBOT_MODEL_SERVER', url)
-    env.setenv('LAWBOT_MODEL_TOKEN', TOKEN)
-    return service.load_app()
-
-
-@pytest.mark.integration
-def test_remote_matches_local(server_env):
-    server_env.setattr(RR, 'SCORES', {'임금채권보장법 시행령 제24조': 0.97, '최저임금법 시행령 제5조': 0.91})
-    loc = make()
-    with serve(make()) as (_, url):
-        rem = connect(server_env, url)
-        assert rem.decree == loc.decree
-        assert list(rem.retriever.ids) == list(loc.retriever.ids) and rem.retriever.n_law == 4
-        assert citation.article_keys(rem.retriever) == citation.article_keys(loc.retriever)
-        for q in ('해고 예고?', '체불 융자 이자 몇프로 이하에요?', '평균임금', '최저임금 환산'):
-            for model in ('pro', 'fast'):
-                a, b = ask(loc, q, model), ask(rem, q, model)
-                assert a[1] == b[1] and a[2] == b[2]
-                assert a[3].get('n_decree') == b[3].get('n_decree')
-
-
-@pytest.mark.integration
-def test_remote_refuses_mismatch(server_env):
-    with serve(make()) as (_, url):
-        server_env.setenv('LAWBOT_DECREE_TAU', '0.8')
-        with pytest.raises(RuntimeError, match=r'하위법령 tau: 서버 0.9 / 웹앱 0.8'):
-            connect(server_env, url)
-        server_env.delenv('LAWBOT_DECREE_TAU')
-        server_env.setenv('LAWBOT_DECREE_ENABLED', '0')
-        with pytest.raises(RuntimeError, match='하위법령 첨부: 서버 켜짐 / 웹앱 꺼짐'):
-            connect(server_env, url)
-        server_env.setenv('LAWBOT_DECREE_ENABLED', '1')
-        server_env.setenv('LAWBOT_DECREE_MODELS', 'fast,pro')  # 첨부 모델은 웹앱이 정함 (비교 안 함)
-        assert connect(server_env, url).decree.models == ('fast', 'pro')
-        server_env.setattr(model_server, 'API_VERSION', 1)  # 하위법령 API 이전 서버
-        with pytest.raises(RuntimeError, match='api_version: 서버 1 / 웹앱 2'):
-            connect(server_env, url)
-    with serve(make(None)) as (_, url):
-        server_env.setenv('LAWBOT_DECREE_MODELS', 'pro')
-        with pytest.raises(RuntimeError, match='하위법령 첨부: 서버 꺼짐 / 웹앱 켜짐'):
-            connect(server_env, url)
-        client = remote.ModelServerClient(url, TOKEN)
-        with pytest.raises(remote.ModelServerError, match='하위법령 첨부가 꺼져'):
-            client.post_json('/search', {'question': 'q', 'k': 3, 'kind': 'decree'})
-        with pytest.raises(remote.ModelServerError, match='kind는'):
-            client.post_json('/search', {'question': 'q', 'k': 3, 'kind': 'x'})
-        a = client.get_json('/articles')
-        assert a['n_law'] == len(a['ids']) == 4 and client.get_json('/info')['decree'] is None
-
-
-def test_api_versions_match():
-    assert model_server.API_VERSION == remote.API_VERSION == 2
+    assert service.load_app().decree is None and made == [{'max_seq_length': 2304, 'doc_style': 'v4'}]
 
 
 # ---- 7. 인용 판정·화면 ----

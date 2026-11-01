@@ -1,14 +1,13 @@
-# tests/test_manifest.py  →  법령 데이터 매니페스트 (manifest): 해시·조문 수 검사, 모델 서버 시작 거부, /info dataset 비교
+# tests/test_manifest.py  →  법령 데이터 매니페스트 (manifest): 해시·조문 수 검사, 웹앱 시작 거부
 # 실제 data/의 조문 CSV·매니페스트를 읽기만 한다 (바꾸는 경우는 tmp_path에 복사해서)
 import json
 import shutil
-import types
 
 import pytest
 
 import lawbot.service as service
 from fakes import FakeLLM, FakeRetriever
-from lawbot import check_deploy, deploy, manifest, model_server, remote
+from lawbot import check_deploy, manifest
 from lawbot.paths import ARTICLES, V4_ARTICLES
 
 
@@ -116,59 +115,18 @@ def test_check_deploy_warns_without_manifest(env, tmp_path):
     assert any(lv == 'WARN' and '매니페스트 없음' in m for lv, m in out)
 
 
-# ---- 모델 서버 시작 (로컬 모드 load_app) ----
-def test_model_server_refuses_changed_csv(env, tmp_path):
+# ---- 웹앱 시작 (load_app) ----
+def test_load_app_refuses_changed_csv(env, tmp_path):
     env.setattr(service, 'Retriever', FakeRetriever)
     env.setattr(service, 'LLM', FakeLLM)
     env.setenv('LAWBOT_PROFILE', 'v4')
     env.setenv('LAWBOT_V4_ARTICLES', str(copy_v4(tmp_path, one_char)))
     FakeRetriever.created = 0
     with pytest.raises(RuntimeError, match='매니페스트와 다릅니다'):
-        service.load_app(local=True)
-    assert FakeRetriever.created == 0  # 검색기·모델을 올리기 전에 거부
+        service.load_app()
+    assert FakeRetriever.created == 0  # 모델 서버에 접속·인덱스를 만들기 전에 거부
     env.setenv('LAWBOT_V4_ARTICLES', str(copy_v4(tmp_path)))
-    assert service.load_app(local=True).profile.name == 'v4'
-
-
-# ---- /info의 dataset (선택 필드) ----
-def fake_app(articles):
-    p = deploy.get_profile('v4')
-    return types.SimpleNamespace(
-        profile=types.SimpleNamespace(name='v4', doc_style='v4', articles=articles),
-        models=types.SimpleNamespace(specs={'fast': 0, 'pro': 0}, loaded={}, max_resident=2),
-        reranker=None,
-        retriever=types.SimpleNamespace(ids=[0] * 415),
-    ), p
-
-
-def test_info_has_dataset(tmp_path):
-    app, p = fake_app(V4_ARTICLES)
-    info = model_server.info(app)
-    assert info['api_version'] == 2 and info['dataset'] == {
-        'dataset_version': 'v4',
-        'reference_date': '2026-10-20',
-        'articles_sha256': manifest.load(V4_ARTICLES)['articles_sha256'],
-    }
-    assert remote.check_info(info, p) == [] and remote.dataset_warnings(info, p) == []
-    app, _ = fake_app(tmp_path / 'v4.csv')  # 서버 쪽 매니페스트 없음
-    assert model_server.info(app)['dataset'] is None
-
-
-def test_old_server_without_dataset_is_accepted():
-    app, p = fake_app(V4_ARTICLES)
-    info = model_server.info(app)
-    del info['dataset']  # 이전 버전 서버
-    assert remote.check_info(info, p) == [] and remote.dataset_warnings(info, p) == []
-
-
-def test_dataset_version_difference_warns():
-    app, p = fake_app(V4_ARTICLES)
-    info = model_server.info(app)
-    info['dataset'] = info['dataset'] | {'dataset_version': 'v4.1'}
-    assert remote.check_info(info, p) == []  # 시작은 막지 않음
-    assert remote.dataset_warnings(info, p) == [
-        'dataset_version: 서버 v4.1 / 웹앱 v4 (모델 서버와 웹앱의 레포 버전을 맞추세요)'
-    ]
+    assert service.load_app().profile.name == 'v4'
 
 
 def test_decree_csv_kinds():

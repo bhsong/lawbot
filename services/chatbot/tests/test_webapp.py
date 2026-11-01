@@ -1,6 +1,4 @@
 # tests/test_webapp.py  →  Fast/Pro 모델 선택·전환, 간결형 답변, v4 검색 형식, 배포 검사 (가짜 모델, 모델 파일 불필요)
-import json
-import struct
 import types
 
 import pandas as pd
@@ -16,20 +14,17 @@ from lawbot.llm import build_prompt_v4
 
 
 class PathLLM(FakeLLM):
-    """모델 폴더 이름을 답으로 내는 가짜 sLLM: 어떤 모델이 답했는지 확인용"""
+    """API 모델 id를 답으로 내는 가짜 답변 모델: 어떤 모델이 답했는지 확인용"""
 
     def stream(self, question, hits, system=None):
         self.args, self.system = (question, hits), system
-        for c in ('【결론】', self.path.name, '\n【근거 조문】\n근로기준법 제26조(해고의 예고)\n【설명】\n- 설명'):
+        for c in ('【결론】', self.path, '\n【근거 조문】\n근로기준법 제26조(해고의 예고)\n【설명】\n- 설명'):
             yield types.SimpleNamespace(text=c, generation_tps=20.0, finish_reason='stop')
 
 
-def make_app(env, resident=2, llm=PathLLM, early_stop=False):
+def make_app(env, llm=PathLLM):
     env.setattr(service, 'Retriever', FakeRetriever)
     env.setattr(service, 'LLM', llm)
-    env.setenv('LAWBOT_MAX_RESIDENT', str(resident))
-    if early_stop:
-        env.setenv('LAWBOT_EARLY_STOP', '1')
     return service.load_app()
 
 
@@ -39,16 +34,16 @@ def test_profiles_define_fast_and_pro(env):
         p = deploy.get_profile(name)
         assert [m.key for m in p.models] == ['fast', 'pro']
         assert [m.label for m in p.models] == ['Lawbot Fast', 'Lawbot Pro']
-        assert all(m.path.is_absolute() for m in p.models)
         assert '정확' not in ' '.join(m.info for m in p.models)  # 검증 전 정확도 단정 금지
         assert [m.fmt for m in p.models] == ['full', 'concise']  # Fast 4항목, Pro 간결형
         assert p.models[0].system_file is None and p.models[1].system_file is not None
     v1, v4 = deploy.get_profile('v1'), deploy.get_profile('v4')
-    assert (v1.articles, v1.emb, v1.max_seq, v1.doc_style) == (paths.ARTICLES, paths.EMB, 512, 'v1')
-    assert v1.models[0].path == paths.LLM_4BIT and v1.system_file is None
+    assert (v1.articles, v1.emb_model, v1.max_seq, v1.doc_style) == (paths.ARTICLES, 'lawbot-emb-v1', 512, 'v1')
+    assert [m.model for m in v1.models] == ['lawbot-fast-v1', 'qwen3-14b-4bit'] and v1.system_file is None
+    assert [m.model for m in v4.models] == ['lawbot-fast-v4', 'qwen3.8-27b-4bit'] and v4.emb_model == 'lawbot-emb-v4'
     assert v1.models[1].system_file == paths.SYSTEM_V1_CONCISE and v4.models[1].system_file == paths.V4_SYSTEM_CONCISE
     assert (v4.max_seq, v4.doc_style, v4.system_file) == (2304, 'v4', paths.V4_SYSTEM)
-    assert {v4.articles, v4.emb, v4.models[0].path} & {v1.articles, v1.emb, v1.models[0].path} == set()
+    assert {v4.articles, v4.emb_model, v4.models[0].model} & {v1.articles, v1.emb_model, v1.models[0].model} == set()
 
 
 def test_default_profile_is_v4(env):
@@ -63,41 +58,41 @@ def test_v4_without_assets_refuses_before_loading(env, tmp_path):
     FakeRetriever.created = 0
     with pytest.raises(RuntimeError, match='LAWBOT_PROFILE=v1'):
         make_app(env)
-    assert FakeRetriever.created == 0  # 검색기·모델을 올리기 전에 거부
+    assert FakeRetriever.created == 0  # 모델 서버에 접속하기 전에 거부
 
 
-def test_profile_env_override_is_absolute(env):
-    env.setenv('LAWBOT_PRO_PATH', 'models/qwen3_14b_qlora')
-    assert deploy.get_profile('v1').models[1].path == paths.ROOT / 'models/qwen3_14b_qlora'
+def test_profile_env_override(env):
+    env.setenv('LAWBOT_PRO_MODEL', 'gpt-x')  # 클라우드 모델 이름도 그대로
+    env.setenv('LAWBOT_EMB_MODEL', 'emb-x')
+    env.setenv('LAWBOT_PRO_SYSTEM', 'data/x.txt')
+    p = deploy.get_profile('v1')
+    assert p.models[1].model == 'gpt-x' and p.emb_model == 'emb-x'
+    assert p.models[1].system_file == paths.ROOT / 'data/x.txt'  # 파일 경로는 레포 최상위 기준 절대 경로
     env.setenv('LAWBOT_PROFILE', 'v9')
     with pytest.raises(ValueError, match='LAWBOT_PROFILE'):
         deploy.get_profile()
-    env.setenv('LAWBOT_MAX_RESIDENT', '3')
-    with pytest.raises(ValueError):
-        deploy.max_resident()
 
 
-# ---- 모델 관리 ----
-def test_manager_lru_one_resident():
-    loads = []
-    specs = deploy.get_profile('v1').models
-    m = service.ModelManager(specs, lambda s: loads.append(s.key) or s.key, max_resident=1)
-    assert m.get('fast')[0] == 'fast' and m.get('fast')[1] is None
-    llm, sec = m.get('pro')
-    assert llm == 'pro' and sec is not None and list(m.loaded) == ['pro']  # Fast를 내린 뒤 Pro
-    m.get('fast')
-    assert loads == ['fast', 'pro', 'fast']
+# ---- 모델 관리 (불러오기·상주는 모델 서버) ----
+def test_chat_models_create_once_and_check_server(env, model_server):
+    a = make_app(env)
+    assert a.models.llms == {}  # 답변 모델 클라이언트는 처음 쓸 때
+    fast, load_s = a.models.get('fast')
+    assert a.models.get('fast') == (fast, None) and load_s is None and fast.path == 'lawbot-fast-v1'
+    assert fast.client is a.models.get('pro')[0].client  # 같은 생성 API 클라이언트
     with pytest.raises(KeyError):
-        m.get('ultra')
+        a.models.get('ultra')
+    model_server.loaded = {'lawbot-fast-v1'}  # 서버 /v1/models의 loaded
+    assert a.models.is_loaded('fast') and not a.models.is_loaded('pro')
 
 
-def test_load_app_preloads_both_when_resident_two(env):
-    a = make_app(env, resident=2)
-    assert list(a.models.loaded) == ['fast', 'pro']
+def test_load_app_builds_clients(env):
+    a = make_app(env)
     assert a.retriever.args[1] == {'max_seq_length': 512, 'doc_style': 'v1'}
-    assert a.models.loaded['fast'].kw == {'prompt_style': 'v1'}  # Fast는 llm.SYSTEM(v1 4섹션) 그대로
+    assert a.retriever.args[0][0].model == 'lawbot-emb-v1'  # 모델 서버의 임베딩 모델 (api_client.Embedder)
+    assert a.models.get('fast')[0].kw == {'prompt_style': 'v1'}  # Fast는 llm.SYSTEM(v1 4섹션) 그대로
     concise_system = paths.SYSTEM_V1_CONCISE.read_text(encoding='utf-8').strip()
-    assert a.models.loaded['pro'].kw == {'prompt_style': 'v1', 'system': concise_system}
+    assert a.models.get('pro')[0].kw == {'prompt_style': 'v1', 'system': concise_system}
     assert '【결론】' in concise_system and '【근거 조문】' in concise_system and '【설명】' not in concise_system
 
 
@@ -109,15 +104,15 @@ def test_load_app_v4_reads_system_file(env, tmp_path):
     env.setenv('LAWBOT_V4_ARTICLES', str(tmp_path / 'v4.csv'))
     env.setenv('LAWBOT_V4_SYSTEM', str(tmp_path / 'system.txt'))
     env.setenv('LAWBOT_PRO_SYSTEM', str(tmp_path / 'concise.txt'))
-    a = make_app(env, resident=2)
-    assert a.models.loaded['fast'].kw == {'prompt_style': 'v4', 'system': 'V4 SYSTEM'}
-    assert a.models.loaded['pro'].kw == {'prompt_style': 'v4', 'system': 'V4 CONCISE'}
+    a = make_app(env)
+    assert a.models.get('fast')[0].kw == {'prompt_style': 'v4', 'system': 'V4 SYSTEM'}
+    assert a.models.get('pro')[0].kw == {'prompt_style': 'v4', 'system': 'V4 CONCISE'}
     assert a.retriever.args[1] == {'max_seq_length': 2304, 'doc_style': 'v4'}
 
 
 def test_pro_system_missing_is_reported(env, tmp_path):
     env.setenv('LAWBOT_PRO_SYSTEM', str(tmp_path / '없음.txt'))
-    chat = app_mod.make_chat(make_app(env, resident=1))
+    chat = app_mod.make_chat(make_app(env))
     with pytest.raises(app_mod.gr.Error, match='Lawbot Pro 모델을 불러오지 못했습니다'):
         list(chat('질문', [], 'pro', 'concise'))
 
@@ -131,20 +126,26 @@ def test_format_follows_model_by_default(env):
     assert (follow('fast'), follow('pro')) == (('fast', 'full'), ('pro', 'concise'))
 
 
-def test_pro_preload_failure_keeps_fast(env, capsys):
-    class ProMissing(PathLLM):
-        def __init__(self, path, **kw):
-            if path.name == paths.PRO_BASE.name:
-                raise ValueError('Repo id must be in the form')  # mlx_lm.load가 없는 절대 경로에 내는 오류
-            super().__init__(path, **kw)
+def test_missing_model_on_server_refuses_start(env, model_server):
+    p = deploy.get_profile('v1')
+    model_server.available = [{'id': p.emb_model, 'type': 'embedding'}, {'id': 'lawbot-fast-v1', 'type': 'chat'}]
+    with pytest.raises(RuntimeError, match='모델 서버에 필요한 모델이 없습니다: chat qwen3-14b-4bit'):
+        make_app(env)
+    env.setenv('LAWBOT_MODELS', 'fast')  # 이 기기에서 Fast만 쓰면 Pro는 서버에 없어도 됨
+    assert list(make_app(env).models.specs) == ['fast']
 
-    a = make_app(env, resident=2, llm=ProMissing)
-    assert list(a.models.loaded) == ['fast']
-    assert 'Lawbot Pro 미리 불러오기 실패' in capsys.readouterr().out
-    chat = app_mod.make_chat(a)
-    with pytest.raises(app_mod.gr.Error, match='Lawbot Pro 모델을 불러오지 못했습니다'):
+
+def test_server_model_load_failure_is_reported(env):
+    from lawbot.api_client import ModelLoadError
+
+    class ServerCannotLoad(PathLLM):
+        def stream(self, question, hits, system=None):
+            raise ModelLoadError('모델 서버 오류 FileNotFoundError: 모델 폴더 없음')
+            yield
+
+    chat = app_mod.make_chat(make_app(env, llm=ServerCannotLoad))
+    with pytest.raises(app_mod.gr.Error, match='Lawbot Pro 모델을 불러오지 못했습니다: qwen3-14b-4bit'):
         list(chat('질문', [], 'pro', 'full'))
-    assert list(chat('질문', [], 'fast', 'full'))[-1][0].startswith('【결론】sllm_mlx_4bit')
 
 
 def test_instance_name_in_title(env):
@@ -160,28 +161,30 @@ def test_instance_name_in_title(env):
 # ---- 모델 선택 ----
 def test_selection_is_per_request(env):
     # 요청마다 고른 모델이 답한다: 이전 선택이 다음 질문에 남지 않음
-    chat = app_mod.make_chat(make_app(env, resident=2))
-    names = {'fast': paths.LLM_4BIT.name, 'pro': paths.PRO_BASE.name}
+    chat = app_mod.make_chat(make_app(env))
+    names = {'fast': 'lawbot-fast-v1', 'pro': 'qwen3-14b-4bit'}
     for key in ('fast', 'pro', 'fast', 'pro', 'pro', 'fast'):
         text, _, stats = list(chat('해고 예고?', [], key, 'full'))[-1]
         assert names[key] in text and stats.startswith(f'Lawbot {key.title()}')
 
 
 def test_fast_and_pro_get_same_context(env):
-    a = make_app(env, resident=2)
+    a = make_app(env)
     chat = app_mod.make_chat(a)
     src = [list(chat('수습 해고 예고?', [], k, 'full'))[-1][1] for k in ('fast', 'pro')]
     assert src[0] == src[1]
-    assert a.models.loaded['fast'].args == a.models.loaded['pro'].args == ('수습 해고 예고?', HITS)
+    assert a.models.llms['fast'].args == a.models.llms['pro'].args == ('수습 해고 예고?', HITS)
 
 
-def test_switch_shows_loading_then_answer(env):
-    chat = app_mod.make_chat(make_app(env, resident=1))
+def test_switch_shows_loading_then_answer(env, model_server):
+    model_server.loaded = {'lawbot-fast-v1'}  # 서버에 Pro가 올라 있지 않음 (첫 요청 때 서버가 불러옴)
+    chat = app_mod.make_chat(make_app(env))
     steps = list(chat('질문', [], 'pro', 'concise'))[1:]  # 첫 단계는 처리 중 문구 (test_status_steps)
     assert steps[0][0] == '⏳ Lawbot Pro 불러오는 중…' and '모델 전환 대기' in steps[0][2]
     assert steps[0][1] == app_mod.fmt_sources(HITS[:3]) != ''  # 조문 카드는 로딩 중에도 먼저 보임
-    assert '모델 전환' in steps[-1][2]
-    assert '모델 전환' not in list(chat('질문', [], 'pro', 'concise'))[-1][2]  # 이미 올라 있으면 전환 없음
+    assert steps[-1][0].startswith('qwen3-14b-4bit')  # 그다음 답 (로딩 시간은 서버의 첫 토큰 시간에 포함)
+    model_server.loaded = None
+    assert '불러오는 중' not in list(chat('질문', [], 'pro', 'concise'))[1][0]  # 이미 올라 있으면 바로 답
 
 
 def test_invalid_inputs(env):
@@ -204,30 +207,6 @@ def test_empty_and_truncated_answer(env):
     assert list(chat('질문', [], 'fast', 'concise'))[-1][0] == app_mod.EMPTY
     Odd.text, Odd.finish = '【결론】길게', 'length'
     assert '⚠ 최대 길이에서 잘림' in list(chat('질문', [], 'fast', 'full'))[-1][2]
-
-
-def test_early_stop_cuts_generation(env):
-    seen = []
-
-    class Long(FakeLLM):
-        def stream(self, question, hits):
-            for c in (
-                '【결론】',
-                '예고해야 합니다.',
-                '\n【근거 조문】\n제26조(해고의 예고)\n',
-                '【설명】',
-                '- 긴 설명',
-                '【참고】',
-            ):
-                seen.append(c)
-                yield types.SimpleNamespace(text=c)
-
-    chat = app_mod.make_chat(make_app(env, llm=Long, early_stop=True))
-    text, _, stats = list(chat('질문', [], 'fast', 'concise'))[-1]
-    assert text == '예고해야 합니다.\n\n근거: 근로기준법 제26조(해고의 예고)'
-    assert '간결형 조기 종료' in stats and seen[-1] == '【설명】'
-    seen.clear()  # 전체 형식은 조기 종료하지 않음
-    assert list(chat('질문', [], 'fast', 'full'))[-1][0].endswith('【참고】') and seen[-1] == '【참고】'
 
 
 # ---- 간결형 ----
@@ -285,13 +264,16 @@ def test_cited_hits_v4_law_names():
 
 # ---- v4 검색 문서 형식 ----
 class FakeEncoder:
-    def __init__(self, path, device=None, model_kwargs=None):
-        pass
+    """api_client.Embedder 대역: 문서는 단위 벡터, 질문은 모두 1"""
 
-    def encode(self, texts, prompt_name=None, **kw):
+    def encode(self, texts, input_type='document', max_seq_length=None):
         import numpy as np
 
-        return np.eye(len(texts), 8, dtype=np.float32) if prompt_name is None else np.ones((len(texts), 8), np.float32)
+        return (
+            np.eye(len(texts), 8, dtype=np.float32)
+            if input_type == 'document'
+            else np.ones((len(texts), 8), np.float32)
+        )
 
 
 def test_retriever_v4_format(env, tmp_path):
@@ -305,11 +287,9 @@ def test_retriever_v4_format(env, tmp_path):
             'text': ['본문 A', '본문 B', ''],
         }
     ).to_csv(csv, index=False, encoding='utf-8-sig')
-    env.setattr(retriever_mod, 'SentenceTransformer', FakeEncoder)
-    env.setattr(retriever_mod.torch.mps, 'empty_cache', lambda: None)
-    r = retriever_mod.Retriever('models/fake', csv, max_seq_length=2304, doc_style='v4')
+    r = retriever_mod.Retriever(FakeEncoder(), csv, max_seq_length=2304, doc_style='v4')
     assert r.docs == ['근로기준법 제2조(정의)\n본문 A', '최저임금법 제2조(정의)\n본문 B']
-    assert r.m.max_seq_length == 2304 and r.starter == set()
+    assert r.max_seq_length == 2304 and r.starter == set()
     hits = r.search('정의', k=2)
     assert {(h['law'], h['article_id']) for h in hits} == {('근로기준법', '제2조'), ('최저임금법', '제2조')}
     assert app_mod.fmt_sources(hits).count('**최저임금법 제2조 정의**') == 1
@@ -328,9 +308,7 @@ def test_retriever_v4_article_no(env, tmp_path):
             'text': ['본문 A', '본문 B'],
         }
     ).to_csv(csv, index=False, encoding='utf-8-sig')
-    env.setattr(retriever_mod, 'SentenceTransformer', FakeEncoder)
-    env.setattr(retriever_mod.torch.mps, 'empty_cache', lambda: None)
-    r = retriever_mod.Retriever('models/fake', csv, max_seq_length=2304, doc_style='v4')
+    r = retriever_mod.Retriever(FakeEncoder(), csv, max_seq_length=2304, doc_style='v4')
     assert r.docs == ['근로기준법 제26조(해고의 예고)\n본문 A', '최저임금법 제5조(최저임금액)\n본문 B']
     hits = r.search('해고', k=2)
     assert {h['article_id'] for h in hits} == {'제26조', '제5조'}
@@ -340,52 +318,27 @@ def test_retriever_v4_article_no(env, tmp_path):
 
 
 # ---- 배포 검사 ----
-def write_safetensors(path, dtype):
-    header = json.dumps({'w': {'dtype': dtype, 'shape': [1], 'data_offsets': [0, 2]}}).encode()
-    path.write_bytes(struct.pack('<Q', len(header)) + header + b'\0\0')
-
-
-def fake_mlx(folder, bits=4, hidden=2560, adapter=False):
-    folder.mkdir(parents=True)
-    (folder / 'config.json').write_text(
-        json.dumps({'model_type': 'qwen3', 'hidden_size': hidden, 'quantization': {'group_size': 64, 'bits': bits}})
-    )
-    (folder / 'tokenizer.json').write_text('{}')
-    (folder / 'tokenizer_config.json').write_text(json.dumps({'chat_template': '{{ messages }}'}))
-    write_safetensors(folder / 'model.safetensors', 'U32')
-    if adapter:
-        (folder / 'adapters.safetensors').write_bytes(b'')
-
-
-def test_check_deploy_reports_each_asset(env, tmp_path):
-    emb = tmp_path / 'emb'
-    emb.mkdir()
-    write_safetensors(emb / 'model.safetensors', 'F16')
-    (emb / 'config_sentence_transformers.json').write_text(json.dumps({'prompts': {'query': 'Instruct: q\nQuery:'}}))
-    (emb / 'modules.json').write_text('[]')
-    (emb / 'tokenizer.json').write_text('{}')
-    fake_mlx(tmp_path / 'fast')
-    fake_mlx(tmp_path / 'pro', bits=4, hidden=5120, adapter=True)
-    env.setenv('LAWBOT_EMB', str(emb))
-    env.setenv('LAWBOT_FAST_PATH', str(tmp_path / 'fast'))
-    env.setenv('LAWBOT_PRO_PATH', str(tmp_path / 'pro'))
-    out = dict((msg, level) for level, msg in check_deploy.run('v1'))
-    text = '\n'.join(f'{lv} {m}' for m, lv in out.items())
+def test_check_deploy_reports_models_and_server(env, model_server):
+    out = check_deploy.run('v1')
+    text = '\n'.join(f'{lv} {m}' for lv, m in out)
     assert 'OK 비삭제 조문 130개 (기대 130)' in text
-    assert "dtype {'F16': 1}" in text and "query 프롬프트: 'Instruct: q\\nQuery:'" in text
-    assert 'OK Lawbot Fast: qwen3 Qwen3-4B' in text and 'Qwen3-14B' in text
-    assert "FAIL Lawbot Pro: 어댑터 파일 남아 있음 ['adapters.safetensors']" in text
+    assert 'INFO 임베딩 lawbot-emb-v1' in text and 'INFO Lawbot Pro: 모델 qwen3-14b-4bit' in text
+    assert 'OK 생성 API: 모델 서버' in text and 'OK 필요한 모델이 모델 서버에 모두 있음' in text
+    model_server.available = []
+    fails = [m for lv, m in check_deploy.run('v1') if lv == 'FAIL']
+    assert '모델 서버에 embedding 모델 lawbot-emb-v1 없음 (LAWBOT_SERVE_*와 맞추기)' in fails
+    assert any('chat 모델 qwen3-14b-4bit' in m for m in fails)
+    env.delenv('LAWBOT_MODEL_SERVER')
+    assert any(lv == 'FAIL' and '모델 서버 주소 없음' in m for lv, m in check_deploy.run('v1'))
+    assert all('test-only-model-token' not in m for _, m in out)  # 토큰 값은 출력하지 않음
 
 
 def test_check_deploy_v4_placeholders_fail(env, tmp_path):
     env.setenv('LAWBOT_V4_ARTICLES', str(tmp_path / '없음.csv'))
     env.setenv('LAWBOT_V4_SYSTEM', str(tmp_path / '없음.txt'))
-    env.setenv('LAWBOT_V4_EMB', str(tmp_path / '없음'))
-    env.setenv('LAWBOT_FAST_PATH', str(tmp_path / '없음4b'))
-    env.setenv('LAWBOT_PRO_PATH', str(tmp_path / '없음14b'))
     env.setenv('LAWBOT_PRO_SYSTEM', str(tmp_path / '없음_concise.txt'))
     fails = [m for level, m in check_deploy.run('v4') if level == 'FAIL']
-    assert len(fails) == 6 and all('없' in m for m in fails)
+    assert len(fails) == 3 and all('없' in m for m in fails)  # 조문 CSV·기본 system·Pro system
 
 
 def test_check_deploy_article_number_format(env, tmp_path):
@@ -409,14 +362,6 @@ def test_check_deploy_article_number_format(env, tmp_path):
     assert not any('형식이 아님' in m for lv, m in out)
 
 
-def test_eval_concise_refuses_test_set(env):
-    import lawbot.eval_concise as ec
-
-    env.setattr('sys.argv', ['eval_concise', '--val', str(paths.EVAL), '--tag', 'x'])
-    with pytest.raises(SystemExit, match='평가 전용'):
-        ec.main()
-
-
 # ---- 실행 설정 파일 (.env) ----
 from lawbot import envfile
 
@@ -430,30 +375,54 @@ def test_env_example_is_complete_without_secrets(env):
         env.setenv(k, v)
     p = deploy.get_profile()
     assert p.name == 'v4' and [m.key for m in p.models] == ['pro']
-    assert p.models[0].path == paths.V4_PRO and p.models[0].system_file == paths.V4_SYSTEM_CONCISE
-    assert p.emb == paths.V4_EMB and values['LAWBOT_V4_ARTICLES'] == 'data/v4/articles_v4.csv'
+    assert p.models[0].model == 'qwen3.8-27b-4bit' and p.models[0].system_file == paths.V4_SYSTEM_CONCISE
+    assert p.emb_model == 'lawbot-emb-v4' and values['LAWBOT_V4_ARTICLES'] == 'data/v4/articles_v4.csv'
     assert p.articles == paths.V4_DECREE_ARTICLES  # 맥미니 32GB: 시행령·시행규칙 첨부 켜짐 (812조문)
-    assert deploy.reranker(p) == deploy.RerankerConfig(paths.V4_RERANKER, 10)
+    assert deploy.reranker(p) == deploy.RerankerConfig('qwen3-reranker-4b', 10)
     assert deploy.decree(p) == deploy.DecreeConfig(0.9, 2, ('pro',))
     assert paths.V4_SYSTEM_CONCISE.is_file()  # Pro 간결형 system은 저장소에 있음
+    from lawbot_model_server.config import parse_models
+
+    served = {
+        e.id: e.kind
+        for kind, key in (('chat', 'CHAT'), ('embedding', 'EMBEDDING'), ('rerank', 'RERANK'))
+        for e in parse_models(kind, values[f'LAWBOT_SERVE_{key}'])
+    }
+    needed = {p.emb_model: 'embedding', deploy.reranker(p).model: 'rerank'} | {m.model: 'chat' for m in p.models}
+    assert needed.items() <= served.items()  # 웹앱이 고르는 모델 id를 모델 서버가 제공
+    assert values['LAWBOT_MODEL_TOKEN'] == '' and values['LAWBOT_MODEL_SERVER_PORT'] == ''  # 비밀·포트는 비워 둠
+    assert not [v for v in values.values() if v.isdigit() and len(v) >= 4]  # 포트 번호를 적지 않음
+
+
+def test_env_dev_example_is_valid(env):
+    """개발 웹앱 .env 예시: 모델 서버 설정 없이 웹앱 설정만, 검색·하위법령 설정이 유효"""
+    values = envfile.parse((paths.ROOT / '.env.dev.example').read_text(encoding='utf-8'))
+    assert not any(k.startswith('LAWBOT_SERVE_') or k == 'LAWBOT_MODEL_SERVER_PORT' for k in values)
+    assert values['LAWBOT_USER'] == values['LAWBOT_PW'] == values['LAWBOT_MODEL_TOKEN'] == ''
+    for k, v in values.items():
+        env.setenv(k, v)
+    p = deploy.get_profile()
+    assert deploy.reranker(p) == deploy.RerankerConfig('qwen3-reranker-4b', 10)
+    assert deploy.decree(p) == deploy.DecreeConfig(0.9, 2, ('pro',))
+    assert [m.model for m in p.models] == ['qwen3.8-27b-4bit'] and p.emb_model == 'lawbot-emb-v4'
 
 
 def test_env_file_loading(env, tmp_path, capsys):
     f = tmp_path / 'lawbot.env'
     f.write_text(
         '# 주석\nexport LAWBOT_PROFILE=v4\nLAWBOT_USER = \'me\'\nLAWBOT_PW="p w#1"\n'
-        'LAWBOT_MODELS=pro  # 끝 주석\nLAWBOT_EARLY_STOP=1\n',
+        'LAWBOT_MODELS=pro  # 끝 주석\nLAWBOT_INSTANCE=파일\n',
         encoding='utf-8',
     )
     f.chmod(0o600)
     env.setenv('LAWBOT_ENV_FILE', str(f))
     env.delenv('LAWBOT_PROFILE')  # conftest의 v1을 지워 파일 값이 들어가게
-    env.setenv('LAWBOT_EARLY_STOP', '0')  # 셸 값이 우선
+    env.setenv('LAWBOT_INSTANCE', '셸')  # 셸 값이 우선
     assert envfile.load() == f
     import os
 
     assert (os.environ['LAWBOT_PROFILE'], os.environ['LAWBOT_USER'], os.environ['LAWBOT_PW']) == ('v4', 'me', 'p w#1')
-    assert os.environ['LAWBOT_MODELS'] == 'pro' and os.environ['LAWBOT_EARLY_STOP'] == '0'
+    assert os.environ['LAWBOT_MODELS'] == 'pro' and os.environ['LAWBOT_INSTANCE'] == '셸'
     out = capsys.readouterr().out
     assert 'p w#1' not in out and '경고' not in out  # 값은 출력하지 않음
     f.chmod(0o644)
@@ -489,8 +458,8 @@ def test_models_selection(env):
 
 def test_pro_only_app(env):
     env.setenv('LAWBOT_MODELS', 'pro')
-    a = make_app(env, resident=1)
-    assert list(a.models.specs) == ['pro'] and list(a.models.loaded) == ['pro']  # Fast는 올리지 않음
+    a = make_app(env)
+    assert list(a.models.specs) == ['pro']  # Fast는 쓰지 않음 (모델 서버에 없어도 됨)
     assert [m.key for m in a.profile.disabled] == ['fast']
     demo = app_mod.build_demo(a)
     radios = {c.label: c for c in demo.blocks.values() if isinstance(c, app_mod.gr.Radio)}
@@ -509,25 +478,25 @@ def test_pro_only_app(env):
 
 def test_full_format_uses_four_part_system(env):
     # 간결형이 기본인 Pro에서 '전체'를 고르면 4항목 system으로 생성 (간결형 출력이 그대로 나오지 않게)
-    a = make_app(env, resident=2)
+    a = make_app(env)
     chat = app_mod.make_chat(a)
     list(chat('질문', [], 'pro', 'full'))
-    assert a.models.loaded['pro'].system == a.full_system
+    assert a.models.llms['pro'].system == a.full_system
     from lawbot.llm import SYSTEM
 
     assert a.full_system == SYSTEM  # v1 프로필: llm.SYSTEM (4섹션)
     list(chat('질문', [], 'pro', 'concise'))
-    assert a.models.loaded['pro'].system is None  # 간결형: Pro 기본(간결형) system
+    assert a.models.llms['pro'].system is None  # 간결형: Pro 기본(간결형) system
     for f in ('full', 'concise'):  # Fast(4항목 학습)는 system을 바꾸지 않음
         list(chat('질문', [], 'fast', f))
-        assert a.models.loaded['fast'].system is None
+        assert a.models.llms['fast'].system is None
     list(service.ask(a, '질문', 'pro'))  # fmt 없이 (평가·벤치): 모델 기본
-    assert a.models.loaded['pro'].system is None
+    assert a.models.llms['pro'].system is None
 
 
 def test_full_system_v4_profile(env):
     env.setenv('LAWBOT_PROFILE', 'v4')
-    a = make_app(env, resident=1)
+    a = make_app(env)
     assert a.full_system == paths.V4_SYSTEM.read_text(encoding='utf-8').strip()
     assert '【설명】' in a.full_system and '【설명】' not in paths.V4_SYSTEM_CONCISE.read_text(encoding='utf-8')
 
@@ -640,28 +609,6 @@ def test_data_notice(env):
     assert app_mod.data_notice(a) == '법령 기준일 2026-10-01 (데이터 v1)'
     demo = app_mod.build_demo(a)
     assert any('법령 기준일 2026-10-01' in str(getattr(b, 'value', '')) for b in demo.blocks.values())
-
-    class Client:
-        def __init__(self, dataset):
-            self.dataset = dataset
-
-        def get_json(self, path):
-            return {'dataset': self.dataset}
-
-    a.retriever.client = Client(
-        {
-            'dataset_version': 'v0',
-            'reference_date': '2026-10-01',
-            'articles_sha256': service.manifest.load(a.profile.articles)['articles_sha256'],
-        }
-    )
-    assert app_mod.data_notice(a) == (
-        '법령 기준일 2026-10-01 (데이터 v1) · ⚠ 모델 서버의 법령 데이터가 이 웹앱과 다릅니다 '
-        '(dataset_version: 서버 v0 / 웹앱 v1)'
-    )
-    a.retriever.client = Client(None)  # 이전 서버: 경고 없음
-    assert app_mod.data_notice(a) == '법령 기준일 2026-10-01 (데이터 v1)'
-    del a.retriever.client
 
 
 def test_chat_api_unchanged(env):
