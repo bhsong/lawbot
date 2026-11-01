@@ -1,7 +1,7 @@
 # 기록: 법령 변경 요약(2단계) 실제 모델 확인
 
 - 날짜: 2026-11-01 (22:52~23:20)
-- 코드: `feat/monitor-summary` (PR #41). 계획: [docs/plans/monitor-summary.md](../plans/monitor-summary.md) 7절
+- 코드: `feat/monitor-summary` (PR #41). 계획: [docs/archives/monitor-summary.md](../archives/monitor-summary.md) 7절
 - 모델: 운영 모델 서버의 `qwen3.8-27b-4bit` (이미 상주, 동시 생성 1). temperature 0, thinking 끔
 - 입력: PR 2 확인 때 만든 replay 이벤트 70건 (`4220f9dc..51fea869`: 법령 19 + 별표서식 51). 임시 `LAW_MONITOR_HOME`, `--events-dir`라 상태 DB는 바뀌지 않음
 
