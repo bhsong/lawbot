@@ -54,7 +54,6 @@ def env(request, monkeypatch):
     monkeypatch.setenv(
         'LAWBOT_REQUEST_LOG', ''
     )  # 레포의 logs/requests.jsonl에 쓰지 않음 (요청 로그 테스트는 직접 지정)
-    monkeypatch.setenv('LAWBOT_PROFILE', 'v1')  # 가짜 모델·조문(fakes.py)은 v1 형식. v4·기본값 테스트는 직접 바꿈
     if request.node.get_closest_marker('models') is None:
         local_ok = request.node.get_closest_marker('integration') is not None
         connect, create_connection = socket.socket.connect, socket.create_connection

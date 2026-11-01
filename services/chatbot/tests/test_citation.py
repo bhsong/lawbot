@@ -60,14 +60,13 @@ def test_citations_reads_cite_section():
 def test_eval_v4_uses_citation_module():
     assert ev.citations is ci.citations and ev.refused is ci.refused and ev.LAW_ALIASES is ci.LAW_ALIASES
     assert ev.key(hit('최저임금법', '제6조')) == '최저임금법 제6조'
-    assert ci.hit_key({'article_id': '제26조', 'title': 't'}) == '근로기준법 제26조'  # v1 검색 결과 (law 없음)
 
 
 # ---- 거절 ----
 @pytest.mark.parametrize(
     'answer,expected',
     [
-        ('【결론】\n제공된 조문만으로는 확인할 수 없습니다.', True),  # v1 학습 문구
+        ('【결론】\n제공된 조문만으로는 확인할 수 없습니다.', True),  # 4B 학습 문구
         ('【결론】\n노동법 내용이라 날씨에 대한 근거를 찾을 수 없습니다.\n【근거 조문】\n근거 조문 없음', True),  # 27B
         ('【결론】\n해당 질문에 대해 답변할 수 없습니다.', True),
         (
@@ -122,14 +121,6 @@ def test_check_ambiguous_in_hits():
     hits = [hit('근로기준법', '제2조', '정의'), hit('최저임금법', '제2조', '정의')]
     assert verdicts('제2조(정의)', hits) == [(None, '제2조', 'ambiguous')]
     assert verdicts('최저임금법 제2조(정의)', hits) == [('최저임금법', '제2조', 'ok')]
-
-
-def test_article_keys_v1():
-    r = types.SimpleNamespace(ids=['제26조', '제27조'], laws=None)  # v1 검색기: laws 없음 (근로기준법)
-    assert ci.article_keys(r) == {('근로기준법', '제26조'), ('근로기준법', '제27조')}
-    assert verdicts('근로기준법 제26조', [{'article_id': '제26조', 'title': 't'}], ci.article_keys(r)) == [
-        ('근로기준법', '제26조', 'ok')
-    ]
 
 
 # ---- 화면 간결형 (answer_format) ----

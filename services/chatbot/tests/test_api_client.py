@@ -188,7 +188,7 @@ def test_external_llm_skips_server_chat_models(env, model_server):
     env.setenv('LAWBOT_LLM_ALLOW_EXTERNAL', '1')
     env.setenv('LAWBOT_LLM_API_KEY', 'sk-test-only')
     env.setenv('LAWBOT_PRO_MODEL', 'gpt-cloud')
-    model_server.available = [{'id': 'lawbot-emb-v1', 'type': 'embedding'}]  # 서버에는 임베딩만
+    model_server.available = [{'id': 'lawbot-emb-v4', 'type': 'embedding'}]  # 서버에는 임베딩만
     a = service.load_app()
     assert a.llm_mode == 'external' and a.models.is_loaded('pro')  # 외부 API는 '불러오는 중' 단계 없음
     llm = a.models.get('pro')[0]
@@ -276,12 +276,12 @@ class Rr:
 
 @pytest.fixture
 def real_server(env):
-    """lawbot_model_server.api 앱 (v1 프로필이 쓰는 모델 id, 가짜 모델) + 챗봇이 이 앱으로 접속하게"""
+    """lawbot_model_server.api 앱 (v4 프로필이 쓰는 모델 id, 가짜 모델) + 챗봇이 이 앱으로 접속하게"""
     entries = [
-        ModelEntry('lawbot-emb-v1', 'embedding', None),
+        ModelEntry('lawbot-emb-v4', 'embedding', None),
         ModelEntry('qwen3-reranker-4b', 'rerank', None),
-        ModelEntry('lawbot-fast-v1', 'chat', None),
-        ModelEntry('qwen3-14b-4bit', 'chat', None),
+        ModelEntry('lawbot-fast-v4', 'chat', None),
+        ModelEntry('qwen3.8-27b-4bit', 'chat', None),
     ]
     reg = Registry(entries, {'chat': Chat, 'embedding': Emb, 'rerank': Rr}, max_resident=1)
     reg.load_fixed()
@@ -295,10 +295,10 @@ def real_server(env):
 
 def test_end_to_end_through_real_server_app(env, real_server, tmp_path):
     env.setenv('LAWBOT_REQUEST_LOG', str(tmp_path / 'requests.jsonl'))
-    a = service.load_app()  # v1: 130조문 인덱스를 서버 임베딩으로
-    emb = real_server.fixed['lawbot-emb-v1']
-    assert emb.calls == [(130, 'document', 512)]
-    assert len(a.retriever.ids) == 130 and a.retriever.D.shape == (130, 64)
+    a = service.load_app()  # 415조문 인덱스를 서버 임베딩으로
+    emb = real_server.fixed['lawbot-emb-v4']
+    assert emb.calls == [(415, 'document', 2304)]
+    assert len(a.retriever.ids) == 415 and a.retriever.D.shape == (415, 64)
     assert not a.models.is_loaded('fast')  # 서버에 아직 올라 있지 않음
     steps = list(service.ask(a, '수습 기간에도 해고 예고를 해야 하나요?', 'fast'))
     assert steps[0][0] == 'load' and steps[-1][0] == 'done'
@@ -311,8 +311,8 @@ def test_end_to_end_through_real_server_app(env, real_server, tmp_path):
         3.25,
         'stop',
     )
-    assert emb.calls[-1] == (1, 'query', 512)
-    messages, kw = real_server.chat['lawbot-fast-v1'].calls[0]
+    assert emb.calls[-1] == (1, 'query', 2304)
+    messages, kw = real_server.chat['lawbot-fast-v4'].calls[0]
     assert messages[1]['content'].startswith('[참고 조문]\n[1] ') and messages[1]['content'].endswith(
         '[질문]\n수습 기간에도 해고 예고를 해야 하나요?'
     )

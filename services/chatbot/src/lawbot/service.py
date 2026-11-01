@@ -17,7 +17,7 @@ from openai import OpenAI
 from lawbot import decree as decree_filter
 from lawbot import deploy, manifest, security
 from lawbot.api_client import Embedder, ModelLoadError, ModelServerClient, ModelServerError, wait_ready
-from lawbot.llm import LLM, SYSTEM
+from lawbot.llm import LLM
 from lawbot.paths import ROOT
 from lawbot.reranker import Reranker
 from lawbot.retriever import Retriever
@@ -57,7 +57,7 @@ class LawbotApp:
     retriever: object
     models: ChatModels
     reranker: object = None  # None: 임베딩 상위 TOP_K개 그대로 (LAWBOT_RERANKER_ENABLED=0, 기본)
-    full_system: str = None  # '전체(4항목)' system: 프로필 system 파일, 없으면 llm.SYSTEM (v1)
+    full_system: str = None  # '전체(4항목)' system: 프로필 system 파일
     decree: object = None  # deploy.DecreeConfig: 시행령·시행규칙 첨부 (None: 법률 3개만, LAWBOT_DECREE_ENABLED=0 기본)
     llm_mode: str = 'api'  # 생성 위치: 'api'(모델 서버) / 'external'(LAWBOT_LLM_BASE_URL의 외부 API)
 
@@ -69,20 +69,18 @@ def uses_decrees(app, model_key):
 
 
 def system_text(profile, spec):
-    """모델별 system 파일 → 프로필 system 파일 → None(llm.SYSTEM, v1 4섹션) 순서"""
-    f = spec.system_file or profile.system_file
-    return f.read_text(encoding='utf-8').strip() if f else None
+    """모델별 system 파일 → 프로필 system 파일 순서"""
+    return (spec.system_file or profile.system_file).read_text(encoding='utf-8').strip()
 
 
 def check_profile_files(p):
     """프로필의 조문 CSV·기본 system 파일이 있는지 모델 서버에 접속하기 전에 확인
     조문 CSV가 매니페스트(조문 수·sha256)와 다르면 거부, 매니페스트가 없으면 경고만 (manifest.check)"""
-    missing = [str(f) for f in (p.articles, p.system_file) if f is not None and not f.is_file()]
+    missing = [str(f) for f in (p.articles, p.system_file) if not f.is_file()]
     if missing:
         raise RuntimeError(
             f'프로필 {p.name}에 필요한 파일이 없습니다: {", ".join(missing)}. '
-            'uv run python -m lawbot.check_deploy로 확인하거나, '
-            'v4 자산 준비 전에는 LAWBOT_PROFILE=v1로 실행하세요.'
+            'uv run python -m lawbot.check_deploy로 확인하세요.'
         )
     manifest.check(p.articles)
 
@@ -136,7 +134,6 @@ def load_app(profile=None):
         Embedder(client, p.emb_model),
         p.articles,
         max_seq_length=p.max_seq,
-        doc_style=p.doc_style,
         **({'decree_max_seq': dc.max_seq} if dc else {}),
     )
     print(
@@ -148,8 +145,7 @@ def load_app(profile=None):
     oa = OpenAI(base_url=llm_url, api_key=llm_key, max_retries=0, http_client=httpx.Client(trust_env=external))
 
     def factory(spec):  # system 파일이 없으면 FileNotFoundError (화면에서 오류 안내)
-        system = system_text(p, spec)
-        return LLM(spec.model, client=oa, prompt_style=p.doc_style, **({'system': system} if system else {}))
+        return LLM(spec.model, client=oa, system=system_text(p, spec))
 
     def loaded():
         return {m['id'] for m in client.models() if m.get('loaded')}
@@ -161,7 +157,7 @@ def load_app(profile=None):
         f'({", ".join(s.model for s in p.models)})',
         flush=True,
     )
-    full = p.system_file.read_text(encoding='utf-8').strip() if p.system_file else SYSTEM
+    full = p.system_file.read_text(encoding='utf-8').strip()
     return LawbotApp(p, retriever, models, reranker, full, dc, 'external' if external else 'api')
 
 

@@ -4,15 +4,11 @@ import numpy as np
 import pandas as pd
 
 from lawbot.decree import LAW_KIND
-from lawbot.paths import ARTICLES
 
-# 검색 문서 문자열: 임베딩 학습 때와 글자 단위로 같아야 한다
-DOC_STYLES = {
-    'v1': lambda law: law['article_id'] + ' ' + law['title'] + '\n' + law['text'],  # 제26조 해고의 예고\n본문
-    'v4': lambda law: (
-        law['law'] + ' ' + law['article_id'] + '(' + law['title'] + ')\n' + law['text']
-    ),  # 근로기준법 제26조(해고의 예고)\n본문
-}
+
+def doc_text(law):
+    """검색 문서 문자열 '근로기준법 제26조(해고의 예고)\\n본문' (조문 DataFrame → Series). 임베딩 학습 때와 글자 단위로 같아야 한다"""
+    return law['law'] + ' ' + law['article_id'] + '(' + law['title'] + ')\n' + law['text']
 
 
 class Retriever:
@@ -24,10 +20,10 @@ class Retriever:
     decree_max_seq: 하위법령 인코딩 최대 토큰 (deploy.DECREE_MAX_SEQ). None이면 하위법령 행을 읽지 않음
     encoder: encode(texts, input_type, max_seq_length) → float32 배열 (api_client.Embedder, 테스트는 가짜)"""
 
-    def __init__(self, encoder, law_csv=ARTICLES, max_seq_length=512, doc_style='v1', decree_max_seq=None):
+    def __init__(self, encoder, law_csv, max_seq_length, decree_max_seq=None):
         law = pd.read_csv(law_csv, encoding='utf-8-sig')
-        law = law[law['deleted'] == 0].reset_index(drop=True)  # v1 130개, v4 415개 조문 (+ 하위법령 397개)
-        if 'article_no' in law:  # v4 CSV는 article_id에 법령명이 들어 있음('근로기준법 제26조') → 번호만 쓴다
+        law = law[law['deleted'] == 0].reset_index(drop=True)  # 415개 조문 (+ 하위법령 397개)
+        if 'article_no' in law:  # article_id에 법령명이 들어 있으면('근로기준법 제26조') 번호만 쓴다
             law['article_id'] = law['article_no']
         kind = law['kind'] if 'kind' in law else pd.Series(LAW_KIND, index=law.index)
         dec = law[kind != LAW_KIND].reset_index(drop=True) if decree_max_seq else law.iloc[:0]
@@ -38,13 +34,13 @@ class Retriever:
         self.n_law = len(law)
         self.ids = both['article_id'].to_numpy()
         self.titles = both['title'].to_numpy()
-        self.laws = both['law'].to_numpy() if doc_style == 'v4' else None  # v4: 법령마다 조문 번호가 겹침
+        self.laws = both['law'].to_numpy()  # 법령마다 조문 번호가 겹침
         self.kinds = (both['kind'] if 'kind' in both else pd.Series(LAW_KIND, index=both.index)).to_numpy()
         self.parent_laws = (
             both['parent_law'] if 'parent_law' in both else both.get('law', pd.Series(None, index=both.index))
         ).to_numpy()
-        law_docs = DOC_STYLES[doc_style](law).tolist()
-        dec_docs = DOC_STYLES[doc_style](dec).tolist() if len(dec) else []
+        law_docs = doc_text(law).tolist()
+        dec_docs = doc_text(dec).tolist() if len(dec) else []
         self.docs = law_docs + dec_docs
         self.starter = set(law.loc[law['starter'] == 1, 'article_id']) if 'starter' in law else set()
         self.encoder, self.max_seq_length = encoder, max_seq_length
@@ -63,7 +59,7 @@ class Retriever:
 
     def _hit(self, i, score):
         h = {'article_id': self.ids[i], 'title': self.titles[i], 'doc': self.docs[i], 'score': score}
-        return h if self.laws is None else h | {'law': self.laws[i]}
+        return h | {'law': self.laws[i]}
 
     def search(self, query, k=3):
         """법률 조문 상위 k개 (하위법령을 켜도 같음)"""

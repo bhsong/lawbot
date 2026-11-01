@@ -42,29 +42,13 @@ uv run lawbot-eval-v4 answers --split val --concurrency 4 --tag <tag>  # 문항�
 
 ## 완료된 실험
 
-완료된 실험 스크립트(v1 평가, 리랭커·하위법령 검증, 벤치마크)는 2026-11-01에 정리했습니다. 결과는 `docs/evals/`와 `results/`에, 코드는 Git 기록에 남아 있습니다. 시행령·시행규칙 첨부 실험의 입력(`data/decree_exp/`, `data/v4/decree_ctx_*.csv`)은 테스트가 운영 필터와 대조하는 데 계속 씁니다. v1 범위 밖·거절 기준선(`oos_v1_4bit.csv`, `refusal_v1_4bit.csv`)도 README 수치와 테스트의 기준선으로 남깁니다.
+완료된 실험 스크립트(v1 평가, 리랭커·하위법령 검증, 벤치마크)는 2026-11-01에, v1 웹앱 구성은 2026-11-02에 정리했습니다. 결과는 `docs/evals/`와 `results/`에, 코드는 Git 기록에 남아 있습니다. 시행령·시행규칙 첨부 실험의 입력(`data/decree_exp/`, `data/v4/decree_ctx_*.csv`)은 테스트가 운영 필터와 대조하는 데 계속 씁니다. v1 범위 밖·거절 기준선(`oos_v1_4bit.csv`, `refusal_v1_4bit.csv`)도 v1 기록 수치와 테스트의 기준선으로 남깁니다.
 
-## 개선 전후 비교
+## v1 통합 지표 (기록)
 
-`lawbot.report`가 `results/`의 평가 결과를 한 행으로 모아 `results/metrics.csv`에 추가합니다. 모델 없이 바로 끝납니다. 검색 Recall@3, 답변 종합 점수, 거짓 거절률, 범위 안 대조군 거짓 거절률, 무관한·비슷한 조문 거절률, 범위 밖 거절률·억지 적용률을 함께 기록합니다. 범위 밖 지표는 기준선과 비교할 수 있도록 기존 82문항으로 재고, 추가 20문항은 따로 잽니다.
+v1 평가 결과는 `results/metrics.csv`에 한 행씩 모았습니다(`v1_4bit` 기준선, `v1_4bit_hybrid` 실패한 하이브리드 검색 실험). 이 파일을 만든 `lawbot.report`와 v1 실행 코드는 2026-11-02에 삭제했고 Git 기록에 있습니다. 경고 기준(Recall@3 0.005, 종합 점수·인용 정확도 0.02, 거짓 거절률 0.01)은 `eval_v4 compare`가 그대로 씁니다.
 
-`--baseline`을 주면 기준 실행과 나란히 보여 주고, 다음처럼 정상 질문에 대한 성능이 떨어지면 부작용 경고를 냅니다. 거절률만 올리고 정상 질문에 답하지 못하게 되는 개선을 걸러 내기 위해서입니다.
-
-| 지표 | 경고 기준 (기준 실행 대비) |
-| --- | --- |
-| 검색 Recall@3 | 0.005 넘게 하락 |
-| 답변 종합 점수 (전체 / 검색 적중) | 0.02 넘게 하락 |
-| 조문 인용 정확도 (일반 / 엄격) | 0.02 넘게 하락 |
-| 거짓 거절률 (검색 적중 문항) | 0.01 넘게 상승 |
-| 범위 안 대조군 거짓 거절률 / 종합 점수 | 0.05(20문항 중 1개) 넘게 나빠짐 |
-
-```bash
-uv run python -m lawbot.report --tag v1_4bit_full --retrieval retrieval_emb_final_v3_fp16.csv \
-  --scored scored_sllm_mlx_4bit.csv --controls scored_controls_v1_4bit.csv --oos oos_v1_4bit_102.csv \
-  --refusal refusal_v1_4bit.csv --hard refusal_hard_v1_4bit.csv --baseline v1_4bit
-```
-
-`metrics.csv`에는 기존 결과로 만든 `v1_4bit`(기준선)과 `v1_4bit_hybrid`(실패한 하이브리드 검색 실험) 두 행이 들어 있습니다. 하이브리드 검색은 범위 밖 거절률이 0.671 → 0.683으로 올랐지만 억지 적용률도 0.256 → 0.268로 올라, 거절률만으로는 개선이라고 볼 수 없었습니다.
+하이브리드 검색은 범위 밖 거절률이 0.671 → 0.683으로 올랐지만 억지 적용률도 0.256 → 0.268로 올라, 거절률만으로는 개선이라고 볼 수 없었습니다.
 
 ## 데이터와 평가 방법
 

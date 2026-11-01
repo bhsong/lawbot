@@ -14,7 +14,7 @@ import lawbot.eval_v4 as ev
 import lawbot.retriever as retriever_mod
 import lawbot.service as service
 from lawbot import answer_format, citation, decree, deploy, manifest
-from lawbot.llm import build_prompt_v4
+from lawbot.llm import build_prompt
 from lawbot.paths import DATA, V4_ARTICLES, V4_DECREE_ARTICLES
 
 E = dict(encoding='utf-8-sig')
@@ -142,11 +142,9 @@ def enc(env):
 
 
 def test_retriever_law_encoding_unchanged(enc):
-    off = retriever_mod.Retriever(enc, law_csv=V4_ARTICLES, max_seq_length=2304, doc_style='v4')
+    off = retriever_mod.Retriever(enc, law_csv=V4_ARTICLES, max_seq_length=2304)
     off_calls, Encoder.calls = Encoder.calls, []
-    on = retriever_mod.Retriever(
-        enc, law_csv=V4_DECREE_ARTICLES, max_seq_length=2304, doc_style='v4', decree_max_seq=3072
-    )
+    on = retriever_mod.Retriever(enc, law_csv=V4_DECREE_ARTICLES, max_seq_length=2304, decree_max_seq=3072)
     assert len(off_calls) == 1 and len(Encoder.calls) == 2
     assert Encoder.calls[0] == off_calls[0] and off_calls[0][1] == 2304  # 같은 문서 목록·같은 max_seq
     assert len(Encoder.calls[1][0]) == 397 and Encoder.calls[1][1] == 3072
@@ -163,15 +161,13 @@ def test_retriever_law_encoding_unchanged(enc):
     assert (on.rank_all([q]) < 415).all()
     with pytest.raises(ValueError, match='하위법령 검색 인덱스'):
         off.search_decrees(q)
-    law_only = retriever_mod.Retriever(enc, law_csv=V4_DECREE_ARTICLES, max_seq_length=2304, doc_style='v4')
+    law_only = retriever_mod.Retriever(enc, law_csv=V4_DECREE_ARTICLES, max_seq_length=2304)
     assert len(law_only.ids) == 415 and np.array_equal(law_only.D, off.D)  # 하위법령을 끄면 812 CSV도 법률만
 
 
 def test_prompt_format_matches_experiment(enc):
     """웹앱 hit(법률 3 + 하위법령 2)의 프롬프트가 실험(eval_decree)의 조문 표로 만든 프롬프트와 글자 단위로 같다"""
-    R = retriever_mod.Retriever(
-        enc, law_csv=V4_DECREE_ARTICLES, max_seq_length=2304, doc_style='v4', decree_max_seq=3072
-    )
+    R = retriever_mod.Retriever(enc, law_csv=V4_DECREE_ARTICLES, max_seq_length=2304, decree_max_seq=3072)
     keys = [f'{l} {a}' for l, a in zip(R.laws, R.ids)]
     table = article_table()
     row = pd.read_csv(DATA / 'v4' / 'decree_ctx_dq_val200.csv', dtype=str, **E).iloc[0]
@@ -181,9 +177,9 @@ def test_prompt_format_matches_experiment(enc):
         i = keys.index(k)
         h = R._hit(i, 0.5) | {'rerank_score': 0.9, 'emb_rank': 1}
         hits.append(h | {'kind': R.kinds[i], 'parent_law': R.parent_laws[i]} if i >= R.n_law else h)
-    assert build_prompt_v4(hits, row.question) == build_prompt_v4([table[k] for k in ctx], row.question)
-    assert f'\n\n[4] {ctx[3]}(' in build_prompt_v4(hits, row.question)
-    assert build_prompt_v4(hits[:3], 'q') == build_prompt_v4([table[k] for k in ctx[:3]], 'q')
+    assert build_prompt(hits, row.question) == build_prompt([table[k] for k in ctx], row.question)
+    assert f'\n\n[4] {ctx[3]}(' in build_prompt(hits, row.question)
+    assert build_prompt(hits[:3], 'q') == build_prompt([table[k] for k in ctx[:3]], 'q')
 
 
 # ---- 4. 서비스: 꺼짐·Fast는 지금과 같음, Pro만 첨부 ----
@@ -279,7 +275,7 @@ DC = deploy.DecreeConfig(0.9, 2, ('pro',))
 
 
 def make(dc=DC, ret=None):
-    p = deploy.get_profile('v4')
+    p = deploy.get_profile()
     models = service.ChatModels(p.models, Bot)
     return service.LawbotApp(p, ret or DecRet(decree=dc is not None), models, RR(), 'FULL', dc)
 
@@ -338,7 +334,7 @@ def test_attached_order_and_prompt(rr):
     assert dec == want and len(dec) == 2
     assert [h['parent_law'] == top1 or h['rerank_score'] >= 0.9 for h in dec] == [True, True]
     assert on.models.llms['pro'].calls[-1] == hits  # LLM에 넘긴 참고 조문 = 화면 hits
-    prompt = build_prompt_v4(hits, q)
+    prompt = build_prompt(hits, q)
     assert prompt.index('[3] ') < prompt.index('[4] ' + dec[0]['law']) < prompt.index('[5] ' + dec[1]['law'])
 
 
@@ -351,7 +347,7 @@ def test_no_decree_passes_prompt_unchanged(rr):
     _, h_on, _, st = ask(on, q, 'pro')
     _, h_off, _, _ = ask(off, q, 'pro')
     assert st['n_decree'] == 0 and len(st['decree_candidates']) == 4 and h_on == h_off
-    assert build_prompt_v4(h_on, q) == build_prompt_v4(h_off, q)
+    assert build_prompt(h_on, q) == build_prompt(h_off, q)
     assert on.models.llms['pro'].calls[-1] == off.models.llms['pro'].calls[-1]
 
 
@@ -367,7 +363,6 @@ def test_decree_rerank_error_not_hidden(rr, tmp_path):
 
 # ---- 5. 설정 ----
 def test_decree_config(env):
-    env.setenv('LAWBOT_PROFILE', 'v4')
     assert deploy.decree(deploy.get_profile()) is None and deploy.get_profile().articles == V4_ARTICLES
     env.setenv('LAWBOT_DECREE_ENABLED', '1')
     with pytest.raises(ValueError, match='리랭커가 필요'):
@@ -392,13 +387,9 @@ def test_decree_config(env):
     env.setenv('LAWBOT_DECREE_K', '3')
     env.setenv('LAWBOT_DECREE_MODELS', 'fast,pro')
     assert deploy.decree(deploy.get_profile()) == deploy.DecreeConfig(0.8, 3, ('fast', 'pro'))
-    env.setenv('LAWBOT_PROFILE', 'v1')
-    with pytest.raises(ValueError, match='v4 프로필에서만'):
-        deploy.decree(deploy.get_profile())
 
 
 def test_load_app_with_decree(env, tmp_path):
-    env.setenv('LAWBOT_PROFILE', 'v4')
     env.setenv('LAWBOT_DECREE_ENABLED', '1')
     made = []
     env.setattr(service, 'Retriever', lambda *a, **kw: made.append(kw) or DecRet())
@@ -409,12 +400,12 @@ def test_load_app_with_decree(env, tmp_path):
     assert made == []
     env.setenv('LAWBOT_RERANKER_ENABLED', '1')
     a = service.load_app()
-    assert made == [{'max_seq_length': 2304, 'doc_style': 'v4', 'decree_max_seq': 3072}]
+    assert made == [{'max_seq_length': 2304, 'decree_max_seq': 3072}]
     assert a.decree == DC and service.uses_decrees(a, 'pro') and not service.uses_decrees(a, 'fast')
     assert manifest.summary(manifest.load(a.profile.articles))['dataset_version'] == 'v4-decree'
     env.setenv('LAWBOT_DECREE_ENABLED', '0')
     made.clear()
-    assert service.load_app().decree is None and made == [{'max_seq_length': 2304, 'doc_style': 'v4'}]
+    assert service.load_app().decree is None and made == [{'max_seq_length': 2304}]
 
 
 # ---- 7. 인용 판정·화면 ----
@@ -474,18 +465,15 @@ def test_screen_texts(env):
     assert app_mod.intro_text(off) == '질문과 관련된 조문 3개를 찾아 그 조문을 근거로 답합니다. '
     st = {'search': 0.1, 'rerank': 1.9, 'decree_search': 0.05, 'decree_rerank': 2.0, 'n_decree': 2, 'load': None}
     assert '시행령·시행규칙 2.05초 (2개 첨부)' in app_mod.fmt_stats('Pro', 'generate', st)
-    env.setenv('LAWBOT_PROFILE', 'v4')
     env.setenv('LAWBOT_RERANKER_ENABLED', '1')
     env.setenv('LAWBOT_DECREE_ENABLED', '1')
     a = dataclasses.replace(on, profile=deploy.get_profile())
     assert app_mod.data_notice(a) == '법령 기준일 2026-10-20 (데이터 v4-decree · 법률 415 · 시행령 273 · 시행규칙 124)'
-    assert app_mod.data_notice(dataclasses.replace(on, profile=deploy.get_profile('v1'))).startswith('법령 기준일 ')
 
 
 def test_check_deploy_decree(env):
     from lawbot import check_deploy
 
-    env.setenv('LAWBOT_PROFILE', 'v4')
     out = []
     check_deploy.check_decree(deploy.get_profile(), out)
     assert out[0][0] == 'INFO' and '꺼짐' in out[0][1]

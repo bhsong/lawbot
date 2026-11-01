@@ -45,7 +45,7 @@ def test_one_line_per_question_without_text(env, log):
         'ok',
         None,
         'api',
-        'v1',
+        'v4',
         'fast',
         'full',
     )

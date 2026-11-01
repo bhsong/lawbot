@@ -61,14 +61,14 @@ def test_test_split_and_sample():
     s = ev.answer_sample(t, 200)
     assert s['eval_cat'].value_counts().to_dict() == {'A_lsa': 100, 'B_newlaw': 100}
     assert s['id'].tolist() == ev.answer_sample(t, 200)['id'].tolist()  # 고정 시드
-    articles = pd.read_csv(deploy.get_profile('v4').articles, **E)
+    articles = pd.read_csv(deploy.get_profile().articles, **E)
     assert set(t['article_id']) <= set(articles['article_id'])
 
 
 def test_keyword_fix_follows_2026_amendment():
     # 2026.4.7 개정으로 임금체불 벌칙이 제107조(5년·5천만원)로: v4 정답과 키워드를 맞춘다
     t = ev.load_test().set_index('id')
-    arts = pd.read_csv(deploy.get_profile('v4').articles, **E).set_index('article_id')
+    arts = pd.read_csv(deploy.get_profile().articles, **E).set_index('article_id')
     assert '5년 이하' in arts.loc['근로기준법 제107조', 'text'] and '제43조' in arts.loc['근로기준법 제107조', 'text']
     kw = ev.keywords()
     for i in ev.KEYWORD_FIX:
@@ -83,7 +83,7 @@ def test_oos_reclassification():
     inside = oos[oos['source'].isin(ev.OOS_IN_SCOPE)]
     assert len(inside) == 27 and len(oos) - len(inside) == 75
     assert set(ev.OOS_IN_SCOPE.values()) <= set(ev.LAW_ALIASES)
-    assert set(ev.LAW_ALIASES) == set(pd.read_csv(deploy.get_profile('v4').articles, **E)['law'])
+    assert set(ev.LAW_ALIASES) == set(pd.read_csv(deploy.get_profile().articles, **E)['law'])
 
 
 # ---- 단계 실행 (가짜 모델) ----
@@ -149,7 +149,7 @@ class Bot:
 
 
 def fake_app(rerank=True):
-    p = deploy.get_profile('v4')
+    p = deploy.get_profile()
     models = service.ChatModels(p.models, Bot)
     return service.LawbotApp(p, Ret(), models, RR() if rerank else None, 'FULL SYSTEM')
 
@@ -220,14 +220,6 @@ def test_stages_end_to_end_and_resume(tmp_path, env):
 def test_retrieval_without_reranker(tmp_path, env):
     ev.run_retrieval(fake_app(rerank=False), frame(), tmp_path / 'r.csv')
     assert 'rr_rank' not in pd.read_csv(tmp_path / 'r.csv', **E)
-
-
-def test_main_refuses_v1(env, monkeypatch):
-    env.setenv('LAWBOT_PROFILE', 'v1')
-    monkeypatch.setattr(service, 'load_app', lambda: fake_app().__class__(deploy.get_profile('v1'), Ret(), None))
-    monkeypatch.setattr('sys.argv', ['eval_v4', 'answers'])
-    with pytest.raises(SystemExit, match='v4 프로필'):
-        ev.main()
 
 
 def test_default_stage_is_all(env, monkeypatch, tmp_path):

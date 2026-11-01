@@ -1,4 +1,4 @@
-# lawbot/deploy.py  →  웹앱 배포 설정: 검색 프로필(v1/v4)과 답변 모델(Fast/Pro) 레지스트리
+# lawbot/deploy.py  →  웹앱 배포 설정: 검색 프로필(v4)과 답변 모델(Fast/Pro) 레지스트리
 # 모델은 API 모델 id로 고른다 (모델 서버 .env의 LAWBOT_SERVE_* 또는 OpenAI 호환 클라우드의 모델 이름)
 import os
 from dataclasses import dataclass, replace
@@ -19,13 +19,12 @@ class ModelSpec:
 
 @dataclass(frozen=True)
 class Profile:
-    name: str  # 'v1' / 'v4'
+    name: str  # 'v4' (요청 로그·피드백 기록에 남김)
     title: str  # 웹앱 제목
     articles: Path  # 조문 CSV
     emb_model: str  # 검색 임베딩 모델 id (모델 서버 /v1/embeddings)
     max_seq: int  # 조문 인코딩 최대 토큰
-    doc_style: str  # 검색 문서·참고 조문 형식 (retriever.DOC_STYLES, llm.build_messages)
-    system_file: Path | None  # None이면 llm.SYSTEM (v1 학습 system). 모델별 system_file이 있으면 그쪽 우선
+    system_file: Path  # 4항목 system. 모델별 system_file이 있으면 그쪽 우선
     models: tuple  # (Fast, Pro). 첫 번째가 기본 선택
     disabled: tuple = ()  # LAWBOT_MODELS에서 뺀 모델: 화면에 '사용 안 함'으로만 표시하고 올리지 않음
 
@@ -40,10 +39,14 @@ def _path(env, default):
     return p if p.is_absolute() else paths.ROOT / p
 
 
-def get_profile(name=None):
-    """프로필 + LAWBOT_MODELS로 고른 답변 모델 (예: 'pro'면 Pro만, 'fast,pro'면 둘 다. 첫 번째가 기본 선택)
-    고르지 않은 모델은 disabled로 옮겨 화면에 비활성으로 남긴다"""
-    p = _profile(name or os.environ.get('LAWBOT_PROFILE', 'v4'))  # 기본 v4. v4 자산이 없으면 LAWBOT_PROFILE=v1
+def get_profile():
+    """v4 프로필 + LAWBOT_MODELS로 고른 답변 모델 (예: 'pro'면 Pro만, 'fast,pro'면 둘 다. 첫 번째가 기본 선택)
+    고르지 않은 모델은 disabled로 옮겨 화면에 비활성으로 남긴다
+    LAWBOT_PROFILE은 없거나 'v4'만 허용한다 (예전 .env의 LAWBOT_PROFILE=v4는 그대로 통과, 다른 값은 조용히 무시하지 않음)"""
+    name = (os.environ.get('LAWBOT_PROFILE') or '').strip()
+    if name not in ('', 'v4'):
+        raise ValueError(f'LAWBOT_PROFILE은 v4만 지원합니다 (v1은 삭제됨): {name!r}. .env에서 이 줄을 지우세요')
+    p = _v4()
     keys = [k.strip() for k in os.environ.get('LAWBOT_MODELS', '').split(',') if k.strip()]
     if not keys:
         return p
@@ -54,69 +57,40 @@ def get_profile(name=None):
     return replace(p, models=tuple(specs[k] for k in keys), disabled=tuple(m for m in p.models if m.key not in keys))
 
 
-def _profile(name):
-    # Fast(4B LoRA)는 학습한 4섹션 그대로, Pro는 간결형 system으로 처음부터 짧게 생성
-    if name == 'v1':  # 이전 동작: 근로기준법 130조문, v1 검색·4B. Pro는 튜닝 전 14B로 속도·메모리 시험
-        return Profile(
-            'v1',
-            '근로기준법 챗봇',
-            paths.ARTICLES,
-            _model('LAWBOT_EMB_MODEL', 'lawbot-emb-v1'),
-            512,
-            'v1',
-            None,
-            (
-                ModelSpec(
-                    'fast',
-                    'Lawbot Fast',
-                    '4B · 빠른 응답, 4항목 답변',
-                    _model('LAWBOT_FAST_MODEL', 'lawbot-fast-v1'),
-                    'full',
-                ),
-                ModelSpec(
-                    'pro',
-                    'Lawbot Pro',
-                    '14B · 큰 모델, 간결한 답변, 응답이 더 느림',
-                    _model('LAWBOT_PRO_MODEL', 'qwen3-14b-4bit'),
-                    'concise',
-                    _path('LAWBOT_PRO_SYSTEM', paths.SYSTEM_V1_CONCISE),
-                ),
+def _v4():
+    """7개 법률 415조문, v4 검색 (MAX_SEQ 2304). Fast(4B LoRA)는 학습한 4섹션 그대로, Pro는 튜닝 전 Qwen3.8-27B 4비트를
+    간결형 system으로 처음부터 짧게 생성
+    하위법령을 켜면(LAWBOT_DECREE_ENABLED=1) 법률 415 + 시행령·시행규칙 397 = 812조문 CSV. 법률 415행은 같음"""
+    articles = (
+        _path('LAWBOT_V4_DECREE_ARTICLES', paths.V4_DECREE_ARTICLES)
+        if decree_enabled()
+        else _path('LAWBOT_V4_ARTICLES', paths.V4_ARTICLES)
+    )
+    return Profile(
+        'v4',
+        '노동법 챗봇',
+        articles,
+        _model('LAWBOT_EMB_MODEL', 'lawbot-emb-v4'),
+        2304,
+        _path('LAWBOT_V4_SYSTEM', paths.V4_SYSTEM),
+        (
+            ModelSpec(
+                'fast',
+                'Lawbot Fast',
+                '4B · 빠른 응답, 4항목 답변',
+                _model('LAWBOT_FAST_MODEL', 'lawbot-fast-v4'),
+                'full',
             ),
-        )
-    if name == 'v4':  # 7개 법률 415조문, v4 검색 (MAX_SEQ 2304). Pro는 튜닝 전 Qwen3.8-27B 4비트
-        # 하위법령을 켜면(LAWBOT_DECREE_ENABLED=1) 법률 415 + 시행령·시행규칙 397 = 812조문 CSV. 법률 415행은 같음
-        articles = (
-            _path('LAWBOT_V4_DECREE_ARTICLES', paths.V4_DECREE_ARTICLES)
-            if decree_enabled()
-            else _path('LAWBOT_V4_ARTICLES', paths.V4_ARTICLES)
-        )
-        return Profile(
-            'v4',
-            '노동법 챗봇',
-            articles,
-            _model('LAWBOT_EMB_MODEL', 'lawbot-emb-v4'),
-            2304,
-            'v4',
-            _path('LAWBOT_V4_SYSTEM', paths.V4_SYSTEM),
-            (
-                ModelSpec(
-                    'fast',
-                    'Lawbot Fast',
-                    '4B · 빠른 응답, 4항목 답변',
-                    _model('LAWBOT_FAST_MODEL', 'lawbot-fast-v4'),
-                    'full',
-                ),
-                ModelSpec(
-                    'pro',
-                    'Lawbot Pro',
-                    '27B · 큰 모델(튜닝 전), 간결한 답변, 응답이 더 느림',
-                    _model('LAWBOT_PRO_MODEL', 'qwen3.8-27b-4bit'),
-                    'concise',
-                    _path('LAWBOT_PRO_SYSTEM', paths.V4_SYSTEM_CONCISE),
-                ),
+            ModelSpec(
+                'pro',
+                'Lawbot Pro',
+                '27B · 큰 모델(튜닝 전), 간결한 답변, 응답이 더 느림',
+                _model('LAWBOT_PRO_MODEL', 'qwen3.8-27b-4bit'),
+                'concise',
+                _path('LAWBOT_PRO_SYSTEM', paths.V4_SYSTEM_CONCISE),
             ),
-        )
-    raise ValueError(f'알 수 없는 LAWBOT_PROFILE: {name!r} (v1 또는 v4)')
+        ),
+    )
 
 
 @dataclass(frozen=True)
@@ -126,18 +100,12 @@ class RerankerConfig:
 
 
 def reranker(profile):
-    """LAWBOT_RERANKER_ENABLED=1이면 리랭커 설정, 아니면 None (기본 꺼짐: 임베딩 상위 3개를 그대로 씀)
-    v4 실험(법령명이 붙은 조문 형식)으로만 검증했으므로 v1 프로필에서 켜면 거부한다"""
+    """LAWBOT_RERANKER_ENABLED=1이면 리랭커 설정, 아니면 None (기본 꺼짐: 임베딩 상위 3개를 그대로 씀)"""
     flag = os.environ.get('LAWBOT_RERANKER_ENABLED', '0')
     if flag not in ('0', '1'):
         raise ValueError(f'LAWBOT_RERANKER_ENABLED는 0 또는 1: {flag!r}')
     if flag == '0':
         return None
-    if profile.doc_style != 'v4':
-        raise ValueError(
-            f'리랭커는 v4 프로필에서만 쓸 수 있습니다 (현재 {profile.name}). '
-            'LAWBOT_RERANKER_ENABLED=0으로 끄거나 LAWBOT_PROFILE=v4로 실행하세요.'
-        )
     n = int(os.environ.get('LAWBOT_RERANKER_CANDIDATES', '10'))
     return RerankerConfig(_model('LAWBOT_RERANK_MODEL', 'qwen3-reranker-4b'), n)
 
@@ -168,14 +136,9 @@ def decree_enabled():
 
 def decree(profile):
     """LAWBOT_DECREE_ENABLED=1이면 하위법령 첨부 설정, 아니면 None (기본 꺼짐: 법률 3개만)
-    리랭커 점수로 거르므로 리랭커가 꺼져 있으면 거부. v4 실험으로만 검증했으므로 v1 프로필도 거부"""
+    리랭커 점수로 거르므로 리랭커가 꺼져 있으면 거부"""
     if not decree_enabled():
         return None
-    if profile.doc_style != 'v4':
-        raise ValueError(
-            f'시행령·시행규칙 첨부는 v4 프로필에서만 쓸 수 있습니다 (현재 {profile.name}). '
-            'LAWBOT_DECREE_ENABLED=0으로 끄거나 LAWBOT_PROFILE=v4로 실행하세요.'
-        )
     if reranker(profile) is None:
         raise ValueError(
             '시행령·시행규칙 첨부는 리랭커 점수로 거르므로 리랭커가 필요합니다. '

@@ -44,7 +44,6 @@ services/chatbot/src/lawbot/
 ├── service.py         # UI와 무관한 질의응답 흐름 (모델 서버 접속, 검색 → 답변 스트리밍)
 ├── app.py             # Gradio 웹앱
 ├── security.py        # 로컬 전용 실행 설정 (127.0.0.1, 로그인 필수, 공유 링크 없음, 포트·모델 서버·생성 API 주소 검증)
-├── prompts.py         # v1 기본 system 문구
 ├── citation.py        # 인용 파싱·형식 검증·거절 판정 (웹앱 화면과 eval_v4 채점이 같이 씀)
 ├── manifest.py        # 법령 데이터 매니페스트 검사 (조문 수·sha256·기준일)
 ├── log_summary.py     # 요청 로그(logs/requests.jsonl) 요약
@@ -55,8 +54,7 @@ services/chatbot/src/lawbot/
 ├── eval_v4.py         # v4 웹앱 구성 평가 (lawbot-eval-v4)
 ├── diff_answers.py    # 두 평가 결과의 답변 원문 글자 단위 비교
 ├── score_answers.py   # 키워드 기반 채점기
-├── refusal.py         # 거절 판정 (【결론】에 '확인할 수 없'), 범위 밖 답변 판정 (거절·안내·억지적용·미인용)
-└── report.py          # 평가 결과를 metrics.csv 한 행으로 모으고 기준 실행과 비교
+└── refusal.py         # 거절 판정 (【결론】에 '확인할 수 없'), 범위 밖 답변 판정 (거절·안내·억지적용·미인용)
 services/model-server/src/lawbot_model_server/
 ├── api.py             # OpenAI 호환 API (FastAPI): 인증·크기 제한·로그
 ├── scheduler.py       # GPU 스레드 하나: chat 동시 생성 상한·대기열·끊김, 생성 스텝 사이에 embeddings·rerank

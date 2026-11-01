@@ -487,7 +487,7 @@ BAD_CITE = {WRONG_LAW: 'cite_wrong_law', OUTSIDE: 'cite_outside', NONEXISTENT: '
 
 def article_keys():
     """전체 조문 {(법령, 제N조)} (v4 프로필 조문 CSV의 비삭제 조문 = 검색 대상과 같음)"""
-    law = pd.read_csv(deploy.get_profile('v4').articles, **E)
+    law = pd.read_csv(deploy.get_profile().articles, **E)
     law = law[law['deleted'] == 0]
     return set(zip(law['law'], law['article_no'] if 'article_no' in law else law['article_id']))
 
@@ -625,19 +625,21 @@ def print_failures(f):
 
 
 # ---- 두 실행 비교 ----
-def compare_rules():
-    """(section, group, metric, 좋아지는 방향, 경고 기준) — 기준은 v1 report.py와 같은 값"""
-    from lawbot.report import METRICS
+# 경고 기준: 기준 실행보다 이만큼 나빠지면 경고
+TOL_RECALL, TOL_SCORE, TOL_CITE, TOL_FALSE_REFUSAL = 0.005, 0.02, 0.02, 0.01
 
+
+def compare_rules():
+    """(section, group, metric, 좋아지는 방향, 경고 기준)"""
     return [
-        ('검색', '전체', '리랭킹 Recall@3', +1, METRICS['recall@3'][2]),
-        ('검색', '전체', '임베딩 Recall@3', +1, METRICS['recall@3'][2]),
-        ('답변', 'A_lsa', '종합 점수', +1, METRICS['total'][2]),
-        ('답변', 'A_lsa', '종합 점수(검색 적중)', +1, METRICS['total_retrieved'][2]),
-        ('답변', '전체', '조문 인용 정확도(법령명 포함)', +1, METRICS['cite_ok'][2]),
-        ('답변', '전체', '거짓 거절률(검색 적중)', -1, METRICS['false_refusal'][2]),
-        ('하위법령 검색', '전체', '정답 하위법령 첨부율', +1, METRICS['recall@3'][2]),
-        ('하위법령 답변', '전체', '정답 하위법령 인용률', +1, METRICS['cite_ok'][2]),
+        ('검색', '전체', '리랭킹 Recall@3', +1, TOL_RECALL),
+        ('검색', '전체', '임베딩 Recall@3', +1, TOL_RECALL),
+        ('답변', 'A_lsa', '종합 점수', +1, TOL_SCORE),
+        ('답변', 'A_lsa', '종합 점수(검색 적중)', +1, TOL_SCORE),
+        ('답변', '전체', '조문 인용 정확도(법령명 포함)', +1, TOL_CITE),
+        ('답변', '전체', '거짓 거절률(검색 적중)', -1, TOL_FALSE_REFUSAL),
+        ('하위법령 검색', '전체', '정답 하위법령 첨부율', +1, TOL_RECALL),
+        ('하위법령 답변', '전체', '정답 하위법령 인용률', +1, TOL_CITE),
     ]
 
 
@@ -916,8 +918,6 @@ def main():
     from lawbot.service import load_app
 
     app = load_app()
-    if app.profile.name != 'v4':
-        raise SystemExit('v4 프로필에서 실행하세요 (LAWBOT_PROFILE=v4)')
     model = args.model or app.profile.models[0].key
     fmt = args.fmt or app.models.specs[model].fmt
     decree = uses_decrees(app, model)

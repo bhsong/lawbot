@@ -8,7 +8,7 @@ import pytest
 import lawbot.service as service
 from fakes import FakeLLM, FakeRetriever
 from lawbot import check_deploy, manifest
-from lawbot.paths import ARTICLES, V4_ARTICLES
+from lawbot.paths import V4_ARTICLES
 
 
 def copy_v4(tmp_path, edit=None):
@@ -31,7 +31,7 @@ def levels(out):
 
 
 # ---- 레포의 매니페스트 ----
-@pytest.mark.parametrize('articles,version,total', [(V4_ARTICLES, 'v4', 415), (ARTICLES, 'v1', 130)])
+@pytest.mark.parametrize('articles,version,total', [(V4_ARTICLES, 'v4', 415)])
 def test_repo_manifests_match_data(articles, version, total):
     m = manifest.load(articles)
     assert m['dataset_version'] == version and m['articles_total'] == total
@@ -100,18 +100,18 @@ def test_missing_manifest_only_warns(tmp_path, capsys):
 
 # ---- check_deploy ----
 def test_check_deploy_pass_and_fail(env, tmp_path):
-    ok = check_deploy.run('v4')
+    ok = check_deploy.run()
     assert any(lv == 'INFO' and '매니페스트: dataset v4 · 기준일' in m for lv, m in ok)
     assert not any(lv == 'FAIL' and ('sha256' in m or '매니페스트' in m) for lv, m in ok)
     env.setenv('LAWBOT_V4_ARTICLES', str(copy_v4(tmp_path, one_char)))
-    fails = [m for lv, m in check_deploy.run('v4') if lv == 'FAIL']
+    fails = [m for lv, m in check_deploy.run() if lv == 'FAIL']
     assert any(m.startswith('조문 CSV sha256') for m in fails)
 
 
 def test_check_deploy_warns_without_manifest(env, tmp_path):
     shutil.copy(V4_ARTICLES, tmp_path / 'v4.csv')
     env.setenv('LAWBOT_V4_ARTICLES', str(tmp_path / 'v4.csv'))
-    out = check_deploy.run('v4')
+    out = check_deploy.run()
     assert any(lv == 'WARN' and '매니페스트 없음' in m for lv, m in out)
 
 

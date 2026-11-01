@@ -28,7 +28,7 @@ def fake_module(name, **attrs):
 
 # 검색기·답변 모델 대신 가짜 모듈, 모델 서버 클라이언트도 가짜 (접속하지 않음): 기동이 빠름
 sys.modules['lawbot.retriever'] = fake_module('lawbot.retriever', Retriever=FakeRetriever)
-sys.modules['lawbot.llm'] = fake_module('lawbot.llm', LLM=RecordingLLM, SYSTEM='가짜 4항목 system')
+sys.modules['lawbot.llm'] = fake_module('lawbot.llm', LLM=RecordingLLM)
 os.environ['LAWBOT_MODEL_SERVER'] = 'http://127.0.0.1:65535'  # 가짜 클라이언트라 접속하지 않음
 os.environ['LAWBOT_MODEL_TOKEN'] = 'test-only-model-token-0123'  # 테스트 전용 가짜 값
 
