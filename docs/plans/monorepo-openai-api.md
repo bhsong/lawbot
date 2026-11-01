@@ -230,6 +230,26 @@ LAWBOT_FAST_MODEL=lawbot-fast-v4
 
 ---
 
-## 6. 사용자 확인 (2026-11-01 답변 완료)
+## 6. 진행 상황
+
+| PR | 상태 |
+| --- | --- |
+| 1 `chore/monorepo` | #33 병합 (2026-11-01) |
+| 2 `feat/openai-api` | 구현·테스트 완료, 실제 모델 검증(§3.5) 전 |
+| 3 `feat/batch-generation` | 시작 전 |
+
+### PR 2 구현 중 계획과 달라진 점
+
+- `eval_concise`와 `LAWBOT_EARLY_STOP`(간결형 조기 종료)도 삭제했다 (사용자 결정, 2026-11-01).
+- 챗봇의 인덱스 모듈 이름은 `index.py` 대신 기존 `retriever.py`를 그대로 썼다 (같은 인터페이스, import 변경 최소화).
+- 웹앱의 `ModelManager`(LRU)는 서버로 옮기고, 웹앱에는 `ChatModels`(key → LLM 클라이언트)만 둔다. 서버가 첫 요청 때 모델을 불러오므로 '모델 전환' 시간은 따로 재지 않고 첫 토큰 시간에 들어간다. 화면의 '불러오는 중' 단계는 `/v1/models`의 `loaded`로 그대로 보여 준다.
+- 화면의 '모델 서버 데이터 버전이 다름' 경고, `/info` 일치 검사, `API_VERSION`은 삭제했다 (조문 데이터가 웹앱에만 있음).
+- 생성 응답의 측정값(`usage`·`timings`)은 마지막에 text가 빈 응답 하나로 붙인다. 토큰은 받는 즉시 내보내 첫 토큰 시간이 그대로다.
+- `chat_template_kwargs`는 웹앱이 보내지 않는다 (서버 기본값이 생각 끔이고, 클라우드 API는 이 필드를 모름).
+- `LLM_PATH`는 삭제했다. 실제 모델 스모크 테스트는 모델 서버 쪽 `-m models`로 옮겼다 (`LAWBOT_SERVE_*` 첫 항목 또는 기본 폴더).
+- 모델 폴더 점검(`lawbot_model_server.check`)에서 chat 모델이 4비트가 아니면 FAIL 대신 WARN으로 했다 (범용 서버라 8비트 모델도 올 수 있음). 리랭커는 그대로 FAIL.
+- 개발 웹앱 `.env`에도 검색 설정(`LAWBOT_RERANKER_ENABLED` 등)이 필요하다 (예전에는 모델 서버 설정을 따랐음). 배포 때 운영·개발 `.env`를 새 예시대로 고쳐야 한다.
+
+## 7. 사용자 확인 (2026-11-01 답변 완료)
 
 맨 위 결정 5~7 참고.

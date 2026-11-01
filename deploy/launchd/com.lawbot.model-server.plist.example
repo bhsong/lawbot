@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<!-- Lawbot 모델 서버 (임베딩·리랭커·답변 모델을 한 번만 올림) 상시 실행 템플릿
+<!-- Lawbot 모델 서버 (OpenAI 호환 API: 임베딩·리랭커·답변 모델을 한 번만 올림, services/model-server) 상시 실행 템플릿
      자리표시를 채워 ~/Library/LaunchAgents/com.lawbot.model-server.plist로 복사 (README "상시 운영과 개발 동시 실행"):
        __UV__       which uv로 찾은 절대 경로 (launchd의 PATH에는 uv가 없음)
        __PROD_DIR__ 운영 worktree 절대 경로 (.env는 이 폴더에서 envfile이 읽음)

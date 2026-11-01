@@ -37,6 +37,8 @@ v4 (현재 기본, `.env.example`):
              └─ 답변 + 근거 조문 표시 (Gradio)
 ```
 
+모델(임베딩·리랭커·답변)은 모두 모델 서버(`services/model-server`, OpenAI 호환 API)에서 돌고, 웹앱(`services/chatbot`)은 조문 인덱스·검색 정렬·하위법령 필터·프롬프트 조립·화면을 맡습니다. 생성만 OpenAI 호환 클라우드 모델로 바꿀 수 있습니다.
+
 v1:
 
 ```
@@ -120,29 +122,31 @@ models/
 └── qwen3_14b_mlx_4bit/    # Qwen3-14B 튜닝 전 = v1 Pro (system: data/system_v1_concise.txt)
 ```
 
-파일이 웹앱 설정과 맞는지는 모델을 올리지 않고 확인할 수 있습니다. 문제가 있는 항목은 `FAIL`로 표시됩니다.
+파일이 설정과 맞는지는 모델을 올리지 않고 확인할 수 있습니다. 문제가 있는 항목은 `FAIL`로 표시됩니다.
 
 ```bash
-uv run python -m lawbot.check_deploy        # 현재 프로필 (기본 v4, LAWBOT_PROFILE=v1이면 v1)
+uv run python -m lawbot_model_server.check  # 모델 서버: .env의 LAWBOT_SERVE_* 모델 폴더 (양자화·어댑터·토크나이저·query 프롬프트)
+uv run python -m lawbot.check_deploy        # 웹앱: 조문 CSV·system·검색 설정 + 모델 서버 접속·필요 모델 (기본 v4)
 uv run python -m lawbot.versions            # 설치된 패키지 버전·맥 사양
 ```
 
-**웹앱 실행 (설정 파일 .env)**
+**실행 (모델 서버 + 웹앱, 설정 파일 .env)**
 
-설정은 레포 최상위의 `.env` 파일에 적어 두면 `uv run lawbot-app`이 시작할 때 읽습니다. `.env.example`(맥 미니 32GB 기본값: v4, 임베딩 0.6B, 후보 10개 → 리랭커 4비트 → 3개, Pro 27B만 사용)을 복사해서 사용자명과 비밀번호만 채우면 됩니다.
+모델은 모두 모델 서버(`services/model-server`, OpenAI 호환 API)가 올리고, 웹앱(`services/chatbot`)은 조문 검색·프롬프트 조립·화면만 맡습니다. 두 프로세스가 레포 최상위의 같은 `.env`를 읽습니다. `.env.example`(맥 미니 32GB 기본값: v4, 임베딩 0.6B, 후보 10개 → 리랭커 4비트 → 3개, Pro 27B만 사용)을 복사해서 사용자명·비밀번호와 모델 서버의 포트·주소·토큰을 채웁니다.
 
 ```zsh
 cp .env.example .env
-chmod 600 .env            # 나만 읽고 쓰기 (비밀번호가 들어가므로)
-open -e .env              # LAWBOT_USER=, LAWBOT_PW= 뒤에 값 입력 후 저장
-uv run lawbot-app
+chmod 600 .env            # 나만 읽고 쓰기 (비밀번호·토큰이 들어가므로)
+openssl rand -hex 32      # 토큰: LAWBOT_MODEL_TOKEN에 붙여 넣기
+open -e .env              # LAWBOT_USER·LAWBOT_PW, LAWBOT_MODEL_SERVER_PORT·LAWBOT_MODEL_SERVER 입력 후 저장
+uv run lawbot-model-server   # 터미널 1: 포트를 먼저 열고 모델을 올린 뒤 'ready'
+uv run lawbot-app            # 터미널 2: 모델 서버가 준비될 때까지 기다린 뒤 조문 인덱스를 만들고 시작
 ```
 
 - `.env`는 `.gitignore`에 들어 있어 Git에 올라가지 않습니다. `.env.example`에는 비밀번호를 적지 마세요.
 - 셸에서 `export`한 변수가 있으면 그 값이 `.env`보다 우선합니다. 한 번만 다르게 실행할 때는 `LAWBOT_RERANKER_ENABLED=0 uv run lawbot-app`처럼 앞에 붙입니다.
 - 다른 파일을 쓰려면 `LAWBOT_ENV_FILE=.env.small uv run lawbot-app`(예: 소형 맥의 Fast 4B 설정), 파일을 읽지 않으려면 `LAWBOT_ENV_FILE=`.
-- `.env`에는 `LAWBOT_*`와 `LLM_PATH`만 적을 수 있습니다. 서버 주소는 바꿀 수 없고, 웹앱 포트는 `LAWBOT_PORT`로 정합니다(아래 참고).
-- `lawbot-model-server`, `check_deploy`도 같은 `.env`를 읽습니다.
+- `.env`에는 `LAWBOT_*`만 적을 수 있습니다. 서버 주소는 바꿀 수 없고, 웹앱 포트는 `LAWBOT_PORT`로 정합니다(아래 참고).
 - 값에 공백이나 ` #`이 들어가면 작은따옴표로 감쌉니다: `LAWBOT_PW='a b#c'`.
 
 비밀번호를 파일에 두지 않으려면 `.env`의 `LAWBOT_PW=` 줄을 지우고 실행할 때 입력하거나 macOS 키체인에서 꺼내 씁니다(zsh).
@@ -153,74 +157,85 @@ security add-generic-password -a lawbot -s lawbot -w   # 키체인에 저장 (�
 LAWBOT_PW="$(security find-generic-password -a lawbot -s lawbot -w)" uv run lawbot-app
 ```
 
-v4 파일(조문 CSV, 4B system)이 없으면 모델을 올리기 전에 실행을 거부하고 안내합니다. v4 준비 전에는 v1으로 실행합니다.
+v4 파일(조문 CSV, 4B system)이 없으면 모델 서버에 접속하기 전에 실행을 거부하고 안내합니다. v4 준비 전에는 v1으로 실행합니다(모델 서버에도 v1 모델 id가 있어야 함).
 
 ```zsh
-LAWBOT_PROFILE=v1 LAWBOT_MODELS= LAWBOT_RERANKER_ENABLED=0 uv run lawbot-app
+LAWBOT_PROFILE=v1 LAWBOT_MODELS= LAWBOT_RERANKER_ENABLED=0 LAWBOT_DECREE_ENABLED=0 uv run lawbot-app
 ```
 
-`LAWBOT_MODELS`로 이 맥에서 쓸 답변 모델을 고릅니다(`.env.example`은 `pro`만). 빠진 모델은 올리지 않고 화면에 "이 기기에서 사용 안 함"으로 비활성 표시합니다(고르면 기본 모델로 되돌림). 둘 다 쓰면(`fast,pro`) 화면에서 고르고, 두 모델은 같은 검색 결과(상위 3개 조문)를 참고합니다.
+`LAWBOT_MODELS`로 이 맥에서 쓸 답변 모델을 고릅니다(`.env.example`은 `pro`만). 빠진 모델은 화면에 "이 기기에서 사용 안 함"으로 비활성 표시합니다(고르면 기본 모델로 되돌림). 둘 다 쓰면(`fast,pro`) 화면에서 고르고, 두 모델은 같은 검색 결과(상위 3개 조문)를 참고합니다.
 
 답변 형식에서 Fast(4항목으로 학습)는 항상 4항목으로 생성하고 "간결"은 화면에서 결론·근거만 보여 줍니다. 간결형이 기본인 Pro는 "전체 (4항목)"를 고르면 4항목 system(`data/v4/system_v4.txt`, v1은 학습 system)으로 다시 생성합니다.
 
-| 모델 | 구성 (v4 기본 경로) | 기본 답변 형식 |
+| 모델 | 구성 (모델 id · v4 기본 폴더) | 기본 답변 형식 |
 | --- | --- | --- |
-| Lawbot Fast | Qwen3-4B + LoRA (`models/v4/sllm_4b_lora_mlx_4bit`) | 전체: `【결론】【근거 조문】【설명】【참고】` 4항목 |
-| Lawbot Pro | Qwen3.8-27B 4비트, 튜닝 전 (`models/v4/qwen3.8_27b_mlx_4bit`), 간결형 system(`data/v4/system_v4_concise.txt`, 초안) | 간결: 결론 + `근거: 실제 인용 조문`. 답변이 더 느림 |
+| Lawbot Fast | Qwen3-4B + LoRA (`lawbot-fast-v4` · `models/v4/sllm_4b_lora_mlx_4bit`) | 전체: `【결론】【근거 조문】【설명】【참고】` 4항목 |
+| Lawbot Pro | Qwen3.8-27B 4비트, 튜닝 전 (`qwen3.8-27b-4bit` · `models/v4/qwen3.8_27b_mlx_4bit`), 간결형 system(`data/v4/system_v4_concise.txt`, 초안) | 간결: 결론 + `근거: 실제 인용 조문`. 답변이 더 느림 |
 
-모델을 바꾸면 답변 형식도 그 모델의 기본값으로 바뀌고, 형식은 직접 다시 고를 수 있습니다. 화면 아래 측정 줄에 검색·모델 전환·첫 토큰·첫 글자·생성 속도·완료 시간이 표시됩니다. Pro 폴더나 Pro system 파일이 없으면 Fast만으로 실행되고, Pro를 고르면 오류 안내가 나옵니다.
+모델을 바꾸면 답변 형식도 그 모델의 기본값으로 바뀌고, 형식은 직접 다시 고를 수 있습니다. 화면 아래 측정 줄에 검색·첫 토큰·첫 글자·생성 속도·완료 시간이 표시됩니다. 모델 서버에 아직 올라 있지 않은 모델을 고르면 "불러오는 중"을 먼저 보여 주고, 불러오는 시간은 첫 토큰 시간에 들어갑니다. 웹앱이 고른 모델 id가 모델 서버에 없으면 시작을 거부합니다.
 
-모델 경로나 메모리 설정은 `.env`에서 바꿉니다(상대 경로는 저장소 최상위 기준). 아래 표가 전체 변수입니다.
+웹앱은 모델을 폴더가 아니라 모델 id로 고르고(`LAWBOT_*_MODEL`), 모델 폴더와 상주 수는 모델 서버 설정(`LAWBOT_SERVE_*`, `LAWBOT_MAX_RESIDENT`)입니다. 아래 표가 전체 변수입니다(상대 경로는 저장소 최상위 기준).
 
 웹앱은 이 맥에서만 쓰는 로컬 전용입니다. 주소는 `127.0.0.1` 고정이고, 포트는 `.env`의 `LAWBOT_PORT`(없으면 기존 기본값)입니다. 브라우저에서 `http://127.0.0.1:<포트>`로 접속해 로그인합니다. 같은 네트워크의 다른 기기에서는 접속할 수 없으며, Gradio 공개 공유 링크(`share`)도 만들지 않습니다. 주소·공유 설정은 바꿀 수 없고, `GRADIO_SERVER_NAME`·`GRADIO_SERVER_PORT` 같은 Gradio 환경 변수는 무시합니다(`services/chatbot/src/lawbot/security.py`). 상시 운영할 때는 `.env`에 `LAWBOT_PORT`를 따로 정하세요.
+
+웹앱(`lawbot-app`, `check_deploy`, `eval_v4`):
 
 | 변수 | 필수 | 용도 |
 | --- | --- | --- |
 | `LAWBOT_USER` | 예 | 로그인 사용자명 (앞뒤 공백 제거 후 비어 있으면 안 됨) |
 | `LAWBOT_PW` | 예 | 로그인 비밀번호 (빈 값·공백만 있는 값은 안 됨) |
+| `LAWBOT_MODEL_SERVER` | 예 | 모델 서버 주소 `http://127.0.0.1:<모델 서버 포트>` (이 맥만 허용) |
+| `LAWBOT_MODEL_TOKEN` | 예 | 모델 서버 토큰 (16자 이상, `openssl rand -hex 32`). 웹앱과 모델 서버가 같은 값 |
+| `LAWBOT_MODEL_SERVER_WAIT` | 아니요 | 시작할 때 모델 서버 준비를 기다리는 최대 초 (기본 `300`) |
 | `LAWBOT_PROFILE` | 아니요 | `v4`(기본, 7개 법률 415조문) 또는 `v1`(근로기준법 130조문, 이전 구성) |
-| `LAWBOT_FAST_PATH` | 아니요 | Fast(4B) 모델 폴더. 기본 v4 `models/v4/sllm_4b_lora_mlx_4bit`, v1 `models/sllm_mlx_4bit` |
-| `LAWBOT_PRO_PATH` | 아니요 | Pro 모델 폴더. 기본 v4 `models/v4/qwen3.8_27b_mlx_4bit`(27B), v1 `models/qwen3_14b_mlx_4bit`(14B) |
+| `LAWBOT_EMB_MODEL` | 아니요 | 검색 임베딩 모델 id (기본 v4 `lawbot-emb-v4`, v1 `lawbot-emb-v1`) |
+| `LAWBOT_FAST_MODEL` / `LAWBOT_PRO_MODEL` | 아니요 | 답변 모델 id (기본 v4 `lawbot-fast-v4` / `qwen3.8-27b-4bit`, v1 `lawbot-fast-v1` / `qwen3-14b-4bit`). 외부 API면 그쪽 모델 이름 |
 | `LAWBOT_MODELS` | 아니요 | 쓸 답변 모델 key를 쉼표로 (`pro`, `fast`, `fast,pro`). 첫 번째가 기본 선택. 비우면 프로필의 Fast·Pro 모두 |
 | `LAWBOT_ENV_FILE` | 아니요 | 읽을 설정 파일 (기본 레포 최상위 `.env`, 없으면 안 읽음). 빈 값이면 읽지 않음. 셸에서만 지정 |
 | `LAWBOT_PRO_SYSTEM` | 아니요 | Pro 간결형 system 파일. 기본 v4 `data/v4/system_v4_concise.txt`, v1 `data/system_v1_concise.txt` |
-| `LAWBOT_V4_ARTICLES` / `LAWBOT_V4_EMB` / `LAWBOT_V4_SYSTEM` | 아니요 | v4 조문 CSV / 임베딩 폴더 / 4B system 파일 (기본 `data/v4/articles_v4.csv`, `models/v4/emb_v4_fp16`, `data/v4/system_v4.txt`) |
-| `LAWBOT_EMB` | 아니요 | v1 검색 임베딩 폴더 (기본 `models/emb_final_v3_fp16`) |
-| `LAWBOT_MAX_RESIDENT` | 아니요 | 동시에 올려 둘 답변 모델 수. `2`(기본, Fast·Pro 모두 상주, 전환 대기 없음) 또는 `1`(선택한 모델만, 바꿀 때 다시 불러옴) |
-| `LAWBOT_RERANKER_ENABLED` | 아니요 | `1`이면 임베딩 상위 후보를 Qwen3-Reranker-4B로 다시 정렬해 상위 3개를 씀 (기본 `0`: 리랭커를 올리지 않고 기존 임베딩 상위 3개). v4 프로필 전용 |
-| `LAWBOT_RERANKER_MODEL_PATH` | 아니요 | 리랭커 MLX 폴더 (기본 `models/v4/reranker_4b_mlx_4bit`) |
+| `LAWBOT_V4_ARTICLES` / `LAWBOT_V4_SYSTEM` | 아니요 | v4 조문 CSV / 4B system 파일 (기본 `data/v4/articles_v4.csv`, `data/v4/system_v4.txt`) |
+| `LAWBOT_RERANKER_ENABLED` | 아니요 | `1`이면 임베딩 상위 후보를 Qwen3-Reranker-4B로 다시 정렬해 상위 3개를 씀 (기본 `0`: 기존 임베딩 상위 3개). v4 프로필 전용 |
+| `LAWBOT_RERANK_MODEL` | 아니요 | 리랭커 모델 id (기본 `qwen3-reranker-4b`) |
 | `LAWBOT_RERANKER_CANDIDATES` | 아니요 | 리랭커에 넘길 임베딩 후보 수 (기본 `10`, 실험값. 3 이상) |
 | `LAWBOT_DECREE_ENABLED` | 아니요 | `1`이면 시행령·시행규칙을 따로 찾아 법률 3개 뒤에 붙임 (기본 `0`: 법률 3개만). 리랭커 필요, v4 프로필 전용 |
 | `LAWBOT_DECREE_TAU` | 아니요 | 법률 1위와 다른 법의 하위법령이 붙을 리랭커 점수 (기본 `0.9`, val로 고른 값) |
 | `LAWBOT_DECREE_K` | 아니요 | 붙일 하위법령 최대 수 (기본 `2`) |
 | `LAWBOT_DECREE_MODELS` | 아니요 | 하위법령을 붙일 답변 모델 key (기본 `pro`. Fast는 참고 조문 3개로 학습했고 첨부를 평가하지 않음) |
 | `LAWBOT_V4_DECREE_ARTICLES` | 아니요 | 하위법령을 켰을 때 쓰는 812조문 CSV (기본 `data/v4/law_articles_v4_decree.csv`). 켜면 `LAWBOT_V4_ARTICLES` 대신 이 파일 |
-| `LLM_PATH` | 아니요 | 실제 모델 테스트(`pytest -m models`)가 쓸 sLLM 폴더 (예: `models/sllm_mlx_8bit`). 웹앱은 쓰지 않음 |
+| `LAWBOT_LLM_BASE_URL` | 아니요 | 생성만 다른 OpenAI 호환 API로 (예: `https://…/v1`). 없으면 모델 서버의 `/v1` |
+| `LAWBOT_LLM_API_KEY` | 외부 API면 예 | 그 API의 키 (모델 서버 토큰은 외부로 보내지 않음) |
+| `LAWBOT_LLM_ALLOW_EXTERNAL` | 외부 API면 예 | `1`: 질문이 이 맥 밖으로 나가는 것을 허용 (https만) |
 | `LAWBOT_PORT` | 아니요 | 웹앱 포트 (1024–65535). 없으면 기존 기본값. 운영·개발을 함께 띄울 때는 서로 다른 값 |
 | `LAWBOT_INSTANCE` | 아니요 | 화면·탭 제목에 붙일 이름 (예: `운영`, `개발`, 40자 이하) |
-| `LAWBOT_MODEL_SERVER` | 아니요 | 모델 서버 주소 `http://127.0.0.1:<모델 서버 포트>`. 있으면 원격 모드(웹앱은 모델을 올리지 않음), 비우면 로컬 모드 |
-| `LAWBOT_MODEL_SERVER_PORT` | 모델 서버 필수 | 모델 서버 포트 (1024–65535, 기본값 없음) |
-| `LAWBOT_MODEL_TOKEN` | 모델 서버·원격 모드 필수 | 모델 서버 토큰 (16자 이상, `openssl rand -hex 32`). 웹앱과 모델 서버가 같은 값 |
-| `LAWBOT_MODEL_SERVER_WAIT` | 아니요 | 원격 모드 웹앱이 시작할 때 모델 서버 준비를 기다리는 최대 초 (기본 `300`) |
 | `LAWBOT_REQUEST_LOG` | 아니요 | 요청 로그 파일 (기본 레포 최상위 `logs/requests.jsonl`). 빈 값이면 기록하지 않음 |
 | `LAWBOT_FEEDBACK` | 아니요 | `1`이면 답변마다 👍·깃발 버튼을 달고 누른 답을 저장 (기본 `0`, `0`·`1`만) |
 | `LAWBOT_FEEDBACK_DIR` | 아니요 | 피드백 저장 폴더 (기본 레포 최상위 `feedback/`). 레포 안이면 `.gitignore`에 걸리는 경로만 허용. 운영은 레포 밖 절대 경로 권장 |
+
+모델 서버(`lawbot-model-server`, `lawbot_model_server.check`):
+
+| 변수 | 필수 | 용도 |
+| --- | --- | --- |
+| `LAWBOT_MODEL_SERVER_PORT` | 예 | 모델 서버 포트 (1024–65535, 기본값 없음). 주소는 127.0.0.1 고정 |
+| `LAWBOT_MODEL_TOKEN` | 예 | 위와 같은 토큰 (16자 이상) |
+| `LAWBOT_SERVE_CHAT` / `LAWBOT_SERVE_EMBEDDING` / `LAWBOT_SERVE_RERANK` | 하나 이상 | 제공할 모델 `id=폴더`를 쉼표로 (예: `qwen3.8-27b-4bit=models/v4/qwen3.8_27b_mlx_4bit`) |
+| `LAWBOT_SERVE_PRELOAD` | 아니요 | 시작할 때 올릴 chat 모델 id (기본: chat 목록 앞에서부터 상주 수만큼). 임베딩·리랭커는 항상 시작할 때 |
+| `LAWBOT_MAX_RESIDENT` | 아니요 | 동시에 올려 둘 chat 모델 수 (기본 `2`, LRU로 교체). 32GB에서 27B를 쓰면 `1` |
 
 `LAWBOT_USER`와 `LAWBOT_PW`가 하나라도 없거나 비어 있으면 모델을 불러오기 전에 `RuntimeError`로 실행을 거부합니다. 인증 없이 서버를 띄우는 방법은 없습니다.
 
 **리랭커 (선택, v4)**
 
-켜면 검색 흐름이 `임베딩 상위 10개 → Qwen3-Reranker-4B(튜닝 없음) → 리랭킹 상위 3개 → 답변 모델`이 됩니다. Fast·Pro가 같은 리랭킹 결과를 참고하고, 리랭커는 앱 시작 때 한 번 올려 상주합니다. 끄면(기본) 리랭커를 올리지 않고 이전과 같은 임베딩 상위 3개를 씁니다. 채점 방식(instruction, 프롬프트, 최대 2,560토큰, yes/no 로짓, 동점은 임베딩 순위)은 v4 리랭커 실험 노트북과 같습니다(`services/chatbot/src/lawbot/reranker.py`).
+켜면 검색 흐름이 `임베딩 상위 10개 → Qwen3-Reranker-4B(튜닝 없음) → 리랭킹 상위 3개 → 답변 모델`이 됩니다. Fast·Pro가 같은 리랭킹 결과를 참고하고, 리랭커는 모델 서버가 시작할 때 올려 상주합니다. 끄면(기본) 웹앱이 리랭커를 부르지 않고 이전과 같은 임베딩 상위 3개를 씁니다. 채점 방식(프롬프트, 최대 2,560토큰, yes/no 로짓)은 v4 리랭커 실험 노트북과 같고(`services/model-server/src/lawbot_model_server/rerank.py`), 작업 설명(instruction)과 정렬(동점은 임베딩 순위)은 웹앱이 정합니다(`services/chatbot/src/lawbot/reranker.py`).
 
 `.env.example`에는 켜져 있습니다(`LAWBOT_RERANKER_ENABLED=1`). 모델 준비는 위 "모델 준비"의 변환 명령을 씁니다.
 
 ```zsh
-uv run python -m lawbot.check_deploy           # .env 설정 그대로: 리랭커 폴더·양자화·yes/no 토큰 검사
-uv run pytest -m models services/chatbot/tests/test_reranker_models.py   # 실제 로딩·채점 스모크 테스트
+uv run python -m lawbot_model_server.check     # 리랭커 폴더·양자화·yes/no 토큰 검사
+uv run pytest -m models services/model-server   # 실제 로딩·채점 스모크 테스트 (임베딩·답변 모델 포함)
 LAWBOT_RERANKER_ENABLED=0 uv run lawbot-app    # 한 번만 끄고 실행
 ```
 
-리랭커 오류(점수가 NaN 등)는 임베딩 순위로 몰래 되돌리지 않고 화면에 오류로 표시합니다. 폴더가 없거나 v1 프로필에서 켜면 모델을 올리기 전에 실행을 거부합니다. 화면의 조문 카드에는 리랭커 점수와 원래 임베딩 순위가, 측정 줄에는 리랭킹 시간이 나오고, 터미널에는 질문마다 검색·리랭킹·첫 토큰·완료 시간이 한 줄씩 남습니다.
+리랭커 오류(점수가 NaN 등)는 임베딩 순위로 몰래 되돌리지 않고 화면에 오류로 표시합니다. 모델 서버에 리랭커 모델 id가 없거나 v1 프로필에서 켜면 웹앱이 시작을 거부합니다. 화면의 조문 카드에는 리랭커 점수와 원래 임베딩 순위가, 측정 줄에는 리랭킹 시간이 나오고, 터미널에는 질문마다 검색·리랭킹·첫 토큰·완료 시간이 한 줄씩 남습니다.
 
 **시행령·시행규칙 첨부 (선택, v4)**
 
@@ -235,21 +250,45 @@ LAWBOT_RERANKER_ENABLED=0 uv run lawbot-app    # 한 번만 끄고 실행
 - 통과한 하위법령이 없으면 붙이지 않고, 프롬프트는 꺼짐과 글자 단위로 같습니다. 참고 조문 형식은 법률과 같은 `[n] 법령명 제N조(제목)`입니다(예: `[4] 근로기준법 시행령 제2조(…)`).
 - 첨부는 `LAWBOT_DECREE_MODELS`의 모델만(기본 Pro) 받습니다. Fast는 하위법령을 찾지도 않으므로 지금과 같습니다.
 - 법률 415개는 지금과 같은 호출(max_seq 2,304)로 따로 인코딩하고, 하위법령은 3,072토큰으로 따로 인코딩합니다(최장 3,017토큰). 법률 임베딩이 비트 단위로 같은지는 첨부 작업 때 확인했습니다([기록](docs/evals/2026-10-31-decree-attach.md)).
-- 리랭커가 꺼져 있거나 v1 프로필이면 모델을 올리기 전에 실행을 거부합니다. 하위법령 리랭킹 오류도 법률과 같이 화면에 오류로 표시합니다(되돌리지 않음).
+- 리랭커가 꺼져 있거나 v1 프로필이면 모델 서버에 접속하기 전에 실행을 거부합니다. 하위법령 리랭킹 오류도 법률과 같이 화면에 오류로 표시합니다(되돌리지 않음).
 - 화면: 하위법령 카드는 `〔시행령〕`·`〔시행규칙〕` 표시와 함께 법률 카드 뒤에 놓이고, 인용한 조문은 펼치고 나머지는 접습니다. 간결형 근거 줄·경고는 법률과 같은 규칙입니다. 측정 줄에 하위법령 시간과 첨부 수, 요청 로그에 `decree_search_ms`·`decree_rerank_ms`·`decree`·`n_decree`가 남습니다.
-- 원격 모드: 웹앱의 켜짐·τ·k가 모델 서버 `/info`의 `decree`와 다르면 시작을 거부합니다(첨부할 모델은 웹앱이 정함). 모델 서버 API는 2입니다.
 - 812조문 매니페스트는 `data/v4/manifest_decree.json`(데이터 `v4-decree`)입니다. 기존 `data/v4/manifest.json`은 415조문 그대로입니다.
 
 Colab 실험(transformers fp16)과의 순위 일치는 리랭커 도입 때 val로 대조했습니다(`results/reranker_verify_val_mlx4bit.csv`).
 
-**상시 운영과 개발 동시 실행 (모델 서버)**
+**모델 서버 (OpenAI 호환 API)**
 
-맥 미니에서 운영 웹앱을 계속 켜 두고(휴대폰은 Tailscale로 접속) 같은 맥에서 개발 웹앱도 띄울 때는, 임베딩·리랭커·답변 모델을 한 번만 올리는 내부 모델 서버(`lawbot-model-server`)를 두 웹앱이 함께 씁니다. 웹앱마다 27B와 리랭커를 따로 올리면 32GB를 넘기 때문입니다. `LAWBOT_MODEL_SERVER`가 비어 있으면 지금처럼 웹앱이 모델을 직접 올리는 로컬 모드입니다.
+모델 서버(`services/model-server`, FastAPI)는 조문 데이터나 챗봇 설정을 모르는 범용 추론 서버입니다. 챗봇 외의 앱(예: 법령 모니터링의 요약)도 OpenAI SDK로 그대로 부를 수 있습니다.
+
+| 엔드포인트 | 형식 | 비고 |
+| --- | --- | --- |
+| `POST /v1/chat/completions` | OpenAI | 스트림(SSE)·`stream_options.include_usage`. `temperature`가 없으면 0(탐욕적 생성, OpenAI 기본값 1과 다름). 확장: `chat_template_kwargs.enable_thinking`(기본 끔), 응답의 `timings`(프리필·생성 속도, MLX 최대 메모리) |
+| `POST /v1/embeddings` | OpenAI | `encoding_format` `float`·`base64`. 확장: `input_type`(`query`·`document`), `max_seq_length`. 목록 하나를 encode 한 번으로 처리 |
+| `POST /v1/rerank` | Cohere/Jina | `results: [{index, relevance_score}]`. 확장: `instruction`(작업 설명) |
+| `GET /v1/models` | OpenAI | 확장: `type`(chat·embedding·rerank), `loaded` |
+| `GET /health` | | `{ready}` (모델을 불러오는 중에도 응답) |
+
+```python
+from openai import OpenAI
+
+client = OpenAI(base_url='http://127.0.0.1:<모델 서버 포트>/v1', api_key='<LAWBOT_MODEL_TOKEN>')
+client.chat.completions.create(
+    model='qwen3.8-27b-4bit', messages=[{'role': 'user', 'content': '다음 개정 내용을 요약해 줘: …'}]
+)
+```
+
+- 127.0.0.1에만 열고, 모든 요청(`/health` 포함)에 토큰이 필요합니다. 모르는 필드(`tools`, `n`>1 등)는 400으로 거절합니다. 질문·문서 내용은 로그에 남기지 않습니다(경로·모델·상태·시간만).
+- 모델 연산은 한 번에 하나입니다(MLX·MPS를 여러 스레드에서 동시에 돌리지 않음). 겹친 요청은 기다리고, 스트림 중 연결이 끊기면(정지 버튼) 다음 토큰에서 멈추고 바로 다음 요청을 받습니다.
+- 웹앱은 임베딩·리랭크를 항상 이 서버에서 쓰고, 생성만 `LAWBOT_LLM_BASE_URL`로 다른 OpenAI 호환 API(클라우드 모델 등)로 바꿀 수 있습니다. 이 맥 밖 주소는 질문이 외부로 나가므로 `LAWBOT_LLM_ALLOW_EXTERNAL=1`과 https가 있어야 허용합니다.
+
+**상시 운영과 개발 동시 실행**
+
+맥 미니에서 운영 웹앱을 계속 켜 두고(휴대폰은 Tailscale로 접속) 같은 맥에서 개발 웹앱도 띄울 때도 모델 서버 하나를 두 웹앱이 함께 씁니다. 웹앱마다 27B와 리랭커를 따로 올리면 32GB를 넘기 때문입니다.
 
 ```
 휴대폰 ──(Tailscale HTTPS, tailscale serve)──▶ 127.0.0.1:<운영 포트>  운영 웹앱 (Gradio, 모델 없음)
 맥 브라우저 ─────────────────────────────────▶ 127.0.0.1:<개발 포트>  개발 웹앱 (Gradio, 모델 없음)
-                                                   │  둘 다 HTTP + 토큰
+                                                   │  둘 다 OpenAI 호환 HTTP + 토큰
                                                    ▼
                                      127.0.0.1:<모델 서버 포트>  모델 서버 (1개)
 ```
@@ -260,7 +299,7 @@ Colab 실험(transformers fp16)과의 순위 일치는 리랭커 도입 때 val�
 | 개발 웹앱 | `<개발 포트>` | 개발 레포 | 없음 |
 | 모델 서버 | `<모델 서버 포트>` | 운영 worktree | 없음 (127.0.0.1 고정) |
 
-포트 번호는 직접 정해 각 `.env`에만 적습니다(레포에 올리지 않음). 운영·개발 포트는 서로 떨어뜨리고, 모델 서버 포트도 따로 둡니다. 모델 서버는 127.0.0.1에만 열리고, 토큰이나 포트가 없으면 실행을 거부합니다. 질문 내용은 모델 서버 로그에 남기지 않습니다(경로·모델·시간만).
+포트 번호는 직접 정해 각 `.env`에만 적습니다(레포에 올리지 않음). 운영·개발 포트는 서로 떨어뜨리고, 모델 서버 포트도 따로 둡니다. 모델 서버는 토큰이나 포트가 없으면 실행을 거부합니다.
 
 1. 토큰을 한 번 만들어 운영·개발 `.env`의 `LAWBOT_MODEL_TOKEN`에 같은 값으로 적습니다: `openssl rand -hex 32`
 2. 운영 worktree를 만듭니다(배포할 태그 기준, 1회).
@@ -270,17 +309,18 @@ Colab 실험(transformers fp16)과의 순위 일치는 리랭커 도입 때 val�
    git worktree add --detach ~/lawbot-prod <태그>
    cd ~/lawbot-prod
    ln -s ~/lawbot/models models                 # 모델 파일 공유
-   cp ~/lawbot/.env .env && chmod 600 .env      # .env.example 맨 아래 운영 블록대로 수정
+   cp ~/lawbot/.env .env && chmod 600 .env      # .env.example대로 (모델 서버 블록 + 맨 아래 운영 블록)
    uv sync --frozen
    ```
 
-   운영 `.env`에는 `LAWBOT_INSTANCE=운영`, `LAWBOT_PORT`, `LAWBOT_MODEL_SERVER_PORT`, `LAWBOT_MODEL_SERVER`, `LAWBOT_MODEL_TOKEN`을, 개발 레포 `.env`에는 `.env.dev.example`대로 `LAWBOT_INSTANCE=개발`, `LAWBOT_PORT`, `LAWBOT_MODEL_SERVER`, `LAWBOT_MODEL_TOKEN`을 적습니다. 두 `.env`의 `LAWBOT_MODEL_SERVER`·`LAWBOT_MODEL_TOKEN`·`LAWBOT_PROFILE`은 같아야 합니다.
+   운영 `.env`는 `.env.example` 그대로(모델 서버 + 웹앱) `LAWBOT_INSTANCE=운영`, `LAWBOT_PORT`를 더하고, 개발 레포 `.env`는 `.env.dev.example`대로 웹앱 설정만 적습니다. 두 `.env`의 `LAWBOT_MODEL_SERVER`·`LAWBOT_MODEL_TOKEN`은 같아야 하고, 웹앱이 고르는 모델 id(`LAWBOT_*_MODEL`)는 운영 `.env`의 `LAWBOT_SERVE_*`에 있어야 합니다.
 3. 직접 실행해 확인합니다.
 
    ```zsh
-   uv run lawbot-model-server                   # 운영 worktree. 포트를 먼저 열고 모델을 올린 뒤 'ready'
-   uv run python -m lawbot.check_deploy         # 모델 파일 + 모델 서버 접속·토큰·api_version·프로필 일치
-   uv run lawbot-app                            # 원격 모드: 모델 서버가 준비될 때까지 최대 LAWBOT_MODEL_SERVER_WAIT초 대기
+   uv run python -m lawbot_model_server.check   # 운영 worktree: 모델 폴더
+   uv run lawbot-model-server                   # 포트를 먼저 열고 모델을 올린 뒤 'ready'
+   uv run python -m lawbot.check_deploy         # 조문·설정 + 모델 서버 접속·토큰·필요 모델
+   uv run lawbot-app                            # 모델 서버가 준비될 때까지 최대 LAWBOT_MODEL_SERVER_WAIT초 대기
    ```
 
 4. launchd로 상시 실행합니다(1회). 템플릿의 자리표시를 채워 복사합니다. 비밀 값과 포트는 plist에 넣지 않습니다(`.env`).
@@ -294,7 +334,7 @@ Colab 실험(transformers fp16)과의 순위 일치는 리랭커 도입 때 val�
    done
    launchctl print gui/$(id -u)/com.lawbot.web | grep state
    tail -f ~/Library/Logs/lawbot/model-server.log
-   launchctl kickstart -k gui/$(id -u)/com.lawbot.web          # 재시작 (서버 쪽 코드가 바뀌면 com.lawbot.model-server도)
+   launchctl kickstart -k gui/$(id -u)/com.lawbot.web          # 재시작 (모델 서버 코드가 바뀌면 com.lawbot.model-server도)
    launchctl bootout gui/$(id -u)/com.lawbot.web               # 해제 (모델 서버도 같은 방식)
    ```
 
@@ -308,21 +348,20 @@ Colab 실험(transformers fp16)과의 순위 일치는 리랭커 도입 때 val�
 
 이 구조의 제약:
 
-- 웹앱 쪽 코드(`app.py`, `service.ask`, `answer_format.py`, system 파일)는 개발 웹앱만 다시 띄워 시험합니다. system 문구는 웹앱이 자기 레포의 파일을 요청마다 보냅니다.
-- 서버 쪽 코드(`llm.py`의 프롬프트 조립, `reranker.py`, `retriever.py`, `model_server.py`)는 개발용 모델 서버로 시험합니다. 운영 모델 서버를 멈추고(`launchctl bootout …/com.lawbot.model-server`), 개발 레포에서 다른 포트로 띄운 뒤(`LAWBOT_MODEL_SERVER_PORT=<시험 포트> uv run lawbot-model-server`) 개발 웹앱을 그 포트로 연결합니다(`LAWBOT_MODEL_SERVER=http://127.0.0.1:<시험 포트> uv run lawbot-app`). 메모리 때문에 모델 서버는 한 번에 하나만 띄웁니다.
-- 모델 서버는 요청을 한 번에 하나만 처리합니다. 개발 화면에서 질문하는 동안 휴대폰 질문은 기다립니다. 정지 버튼으로 연결이 끊기면 바로 다음 요청을 받지만, 휴대폰이 연결을 끊지 않고 사라지면 생성이 최대 길이(1024토큰)에서 끝날 때까지 기다립니다.
-- 검색 설정(리랭커 사용·후보 수)과 상주 모델 수는 모델 서버(운영 `.env`)가 기준입니다. 원격 모드 웹앱의 `LAWBOT_RERANKER_*`·`LAWBOT_MAX_RESIDENT`는 쓰지 않습니다. 웹앱은 시작할 때 프로필·`doc_style`·모델 key·API 버전이 서버와 같은지 확인하고, 다르면 실행을 거부합니다.
+- 웹앱 쪽 코드(`services/chatbot`: 검색·리랭킹 정렬·하위법령 필터·프롬프트 조립·화면, system 파일, 조문 데이터)는 개발 웹앱만 다시 띄워 시험합니다.
+- 모델 서버 코드(`services/model-server`)는 개발용 모델 서버로 시험합니다. 운영 모델 서버를 멈추고(`launchctl bootout …/com.lawbot.model-server`), 개발 레포에서 다른 포트로 띄운 뒤(`LAWBOT_MODEL_SERVER_PORT=<시험 포트> uv run lawbot-model-server`) 개발 웹앱을 그 포트로 연결합니다(`LAWBOT_MODEL_SERVER=http://127.0.0.1:<시험 포트> uv run lawbot-app`). 메모리 때문에 모델 서버는 한 번에 하나만 띄웁니다.
+- 모델 서버는 모델 연산을 한 번에 하나만 합니다. 개발 화면에서 질문하는 동안 휴대폰 질문은 기다립니다. 정지 버튼으로 연결이 끊기면 바로 다음 요청을 받지만, 휴대폰이 연결을 끊지 않고 사라지면 생성이 최대 길이(1024토큰)에서 끝날 때까지 기다립니다.
+- 웹앱은 시작할 때 조문 인덱스를 모델 서버의 임베딩으로 만듭니다(812조문 기준 수십 초). 운영·개발 웹앱이 각자 만듭니다.
 - 같은 브라우저에서 운영·개발 화면에 번갈아 로그인할 때 로그인 쿠키가 겹치면, 개발 화면은 `http://localhost:<개발 포트>`로 접속합니다(호스트가 다르면 쿠키가 분리됨).
-- `eval_v4`는 원격 모드로도 돌아갑니다. 결과의 `peak_gb`·MLX 메모리는 모델 서버 프로세스 값입니다.
+- `eval_v4`도 같은 모델 서버를 씁니다. 결과의 `peak_gb`는 모델 서버 프로세스 값입니다.
 
 **법령 데이터 버전 (매니페스트)**
 
-조문 CSV 옆의 `manifest.json`(v4 `data/v4/manifest.json`, v1 `data/manifest.json`)에 데이터 버전·기준일·수집일·출처·조문 수(법령별·종류별)·sha256과, 임베딩·4B LoRA가 학습한 데이터 버전을 적어 둡니다. 검색 인덱스는 파일이 아니라 모델 서버가 시작할 때 만들므로, 대신 이 값으로 데이터와 모델이 맞는지 확인합니다.
+조문 CSV 옆의 `manifest.json`(v4 `data/v4/manifest.json`, v1 `data/manifest.json`)에 데이터 버전·기준일·수집일·출처·조문 수(법령별·종류별)·sha256과, 임베딩·4B LoRA가 학습한 데이터 버전을 적어 둡니다. 검색 인덱스는 파일이 아니라 웹앱이 시작할 때 만들므로, 대신 이 값으로 데이터와 모델이 맞는지 확인합니다. 조문 데이터는 웹앱에만 있습니다(모델 서버는 모름).
 
-- 모델 서버(로컬 모드 웹앱 포함)는 시작할 때 CSV를 검사해, 조문 수나 sha256이 다르면 모델을 올리기 전에 실행을 거부합니다. 매니페스트가 없으면 경고만 합니다.
+- 웹앱은 시작할 때 CSV를 검사해, 조문 수나 sha256이 다르면 모델 서버에 접속하기 전에 실행을 거부합니다. 매니페스트가 없으면 경고만 합니다.
 - `uv run python -m lawbot.check_deploy`가 같은 검사를 OK/FAIL로 보여 줍니다. 시행일이 수집일보다 늦은 조문은 WARN입니다.
-- 모델 서버 `/info`가 `dataset`(버전·기준일·sha256)을 보내고, 원격 모드 웹앱은 자기 레포의 매니페스트와 다르면 경고합니다(시작은 막지 않음).
-- 조문 CSV를 바꾸면 매니페스트도 새 데이터 버전으로 함께 바꾸고, 모델 서버와 웹앱을 모두 재시작합니다.
+- 조문 CSV를 바꾸면 매니페스트도 새 데이터 버전으로 함께 바꾸고, 웹앱을 재시작합니다.
 - 한 폴더에 조문 CSV가 여럿이면 `manifest_<이름>.json`을 더 둡니다. `articles_file`이 그 CSV인 매니페스트를 고릅니다(812조문: `data/v4/manifest_decree.json`).
 
 **요청 로그와 오류 안내**
@@ -334,7 +373,7 @@ uv run python -m lawbot.log_summary                      # 상태별 건수, 단
 uv run python -m lawbot.log_summary --caller lawbot-app  # 평가 실행 제외
 ```
 
-오류 유형은 화면 안내와 같습니다. `model_server`(서버 연결 실패·토큰 불일치·로딩 중)는 "모델 서버가 준비되지 않았습니다", `model_load`(모델 폴더·system 파일 없음)는 기존 "모델을 불러오지 못했습니다"로 안내합니다. 리랭킹·생성 오류는 임베딩 순위로 되돌리지 않고 그대로 오류로 표시합니다.
+오류 유형은 화면 안내와 같습니다. `model_server`(서버 연결 실패·토큰 불일치·로딩 중)는 "모델 서버가 준비되지 않았습니다", `model_load`(모델 서버의 모델 폴더 없음·형식 오류, 웹앱의 system 파일 없음)는 "모델을 불러오지 못했습니다"로 안내합니다. 요청 로그의 `mode`는 `api`(모델 서버에서 생성) 또는 `external`(외부 생성 API)입니다. 리랭킹·생성 오류는 임베딩 순위로 되돌리지 않고 그대로 오류로 표시합니다.
 
 **답변 피드백 (선택, `LAWBOT_FEEDBACK=1`)**
 
@@ -355,11 +394,11 @@ uv run python -m lawbot.feedback_export feedback_review_<날짜>.csv --out data/
 
 **테스트 실행**
 
-기본 테스트는 모델 파일, 네트워크, 실제 비밀번호 없이 돌아갑니다. `uv sync`만 하면 됩니다. 실제 모델 대신 가짜 임베딩·sLLM을 넣고, 테스트 중 외부 네트워크 접속은 막습니다. `data/`·`results/`는 읽기만 합니다.
+기본 테스트는 모델 파일, 네트워크, 실제 비밀번호 없이 돌아갑니다. `uv sync`만 하면 됩니다. 두 서비스의 테스트(`services/*/tests`)를 함께 돌리고, 실제 모델 대신 가짜 모델·가짜 모델 서버를 넣으며, 테스트 중 외부 네트워크 접속은 막습니다. 챗봇 클라이언트와 실제 모델 서버 앱(가짜 모델)이 OpenAI SDK로 통하는지 보는 계약 테스트도 들어 있습니다. `data/`·`results/`는 읽기만 합니다.
 
 ```bash
 uv run pytest              # 기본 테스트 전체 (모델 불필요)
-uv run pytest -m models    # 실제 모델 테스트 (models/ 필요, 기본 실행에서 제외)
+uv run pytest -m models services/model-server   # 실제 모델 스모크 테스트 (models/ 필요, 기본 실행에서 제외)
 uv run ruff check          # 린트 (규칙은 pyproject.toml의 [tool.ruff])
 uv run ruff format         # 포맷 (작은따옴표, 120자)
 ```
@@ -419,25 +458,26 @@ uv run python -m lawbot.report --tag v1_4bit_full --retrieval retrieval_emb_fina
 
 ### 프로젝트 구조
 
-uv workspace 모노레포입니다. 레포 최상위에서 `uv sync`·`uv run …`을 실행하면 모든 서비스가 함께 설치됩니다. 데이터(`data/`), 모델(`models/`), 평가 결과(`results/`)는 레포 최상위에 그대로 둡니다. 모델 서버를 별도 서비스(`services/model-server`, OpenAI 호환 API)로 나누는 작업이 진행 중입니다([계획](docs/plans/monorepo-openai-api.md)).
+uv workspace 모노레포입니다. 레포 최상위에서 `uv sync`·`uv run …`을 실행하면 모든 서비스가 함께 설치됩니다. 데이터(`data/`), 모델(`models/`), 평가 결과(`results/`)는 레포 최상위에 그대로 둡니다. 서비스는 서로 import하지 않고 HTTP(OpenAI 호환 API)로만 통합니다.
 
 ```
 pyproject.toml         # workspace 루트: 멤버 목록, pytest·ruff 설정
-services/chatbot/      # 웹앱·평가 (패키지 lawbot), 테스트는 services/chatbot/tests/
+services/chatbot/      # 웹앱·평가 (패키지 lawbot, 모델 라이브러리 없음), 테스트는 services/chatbot/tests/
+services/model-server/ # OpenAI 호환 모델 서버 (패키지 lawbot_model_server, MLX·torch), 테스트는 services/model-server/tests/
 ```
 
 ```
 services/chatbot/src/lawbot/
-├── paths.py           # 데이터·모델 경로
-├── retriever.py       # 임베딩 검색 (법률, 켜면 하위법령 인덱스 따로)
+├── paths.py           # 데이터 경로
+├── retriever.py       # 조문 인덱스·코사인 검색 (벡터는 모델 서버 임베딩, 법률·하위법령 인덱스 따로)
+├── reranker.py        # 리랭커 클라이언트: 모델 서버 점수 → 정렬 (동점은 임베딩 순위)
 ├── decree.py          # 시행령·시행규칙 첨부 필터 (same1+other0.9, 웹앱·평가 공통)
-├── llm.py             # 프롬프트 구성, MLX 생성
-├── service.py         # UI와 무관한 질의응답 흐름 (모델 로딩, 검색 → 답변 스트리밍)
+├── llm.py             # 프롬프트 구성, openai SDK로 생성 스트림
+├── api_client.py      # 모델 서버 클라이언트 (임베딩·리랭크·모델 목록, 프록시 무시)
+├── service.py         # UI와 무관한 질의응답 흐름 (모델 서버 접속, 검색 → 답변 스트리밍)
 ├── app.py             # Gradio 웹앱
-├── security.py        # 로컬 전용 실행 설정 (127.0.0.1, 로그인 필수, 공유 링크 없음, 포트·모델 서버 주소 검증)
-├── prompts.py         # v1 기본 system 문구 (모델 라이브러리 없이 읽음)
-├── model_server.py    # 내부 모델 서버: 임베딩·리랭커·답변 모델을 한 번만 올려 웹앱들이 공유 (127.0.0.1, 토큰)
-├── remote.py          # 원격 모드 웹앱의 모델 서버 클라이언트 (LAWBOT_MODEL_SERVER)
+├── security.py        # 로컬 전용 실행 설정 (127.0.0.1, 로그인 필수, 공유 링크 없음, 포트·모델 서버·생성 API 주소 검증)
+├── prompts.py         # v1 기본 system 문구
 ├── citation.py        # 인용 파싱·형식 검증·거절 판정 (웹앱 화면과 eval_v4 채점이 같이 씀)
 ├── manifest.py        # 법령 데이터 매니페스트 검사 (조문 수·sha256·기준일)
 ├── log_summary.py     # 요청 로그(logs/requests.jsonl) 요약
@@ -450,6 +490,15 @@ services/chatbot/src/lawbot/
 ├── score_answers.py   # 키워드 기반 채점기
 ├── refusal.py         # 거절 판정 (【결론】에 '확인할 수 없'), 범위 밖 답변 판정 (거절·안내·억지적용·미인용)
 └── report.py          # 평가 결과를 metrics.csv 한 행으로 모으고 기준 실행과 비교
+services/model-server/src/lawbot_model_server/
+├── api.py             # OpenAI 호환 API (FastAPI): 인증·크기 제한·로그, 작업 스레드로 한 번에 하나
+├── chat.py            # MLX 채팅 모델 (chat template·생각 블록 처리·탐욕적 생성)
+├── embeddings.py      # sentence-transformers 임베딩 (MPS, fp16)
+├── rerank.py          # Qwen3-Reranker 채점 (실험 노트북과 같은 입력)
+├── registry.py        # 제공 모델 목록, chat 모델 LRU
+├── config.py          # 포트·토큰·LAWBOT_SERVE_* 설정
+├── check.py           # 모델 폴더 점검 (양자화·어댑터·토크나이저·query 프롬프트)
+└── server.py          # uvicorn 실행 (lawbot-model-server)
 deploy/launchd/        # 상시 운영용 launchd 템플릿 (모델 서버·웹앱)
 ```
 
@@ -538,6 +587,8 @@ Question
              └─ Answer + source article panel (Gradio)
 ```
 
+All models (embedding, reranker, answer) run in the model server (`services/model-server`, an OpenAI-compatible API); the web app (`services/chatbot`) owns the article index, ranking, decree filter, prompt assembly and UI. Generation alone can be switched to an OpenAI-compatible cloud model.
+
 v1:
 
 ```
@@ -621,92 +672,106 @@ models/
 └── qwen3_14b_mlx_4bit/    # base Qwen3-14B = v1 Pro (system: data/system_v1_concise.txt)
 ```
 
-To check that the files match the web app settings without loading any model (problems are marked `FAIL`):
+To check that the files match the settings without loading any model (problems are marked `FAIL`):
 
 ```bash
-uv run python -m lawbot.check_deploy        # current profile (default v4; v1 if LAWBOT_PROFILE=v1)
+uv run python -m lawbot_model_server.check  # model server: LAWBOT_SERVE_* model folders (quantization, adapters, tokenizer, query prompt)
+uv run python -m lawbot.check_deploy        # web app: article CSV, system prompts, retrieval settings + model server and required models
 uv run python -m lawbot.versions            # installed package versions and Mac specs
 ```
 
-**Run the web app (settings file .env)**
+**Run (model server + web app, settings file .env)**
 
-Settings in a `.env` file at the repository root are read when `uv run lawbot-app` starts. Copy `.env.example` (32GB Mac mini defaults: v4, 0.6B embedding, 10 candidates → 4-bit reranker → 3, Pro 27B only) and fill in only the username and password:
+All models run in the model server (`services/model-server`, an OpenAI-compatible API); the web app (`services/chatbot`) only does article retrieval, prompt assembly and the UI. Both read the same `.env` at the repository root. Copy `.env.example` (32GB Mac mini defaults: v4, 0.6B embedding, 10 candidates → 4-bit reranker → 3, Pro 27B only) and fill in the username, password and the model server port, URL and token:
 
 ```zsh
 cp .env.example .env
-chmod 600 .env            # owner-only (it holds the password)
-open -e .env              # fill LAWBOT_USER= and LAWBOT_PW=, then save
-uv run lawbot-app
+chmod 600 .env            # owner-only (it holds the password and token)
+openssl rand -hex 32      # token: paste into LAWBOT_MODEL_TOKEN
+open -e .env              # fill LAWBOT_USER, LAWBOT_PW, LAWBOT_MODEL_SERVER_PORT, LAWBOT_MODEL_SERVER, then save
+uv run lawbot-model-server   # terminal 1: opens the port, loads the models, prints 'ready'
+uv run lawbot-app            # terminal 2: waits for the model server, builds the article index, starts
 ```
 
-`.env` is git-ignored. Variables already exported in the shell win over the file (e.g. `LAWBOT_RERANKER_ENABLED=0 uv run lawbot-app` for a one-off run). `LAWBOT_ENV_FILE=<file>` picks another file and `LAWBOT_ENV_FILE=` disables it. Only `LAWBOT_*` and `LLM_PATH` are allowed in the file. `lawbot-model-server` and `check_deploy` read the same file. To keep the password out of the file, delete the `LAWBOT_PW=` line and use `read -rs 'LAWBOT_PW?Password: ' && export LAWBOT_PW` or the macOS Keychain (`LAWBOT_PW="$(security find-generic-password -a lawbot -s lawbot -w)" uv run lawbot-app`).
+`.env` is git-ignored. Variables already exported in the shell win over the file (e.g. `LAWBOT_RERANKER_ENABLED=0 uv run lawbot-app` for a one-off run). `LAWBOT_ENV_FILE=<file>` picks another file and `LAWBOT_ENV_FILE=` disables it. Only `LAWBOT_*` variables are allowed in the file. To keep the password out of the file, delete the `LAWBOT_PW=` line and use `read -rs 'LAWBOT_PW?Password: ' && export LAWBOT_PW` or the macOS Keychain (`LAWBOT_PW="$(security find-generic-password -a lawbot -s lawbot -w)" uv run lawbot-app`).
 
-If the v4 files (article CSV, 4B system prompt) are missing, the app refuses to start before loading any model and says what is missing. Until v4 is ready, run v1:
+If the v4 files (article CSV, 4B system prompt) are missing, the app refuses to start before contacting the model server and says what is missing. Until v4 is ready, run v1 (the model server must serve the v1 model ids):
 
 ```zsh
-LAWBOT_PROFILE=v1 LAWBOT_MODELS= LAWBOT_RERANKER_ENABLED=0 uv run lawbot-app
+LAWBOT_PROFILE=v1 LAWBOT_MODELS= LAWBOT_RERANKER_ENABLED=0 LAWBOT_DECREE_ENABLED=0 uv run lawbot-app
 ```
 
-`LAWBOT_MODELS` selects the answer models used on this machine (`.env.example`: `pro` only). Models left out are not loaded and appear disabled in the UI ("이 기기에서 사용 안 함"; selecting one switches back to the default). With both (`fast,pro`) you choose in the UI, and both use the same retrieval results (top 3 articles). Fast (trained on the four-part format) always generates four parts and "간결" only trims the display; Pro (concise by default) regenerates with the four-part system prompt (`data/v4/system_v4.txt`) when "전체 (4항목)" is selected.
+`LAWBOT_MODELS` selects the answer models used on this machine (`.env.example`: `pro` only). Models left out appear disabled in the UI ("이 기기에서 사용 안 함"; selecting one switches back to the default). With both (`fast,pro`) you choose in the UI, and both use the same retrieval results (top 3 articles). Fast (trained on the four-part format) always generates four parts and "간결" only trims the display; Pro (concise by default) regenerates with the four-part system prompt (`data/v4/system_v4.txt`) when "전체 (4항목)" is selected.
 
-| Model | Setup (v4 default paths) | Default answer format |
+| Model | Setup (model id · v4 default folder) | Default answer format |
 | --- | --- | --- |
-| Lawbot Fast | Qwen3-4B + LoRA (`models/v4/sllm_4b_lora_mlx_4bit`) | Full: four parts (Conclusion, Cited articles, Explanation, Notes) |
-| Lawbot Pro | Qwen3.8-27B 4-bit, untuned (`models/v4/qwen3.8_27b_mlx_4bit`) with a draft concise system prompt (`data/v4/system_v4_concise.txt`) | Concise: conclusion + `근거:` the articles actually cited. Slower |
+| Lawbot Fast | Qwen3-4B + LoRA (`lawbot-fast-v4` · `models/v4/sllm_4b_lora_mlx_4bit`) | Full: four parts (Conclusion, Cited articles, Explanation, Notes) |
+| Lawbot Pro | Qwen3.8-27B 4-bit, untuned (`qwen3.8-27b-4bit` · `models/v4/qwen3.8_27b_mlx_4bit`) with a draft concise system prompt (`data/v4/system_v4_concise.txt`) | Concise: conclusion + `근거:` the articles actually cited. Slower |
 
-Switching models also switches the answer format to that model's default; you can change the format afterwards. A status line under the chat shows retrieval, model switch, first token, first character, generation speed and total time. If the Pro folder or Pro system prompt is missing, the app runs with Fast only and shows an error when Pro is selected.
+Switching models also switches the answer format to that model's default; you can change the format afterwards. A status line under the chat shows retrieval, first token, first character, generation speed and total time. Selecting a model the server has not loaded yet shows "loading" first, and the load time is part of the first-token time. The web app refuses to start if a model id it uses is not served by the model server.
 
-Change model paths or memory settings in `.env` (relative paths are resolved from the repository root); the table below lists every variable.
+The web app picks models by id (`LAWBOT_*_MODEL`), not by folder; model folders and the resident count are model server settings (`LAWBOT_SERVE_*`, `LAWBOT_MAX_RESIDENT`). The tables below list every variable (relative paths are resolved from the repository root).
 
 The web app is local-only, for use on this Mac. The address is fixed to `127.0.0.1`; the port is `LAWBOT_PORT` in `.env` (the previous default if unset). Open `http://127.0.0.1:<port>` in a browser and log in. Other devices on the network cannot connect, and no public Gradio share link is created. The address and share setting cannot be changed, and Gradio variables such as `GRADIO_SERVER_NAME` and `GRADIO_SERVER_PORT` are ignored (`services/chatbot/src/lawbot/security.py`). For an always-on setup, set `LAWBOT_PORT` explicitly in `.env`.
+
+Web app (`lawbot-app`, `check_deploy`, `eval_v4`):
 
 | Variable | Required | Purpose |
 | --- | --- | --- |
 | `LAWBOT_USER` | Yes | Login username (must not be empty after trimming whitespace) |
 | `LAWBOT_PW` | Yes | Login password (must not be empty or whitespace only) |
+| `LAWBOT_MODEL_SERVER` | Yes | Model server URL `http://127.0.0.1:<model server port>` (this Mac only) |
+| `LAWBOT_MODEL_TOKEN` | Yes | Model server token (16+ characters, `openssl rand -hex 32`); same value for web apps and server |
+| `LAWBOT_MODEL_SERVER_WAIT` | No | Seconds to wait at startup for the model server to be ready (default `300`) |
 | `LAWBOT_PROFILE` | No | `v4` (default, 415 articles from 7 laws) or `v1` (130 Labor Standards Act articles, previous setup) |
-| `LAWBOT_FAST_PATH` | No | Fast (4B) model folder. Default v4 `models/v4/sllm_4b_lora_mlx_4bit`, v1 `models/sllm_mlx_4bit` |
-| `LAWBOT_PRO_PATH` | No | Pro model folder. Default v4 `models/v4/qwen3.8_27b_mlx_4bit` (27B), v1 `models/qwen3_14b_mlx_4bit` (14B) |
+| `LAWBOT_EMB_MODEL` | No | Retrieval embedding model id (default v4 `lawbot-emb-v4`, v1 `lawbot-emb-v1`) |
+| `LAWBOT_FAST_MODEL` / `LAWBOT_PRO_MODEL` | No | Answer model ids (default v4 `lawbot-fast-v4` / `qwen3.8-27b-4bit`, v1 `lawbot-fast-v1` / `qwen3-14b-4bit`); the provider's model name for an external API |
 | `LAWBOT_MODELS` | No | Comma-separated answer model keys to use (`pro`, `fast`, `fast,pro`); the first is the default. Empty: both |
 | `LAWBOT_ENV_FILE` | No | Settings file to read (default `.env` at the repo root, skipped if absent); empty disables it. Shell only |
 | `LAWBOT_PRO_SYSTEM` | No | Pro concise system prompt file. Default v4 `data/v4/system_v4_concise.txt`, v1 `data/system_v1_concise.txt` |
-| `LAWBOT_V4_ARTICLES` / `LAWBOT_V4_EMB` / `LAWBOT_V4_SYSTEM` | No | v4 article CSV / embedding folder / 4B system prompt file (defaults `data/v4/articles_v4.csv`, `models/v4/emb_v4_fp16`, `data/v4/system_v4.txt`) |
-| `LAWBOT_EMB` | No | v1 retrieval embedding folder (default `models/emb_final_v3_fp16`) |
-| `LAWBOT_MAX_RESIDENT` | No | Answer models kept in memory: `2` (default, Fast and Pro both resident, no switch wait) or `1` (selected model only, reloads on switch) |
-| `LAWBOT_RERANKER_ENABLED` | No | `1` re-ranks the embedding candidates with Qwen3-Reranker-4B and keeps the top 3 (default `0`: no reranker is loaded, plain embedding top 3). v4 profile only |
-| `LAWBOT_RERANKER_MODEL_PATH` | No | Reranker MLX folder (default `models/v4/reranker_4b_mlx_4bit`) |
+| `LAWBOT_V4_ARTICLES` / `LAWBOT_V4_SYSTEM` | No | v4 article CSV / 4B system prompt file (defaults `data/v4/articles_v4.csv`, `data/v4/system_v4.txt`) |
+| `LAWBOT_RERANKER_ENABLED` | No | `1` re-ranks the embedding candidates with Qwen3-Reranker-4B and keeps the top 3 (default `0`: plain embedding top 3). v4 profile only |
+| `LAWBOT_RERANK_MODEL` | No | Reranker model id (default `qwen3-reranker-4b`) |
 | `LAWBOT_RERANKER_CANDIDATES` | No | Embedding candidates passed to the reranker (default `10`, the experiment value; at least 3) |
 | `LAWBOT_DECREE_ENABLED` | No | `1` retrieves enforcement decree/rule articles separately and attaches them after the 3 Act articles (default `0`: Act articles only). Needs the reranker; v4 profile only |
 | `LAWBOT_DECREE_TAU` | No | Reranker score a decree of a different law than the top Act article needs to be attached (default `0.9`, chosen on validation) |
 | `LAWBOT_DECREE_K` | No | Maximum decree articles attached (default `2`) |
 | `LAWBOT_DECREE_MODELS` | No | Answer model keys that get decrees (default `pro`; Fast was trained with 3 articles and attachment was not evaluated for it) |
 | `LAWBOT_V4_DECREE_ARTICLES` | No | 812-article CSV used when decrees are on (default `data/v4/law_articles_v4_decree.csv`); replaces `LAWBOT_V4_ARTICLES` while on |
-| `LLM_PATH` | No | SLM folder used by the real-model tests (`pytest -m models`), e.g. `models/sllm_mlx_8bit`. Not used by the web app |
+| `LAWBOT_LLM_BASE_URL` | No | Send generation only to another OpenAI-compatible API (e.g. `https://…/v1`). Default: the model server's `/v1` |
+| `LAWBOT_LLM_API_KEY` | For an external API | That API's key (the model server token is never sent outside) |
+| `LAWBOT_LLM_ALLOW_EXTERNAL` | For an external API | `1` allows questions to leave this Mac (https only) |
 | `LAWBOT_PORT` | No | Web app port (1024–65535). Previous default if unset. Use different values when running production and development together |
 | `LAWBOT_INSTANCE` | No | Name appended to the page and tab title (e.g. `운영`, `개발`; at most 40 characters) |
-| `LAWBOT_MODEL_SERVER` | No | Model server URL `http://127.0.0.1:<model server port>`. Set: remote mode (the web app loads no models). Empty: local mode |
-| `LAWBOT_MODEL_SERVER_PORT` | Model server | Model server port (1024–65535, no default) |
-| `LAWBOT_MODEL_TOKEN` | Model server, remote mode | Model server token (16+ characters, `openssl rand -hex 32`); same value for web apps and server |
-| `LAWBOT_MODEL_SERVER_WAIT` | No | Seconds a remote-mode web app waits at startup for the model server to be ready (default `300`) |
 | `LAWBOT_REQUEST_LOG` | No | Request log file (default `logs/requests.jsonl` at the repo root). Empty disables it |
 | `LAWBOT_FEEDBACK` | No | `1` adds 👍 and flag buttons to each answer and saves the rated answers (default `0`; only `0` or `1`) |
 | `LAWBOT_FEEDBACK_DIR` | No | Feedback folder (default `feedback/` at the repo root). Inside the repo it must be git-ignored. For production, an absolute path outside the repo is recommended |
+
+Model server (`lawbot-model-server`, `lawbot_model_server.check`):
+
+| Variable | Required | Purpose |
+| --- | --- | --- |
+| `LAWBOT_MODEL_SERVER_PORT` | Yes | Model server port (1024–65535, no default). The address is fixed to 127.0.0.1 |
+| `LAWBOT_MODEL_TOKEN` | Yes | The same token as above (16+ characters) |
+| `LAWBOT_SERVE_CHAT` / `LAWBOT_SERVE_EMBEDDING` / `LAWBOT_SERVE_RERANK` | At least one | Comma-separated `id=folder` entries (e.g. `qwen3.8-27b-4bit=models/v4/qwen3.8_27b_mlx_4bit`) |
+| `LAWBOT_SERVE_PRELOAD` | No | Chat model ids loaded at startup (default: the first chat models up to the resident count). Embedding and reranker models always load at startup |
+| `LAWBOT_MAX_RESIDENT` | No | Chat models kept in memory (default `2`, LRU). Use `1` with 27B on 32 GB |
 
 If either `LAWBOT_USER` or `LAWBOT_PW` is missing or empty, the app refuses to start with a `RuntimeError` before loading any model. There is no way to run the server without a login.
 
 **Reranker (optional, v4)**
 
-When enabled, retrieval becomes `embedding top 10 → Qwen3-Reranker-4B (not fine-tuned) → reranked top 3 → answer model`. Fast and Pro share the reranked context, and the reranker is loaded once at startup and stays resident. When disabled (default) it is not loaded and the app uses the embedding top 3 as before. Scoring (instruction, prompt, 2,560-token limit, yes/no logits, ties kept in embedding order) matches the v4 reranker experiment notebook (`services/chatbot/src/lawbot/reranker.py`).
+When enabled, retrieval becomes `embedding top 10 → Qwen3-Reranker-4B (not fine-tuned) → reranked top 3 → answer model`. Fast and Pro share the reranked context, and the model server loads the reranker at startup and keeps it resident. When disabled (default) the web app does not call it and uses the embedding top 3 as before. Scoring (prompt, 2,560-token limit, yes/no logits) matches the v4 reranker experiment notebook (`services/model-server/src/lawbot_model_server/rerank.py`); the task instruction and the ordering (ties kept in embedding order) belong to the web app (`services/chatbot/src/lawbot/reranker.py`).
 
 `.env.example` enables it (`LAWBOT_RERANKER_ENABLED=1`); see "Model setup" above for the conversion command.
 
 ```zsh
-uv run python -m lawbot.check_deploy           # with .env: reranker folder, quantization, yes/no tokens
-uv run pytest -m models services/chatbot/tests/test_reranker_models.py   # real load + scoring smoke test
+uv run python -m lawbot_model_server.check     # reranker folder, quantization, yes/no tokens
+uv run pytest -m models services/model-server   # real load + scoring smoke tests (embedding and answer models too)
 LAWBOT_RERANKER_ENABLED=0 uv run lawbot-app    # one-off run without it
 ```
 
-Reranker errors (e.g. NaN scores) are shown as errors instead of silently falling back to the embedding order. A missing folder, or enabling it with the v1 profile, stops the app before any model is loaded. Agreement with the Colab run (transformers fp16) was checked on val when the reranker was added (`results/reranker_verify_val_mlx4bit.csv`).
+Reranker errors (e.g. NaN scores) are shown as errors instead of silently falling back to the embedding order. A reranker id the model server does not serve, or enabling it with the v1 profile, stops the web app at startup. Agreement with the Colab run (transformers fp16) was checked on val when the reranker was added (`results/reranker_verify_val_mlx4bit.csv`).
 
 **Enforcement decrees and rules (optional, v4)**
 
@@ -721,19 +786,43 @@ When enabled (`LAWBOT_DECREE_ENABLED=1`; on in `.env.example`), Act retrieval is
 - When nothing passes, nothing is attached and the prompt is identical, character for character, to the decree-off prompt. Attached articles use the same `[n] law Art. N(title)` format (e.g. `[4] 근로기준법 시행령 제2조(…)`).
 - Only models in `LAWBOT_DECREE_MODELS` (default Pro) get decrees. Fast does not even search them, so it behaves as before.
 - The 415 Act articles are encoded exactly as before (max_seq 2,304) and the decrees separately at 3,072 tokens (longest 3,017). The Act embeddings were checked to be bit-identical when decrees were added ([record](docs/evals/2026-10-31-decree-attach.md)).
-- Enabling it without the reranker, or with the v1 profile, stops the app before any model is loaded. Decree reranking errors are shown as errors, like Act reranking.
+- Enabling it without the reranker, or with the v1 profile, stops the app before it contacts the model server. Decree reranking errors are shown as errors, like Act reranking.
 - Screen: decree cards carry a `〔시행령〕`/`〔시행규칙〕` tag and come after the Act cards; cited articles are expanded and the rest folded. The concise citation line and warnings follow the same rules as for Acts. The stats line shows decree time and count; the request log adds `decree_search_ms`, `decree_rerank_ms`, `decree` and `n_decree`.
-- Remote mode: the web app refuses to start if its on/off, τ or k differ from the model server's `/info` `decree` (which models get decrees is the web app's choice). The model server API is version 2.
 - The 812-article manifest is `data/v4/manifest_decree.json` (data `v4-decree`); `data/v4/manifest.json` still describes the 415-article CSV.
 
-**Always-on production plus development (model server)**
+**Model server (OpenAI-compatible API)**
 
-To keep a production web app running on the Mac mini (reached from a phone over Tailscale) while also running a development web app on the same Mac, both web apps share one internal model server (`lawbot-model-server`) that loads the embedding model, reranker and answer models once. Loading 27B and the reranker in every web app would exceed 32 GB. With `LAWBOT_MODEL_SERVER` empty, the web app loads its own models as before (local mode).
+The model server (`services/model-server`, FastAPI) is a general inference server that knows nothing about the article data or chatbot settings. Other apps (for example law-change monitoring that only needs summaries) can call it with the OpenAI SDK.
+
+| Endpoint | Format | Notes |
+| --- | --- | --- |
+| `POST /v1/chat/completions` | OpenAI | Streaming (SSE) and `stream_options.include_usage`. Without `temperature` it decodes greedily (0, unlike OpenAI's default of 1). Extensions: `chat_template_kwargs.enable_thinking` (off by default), `timings` in responses (prefill and generation speed, MLX peak memory) |
+| `POST /v1/embeddings` | OpenAI | `encoding_format` `float` or `base64`. Extensions: `input_type` (`query`/`document`), `max_seq_length`. One list is one encode call |
+| `POST /v1/rerank` | Cohere/Jina | `results: [{index, relevance_score}]`. Extension: `instruction` (task description) |
+| `GET /v1/models` | OpenAI | Extensions: `type` (chat/embedding/rerank), `loaded` |
+| `GET /health` | | `{ready}` (answers while models are still loading) |
+
+```python
+from openai import OpenAI
+
+client = OpenAI(base_url='http://127.0.0.1:<model server port>/v1', api_key='<LAWBOT_MODEL_TOKEN>')
+client.chat.completions.create(
+    model='qwen3.8-27b-4bit', messages=[{'role': 'user', 'content': 'Summarize this amendment: …'}]
+)
+```
+
+- It listens only on 127.0.0.1 and every request (including `/health`) needs the token. Unknown fields (`tools`, `n` > 1, …) are rejected with 400. Questions and documents are never logged (path, model, status and time only).
+- Model computation runs one at a time (MLX and MPS are never driven from several threads at once). Overlapping requests wait; when a stream is disconnected (stop button) generation stops at the next token and the next request starts.
+- The web app always uses this server for embeddings and reranking; only generation can be pointed at another OpenAI-compatible API (e.g. a cloud model) with `LAWBOT_LLM_BASE_URL`. An address outside this Mac sends questions out, so it needs `LAWBOT_LLM_ALLOW_EXTERNAL=1` and https.
+
+**Always-on production plus development**
+
+To keep a production web app running on the Mac mini (reached from a phone over Tailscale) while also running a development web app on the same Mac, both web apps share one model server. Loading 27B and the reranker in every web app would exceed 32 GB.
 
 ```
 phone ──(Tailscale HTTPS, tailscale serve)──▶ 127.0.0.1:<prod port>   production web app (Gradio, no models)
 Mac browser ────────────────────────────────▶ 127.0.0.1:<dev port>    development web app (Gradio, no models)
-                                                  │  both: HTTP + token
+                                                  │  both: OpenAI-compatible HTTP + token
                                                   ▼
                                     127.0.0.1:<model server port>  model server (one)
 ```
@@ -744,11 +833,11 @@ Mac browser ──────────────────────�
 | Development web app | `<dev port>` | development repo | no |
 | Model server | `<model server port>` | production worktree | no (fixed to 127.0.0.1) |
 
-Choose the port numbers yourself and write them only in each `.env` (never in the repository); keep the production and development ports far apart and give the model server its own. The model server listens only on 127.0.0.1 and refuses to start without a token or port. Questions are not written to its log (path, model and timing only).
+Choose the port numbers yourself and write them only in each `.env` (never in the repository); keep the production and development ports far apart and give the model server its own. The model server refuses to start without a token or port.
 
 1. Create a token once and put the same value in `LAWBOT_MODEL_TOKEN` of both `.env` files: `openssl rand -hex 32`
-2. Create the production worktree from the tag to deploy (once): `git worktree add --detach ~/lawbot-prod <tag>`, then in it `ln -s ~/lawbot/models models`, `cp ~/lawbot/.env .env && chmod 600 .env` (edit as in the production block at the end of `.env.example`) and `uv sync --frozen`. The production `.env` sets `LAWBOT_INSTANCE=운영`, `LAWBOT_PORT`, `LAWBOT_MODEL_SERVER_PORT`, `LAWBOT_MODEL_SERVER` and `LAWBOT_MODEL_TOKEN`; the development `.env` follows `.env.dev.example` (`LAWBOT_INSTANCE=개발`, `LAWBOT_PORT`, `LAWBOT_MODEL_SERVER`, `LAWBOT_MODEL_TOKEN`). `LAWBOT_MODEL_SERVER`, `LAWBOT_MODEL_TOKEN` and `LAWBOT_PROFILE` must match.
-3. Check by hand: `uv run lawbot-model-server` (opens the port first, prints `ready` once the models are loaded), `uv run python -m lawbot.check_deploy` (model files plus server reachability, token, API version and profile), `uv run lawbot-app` (remote mode waits up to `LAWBOT_MODEL_SERVER_WAIT` seconds for the server).
+2. Create the production worktree from the tag to deploy (once): `git worktree add --detach ~/lawbot-prod <tag>`, then in it `ln -s ~/lawbot/models models`, `cp ~/lawbot/.env .env && chmod 600 .env` and `uv sync --frozen`. The production `.env` follows `.env.example` (model server + web app) plus `LAWBOT_INSTANCE=운영` and `LAWBOT_PORT`; the development `.env` follows `.env.dev.example` (web app settings only). `LAWBOT_MODEL_SERVER` and `LAWBOT_MODEL_TOKEN` must match, and the model ids the web apps use (`LAWBOT_*_MODEL`) must be in the production `LAWBOT_SERVE_*`.
+3. Check by hand: `uv run python -m lawbot_model_server.check` (model folders), `uv run lawbot-model-server` (opens the port first, prints `ready` once the models are loaded), `uv run python -m lawbot.check_deploy` (articles and settings plus server reachability, token and required models), `uv run lawbot-app` (waits up to `LAWBOT_MODEL_SERVER_WAIT` seconds for the server).
 4. Run both under launchd (once). Fill the placeholders in the templates; secrets and ports stay in `.env`, not in the plist.
 
    ```zsh
@@ -758,7 +847,7 @@ Choose the port numbers yourself and write them only in each `.env` (never in th
        deploy/launchd/com.lawbot.$k.plist.example > ~/Library/LaunchAgents/com.lawbot.$k.plist
      launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.lawbot.$k.plist   # register and start
    done
-   launchctl kickstart -k gui/$(id -u)/com.lawbot.web          # restart (also com.lawbot.model-server after server-side changes)
+   launchctl kickstart -k gui/$(id -u)/com.lawbot.web          # restart (also com.lawbot.model-server after model server changes)
    launchctl bootout gui/$(id -u)/com.lawbot.web               # unregister
    ```
 
@@ -767,21 +856,20 @@ Choose the port numbers yourself and write them only in each `.env` (never in th
 
 Constraints:
 
-- Web-app-side changes (`app.py`, `service.ask`, `answer_format.py`, system prompt files) are tested by restarting only the development web app; the web app sends its own system prompt with every request.
-- Server-side changes (prompt assembly in `llm.py`, `reranker.py`, `retriever.py`, `model_server.py`) need a development model server: stop the production one, start one from the development repo on another port (`LAWBOT_MODEL_SERVER_PORT=<test port> uv run lawbot-model-server`) and point the development web app at it. Run only one model server at a time because of memory.
-- The model server handles one request at a time, so a phone question waits while a development question is generating. Stop buttons disconnect and free it at once; a phone that disappears without disconnecting holds it until generation reaches the length limit (1024 tokens).
-- Retrieval settings (reranker, candidate count) and resident model count come from the model server (production `.env`); a remote-mode web app ignores `LAWBOT_RERANKER_*` and `LAWBOT_MAX_RESIDENT`. At startup it checks that profile, `doc_style`, model keys and API version match the server and refuses to start otherwise.
+- Web app changes (`services/chatbot`: retrieval, rerank ordering, decree filter, prompt assembly, UI, system prompt files, article data) are tested by restarting only the development web app.
+- Model server changes (`services/model-server`) need a development model server: stop the production one, start one from the development repo on another port (`LAWBOT_MODEL_SERVER_PORT=<test port> uv run lawbot-model-server`) and point the development web app at it. Run only one model server at a time because of memory.
+- The model server computes one request at a time, so a phone question waits while a development question is generating. Stop buttons disconnect and free it at once; a phone that disappears without disconnecting holds it until generation reaches the length limit (1024 tokens).
+- The web app builds its article index with the model server's embeddings at startup (tens of seconds for 812 articles); production and development each build their own.
 - If login cookies clash when switching between production and development in one browser, open development at `http://localhost:<dev port>` (a different host keeps separate cookies).
-- `eval_v4` also runs in remote mode; their `peak_gb` and MLX memory are the model server's.
+- `eval_v4` uses the same model server; `peak_gb` in its results is the model server's.
 
 **Law data version (manifest)**
 
-A `manifest.json` next to each article CSV (`data/v4/manifest.json`, `data/manifest.json` for v1; extra CSVs in the same folder get `manifest_<name>.json`, picked by `articles_file`, e.g. `data/v4/manifest_decree.json` for the 812 articles) records the data version, reference and collection dates, source, article counts (per law and per kind), the CSV's SHA-256, and the data version the embedding and 4B LoRA were trained on. The search index is built when the model server starts rather than stored, so these values are what tie the data to the models.
+A `manifest.json` next to each article CSV (`data/v4/manifest.json`, `data/manifest.json` for v1; extra CSVs in the same folder get `manifest_<name>.json`, picked by `articles_file`, e.g. `data/v4/manifest_decree.json` for the 812 articles) records the data version, reference and collection dates, source, article counts (per law and per kind), the CSV's SHA-256, and the data version the embedding and 4B LoRA were trained on. The search index is built when the web app starts rather than stored, so these values are what tie the data to the models. The article data lives only in the web app (the model server never sees it).
 
-- The model server (and a local-mode web app) checks the CSV at startup and refuses to start, before loading any model, if the count or SHA-256 differs. A missing manifest only warns.
+- The web app checks the CSV at startup and refuses to start, before contacting the model server, if the count or SHA-256 differs. A missing manifest only warns.
 - `uv run python -m lawbot.check_deploy` shows the same check as OK/FAIL; articles effective after the collection date are a WARN.
-- The model server's `/info` reports `dataset` (version, reference date, SHA-256); a remote-mode web app warns, without refusing, when it differs from its own repo's manifest.
-- When the article CSV changes, update the manifest with a new data version and restart both the model server and the web app.
+- When the article CSV changes, update the manifest with a new data version and restart the web app.
 
 **Request log and error messages**
 
@@ -792,7 +880,7 @@ uv run python -m lawbot.log_summary                      # counts by status, per
 uv run python -m lawbot.log_summary --caller lawbot-app  # exclude evaluation runs
 ```
 
-Error types match the on-screen messages: `model_server` (unreachable server, token mismatch, still loading) shows "the model server is not ready", `model_load` (missing model folder or system file) keeps the existing load-failure message. Reranking and generation errors are shown as errors, never silently replaced by the embedding order.
+Error types match the on-screen messages: `model_server` (unreachable server, token mismatch, still loading) shows "the model server is not ready", `model_load` (model folder missing or invalid on the model server, or a missing system file in the web app) shows the load-failure message. The request log's `mode` is `api` (generated by the model server) or `external` (external generation API). Reranking and generation errors are shown as errors, never silently replaced by the embedding order.
 
 **Answer feedback (optional, `LAWBOT_FEEDBACK=1`)**
 
@@ -813,11 +901,11 @@ uv run python -m lawbot.feedback_export feedback_review_<date>.csv --out data/fe
 
 **Run the tests**
 
-The default tests need no model files, network access or real password; `uv sync` is enough. They use fake embedding and SLM models, block outbound network access, and only read `data/` and `results/`.
+The default tests need no model files, network access or real password; `uv sync` is enough. They run both services' tests (`services/*/tests`) with fake models and a fake model server, block outbound network access, and only read `data/` and `results/`. A contract test checks that the chatbot client talks to the real model server app (with fake models) through the OpenAI SDK.
 
 ```bash
 uv run pytest              # all default tests (no models needed)
-uv run pytest -m models    # real-model tests (needs models/, excluded by default)
+uv run pytest -m models services/model-server   # real-model smoke tests (needs models/, excluded by default)
 uv run ruff check          # lint (rules in [tool.ruff] in pyproject.toml)
 uv run ruff format         # format (single quotes, 120 columns)
 ```
@@ -867,25 +955,26 @@ See the Korean section above for an example `lawbot.report` command on the saved
 
 ### Project layout
 
-The repository is a uv workspace monorepo. Running `uv sync` or `uv run …` at the top level installs every service. Data (`data/`), models (`models/`) and evaluation results (`results/`) stay at the top level. Splitting the model server into its own service (`services/model-server`, an OpenAI-compatible API) is in progress ([plan](docs/plans/monorepo-openai-api.md)).
+The repository is a uv workspace monorepo. Running `uv sync` or `uv run …` at the top level installs every service. Data (`data/`), models (`models/`) and evaluation results (`results/`) stay at the top level. The services never import each other; they talk only over HTTP (the OpenAI-compatible API).
 
 ```
 pyproject.toml         # workspace root: members, pytest and ruff settings
-services/chatbot/      # web app and evaluation (package lawbot); tests in services/chatbot/tests/
+services/chatbot/      # web app and evaluation (package lawbot, no model libraries); tests in services/chatbot/tests/
+services/model-server/ # OpenAI-compatible model server (package lawbot_model_server, MLX and torch); tests in services/model-server/tests/
 ```
 
 ```
 services/chatbot/src/lawbot/
-├── paths.py           # data and model paths
-├── retriever.py       # embedding retrieval (Acts; separate decree index when enabled)
+├── paths.py           # data paths
+├── retriever.py       # article index and cosine search (vectors from the model server; separate Act and decree indexes)
+├── reranker.py        # reranker client: model server scores → ordering (ties kept in embedding order)
 ├── decree.py          # enforcement-decree attachment filter (same1+other0.9, shared by web app and eval)
-├── llm.py             # prompt construction, MLX generation
-├── service.py         # UI-independent Q&A flow (model loading, retrieval → streamed answer)
+├── llm.py             # prompt construction, generation stream through the openai SDK
+├── api_client.py      # model server client (embeddings, rerank, model list; ignores proxies)
+├── service.py         # UI-independent Q&A flow (model server connection, retrieval → streamed answer)
 ├── app.py             # Gradio web app
-├── security.py        # local-only launch settings (127.0.0.1, login required, no share link, port and model server URL checks)
-├── prompts.py         # v1 default system prompt (readable without model libraries)
-├── model_server.py    # internal model server: loads embedding, reranker and answer models once for all web apps (127.0.0.1, token)
-├── remote.py          # model server client for remote-mode web apps (LAWBOT_MODEL_SERVER)
+├── security.py        # local-only launch settings (127.0.0.1, login required, no share link, port, model server and generation API URL checks)
+├── prompts.py         # v1 default system prompt
 ├── citation.py        # citation parsing, per-citation checks, refusal detection (shared by the web view and eval_v4)
 ├── manifest.py        # law data manifest checks (article counts, SHA-256, reference date)
 ├── log_summary.py     # summary of the request log (logs/requests.jsonl)
@@ -898,6 +987,15 @@ services/chatbot/src/lawbot/
 ├── score_answers.py   # keyword-based answer scorer
 ├── refusal.py         # refusal detection ('확인할 수 없' in the conclusion), out-of-scope verdicts (refusal, referral, forced, uncited)
 └── report.py          # combine evaluation results into a metrics.csv row and compare with a baseline
+services/model-server/src/lawbot_model_server/
+├── api.py             # OpenAI-compatible API (FastAPI): auth, size limit, logging, one computation at a time via a worker thread
+├── chat.py            # MLX chat model (chat template, thinking-block handling, greedy decoding)
+├── embeddings.py      # sentence-transformers embeddings (MPS, fp16)
+├── rerank.py          # Qwen3-Reranker scoring (same inputs as the experiment notebook)
+├── registry.py        # served models, chat-model LRU
+├── config.py          # port, token, LAWBOT_SERVE_* settings
+├── check.py           # model folder checks (quantization, adapters, tokenizer, query prompt)
+└── server.py          # uvicorn launcher (lawbot-model-server)
 deploy/launchd/        # launchd templates for the always-on setup (model server, web app)
 ```
 
