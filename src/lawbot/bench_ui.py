@@ -6,12 +6,15 @@ import argparse
 import json
 import os
 import time
+
 import httpx
 import pandas as pd
+
+from lawbot import envfile
 from lawbot.bench_models import QUESTIONS
 from lawbot.paths import RESULTS
-from lawbot import envfile
 from lawbot.security import SERVER_NAME, server_port
+
 
 def ask_timed(c, question, model_key, fmt):
     t0 = time.perf_counter()
@@ -19,7 +22,7 @@ def ask_timed(c, question, model_key, fmt):
     r.raise_for_status()
     first = last = None
     answer, stats, error = '', '', None
-    with c.stream('GET', f"/gradio_api/call/chat/{r.json()['event_id']}", timeout=600) as s:
+    with c.stream('GET', f'/gradio_api/call/chat/{r.json()["event_id"]}', timeout=600) as s:
         event = None
         for line in s.iter_lines():
             if line.startswith('event: '):
@@ -34,8 +37,17 @@ def ask_timed(c, question, model_key, fmt):
                     if first is None and not answer.startswith('⏳'):
                         first = time.perf_counter() - t0
                 last = time.perf_counter() - t0
-    return {'model': model_key, 'fmt': fmt, 'question': question, 'ui_first_text': first, 'ui_done': last,
-            'server_stats': stats, 'error': error, 'answer': answer}
+    return {
+        'model': model_key,
+        'fmt': fmt,
+        'question': question,
+        'ui_first_text': first,
+        'ui_done': last,
+        'server_stats': stats,
+        'error': error,
+        'answer': answer,
+    }
+
 
 def main():
     ap = argparse.ArgumentParser()
@@ -44,7 +56,7 @@ def main():
     ap.add_argument('--fmt', default='concise', choices=['concise', 'full'])
     args = ap.parse_args()
     pd.set_option('display.width', 200, 'display.max_columns', None)
-    envfile.load()                       # 웹앱과 같은 .env (포트·계정)
+    envfile.load()  # 웹앱과 같은 .env (포트·계정)
     user, pw = os.environ.get('LAWBOT_USER', ''), os.environ.get('LAWBOT_PW', '')
     if not user.strip() or not pw.strip():
         raise SystemExit('LAWBOT_USER/LAWBOT_PW 환경 변수가 필요합니다 (웹앱과 같은 값)')
@@ -56,12 +68,18 @@ def main():
             for key in args.models.split(','):
                 rows.append(ask_timed(c, q, key, args.fmt))
                 r = rows[-1]
-                print(f"{key:4} 첫 글자 {r['ui_first_text'] or 0:5.1f}초 · 완료 {r['ui_done'] or 0:5.1f}초 · {r['server_stats']}")
+                print(
+                    f'{key:4} 첫 글자 {r["ui_first_text"] or 0:5.1f}초 · 완료 {r["ui_done"] or 0:5.1f}초 · {r["server_stats"]}'
+                )
     o = pd.DataFrame(rows)
     RESULTS.mkdir(exist_ok=True)
     o.to_csv(RESULTS / f'bench_ui_{args.tag}.csv', index=False, encoding='utf-8-sig')
     print(o.groupby('model')[['ui_first_text', 'ui_done']].median().round(2))
-    print('15초 안에 첫 글자:', o.groupby('model')['ui_first_text'].apply(lambda s: f'{(s <= 15).sum()}/{len(s)}').to_dict())
+    print(
+        '15초 안에 첫 글자:',
+        o.groupby('model')['ui_first_text'].apply(lambda s: f'{(s <= 15).sum()}/{len(s)}').to_dict(),
+    )
+
 
 if __name__ == '__main__':
     main()

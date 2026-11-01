@@ -4,8 +4,11 @@
 import argparse
 import json
 from pathlib import Path
+
 import pandas as pd
+
 from lawbot.service import MS_FIELDS, REQUEST_LOG, request_log_path
+
 
 def load(path):
     """JSONL → DataFrame. 깨진 줄(쓰는 중에 멈춘 마지막 줄 등)은 건너뛰고 개수를 함께 돌려준다"""
@@ -19,6 +22,7 @@ def load(path):
             bad += 1
     return pd.DataFrame(rows), bad
 
+
 def summarize(d):
     """요약 줄 목록"""
     out = [f'요청 {len(d)}건 · ' + ' · '.join(f'{k} {v}' for k, v in d['status'].value_counts().items())]
@@ -26,22 +30,25 @@ def summarize(d):
     for (mode, model), g in ok.groupby(['mode', 'model']):
         out.append(f'[{mode} · {model}] 성공 {len(g)}건')
         for k in MS_FIELDS:
-            if f'{k}_ms' not in g:       # 하위법령 필드가 생기기 전 로그 (decree_search_ms 등)
+            if f'{k}_ms' not in g:  # 하위법령 필드가 생기기 전 로그 (decree_search_ms 등)
                 continue
             s = g[f'{k}_ms'].dropna()
             if len(s):
-                out.append(f'  {k:10} 중앙값 {s.median() / 1000:6.2f}초 · p95 {s.quantile(.95) / 1000:6.2f}초 ({len(s)}건)')
+                out.append(
+                    f'  {k:10} 중앙값 {s.median() / 1000:6.2f}초 · p95 {s.quantile(0.95) / 1000:6.2f}초 ({len(s)}건)'
+                )
         if 'n_decree' in g and g['n_decree'].notna().any():
             n = g['n_decree'].dropna()
             out.append(f'  시행령·시행규칙 첨부 평균 {n.mean():.2f}개 · 없음 {(n == 0).mean():.0%} ({len(n)}건)')
         if g['peak_gb'].notna().any():
-            out.append(f"  peak_gb    최대 {g['peak_gb'].max():.1f}GB")
+            out.append(f'  peak_gb    최대 {g["peak_gb"].max():.1f}GB')
         if (g['finish'] == 'length').any():
-            out.append(f"  최대 길이 잘림 {int((g['finish'] == 'length').sum())}건")
+            out.append(f'  최대 길이 잘림 {int((g["finish"] == "length").sum())}건')
     err = d[d['status'] == 'error']
     if len(err):
         out.append('오류 유형: ' + ' · '.join(f'{k} {v}' for k, v in err['error_type'].value_counts().items()))
     return out
+
 
 def main(argv=None):
     ap = argparse.ArgumentParser(description='웹앱 요청 로그(JSONL) 요약')
@@ -63,6 +70,7 @@ def main(argv=None):
         return
     for line in summarize(d):
         print(line)
+
 
 if __name__ == '__main__':
     main()

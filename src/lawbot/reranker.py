@@ -4,9 +4,11 @@
 #   → 마지막 위치의 no·yes 로짓을 float32 softmax → P(yes). 점수 내림차순, 동점은 임베딩 순위
 # 노트북은 4B를 batch 1로 돌렸으므로(패딩 없음) 여기서도 후보마다 한 번씩 계산한다
 from pathlib import Path
+
 import mlx.core as mx
 from mlx_lm import load
-from lawbot.decree import rank_order   # 점수 내림차순, 동점은 임베딩 순서 (하위법령 필터와 같은 함수)
+
+from lawbot.decree import rank_order  # 점수 내림차순, 동점은 임베딩 순서 (하위법령 필터와 같은 함수)
 
 # 아래 세 문자열과 MAX_LENGTH는 노트북 셀 3을 글자 그대로 옮긴 것 (바꾸면 실험 결과와 비교할 수 없음)
 TASK = 'Given a Korean labor-law question, retrieve the statutory article that directly provides the legal basis for answering it.'
@@ -15,8 +17,10 @@ PREFIX = '<|im_start|>system\nJudge whether the Document meets the requirements 
 SUFFIX = '<|im_end|>\n<|im_start|>assistant\n<think>\n\n</think>\n\n'
 CANDIDATES = 10
 
+
 def pair_text(question, doc):
     return f'Instruct: {TASK}\nQuery: {question}\nDocument: {doc}'
+
 
 def yes_probability(no_yes):
     """노트북과 같이 float32 softmax([no, yes])[1]. 차이가 크면 1.0으로 포화해 동점이 생길 수 있다"""
@@ -26,7 +30,7 @@ def yes_probability(no_yes):
 class Reranker:
     def __init__(self, path, candidates=CANDIDATES, max_length=MAX_LENGTH):
         path = Path(path)
-        if not path.is_dir():            # mlx_lm.load는 없는 경로를 Hugging Face 저장소 이름으로 보고 내려받으려 함
+        if not path.is_dir():  # mlx_lm.load는 없는 경로를 Hugging Face 저장소 이름으로 보고 내려받으려 함
             raise FileNotFoundError(f'리랭커 모델 폴더 없음: {path}')
         self.path, self.candidates, self.max_length = path, candidates, max_length
         self.model, self.tok = load(str(path))
@@ -43,7 +47,7 @@ class Reranker:
     def encode(self, question, doc):
         """노트북 encode_pairs와 같은 토큰 열 (가운데 부분만 오른쪽에서 잘라 문서 뒷부분이 잘림)"""
         mid = self.tok.encode(pair_text(question, doc), add_special_tokens=False)
-        return self.prefix + mid[:self.max_mid] + self.suffix
+        return self.prefix + mid[: self.max_mid] + self.suffix
 
     def _no_yes_logits(self, ids):
         """마지막 위치의 [no, yes] 로짓. Model.__call__은 모든 위치에 lm_head를 곱하므로(2560 × 15만 어휘)
@@ -71,5 +75,4 @@ class Reranker:
         if not candidates or not all(isinstance(c, dict) and isinstance(c.get('doc'), str) for c in candidates):
             raise ValueError('후보는 doc 문자열을 가진 검색 결과 dict 목록이어야 합니다')
         scores = self.score(question, [c['doc'] for c in candidates])
-        return [candidates[i] | {'rerank_score': scores[i], 'emb_rank': i + 1}
-                for i in rank_order(scores)[:top_k]]
+        return [candidates[i] | {'rerank_score': scores[i], 'emb_rank': i + 1} for i in rank_order(scores)[:top_k]]
