@@ -235,7 +235,7 @@ LAWBOT_FAST_MODEL=lawbot-fast-v4
 | PR | 상태 |
 | --- | --- |
 | 1 `chore/monorepo` | #33 병합 (2026-11-01) |
-| 2 `feat/openai-api` | 구현·테스트 완료, 실제 모델 검증(§3.5) 전 |
+| 2 `feat/openai-api` | 구현·테스트·실제 모델 검증 완료 (답변 600개 동일, [기록](../evals/2026-11-01-openai-api.md)), 병합 전 |
 | 3 `feat/batch-generation` | 시작 전 |
 
 ### PR 2 구현 중 계획과 달라진 점
