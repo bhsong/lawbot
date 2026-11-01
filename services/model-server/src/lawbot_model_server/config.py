@@ -28,7 +28,7 @@ class Config:
     models: tuple  # ModelEntry
     preload: tuple  # 시작할 때 올릴 chat 모델 id (첫 번째는 실패하면 시작 중단, 나머지는 경고만)
     max_resident: int  # 동시에 올려 두는 chat 모델 수 (LRU). embedding·rerank는 항상 상주
-    max_concurrent: int = 1  # 동시에 생성하는 chat 요청 수. 1: 순차(PR 2와 같은 계산), 2 이상: 배치 생성
+    max_concurrent: int = 1  # 동시에 생성하는 chat 요청 수 (배치 크기). 1이면 PR 2와 같은 답 (2026-11-01 val 확인)
 
 
 def parse_port(name, value):

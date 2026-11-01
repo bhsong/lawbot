@@ -125,12 +125,7 @@ def run():
             out.append(('OK', f'{e.kind} {e.id}: {e.path}'))
             CHECKS[e.kind](e, out)
     out.append(('INFO', f'chat 상주 최대 {resident}개 · 시작할 때 {list(preload) or "없음"}'))
-    out.append(
-        (
-            'INFO',
-            f'동시 생성 최대 {concurrent}개 · ' + ('순차 생성 (stream_generate)' if concurrent == 1 else '배치 생성'),
-        )
-    )
+    out.append(('INFO', f'동시 생성 최대 {concurrent}개 (mlx_lm BatchGenerator)'))
     return out
 
 

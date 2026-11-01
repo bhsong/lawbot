@@ -223,7 +223,7 @@ LAWBOT_PROFILE=v1 LAWBOT_MODELS= LAWBOT_RERANKER_ENABLED=0 LAWBOT_DECREE_ENABLED
 | `LAWBOT_SERVE_CHAT` / `LAWBOT_SERVE_EMBEDDING` / `LAWBOT_SERVE_RERANK` | 하나 이상 | 제공할 모델 `id=폴더`를 쉼표로 (예: `qwen3.8-27b-4bit=models/v4/qwen3.8_27b_mlx_4bit`) |
 | `LAWBOT_SERVE_PRELOAD` | 아니요 | 시작할 때 올릴 chat 모델 id (기본: chat 목록 앞에서부터 상주 수만큼). 임베딩·리랭커는 항상 시작할 때 |
 | `LAWBOT_MAX_RESIDENT` | 아니요 | 동시에 올려 둘 chat 모델 수 (기본 `2`, LRU로 교체). 32GB에서 27B를 쓰면 `1` |
-| `LAWBOT_MAX_CONCURRENT` | 아니요 | 동시에 생성하는 chat 요청 수 (1–16, 기본 `1`). `1`은 순차 생성, `2` 이상은 배치 생성(mlx_lm `BatchGenerator`). 넘는 요청은 받은 순서대로 기다림 |
+| `LAWBOT_MAX_CONCURRENT` | 아니요 | 동시에 생성하는 chat 요청 수 (1–16, 기본 `1`). 생성은 mlx_lm `BatchGenerator`로 하고, 이 값이 배치 크기. `1`이면 이전 순차 생성과 같은 답, `2` 이상은 처리량이 늘지만 요청마다 느려지고 답 표현이 조금 달라질 수 있음([기록](docs/evals/2026-11-01-batch-generation.md)). 넘는 요청은 받은 순서대로 기다림 |
 
 `LAWBOT_USER`와 `LAWBOT_PW`가 하나라도 없거나 비어 있으면 모델을 불러오기 전에 `RuntimeError`로 실행을 거부합니다. 인증 없이 서버를 띄우는 방법은 없습니다.
 
@@ -501,7 +501,7 @@ services/chatbot/src/lawbot/
 services/model-server/src/lawbot_model_server/
 ├── api.py             # OpenAI 호환 API (FastAPI): 인증·크기 제한·로그
 ├── scheduler.py       # GPU 스레드 하나: chat 동시 생성 상한·대기열·끊김, 생성 스텝 사이에 embeddings·rerank
-├── chat.py            # MLX 채팅 모델 (chat template·생각 블록 처리·탐욕적 생성), 순차·배치 생성 엔진
+├── chat.py            # MLX 채팅 모델 (chat template·생각 블록 처리·탐욕적 생성), 배치 생성 엔진 (mlx_lm BatchGenerator)
 ├── embeddings.py      # sentence-transformers 임베딩 (MPS, fp16)
 ├── rerank.py          # Qwen3-Reranker 채점 (실험 노트북과 같은 입력)
 ├── registry.py        # 제공 모델 목록, chat 모델 LRU
@@ -768,7 +768,7 @@ Model server (`lawbot-model-server`, `lawbot_model_server.check`):
 | `LAWBOT_SERVE_CHAT` / `LAWBOT_SERVE_EMBEDDING` / `LAWBOT_SERVE_RERANK` | At least one | Comma-separated `id=folder` entries (e.g. `qwen3.8-27b-4bit=models/v4/qwen3.8_27b_mlx_4bit`) |
 | `LAWBOT_SERVE_PRELOAD` | No | Chat model ids loaded at startup (default: the first chat models up to the resident count). Embedding and reranker models always load at startup |
 | `LAWBOT_MAX_RESIDENT` | No | Chat models kept in memory (default `2`, LRU). Use `1` with 27B on 32 GB |
-| `LAWBOT_MAX_CONCURRENT` | No | Chat requests generated at the same time (1–16, default `1`). `1` generates one at a time; `2` or more uses batched generation (mlx_lm `BatchGenerator`). Extra requests wait in arrival order |
+| `LAWBOT_MAX_CONCURRENT` | No | Chat requests generated at the same time (1–16, default `1`). Generation uses mlx_lm `BatchGenerator` and this is the batch size. `1` gives the same answers as the earlier sequential generation; `2` or more raises throughput but slows each request and may change answer wording slightly ([record](docs/evals/2026-11-01-batch-generation.md)). Extra requests wait in arrival order |
 
 If either `LAWBOT_USER` or `LAWBOT_PW` is missing or empty, the app refuses to start with a `RuntimeError` before loading any model. There is no way to run the server without a login.
 
@@ -1007,7 +1007,7 @@ services/chatbot/src/lawbot/
 services/model-server/src/lawbot_model_server/
 ├── api.py             # OpenAI-compatible API (FastAPI): auth, size limit, logging
 ├── scheduler.py       # one GPU thread: chat concurrency limit, queue, disconnects; embeddings/rerank between generation steps
-├── chat.py            # MLX chat model (chat template, thinking-block handling, greedy decoding), sequential and batched engines
+├── chat.py            # MLX chat model (chat template, thinking-block handling, greedy decoding), batched generation engine (mlx_lm BatchGenerator)
 ├── embeddings.py      # sentence-transformers embeddings (MPS, fp16)
 ├── rerank.py          # Qwen3-Reranker scoring (same inputs as the experiment notebook)
 ├── registry.py        # served models, chat-model LRU

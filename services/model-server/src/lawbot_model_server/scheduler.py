@@ -36,13 +36,8 @@ class Ticket:
 
 
 def default_engine(model, max_concurrent):
-    """ChatModel.engine이 있으면 그것 (순차·배치), 없으면(가짜 모델) 순차 엔진"""
-    make = getattr(model, 'engine', None)
-    if make is not None:
-        return make(max_concurrent)
-    from lawbot_model_server.chat import SequentialEngine
-
-    return SequentialEngine(model)
+    """모델이 만드는 생성 엔진 (ChatModel은 BatchEngine, 테스트의 가짜 모델은 FakeEngine)"""
+    return model.engine(max_concurrent)
 
 
 class Scheduler:
@@ -109,9 +104,13 @@ class Scheduler:
             t.put('end')
 
     def _close_engine(self):
-        if self.engine is not None:
-            self.engine.close()
-        self.engine, self.engine_model = None, None
+        """닫다가 오류가 나도 엔진은 버린다 (GPU 스레드가 죽으면 모든 요청이 영원히 기다림)"""
+        engine, self.engine, self.engine_model = self.engine, None, None
+        if engine is not None:
+            try:
+                engine.close()
+            except Exception:
+                pass
 
     def _admit(self):
         while self.waiting:
@@ -134,7 +133,12 @@ class Scheduler:
                     err.__cause__ = e
                     t.put('error', err)
                     continue
-                self.engine, self.engine_model = self.make_engine(model, self.max_concurrent), model_id
+                try:
+                    self.engine = self.make_engine(model, self.max_concurrent)
+                except Exception as e:
+                    t.put('error', e)
+                    continue
+                self.engine_model = model_id
             try:
                 self.engine.add(t, messages, kw)
             except Exception as e:
@@ -153,19 +157,20 @@ class Scheduler:
             if t.cancelled.is_set():
                 self.engine.remove(t)
 
+    def _fail_engine(self, e):
+        """엔진 자체의 예상 못 한 오류: 진행 중 요청을 모두 실패로 알리고 엔진을 버림"""
+        for t in self.engine.tickets() if self.engine is not None else []:
+            t.put('error', e)
+        self._close_engine()
+
     def _run(self):
         while True:
-            self._receive()
-            self._run_calls()
-            self._drop_cancelled()
-            self._admit()
             try:
+                self._receive()
+                self._run_calls()
+                self._drop_cancelled()
+                self._admit()
                 self._step()
-            except Exception as e:  # 엔진 자체의 예상 못 한 오류: 진행 중 요청을 모두 실패로 알리고 엔진을 버림
-                for t in self.engine.tickets() if self.engine is not None else []:
-                    t.put('error', e)
-                try:
-                    self._close_engine()
-                except Exception:
-                    self.engine, self.engine_model = None, None
+            except Exception as e:  # 어떤 오류에도 스레드는 산다
+                self._fail_engine(e)
             self._counts = (len(self.calls), len(self.waiting), len(self.engine) if self.engine is not None else 0)

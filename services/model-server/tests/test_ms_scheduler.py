@@ -1,5 +1,5 @@
 # services/model-server/tests/test_ms_scheduler.py  →  GPU 스레드 스케줄러와 생성 엔진 (동시 추론, PR 3)
-# 스케줄러: 가짜 모델 + SequentialEngine (모델 파일 불필요)
+# 스케줄러: 가짜 모델 + 테스트용 순차 엔진 (ms_fakes.FakeEngine, 모델 파일 불필요)
 # BatchEngine: 무작위 가중치의 작은 qwen3·qwen3_5 모델 + 실제 mlx_lm BatchGenerator. 순차 생성(generate_step)과 토큰 비교
 import asyncio
 import time
@@ -229,23 +229,63 @@ def test_model_load_error_keeps_cause():
     assert s.pending() == 0
 
 
-def test_engine_comes_from_model_when_available():
-    """ChatModel.engine(n)이 있으면 그 엔진을 쓴다 (실제 모델: 1이면 순차, 2 이상이면 배치)"""
+def test_engine_creation_error_fails_request_and_thread_survives():
+    """엔진을 못 만들면 그 요청만 오류. GPU 스레드는 살아서 다음 요청을 처리한다 (죽으면 요청이 영원히 기다림)"""
     made = []
 
-    class WithEngine(FakeChat):
-        def engine(self, n):
-            from lawbot_model_server.chat import SequentialEngine
+    def make_engine(model, n):
+        made.append(n)
+        if len(made) == 1:
+            raise AttributeError('engine 없음')
+        return model.engine(n)
 
-            made.append(n)
-            return SequentialEngine(self)
-
-    s = Scheduler(registry(chat=WithEngine), max_concurrent=3)
+    s = Scheduler(registry(), max_concurrent=2, make_engine=make_engine)
 
     async def main():
-        return await collect(s.chat('chat-a', ask('q'), KW))
+        first = await s.chat('chat-a', ask('q'), KW).next()
+        return first, await collect(s.chat('chat-a', ask('q'), KW))
 
-    assert text(run(main())) == '【결론】예고해야 합니다.' and made == [3]
+    (kind, e), items = run(main())
+    assert kind == 'error' and isinstance(e, AttributeError)
+    assert text(items) == '【결론】예고해야 합니다.' and s.thread.is_alive() and s.pending() == 0
+
+
+def test_engine_close_error_on_model_switch_thread_survives():
+    """모델을 바꾸며 엔진을 닫다 오류가 나도 스레드는 산다. 새 모델 요청은 그대로 처리"""
+
+    class BadClose(FakeChat):
+        def engine(self, n):
+            eng = super().engine(n)
+
+            def close():
+                raise RuntimeError('close 실패')
+
+            eng.close = close
+            return eng
+
+    s = Scheduler(registry(chat=BadClose), max_concurrent=1)
+
+    async def main():
+        a = await collect(s.chat('chat-a', ask('q'), KW))
+        b = await collect(s.chat('chat-b', ask('q'), KW))
+        return a, b
+
+    a, b = run(main())
+    assert text(a) == text(b) == '【결론】예고해야 합니다.' and s.thread.is_alive()
+
+
+def test_engine_comes_from_model():
+    """엔진은 모델의 engine(상한)으로 만든다 (실제 ChatModel은 BatchEngine). 모델을 바꾸기 전까지 하나를 계속 쓴다"""
+    reg = registry()
+    s = Scheduler(reg, max_concurrent=3)
+
+    async def main():
+        a = await collect(s.chat('chat-a', ask('q'), KW))
+        b = await collect(s.chat('chat-a', ask('q'), KW))
+        return a, b
+
+    a, b = run(main())
+    assert text(a) == text(b) == '【결론】예고해야 합니다.' and reg.chat['chat-a'].engines == [3]
 
 
 @pytest.mark.parametrize('n', [0, 17])

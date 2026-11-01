@@ -262,7 +262,7 @@ LAWBOT_FAST_MODEL=lawbot-fast-v4
 | --- | --- |
 | 1 `chore/monorepo` | #33 병합 (2026-11-01) |
 | 2 `feat/openai-api` | #34 병합 (2026-11-01). 답변 600개 동일 ([기록](../evals/2026-11-01-openai-api.md)) |
-| 3 `feat/batch-generation` | 구현·테스트·실제 모델 검증 완료 ([기록](../evals/2026-11-01-batch-generation.md)). 기본값·`SequentialEngine` 삭제 결정 대기, 병합 전 |
+| 3 `feat/batch-generation` | 구현·테스트·실제 모델 검증 완료 ([기록](../evals/2026-11-01-batch-generation.md)). 기본값 1 유지, `SequentialEngine` 삭제 (사용자 결정), 병합 전 |
 
 ### PR 2 구현 중 계획과 달라진 점
 
@@ -282,6 +282,17 @@ LAWBOT_FAST_MODEL=lawbot-fast-v4
 - `hide_thinking`의 상태를 `ThinkFilter` 클래스로 옮겼다(요청마다 하나). 동작은 같고 기존 테스트가 그대로 통과한다.
 - 웹앱 요청 로그(JSONL)는 동시 질문의 줄이 섞이지 않게 잠금을 걸고 쓴다.
 - `eval_v4`는 단계별 문항 수·시간을 `run_<tag>.json`의 `stage_times`에 남기고, 끝날 때 문항/분을 출력한다(처리량 비교용).
+- 측정 결과(§4.4, [기록](../evals/2026-11-01-batch-generation.md)): 배치 경로 1건이 val 답변 200개를 기준과 글자 단위로 같게 냈고 지연도 같았다. 동시 2·4는 처리량 ×1.36·×1.67, 요청당 완료 1.5·2.4배, 답변 52·56개가 표현만 다름.
+- 결정 (사용자, 2026-11-01): 기본값 `LAWBOT_MAX_CONCURRENT=1` 유지. `SequentialEngine`은 지운다 (§4.1 조건 충족).
+  - `ChatModel.engine(n)`은 n과 관계없이 `BatchEngine`. 상한 1이면 한 번에 하나만 배치에 넣는다.
+  - `ChatModel.stream`·`hide_thinking`도 지운다 (`SequentialEngine`만 썼음). 생각 블록 숨김은 `ThinkFilter` 하나.
+  - 스케줄러 테스트의 가짜 모델은 테스트 쪽 순차 엔진(`ms_fakes.FakeEngine`)을 쓴다. 스케줄러의 '엔진 없는 모델은 순차 엔진' 대체 경로는 지운다.
+  - `test_ms_models`의 chat 테스트는 `ChatModel` + `BatchEngine` + 가짜 `BatchGenerator`로 같은 것(템플릿 인자, 생각 끄기, sampler, max_tokens)을 본다.
+  - 실제 모델 스모크는 `mlx_lm.stream_generate`를 테스트 안의 기준으로 두고 `BatchEngine` 1건과 비교한다 (mlx_lm 업데이트 때 같은 답인지 확인용).
+- 삭제 중 찾은 문제: 엔진을 만들거나 닫다 예외가 나면 GPU 스레드가 죽고, 이후 요청이 응답 없이 영원히 기다렸다 (챗봇 계약 테스트의 가짜 모델에 `engine`이 없어 드러남). 고침:
+  - 엔진 생성 오류는 그 요청만 실패로 알린다. 엔진 닫기 오류는 무시하고 엔진을 버린다.
+  - 루프 한 바퀴 전체를 감싸서, 예상 못 한 오류는 진행 중 요청을 실패로 알리고 스레드는 계속 돈다.
+  - 테스트 2개: 엔진 생성 실패 뒤 다음 요청 처리, 모델 교체 중 닫기 실패 뒤 새 모델 요청 처리.
 
 ## 7. 사용자 확인 (2026-11-01 답변 완료)
 

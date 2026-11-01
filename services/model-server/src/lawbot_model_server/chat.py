@@ -1,15 +1,15 @@
 # lawbot_model_server/chat.py  →  MLX 채팅 모델: messages → chat template → 생성 (mlx_lm)
 # 챗봇의 이전 llm.LLM.stream과 같은 계산 (템플릿 인자·생각 블록 처리·탐욕적 생성): 답변이 글자 단위로 같아야 함
-# 생성 엔진 (scheduler.py가 GPU 스레드에서 add·step·remove를 부른다. 엔진 하나 = 모델 하나)
-#   SequentialEngine: 요청마다 stream_generate를 한 토큰씩 진행 (동시 1이면 PR 2와 같은 계산)
-#   BatchEngine: mlx_lm BatchGenerator로 여러 요청을 한 배치에서 생성 (continuous batching)
+# 생성 엔진 BatchEngine: mlx_lm BatchGenerator로 여러 요청을 한 배치에서 생성 (continuous batching)
+#   scheduler.py가 GPU 스레드에서 add·step·remove를 부른다. 엔진 하나 = 모델 하나
+#   요청 1건이면 이전 stream_generate와 같은 답 (2026-11-01 val 200문항 확인, docs/evals/2026-11-01-batch-generation.md)
 import copy
 import time
 from dataclasses import dataclass
 from pathlib import Path
 
 import mlx.core as mx
-from mlx_lm import load, stream_generate
+from mlx_lm import load
 from mlx_lm.generate import BatchGenerator
 from mlx_lm.sample_utils import make_sampler
 
@@ -69,16 +69,6 @@ class ThinkFilter:
         return _with_text(r, self.buf[i + len(self.end) :].lstrip())
 
 
-def hide_thinking(responses, markers):
-    """ThinkFilter를 응답 반복자에 (markers가 None이면 그대로)"""
-    if markers is None:
-        yield from responses
-        return
-    f = ThinkFilter(markers)
-    for r in responses:
-        yield f.feed(r)
-
-
 class ChatModel:
     def __init__(self, path):
         path = Path(path)
@@ -94,60 +84,9 @@ class ChatModel:
         )
         return text if enable_thinking else close_thinking(text, self.think)
 
-    def stream(self, messages, max_tokens=1024, temperature=0.0, top_p=None, enable_thinking=False):
-        """mlx_lm GenerationResponse(text·prompt_tokens·…·finish_reason)를 토큰마다. temperature 0이면 탐욕적 생성
-        생각을 끄면(기본) 템플릿이 무시해도 빈 생각 블록을 붙이고, 그래도 나온 생각 블록은 text에서 숨긴다"""
-        sampler = make_sampler(temp=temperature, top_p=top_p if top_p is not None and top_p < 1.0 else 0.0)
-        gen = stream_generate(
-            self.model, self.tok, self.prompt(messages, enable_thinking), max_tokens=max_tokens, sampler=sampler
-        )
-        try:
-            yield from (gen if enable_thinking else hide_thinking(gen, self.think))
-        finally:
-            gen.close()  # 중간에 멈추면 생성도 멈춤
-
     def engine(self, max_concurrent):
-        """1이면 순차 (PR 2와 같은 stream_generate), 2 이상이면 배치 생성"""
-        return SequentialEngine(self) if max_concurrent == 1 else BatchEngine(self, max_concurrent)
-
-
-class SequentialEngine:
-    """요청마다 model.stream 반복자를 두고 step마다 한 토큰씩 진행. 이벤트는 (ticket, 'item'|'end'|'error', 값)
-    한 요청의 오류는 그 요청만 끝낸다. 가짜 모델(테스트)도 이 엔진을 쓴다"""
-
-    def __init__(self, model):
-        self.model, self.items = model, {}
-
-    def __len__(self):
-        return len(self.items)
-
-    def tickets(self):
-        return list(self.items)
-
-    def add(self, ticket, messages, kw):
-        self.items[ticket] = self.model.stream(messages, **kw)
-
-    def step(self):
-        events = []
-        for ticket, it in list(self.items.items()):
-            try:
-                events.append((ticket, 'item', next(it)))
-            except StopIteration:
-                del self.items[ticket]
-                events.append((ticket, 'end', None))
-            except Exception as e:
-                del self.items[ticket]
-                events.append((ticket, 'error', e))
-        return events
-
-    def remove(self, ticket):
-        it = self.items.pop(ticket, None)
-        if it is not None:
-            it.close()  # 생성 반복자를 닫아 멈춤
-
-    def close(self):
-        for t in self.tickets():
-            self.remove(t)
+        """생성 엔진. 상한 1이면 한 번에 하나만 배치에 넣는다"""
+        return BatchEngine(self, max_concurrent)
 
 
 @dataclass
@@ -177,7 +116,7 @@ class _Request:
 
 class BatchEngine:
     """mlx_lm BatchGenerator (continuous batching). 요청마다 detokenizer·생각 숨김·측정 시각을 따로 둔다
-    끝내는 규칙은 stream_generate와 같다: eos는 stop(그 토큰 글자 없음), max_tokens는 length(마지막 토큰 포함)
+    끝내는 규칙은 mlx_lm stream_generate와 같다: eos는 stop(그 토큰 글자 없음), max_tokens는 length(마지막 토큰 포함)
     스텝 오류는 배치 전체가 실패하고 다음 요청 때 생성기를 새로 만든다"""
 
     def __init__(self, chat, max_concurrent, make_generator=None):

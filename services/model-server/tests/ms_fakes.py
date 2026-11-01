@@ -37,7 +37,7 @@ class Compute:
 
 
 class FakeChat:
-    """ChatModel과 같은 stream 인자. 받은 인자를 기록하고 mlx_lm 응답과 같은 속성을 낸다
+    """생성 요청 인자(messages·max_tokens·temperature…)를 기록하고 mlx_lm 응답과 같은 속성을 낸다. 받은 인자를 기록하고 mlx_lm 응답과 같은 속성을 낸다
     chunks의 문자열 하나가 토큰 하나. 요청마다 다르게 하려면 messages 마지막 내용으로 per_prompt에서 찾는다"""
 
     chunks = ['【결론】', '예고해야', ' 합니다.']
@@ -49,6 +49,7 @@ class FakeChat:
         self.path, self.calls, self.closed, self.yielded = path, [], False, 0
         self.open = 0  # 진행 중인 스트림 수
         self.max_open = 0
+        self.engines = []  # engine()에 받은 상한
 
     def stream(self, messages, **kw):
         self.calls.append({'messages': messages, **kw})
@@ -74,6 +75,50 @@ class FakeChat:
         finally:
             self.open -= 1
             self.closed = True
+
+    def engine(self, max_concurrent):
+        """ChatModel.engine과 같은 자리. 실제는 BatchEngine, 가짜는 stream을 한 토큰씩 진행하는 FakeEngine"""
+        self.engines.append(max_concurrent)
+        return FakeEngine(self)
+
+
+class FakeEngine:
+    """테스트용 순차 엔진: 요청마다 model.stream 반복자를 두고 step마다 한 토큰씩. BatchEngine과 같은 인터페이스
+    이벤트는 (ticket, 'item'|'end'|'error', 값). 한 요청의 오류는 그 요청만 끝낸다"""
+
+    def __init__(self, model):
+        self.model, self.items = model, {}
+
+    def __len__(self):
+        return len(self.items)
+
+    def tickets(self):
+        return list(self.items)
+
+    def add(self, ticket, messages, kw):
+        self.items[ticket] = self.model.stream(messages, **kw)
+
+    def step(self):
+        events = []
+        for ticket, it in list(self.items.items()):
+            try:
+                events.append((ticket, 'item', next(it)))
+            except StopIteration:
+                del self.items[ticket]
+                events.append((ticket, 'end', None))
+            except Exception as e:
+                del self.items[ticket]
+                events.append((ticket, 'error', e))
+        return events
+
+    def remove(self, ticket):
+        it = self.items.pop(ticket, None)
+        if it is not None:
+            it.close()
+
+    def close(self):
+        for t in self.tickets():
+            self.remove(t)
 
 
 class FakeEmbedder:

@@ -145,9 +145,9 @@ def test_check_reports_missing(ms_env, tmp_path):
     assert any(lv == 'FAIL' and 'chat d: 폴더 없음' in m for lv, m in out)
     assert any(lv == 'FAIL' and 'config_sentence_transformers.json 없음' in m for lv, m in out)
     assert all(TOKEN not in m for _, m in out)
-    assert ('INFO', '동시 생성 최대 1개 · 순차 생성 (stream_generate)') in out
+    assert ('INFO', '동시 생성 최대 1개 (mlx_lm BatchGenerator)') in out
     ms_env.setenv('LAWBOT_MAX_CONCURRENT', '4')
-    assert ('INFO', '동시 생성 최대 4개 · 배치 생성') in check.run()
+    assert ('INFO', '동시 생성 최대 4개 (mlx_lm BatchGenerator)') in check.run()
     ms_env.setenv('LAWBOT_MAX_CONCURRENT', '0')
     assert any(lv == 'FAIL' and 'LAWBOT_MAX_CONCURRENT' in m for lv, m in check.run())
 
