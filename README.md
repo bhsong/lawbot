@@ -503,6 +503,7 @@ deploy/launchd/        # 상시 운영용 launchd 템플릿 (모델 서버·웹�
 
 - **조문**: 근로기준법 현행 130개 조문. 삭제 조문 2개는 제외했고, 기준일은 2026-10-01입니다.
 - **v4 조문**: 근로기준법 등 7개 법률의 비삭제 415개 조문(`data/v4/articles_v4.csv`). [Legalize KR](https://github.com/legalize-kr/legalize-kr)에서 2026-10-20에 수집했고, 버전·기준일·sha256은 `data/v4/manifest.json`에 있습니다. 시행령·시행규칙 397개를 더한 812조문(`data/v4/law_articles_v4_decree.csv`, 열 `kind`·`parent_law`·`parent_ids`·`child_ids`)은 `LAWBOT_DECREE_ENABLED=1`일 때 웹앱이 씁니다(매니페스트 `data/v4/manifest_decree.json`, 같은 2026-10-20 수집).
+  - 21개 법령 파일 모두 2026-10-20에 시행 중인 조문입니다(Legalize KR 이력과 조문 단위로 대조). 그 뒤 시행되는 개정(2026-11-27 남녀고용평등법, 2026-12-08 근로기준법 등)은 데이터에 없습니다. 법령별 출처 버전, 이후 개정 목록, 갱신 방법은 [docs/data-provenance.md](docs/data-provenance.md)에 있습니다.
 - **하위법령 질문**: 시행령·시행규칙이 정답인 4,096문항(`data/decree_exp/qa_decree_v4.csv`, 분할 `split_decree_v4.csv`: 임베딩 기준 train 1,772 / val 444 / test 1,880, 시드 42). `data/decree_exp/`에는 Colab 실험의 후보·리랭커 점수(fp16)와 맥 MLX 점수, 규칙 비교 결과가 함께 있습니다.
 - **질문**: 총 2,602개(130조문 × 질문 유형 5종 × 약 4개)입니다.
   - 질문 유형: 구어체, 사용자(사업주) 관점, 간접 질문, 키워드, 상황 설명
@@ -971,6 +972,7 @@ deploy/launchd/        # launchd templates for the always-on setup (model server
 
 - **Articles**: The 130 current articles of the Labor Standards Act. Two repealed articles are excluded. The text is as of 2026-10-01.
 - **v4 articles**: 415 current articles from seven labor laws (`data/v4/articles_v4.csv`), collected from [Legalize KR](https://github.com/legalize-kr/legalize-kr) on 2026-10-20; version, dates and SHA-256 are in `data/v4/manifest.json`. The 812-article set that adds 397 enforcement-decree and rule articles (`data/v4/law_articles_v4_decree.csv`, columns `kind`, `parent_law`, `parent_ids`, `child_ids`) is used by the web app when `LAWBOT_DECREE_ENABLED=1` (manifest `data/v4/manifest_decree.json`, same 2026-10-20 collection).
+  - All 21 law files hold the articles in force on 2026-10-20 (checked article by article against the Legalize KR history). Later amendments (2026-11-27 Equal Employment Act, 2026-12-08 Labor Standards Act, and others) are not in the data. Per-file source versions, the list of later amendments and how to update it are in [docs/data-provenance.md](docs/data-provenance.md) (Korean).
 - **Decree questions**: 4,096 questions answered by a decree or rule article (`data/decree_exp/qa_decree_v4.csv`; split `split_decree_v4.csv`: embedding train 1,772 / val 444 / test 1,880, seed 42). `data/decree_exp/` also holds the Colab candidates and fp16 reranker scores, the Mac MLX scores and the rule comparison.
 - **Questions**: 2,602 in total (130 articles × 5 question types × about 4 each).
   - Question types: colloquial, employer perspective, indirect, keyword, situational
