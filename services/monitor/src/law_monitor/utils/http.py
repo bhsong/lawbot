@@ -57,12 +57,19 @@ class HttpClient:
         self._last = self.clock()
 
     def get(self, url: str, params: dict | None = None) -> httpx.Response:
+        return self.request('GET', url, params=params)
+
+    def post(self, url: str, *, json: dict, headers: dict | None = None) -> httpx.Response:
+        """헤더(토큰)는 오류 메시지에 넣지 않는다."""
+        return self.request('POST', url, json=json, headers=headers)
+
+    def request(self, method: str, url: str, *, params=None, json=None, headers=None) -> httpx.Response:
         shown = masked_url(url, params)
 
         def once() -> httpx.Response:
             self._wait_turn()
             try:
-                resp = self.client.get(url, params=params)
+                resp = self.client.request(method, url, params=params, json=json, headers=headers)
             except httpx.TransportError as e:
                 raise _Retryable(f'{shown}: {type(e).__name__}') from None
             if resp.status_code >= 500:

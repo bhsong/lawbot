@@ -191,10 +191,10 @@ def make_config(
     return from_dict(data)
 
 
-def make_monitor(tmp_path: Path, config, *, collectors=None, now=FIXED_NOW, lawgo=None) -> Monitor:
-    """lawgo가 없으면 빈 가짜 법제처 서버 (머리말에 법령MST·일련번호가 없는 파일은 호출 자체가 없음)."""
+def make_monitor(tmp_path: Path, config, *, collectors=None, now=FIXED_NOW, lawgo=None, llm=None) -> Monitor:
+    """lawgo가 없으면 빈 가짜 법제처 서버 (머리말에 법령MST·일련번호가 없는 파일은 호출 자체가 없음). llm은 요약 모델."""
     client = lawgo if lawgo is not None else FakeLawGo().client()
-    return Monitor(Paths(tmp_path / 'home'), config, collectors=collectors, now=lambda: now, lawgo=client)
+    return Monitor(Paths(tmp_path / 'home'), config, collectors=collectors, now=lambda: now, lawgo=client, llm=llm)
 
 
 # ---- 가짜 법제처 서버 ----

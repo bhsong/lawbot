@@ -18,8 +18,10 @@ from law_monitor.config import Config
 from law_monitor.enrich import LawGoEnricher
 from law_monitor.events import EventStore, make_event_id
 from law_monitor.lawgo import LawGoClient
+from law_monitor.llm import ChatClient
 from law_monitor.paths import Paths
 from law_monitor.state import State
+from law_monitor.summarize import SummaryResult, load_events, write_summary
 
 KST = timezone(timedelta(hours=9), 'KST')
 FAILING_AFTER = 3
@@ -57,9 +59,10 @@ class Monitor:
         collectors: list[Collector] | None = None,
         now: Callable[[], datetime] | None = None,
         lawgo: LawGoClient | None = None,
+        llm: ChatClient | None = None,
     ):
-        """lawgo가 없으면 bootstrap만 된다 (collect·replay는 법제처 원문 보강이 필요해 거부)."""
-        self.paths, self.config, self.lawgo = paths, config, lawgo
+        """lawgo가 없으면 bootstrap만 된다 (collect·replay는 법제처 원문 보강이 필요해 거부). llm은 요약 모델."""
+        self.paths, self.config, self.lawgo, self.llm = paths, config, lawgo, llm
         enricher = LawGoEnricher(lawgo, config) if lawgo is not None else None
         self.collectors = collectors if collectors is not None else default_collectors(config, enricher)
         self.now = now or (lambda: datetime.now(KST))
@@ -119,6 +122,46 @@ class Monitor:
                 self.paths.rel(store.base),
             )
         return result.events
+
+    def summarize(self, *, events_dir=None, run_line: str | None = None) -> SummaryResult:
+        """대기 이벤트(processed_at 없음)를 요약해 data/summaries/YYYY-MM-DD.md를 쓴다 (2단계).
+
+        events_dir를 주면 그 폴더의 이벤트 JSON(replay 결과)을 요약해 그 폴더의 summary.md에 쓰고 상태는 바꾸지 않는다.
+        """
+        if self.llm is None:
+            raise MissingSecret(
+                '요약 모델 설정이 없습니다: LAWBOT_MODEL_SERVER·LAWBOT_MODEL_TOKEN '
+                '(환경변수, services/monitor/.env 또는 레포 최상위 .env)'
+            )
+        now = self.now()
+        with _file_log(self.paths, now):
+            if events_dir is not None:
+                folder = self.paths.home / events_dir if not events_dir.is_absolute() else events_dir
+                items = [
+                    (p.stem, self.paths.rel(p) if p.is_relative_to(self.paths.home) else str(p))
+                    for p in sorted(folder.glob('*.json'))
+                ]
+                events, paths = load_events(self.paths.home, items)
+                out = folder / 'summary.md'
+            else:
+                events, paths = load_events(self.paths.home, self.state.pending_events())
+                day = now.strftime('%Y-%m-%d')
+                out = self.paths.data / 'summaries' / f'{day}.md'
+                if out.exists():  # 같은 날 두 번째 실행: 앞 파일을 덮지 않음
+                    out = out.with_name(f'{day}-{now.strftime("%H%M%S")}.md')
+            result, done = write_summary(
+                events,
+                paths,
+                home=self.paths.home,
+                client=self.llm,
+                out_path=out,
+                title_date=now.strftime('%Y-%m-%d'),
+                run_line=run_line,
+                ran_at=now.isoformat(timespec='seconds'),
+            )
+            if events_dir is None:
+                self.state.mark_processed(done, self.now().isoformat(timespec='seconds'))
+        return result
 
     def _run(self, chosen: list[Collector], mode: str) -> RunSummary:
         started = self.now()

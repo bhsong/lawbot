@@ -75,6 +75,23 @@ class State:
     def event_exists(self, event_id: str) -> bool:
         return self.conn.execute('select 1 from events where event_id = ?', (event_id,)).fetchone() is not None
 
+    def pending_events(self) -> list[tuple[str, str | None]]:
+        """요약하지 않은 이벤트 (event_id, json_path), 저장 순서대로 (2단계 입력)."""
+        rows = self.conn.execute(
+            'select event_id, json_path from events where processed_at is null order by created_at, rowid'
+        )
+        return [(r[0], r[1]) for r in rows]
+
+    def pending_count(self) -> int:
+        return self.conn.execute('select count(*) from events where processed_at is null').fetchone()[0]
+
+    def mark_processed(self, event_ids: list[str], now: str) -> None:
+        with self.conn:
+            self.conn.executemany(
+                'update events set processed_at = ? where event_id = ? and processed_at is null',
+                [(now, eid) for eid in event_ids],
+            )
+
     def start_run(self, run_id: str, mode: str, started_at: str) -> None:
         with self.conn:
             self.conn.execute(
