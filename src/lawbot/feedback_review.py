@@ -18,7 +18,7 @@ import pandas as pd
 from lawbot.feedback import check_private
 from lawbot.paths import DATA, EVAL, V4_QA, V4_SPLIT
 
-DECREE_QA, DECREE_SPLIT = DATA / 'v4' / 'qa_decree_v4.csv', DATA / 'v4' / 'split_decree_v4.csv'   # 하위법령 질문 (build_decree_ctx)
+DECREE_QA, DECREE_SPLIT = DATA / 'decree_exp' / 'qa_decree_v4.csv', DATA / 'decree_exp' / 'split_decree_v4.csv'   # 하위법령 질문 (eval_v4.DQ_QA와 같은 파일)
 
 E = dict(encoding='utf-8-sig')
 THRESHOLD = 0.9
