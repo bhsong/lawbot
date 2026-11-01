@@ -1,71 +1,15 @@
-# tests/test_reranker.py  →  Qwen3-Reranker 계층 (reranker.py)과 service·app·check_deploy 연결
-# 실제 4B 리랭커 대신 작은 무작위 MLX Qwen3 모델·가짜 토크나이저를 쓴다: 모델 파일·네트워크 불필요
-# 실제 모델 스모크 테스트는 test_models.py (-m models)
+# tests/test_reranker.py  →  리랭커 클라이언트 (reranker.py: 모델 서버 /v1/rerank 점수 → 정렬)와 service·app·check_deploy 연결
+# 채점 계산(작은 MLX Qwen3)은 모델 서버 테스트 (services/model-server/tests/test_ms_models.py)
 import json
 
-import mlx.core as mx
-import mlx.nn as nn
 import pytest
-from mlx_lm.models import qwen3
 
 import lawbot.app as app_mod
 import lawbot.reranker as rr_mod
 import lawbot.service as service
-from fakes import FakeLLM, FakeRetriever
-from lawbot import check_deploy, deploy, paths
+from fakes import FakeLLM, FakeRetriever, FakeServerClient
+from lawbot import check_deploy, deploy
 from lawbot.llm import build_prompt_v4
-
-VOCAB = 64
-
-
-class FakeTok:
-    """글자마다 토큰 하나 (yes=1, no=2). 실제 BPE와 달리 길이를 쉽게 셀 수 있다"""
-
-    def encode(self, text, add_special_tokens=True):
-        assert add_special_tokens is False  # 노트북과 같이 특수 토큰을 붙이지 않음
-        return [3 + ord(c) % (VOCAB - 3) for c in text]
-
-    def convert_tokens_to_ids(self, token):
-        return {'yes': 1, 'no': 2}.get(token)
-
-
-def tiny_qwen3(tie=True, seed=0):
-    mx.random.seed(seed)
-    args = qwen3.ModelArgs(
-        model_type='qwen3',
-        hidden_size=64,
-        num_hidden_layers=2,
-        intermediate_size=128,
-        num_attention_heads=4,
-        rms_norm_eps=1e-6,
-        vocab_size=VOCAB,
-        num_key_value_heads=2,
-        max_position_embeddings=4096,
-        head_dim=16,
-        tie_word_embeddings=tie,
-        rope_theta=10000.0,
-    )
-    model = qwen3.Model(args)
-    mx.eval(model.parameters())
-    return model
-
-
-@pytest.fixture
-def make_reranker(env, tmp_path):
-    loads = []
-
-    def build(model=None, max_length=rr_mod.MAX_LENGTH, tok=None):
-        m = model or tiny_qwen3()
-
-        def load(path):
-            loads.append(path)
-            return m, tok or FakeTok()
-
-        env.setattr(rr_mod, 'load', load)
-        return rr_mod.Reranker(tmp_path, max_length=max_length)
-
-    build.loads = loads
-    return build
 
 
 def cands(n):
@@ -81,112 +25,69 @@ def cands(n):
     ]
 
 
-def with_scores(r, table):
-    """score를 문서별 고정 점수로 바꾼다 (정렬 규칙만 시험)"""
-    r.score = lambda q, docs: [table[d] for d in docs]
-    return r
+class ScoreClient:
+    """ModelServerClient.rerank 대역: 문서별 고정 점수, 받은 인자 기록"""
+
+    def __init__(self, table=None):
+        self.table, self.calls = table or {}, []
+
+    def rerank(self, model, query, documents, instruction=None):
+        self.calls.append((model, query, list(documents), instruction))
+        return [self.table.get(d, 0.5) for d in documents]
 
 
-# ---- 실험 노트북과 같은 입력·채점 ----
-def test_prompt_strings_match_notebook():
-    # lawbot_v4_reranker.ipynb 셀 3의 값을 글자 그대로 (바뀌면 Colab 결과와 비교할 수 없음)
+def with_scores(table):
+    return rr_mod.Reranker(ScoreClient(table), 'qwen3-reranker-4b')
+
+
+# ---- 실험 노트북과 같은 작업 설명 ----
+def test_task_matches_notebook():
+    # lawbot_v4_reranker.ipynb 셀 3의 작업 설명을 글자 그대로 (바뀌면 Colab 결과와 비교할 수 없음)
     assert rr_mod.TASK == (
         'Given a Korean labor-law question, retrieve the statutory article that directly '
         'provides the legal basis for answering it.'
     )
-    assert rr_mod.MAX_LENGTH == 2560 and rr_mod.CANDIDATES == 10
-    assert rr_mod.PREFIX == (
-        '<|im_start|>system\nJudge whether the Document meets the requirements based on the Query '
-        'and the Instruct provided. Note that the answer can only be "yes" or "no".<|im_end|>\n'
-        '<|im_start|>user\n'
-    )
-    assert rr_mod.SUFFIX == '<|im_end|>\n<|im_start|>assistant\n<think>\n\n</think>\n\n'
-    assert rr_mod.pair_text('질문', '문서') == f'Instruct: {rr_mod.TASK}\nQuery: 질문\nDocument: 문서'
+    assert rr_mod.CANDIDATES == 10
 
 
-def test_encode_layout_and_truncation(make_reranker):
-    r = make_reranker(max_length=400)
-    tok = FakeTok()
-    pre, suf = tok.encode(rr_mod.PREFIX, add_special_tokens=False), tok.encode(rr_mod.SUFFIX, add_special_tokens=False)
-    short = r.encode('q', 'd')
-    assert short == pre + tok.encode(rr_mod.pair_text('q', 'd'), add_special_tokens=False) + suf
-    long = r.encode('q', '가' * 1000)  # 가운데만 오른쪽에서 잘라 앞뒤 특수 문자열은 그대로
-    assert len(long) == 400 and long[: len(pre)] == pre and long[-len(suf) :] == suf
-    assert r.max_mid == 400 - len(pre) - len(suf)
-
-
-@pytest.mark.parametrize('tie', [True, False])
-def test_last_position_logits_match_full_forward(make_reranker, tie):
-    # lm_head를 마지막 위치에만 곱해도 Model.__call__ 전체 계산의 마지막 위치와 같아야 함
-    # 계산 구조 검증이므로 CPU에서 비교: 일부 Apple GPU는 fp32 행렬 곱을 저정밀(NAX·TF32) 경로로 계산해
-    # 오차가 1e-3 수준이 된다 (4비트 양자화 행렬 곱은 해당 없음, 배포 모델은 4비트)
-    model = tiny_qwen3(tie=tie)
-    r = make_reranker(model=model)
-    ids = r.encode('해고 예고?', '근로기준법 제26조(해고의 예고)\n사용자는 30일 전에 예고')
-    with mx.stream(mx.cpu):
-        full = model(mx.array([ids]))[0, -1]
-        got = r._no_yes_logits(ids)
-        assert mx.allclose(got, full[mx.array([2, 1])], atol=1e-4).item()
-
-
-def test_quantized_model_logits(make_reranker):
-    # 배포는 4비트: QuantizedEmbedding.as_linear(tie) 경로도 전체 계산과 같아야 함
-    model = tiny_qwen3(tie=True)
-    nn.quantize(model, group_size=32, bits=4)
-    r = make_reranker(model=model)
-    ids = r.encode('q', 'doc')
-    assert mx.allclose(r._no_yes_logits(ids), model(mx.array([ids]))[0, -1][mx.array([2, 1])], atol=1e-3).item()
-
-
-def test_yes_probability_is_float32_softmax():
-    assert rr_mod.yes_probability(mx.array([0.0, 0.0])) == 0.5
-    p = rr_mod.yes_probability(mx.array([1.0, 3.0], dtype=mx.float16))
-    assert abs(p - 1 / (1 + 2.718281828**-2)) < 1e-6
-    # 노트북(float32)과 같이 차이가 크면 1.0으로 포화 → 동점은 임베딩 순위로 가름
-    assert rr_mod.yes_probability(mx.array([-20.0, 20.0])) == rr_mod.yes_probability(mx.array([-30.0, 30.0])) == 1.0
-
-
-def test_real_scores_in_unit_interval(make_reranker):
-    r = make_reranker()
-    s = r.score('질문', [c['doc'] for c in cands(4)])
-    assert len(s) == 4 and all(0 <= x <= 1 for x in s)
-    assert s == r.score('질문', [c['doc'] for c in cands(4)])  # 같은 입력은 같은 점수
-    assert len(make_reranker.loads) == 1  # 채점마다 다시 불러오지 않음
+def test_sends_documents_and_task_to_server():
+    c = cands(3)
+    r = with_scores({})
+    r.rerank('질문', c, top_k=3)
+    assert r.client.calls == [('qwen3-reranker-4b', '질문', [x['doc'] for x in c], rr_mod.TASK)]
 
 
 # ---- 정렬 규칙 ----
-def test_ten_candidates_return_three_sorted(make_reranker):
+def test_ten_candidates_return_three_sorted():
     c = cands(10)
-    r = with_scores(
-        make_reranker(), {x['doc']: s for x, s in zip(c, [0.1, 0.5, 0.2, 0.9, 0.3, 0.8, 0.05, 0.7, 0.4, 0.6])}
-    )
+    r = with_scores({x['doc']: s for x, s in zip(c, [0.1, 0.5, 0.2, 0.9, 0.3, 0.8, 0.05, 0.7, 0.4, 0.6])})
     out = r.rerank('질문', c, top_k=3)
     assert [h['article_id'] for h in out] == ['제4조', '제6조', '제8조']
     assert [h['rerank_score'] for h in out] == [0.9, 0.8, 0.7]
     assert [h['emb_rank'] for h in out] == [4, 6, 8]
 
 
-def test_ties_keep_embedding_order(make_reranker):
+def test_ties_keep_embedding_order():
     c = cands(5)
-    r = with_scores(make_reranker(), {x['doc']: s for x, s in zip(c, [0.5, 1.0, 0.5, 1.0, 1.0])})
+    r = with_scores({x['doc']: s for x, s in zip(c, [0.5, 1.0, 0.5, 1.0, 1.0])})
     assert [h['article_id'] for h in r.rerank('질문', c, top_k=3)] == ['제2조', '제4조', '제5조']
-    r = with_scores(make_reranker(), {x['doc']: 0.5 for x in c})
+    r = with_scores({x['doc']: 0.5 for x in c})
     assert [h['article_id'] for h in r.rerank('질문', c, top_k=5)] == [x['article_id'] for x in c]
 
 
-def test_few_candidates(make_reranker):
+def test_few_candidates():
     c = cands(2)
-    r = with_scores(make_reranker(), {c[0]['doc']: 0.1, c[1]['doc']: 0.9})
+    r = with_scores({c[0]['doc']: 0.1, c[1]['doc']: 0.9})
     assert [h['article_id'] for h in r.rerank('질문', c, top_k=3)] == ['제2조', '제1조']
     c = cands(3)
-    r = with_scores(make_reranker(), {x['doc']: s for x, s in zip(c, [0.2, 0.3, 0.1])})
+    r = with_scores({x['doc']: s for x, s in zip(c, [0.2, 0.3, 0.1])})
     assert [h['article_id'] for h in r.rerank('질문', c, top_k=3)] == ['제2조', '제1조', '제3조']
 
 
-def test_metadata_preserved_and_input_untouched(make_reranker):
+def test_metadata_preserved_and_input_untouched():
     c = cands(4)
     before = json.dumps(c, ensure_ascii=False)
-    r = with_scores(make_reranker(), {x['doc']: s for x, s in zip(c, [0.1, 0.4, 0.3, 0.2])})
+    r = with_scores({x['doc']: s for x, s in zip(c, [0.1, 0.4, 0.3, 0.2])})
     out = r.rerank('질문', c, top_k=3)
     assert json.dumps(c, ensure_ascii=False) == before  # 입력 dict를 바꾸지 않음
     for h in out:
@@ -195,8 +96,8 @@ def test_metadata_preserved_and_input_untouched(make_reranker):
         assert set(h) - set(orig) == {'rerank_score', 'emb_rank'}
 
 
-def test_invalid_inputs(make_reranker):
-    r = with_scores(make_reranker(), {})
+def test_invalid_inputs():
+    r = with_scores({})
     for q, c, k in (
         ('', cands(3), 3),
         ('  ', cands(3), 3),
@@ -209,29 +110,15 @@ def test_invalid_inputs(make_reranker):
     ):
         with pytest.raises(ValueError):
             r.rerank(q, c, top_k=k)
+    assert r.client.calls == []  # 잘못된 입력은 서버에 보내지 않음
 
 
-def test_bad_scores_raise(make_reranker):
-    r = make_reranker()
-    r._no_yes_logits = lambda ids: mx.array([float('nan'), 0.0])
+@pytest.mark.parametrize('bad', [float('nan'), 1.5, -0.1, None])
+def test_bad_scores_raise(bad):
+    c = cands(3)
+    r = with_scores({c[1]['doc']: bad})
     with pytest.raises(RuntimeError, match='점수가 올바르지 않습니다'):
-        r.rerank('질문', cands(3))
-
-
-def test_load_errors(env, tmp_path, make_reranker):
-    with pytest.raises(FileNotFoundError, match='리랭커 모델 폴더 없음'):
-        rr_mod.Reranker(tmp_path / '없음')
-    m = tiny_qwen3()
-    m.model_type = 'qwen2'
-    with pytest.raises(ValueError, match='Qwen3 모델이 아닙니다'):
-        make_reranker(model=m)
-
-    class NoYes(FakeTok):
-        def convert_tokens_to_ids(self, token):
-            return None
-
-    with pytest.raises(ValueError, match='yes/no 토큰'):
-        make_reranker(tok=NoYes())
+        r.rerank('질문', c)
 
 
 # ---- 설정 ----
@@ -239,10 +126,10 @@ def test_reranker_config(env):
     v4, v1 = deploy.get_profile('v4'), deploy.get_profile('v1')
     assert deploy.reranker(v4) is None and deploy.reranker(v1) is None  # 기본 꺼짐
     env.setenv('LAWBOT_RERANKER_ENABLED', '1')
-    assert deploy.reranker(v4) == deploy.RerankerConfig(paths.V4_RERANKER, 10)
-    env.setenv('LAWBOT_RERANKER_MODEL_PATH', 'models/v4/rr')
+    assert deploy.reranker(v4) == deploy.RerankerConfig('qwen3-reranker-4b', 10)
+    env.setenv('LAWBOT_RERANK_MODEL', 'rr-8bit')
     env.setenv('LAWBOT_RERANKER_CANDIDATES', '20')
-    assert deploy.reranker(v4) == deploy.RerankerConfig(paths.ROOT / 'models/v4/rr', 20)
+    assert deploy.reranker(v4) == deploy.RerankerConfig('rr-8bit', 20)
     with pytest.raises(ValueError, match='v4 프로필에서만'):
         deploy.reranker(v1)
     env.setenv('LAWBOT_RERANKER_ENABLED', 'yes')
@@ -264,9 +151,9 @@ class FakeReranker:
     created = 0
     fail = None
 
-    def __init__(self, path, candidates=10):
+    def __init__(self, client, model, candidates=10):
         FakeReranker.created += 1
-        self.path, self.candidates, self.calls = path, candidates, []
+        self.client, self.model, self.candidates, self.calls = client, model, candidates, []
 
     def rerank(self, question, candidates, top_k=3):  # 임베딩 역순이 리랭킹 순서라고 가정
         if FakeReranker.fail:
@@ -284,10 +171,6 @@ def v4_app(env, tmp_path, enabled, **extra):
     env.setattr(service, 'LLM', FakeLLM)
     env.setattr(service, 'Reranker', FakeReranker)
     env.setenv('LAWBOT_PROFILE', 'v4')
-    env.setenv('LAWBOT_MAX_RESIDENT', '1')
-    folder = tmp_path / 'rr'
-    folder.mkdir(exist_ok=True)
-    env.setenv('LAWBOT_RERANKER_MODEL_PATH', str(folder))
     env.setenv('LAWBOT_RERANKER_ENABLED', '1' if enabled else '0')
     for k, v in extra.items():
         env.setenv(k, v)
@@ -300,7 +183,7 @@ def test_disabled_is_embedding_top3(env, tmp_path):
     *_, (stage, hits, raw, st) = service.ask(a, '해고 예고?', 'fast')
     assert stage == 'done' and a.retriever.ks == [3]
     assert hits == cands(3)  # 기존 검색 결과 그대로 (키 추가 없음)
-    assert a.models.loaded['fast'].args == ('해고 예고?', cands(3))
+    assert a.models.llms['fast'].args == ('해고 예고?', cands(3))
     assert 'rerank' not in st
 
 
@@ -320,12 +203,13 @@ def test_disabled_v1_unchanged(env):
 
 def test_enabled_reranks_top10_to_top3(env, tmp_path, capsys):
     a = v4_app(env, tmp_path, enabled=True)
-    assert FakeReranker.created == 1 and a.reranker.path == tmp_path / 'rr'
+    assert FakeReranker.created == 1 and a.reranker.model == 'qwen3-reranker-4b'
+    assert isinstance(a.reranker.client, FakeServerClient)  # 임베딩과 같은 모델 서버
     *_, (stage, hits, raw, st) = service.ask(a, '해고 예고?', 'fast')
     assert a.retriever.ks == [10]
     assert a.reranker.calls == [('해고 예고?', [f'제{i}조' for i in range(1, 11)], 3)]
     assert [h['article_id'] for h in hits] == ['제10조', '제9조', '제8조']  # 리랭킹 점수순
-    assert a.models.loaded['fast'].args == ('해고 예고?', hits)  # 최종 3개만 답변 모델로
+    assert a.models.llms['fast'].args == ('해고 예고?', hits)  # 최종 3개만 답변 모델로
     assert st['search'] >= 0 and st['rerank'] >= 0
     assert '리랭킹' in capsys.readouterr().out  # 단계별 시간 로그
 
@@ -346,15 +230,18 @@ def test_enabled_candidates_env(env, tmp_path):
         v4_app(env, tmp_path, enabled=True, LAWBOT_RERANKER_CANDIDATES='2')
 
 
-def test_enabled_refuses_before_loading(env, tmp_path):
-    env.setenv('LAWBOT_RERANKER_MODEL_PATH', str(tmp_path / '없음'))
+def test_enabled_refuses_before_loading(env, tmp_path, model_server):
     env.setattr(service, 'Retriever', CandRetriever)
     env.setattr(service, 'LLM', FakeLLM)
     env.setattr(service, 'Reranker', FakeReranker)
     env.setenv('LAWBOT_PROFILE', 'v4')
     env.setenv('LAWBOT_RERANKER_ENABLED', '1')
     FakeRetriever.created = FakeLLM.created = FakeReranker.created = 0
-    with pytest.raises(RuntimeError, match='리랭커 모델 폴더가 없습니다'):
+    p = deploy.get_profile()
+    model_server.available = [{'id': p.emb_model, 'type': 'embedding'}] + [
+        {'id': s.model, 'type': 'chat'} for s in p.models
+    ]  # 서버에 리랭커 모델 없음
+    with pytest.raises(RuntimeError, match='모델 서버에 필요한 모델이 없습니다: rerank qwen3-reranker-4b'):
         service.load_app()
     env.setenv('LAWBOT_PROFILE', 'v1')
     with pytest.raises(ValueError, match='v4 프로필에서만'):
@@ -369,7 +256,7 @@ def test_reranker_failure_is_not_hidden(env, tmp_path):
     chat = app_mod.make_chat(a)
     with pytest.raises(RuntimeError, match='점수가 올바르지'):
         list(chat('질문', [], 'fast', 'full'))
-    assert not hasattr(a.models.loaded['fast'], 'args')
+    assert 'fast' not in a.models.llms  # 답변 모델을 부르지 않음
 
 
 def test_chat_shows_rerank_info(env, tmp_path):
@@ -391,30 +278,23 @@ def test_prompt_format_unchanged_by_rerank_keys():
     assert build_prompt_v4(tagged, '질문') == build_prompt_v4(hits, '질문')
 
 
-# ---- 배포 검사 ----
-def fake_reranker_folder(folder, bits=4, vocab=('yes', 'no')):
-    folder.mkdir()
-    (folder / 'config.json').write_text(
-        json.dumps({'model_type': 'qwen3', 'hidden_size': 2560, 'quantization': {'group_size': 64, 'bits': bits}})
-    )
-    (folder / 'tokenizer.json').write_text(json.dumps({'model': {'vocab': {v: i for i, v in enumerate(vocab)}}}))
-    (folder / 'model.safetensors').write_bytes(b'')
-
-
-def test_check_deploy_reranker(env, tmp_path):
+# ---- 배포 검사 (리랭커 폴더 검사는 모델 서버 lawbot_model_server.check) ----
+def test_check_deploy_reranker(env, model_server):
     def run():
         return [(lv, m) for lv, m in check_deploy.run('v4') if '리랭커' in m]
 
-    assert run() == [('INFO', '리랭커 꺼짐 (LAWBOT_RERANKER_ENABLED=1이면 리랭커 폴더도 검사)')]
+    assert run() == [('INFO', '리랭커 꺼짐 (LAWBOT_RERANKER_ENABLED=1이면 모델 서버의 리랭커 모델도 확인)')]
     env.setenv('LAWBOT_RERANKER_ENABLED', '1')
-    env.setenv('LAWBOT_RERANKER_MODEL_PATH', str(tmp_path / 'rr'))
-    assert ('FAIL', f'리랭커 모델 폴더 없음: {tmp_path / "rr"}') in run()
-    fake_reranker_folder(tmp_path / 'rr')
-    out = run()
-    assert all(lv == 'OK' for lv, _ in out), out
-    assert any('qwen3 Qwen3-4B' in m for _, m in out)
-    env.setenv('LAWBOT_RERANKER_MODEL_PATH', str(tmp_path / 'rr8'))
-    fake_reranker_folder(tmp_path / 'rr8', bits=8, vocab=('a',))
-    assert [lv for lv, _ in run()].count('FAIL') == 2
+    assert ('OK', '리랭커 qwen3-reranker-4b: 후보 10개 → 3개 (v4 실험 10개)') in run()
+    env.setenv('LAWBOT_RERANKER_CANDIDATES', '2')
+    assert any(lv == 'FAIL' and '후보 2개' in m for lv, m in run())
+    env.delenv('LAWBOT_RERANKER_CANDIDATES')
+    env.setenv('LAWBOT_RERANK_MODEL', '없는-리랭커')
+    p = deploy.get_profile('v4')
+    model_server.available = [
+        {'id': p.emb_model, 'type': 'embedding'},
+        {'id': 'qwen3-reranker-4b', 'type': 'rerank'},
+    ] + [{'id': s.model, 'type': 'chat'} for s in p.models]
+    assert ('FAIL', '모델 서버에 rerank 모델 없는-리랭커 없음 (LAWBOT_SERVE_*와 맞추기)') in check_deploy.run('v4')
     env.setenv('LAWBOT_PROFILE', 'v1')
     assert any(lv == 'FAIL' and 'v4 프로필에서만' in m for lv, m in check_deploy.run('v1'))

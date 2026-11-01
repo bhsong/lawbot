@@ -66,7 +66,7 @@ def fmt_sources(hits, cited=None, refused=False):
 
 
 def data_notice(app):
-    """제목 아래 한 줄: 법령 기준일 (웹앱 레포의 매니페스트). 원격 모드에서 모델 서버의 데이터 버전이 다르면 경고"""
+    """제목 아래 한 줄: 법령 기준일 (웹앱 레포의 매니페스트. 조문 데이터는 웹앱에만 있음)"""
     m = manifest.load(app.profile.articles)
     kinds = manifest.kinds_text(m)  # 하위법령을 켜면 '법률 415 · 시행령 273 · 시행규칙 124'
     line = (
@@ -74,18 +74,6 @@ def data_notice(app):
         if m
         else '법령 기준일: 확인되지 않음 (데이터 매니페스트 없음)'
     )
-    client = getattr(app.retriever, 'client', None)
-    if client is not None:
-        from lawbot.remote import dataset_warnings
-
-        try:
-            warn = dataset_warnings(client.get_json('/info'), app.profile)
-        except Exception:  # 화면은 그대로 띄운다 (서버 문제는 질문할 때 안내)
-            warn = []
-        if warn:
-            line += (
-                ' · ⚠ 모델 서버의 법령 데이터가 이 웹앱과 다릅니다 (' + '; '.join(w.split(' (')[0] for w in warn) + ')'
-            )
     return line
 
 
@@ -170,15 +158,15 @@ def make_chat(app, fb=None):
                 yield text, src, fmt_stats(spec.label, stage, st)
         except Exception as e:  # 유형은 service.ask가 붙임 (요청 로그의 error_type과 같음)
             kind = getattr(e, 'lawbot_error', None)
-            if kind == 'model_server':  # 연결 실패·토큰 불일치·로딩 중
+            if kind == 'model_server':  # 모델 서버(생성 API) 연결 실패·토큰 불일치·로딩 중
                 raise gr.Error(
                     f'모델 서버가 준비되지 않았습니다 ({type(e).__name__}). 잠시 뒤 다시 질문하고, 계속되면 '
                     'uv run python -m lawbot.check_deploy로 모델 서버를 확인하세요.'
                 ) from e
-            if kind == 'model_load':  # 모델 폴더 없음·형식 오류 (mlx_lm.load)
+            if kind == 'model_load':  # 모델 서버의 모델 폴더 없음·형식 오류, 웹앱의 system 파일 없음
                 raise gr.Error(
-                    f'{spec.label} 모델을 불러오지 못했습니다: {spec.path} ({type(e).__name__}). '
-                    'uv run python -m lawbot.check_deploy로 확인하세요.'
+                    f'{spec.label} 모델을 불러오지 못했습니다: {spec.model} ({type(e).__name__}). '
+                    'uv run python -m lawbot_model_server.check와 uv run python -m lawbot.check_deploy로 확인하세요.'
                 ) from e
             raise  # 리랭킹·생성 중 오류는 그대로 올림 (Gradio가 오류로 표시)
 
@@ -187,10 +175,9 @@ def make_chat(app, fb=None):
 
 def model_choices(app):
     """쓰는 모델 + LAWBOT_MODELS에서 뺀 모델(비활성 표시, 고르면 되돌림)"""
-    return [
-        (f'{s.label} — {s.info}' + ('' if s.path.is_dir() else ' (모델 폴더 없음)'), s.key)
-        for s in app.models.specs.values()
-    ] + [(f'{s.label} — 이 기기에서 사용 안 함', s.key) for s in app.profile.disabled]
+    return [(f'{s.label} — {s.info}', s.key) for s in app.models.specs.values()] + [
+        (f'{s.label} — 이 기기에서 사용 안 함', s.key) for s in app.profile.disabled
+    ]
 
 
 def default_fmt(app):

@@ -138,6 +138,57 @@ def test_check_reports_missing(ms_env, tmp_path):
     assert all(TOKEN not in m for _, m in out)
 
 
+def write_safetensors(path, dtype):
+    import json
+    import struct
+
+    header = json.dumps({'w': {'dtype': dtype, 'shape': [1], 'data_offsets': [0, 2]}}).encode()
+    path.write_bytes(struct.pack('<Q', len(header)) + header + b'\0\0')
+
+
+def fake_mlx(folder, bits=4, hidden=2560, adapter=False, vocab=None):
+    import json
+
+    folder.mkdir(parents=True)
+    (folder / 'config.json').write_text(
+        json.dumps({'model_type': 'qwen3', 'hidden_size': hidden, 'quantization': {'group_size': 64, 'bits': bits}})
+    )
+    (folder / 'tokenizer.json').write_text(json.dumps({'model': {'vocab': {v: i for i, v in enumerate(vocab or [])}}}))
+    (folder / 'tokenizer_config.json').write_text(json.dumps({'chat_template': '{{ messages }}'}))
+    write_safetensors(folder / 'model.safetensors', 'U32')
+    if adapter:
+        (folder / 'adapters.safetensors').write_bytes(b'')
+
+
+def test_check_reports_each_model_folder(ms_env, tmp_path):
+    """챗봇의 이전 check_deploy 모델 폴더 검사: 양자화·크기·어댑터·chat template·query 프롬프트·yes/no 토큰"""
+    import json
+
+    emb = tmp_path / 'emb'
+    emb.mkdir()
+    write_safetensors(emb / 'model.safetensors', 'F16')
+    (emb / 'config.json').write_text('{}')
+    (emb / 'config_sentence_transformers.json').write_text(json.dumps({'prompts': {'query': 'Instruct: q\nQuery:'}}))
+    (emb / 'modules.json').write_text('[]')
+    (emb / 'tokenizer.json').write_text('{}')
+    fake_mlx(tmp_path / 'fast')
+    fake_mlx(tmp_path / 'pro', hidden=5120, adapter=True)
+    fake_mlx(tmp_path / 'rr', vocab=['yes', 'no'])
+    fake_mlx(tmp_path / 'rr8', bits=8, vocab=['a'])
+    set_minimal(
+        ms_env,
+        LAWBOT_SERVE_CHAT=f'fast={tmp_path / "fast"},pro={tmp_path / "pro"}',
+        LAWBOT_SERVE_EMBEDDING=f'emb={emb}',
+        LAWBOT_SERVE_RERANK=f'rr={tmp_path / "rr"},rr8={tmp_path / "rr8"}',
+    )
+    text = '\n'.join(f'{lv} {m}' for lv, m in check.run())
+    assert 'OK chat fast: qwen3 Qwen3-4B' in text and 'chat pro: qwen3 Qwen3-14B' in text
+    assert "FAIL chat pro: 어댑터 파일 남아 있음 ['adapters.safetensors']" in text
+    assert "OK embedding emb: dtype {'F16': 1}" in text and "query 프롬프트 'Instruct: q\\nQuery:'" in text
+    assert 'OK rerank rr: qwen3 Qwen3-4B' in text and 'OK rerank rr: tokenizer.json yes/no 토큰 있음' in text
+    assert 'FAIL rerank rr8: qwen3' in text and 'FAIL rerank rr8: tokenizer.json' in text
+
+
 # ---- 실제 HTTP 서버: 스트림 중 끊김 ----
 @contextlib.contextmanager
 def running(app):

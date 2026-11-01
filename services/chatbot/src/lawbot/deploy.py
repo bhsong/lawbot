@@ -1,5 +1,5 @@
-# src/lawbot/deploy.py  →  웹앱 배포 설정: 검색 프로필(v1/v4)과 답변 모델(Fast/Pro) 레지스트리
-# 모델 라이브러리를 import하지 않는다 (check_deploy·테스트가 모델 없이 읽음)
+# lawbot/deploy.py  →  웹앱 배포 설정: 검색 프로필(v1/v4)과 답변 모델(Fast/Pro) 레지스트리
+# 모델은 API 모델 id로 고른다 (모델 서버 .env의 LAWBOT_SERVE_* 또는 OpenAI 호환 클라우드의 모델 이름)
 import os
 from dataclasses import dataclass, replace
 from pathlib import Path
@@ -12,7 +12,7 @@ class ModelSpec:
     key: str  # UI·API 값 ('fast' / 'pro')
     label: str  # 화면 표시명
     info: str  # 크기·속도 설명 (정확도 비교는 쓰지 않음: 실측 전)
-    path: Path  # 로컬 MLX 폴더 (절대 경로)
+    model: str  # API 모델 id (chat completions의 model)
     fmt: str  # 기본 답변 형식: 'full'(4섹션 원문) / 'concise'(결론 + 근거)
     system_file: Path | None = None  # 이 모델만 쓰는 system (None이면 프로필 system)
 
@@ -22,7 +22,7 @@ class Profile:
     name: str  # 'v1' / 'v4'
     title: str  # 웹앱 제목
     articles: Path  # 조문 CSV
-    emb: Path  # 검색 임베딩 폴더
+    emb_model: str  # 검색 임베딩 모델 id (모델 서버 /v1/embeddings)
     max_seq: int  # 조문 인코딩 최대 토큰
     doc_style: str  # 검색 문서·참고 조문 형식 (retriever.DOC_STYLES, llm.build_messages)
     system_file: Path | None  # None이면 llm.SYSTEM (v1 학습 system). 모델별 system_file이 있으면 그쪽 우선
@@ -30,9 +30,12 @@ class Profile:
     disabled: tuple = ()  # LAWBOT_MODELS에서 뺀 모델: 화면에 '사용 안 함'으로만 표시하고 올리지 않음
 
 
+def _model(env, default):
+    return (os.environ.get(env) or '').strip() or default
+
+
 def _path(env, default):
-    """환경 변수가 있으면 그 경로. 상대 경로는 레포 최상위 기준 절대 경로로 바꾼다
-    (mlx_lm.load는 없는 상대 경로를 Hugging Face 저장소 이름으로 보고 내려받으려 함)"""
+    """환경 변수가 있으면 그 경로 (조문 CSV·system 파일). 상대 경로는 레포 최상위 기준 절대 경로로 바꾼다"""
     p = Path(os.environ.get(env) or default).expanduser()
     return p if p.is_absolute() else paths.ROOT / p
 
@@ -58,7 +61,7 @@ def _profile(name):
             'v1',
             '근로기준법 챗봇',
             paths.ARTICLES,
-            _path('LAWBOT_EMB', paths.EMB),
+            _model('LAWBOT_EMB_MODEL', 'lawbot-emb-v1'),
             512,
             'v1',
             None,
@@ -67,14 +70,14 @@ def _profile(name):
                     'fast',
                     'Lawbot Fast',
                     '4B · 빠른 응답, 4항목 답변',
-                    _path('LAWBOT_FAST_PATH', paths.LLM_4BIT),
+                    _model('LAWBOT_FAST_MODEL', 'lawbot-fast-v1'),
                     'full',
                 ),
                 ModelSpec(
                     'pro',
                     'Lawbot Pro',
                     '14B · 큰 모델, 간결한 답변, 응답이 더 느림',
-                    _path('LAWBOT_PRO_PATH', paths.PRO_BASE),
+                    _model('LAWBOT_PRO_MODEL', 'qwen3-14b-4bit'),
                     'concise',
                     _path('LAWBOT_PRO_SYSTEM', paths.SYSTEM_V1_CONCISE),
                 ),
@@ -91,7 +94,7 @@ def _profile(name):
             'v4',
             '노동법 챗봇',
             articles,
-            _path('LAWBOT_V4_EMB', paths.V4_EMB),
+            _model('LAWBOT_EMB_MODEL', 'lawbot-emb-v4'),
             2304,
             'v4',
             _path('LAWBOT_V4_SYSTEM', paths.V4_SYSTEM),
@@ -100,14 +103,14 @@ def _profile(name):
                     'fast',
                     'Lawbot Fast',
                     '4B · 빠른 응답, 4항목 답변',
-                    _path('LAWBOT_FAST_PATH', paths.V4_FAST),
+                    _model('LAWBOT_FAST_MODEL', 'lawbot-fast-v4'),
                     'full',
                 ),
                 ModelSpec(
                     'pro',
                     'Lawbot Pro',
                     '27B · 큰 모델(튜닝 전), 간결한 답변, 응답이 더 느림',
-                    _path('LAWBOT_PRO_PATH', paths.V4_PRO),
+                    _model('LAWBOT_PRO_MODEL', 'qwen3.8-27b-4bit'),
                     'concise',
                     _path('LAWBOT_PRO_SYSTEM', paths.V4_SYSTEM_CONCISE),
                 ),
@@ -116,22 +119,10 @@ def _profile(name):
     raise ValueError(f'알 수 없는 LAWBOT_PROFILE: {name!r} (v1 또는 v4)')
 
 
-def max_resident():
-    """동시에 메모리에 올려 두는 답변 모델 수. 2: Fast·Pro 함께 상주, 1: 선택한 모델만 (전환 때 다시 로딩)"""
-    n = int(os.environ.get('LAWBOT_MAX_RESIDENT', '2'))
-    if n not in (1, 2):
-        raise ValueError(f'LAWBOT_MAX_RESIDENT는 1 또는 2: {n}')
-    return n
-
-
 @dataclass(frozen=True)
 class RerankerConfig:
-    path: Path  # Qwen3-Reranker-4B MLX 폴더 (절대 경로)
+    model: str  # 리랭커 모델 id (모델 서버 /v1/rerank, Qwen3-Reranker-4B)
     candidates: int  # 리랭커에 넘길 임베딩 상위 후보 수 (v4 실험 10). 최종 조문 수는 service.TOP_K
-
-
-def reranker_path():
-    return _path('LAWBOT_RERANKER_MODEL_PATH', paths.V4_RERANKER)
 
 
 def reranker(profile):
@@ -148,7 +139,7 @@ def reranker(profile):
             'LAWBOT_RERANKER_ENABLED=0으로 끄거나 LAWBOT_PROFILE=v4로 실행하세요.'
         )
     n = int(os.environ.get('LAWBOT_RERANKER_CANDIDATES', '10'))
-    return RerankerConfig(reranker_path(), n)
+    return RerankerConfig(_model('LAWBOT_RERANK_MODEL', 'qwen3-reranker-4b'), n)
 
 
 # ---- 시행령·시행규칙(하위법령) 첨부 (docs/archives/decree-attach.md) ----
@@ -175,10 +166,9 @@ def decree_enabled():
     return flag == '1'
 
 
-def decree(profile, require_reranker=True):
+def decree(profile):
     """LAWBOT_DECREE_ENABLED=1이면 하위법령 첨부 설정, 아니면 None (기본 꺼짐: 법률 3개만)
-    리랭커 점수로 거르므로 리랭커가 꺼져 있으면 거부. v4 실험으로만 검증했으므로 v1 프로필도 거부
-    require_reranker=False: 원격 모드 웹앱 (리랭커는 모델 서버 설정. 서버가 켜짐을 /info로 알려 줌)"""
+    리랭커 점수로 거르므로 리랭커가 꺼져 있으면 거부. v4 실험으로만 검증했으므로 v1 프로필도 거부"""
     if not decree_enabled():
         return None
     if profile.doc_style != 'v4':
@@ -186,7 +176,7 @@ def decree(profile, require_reranker=True):
             f'시행령·시행규칙 첨부는 v4 프로필에서만 쓸 수 있습니다 (현재 {profile.name}). '
             'LAWBOT_DECREE_ENABLED=0으로 끄거나 LAWBOT_PROFILE=v4로 실행하세요.'
         )
-    if require_reranker and reranker(profile) is None:
+    if reranker(profile) is None:
         raise ValueError(
             '시행령·시행규칙 첨부는 리랭커 점수로 거르므로 리랭커가 필요합니다. '
             'LAWBOT_RERANKER_ENABLED=1로 켜거나 LAWBOT_DECREE_ENABLED=0으로 끄세요.'

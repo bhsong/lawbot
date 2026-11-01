@@ -16,7 +16,7 @@
 #   summary  : 위 결과 파일로 지표 표 → results/v4/summary_<tag>.csv, 실패 유형 → results/v4/fail_<tag>.csv
 #   compare  : 두 tag의 summary·실패 유형을 나란히 놓고 report.py 경고 기준으로 나빠진 지표를 경고
 # 결과는 results/v4/<단계>_<tag>.csv에 문항마다 한 행씩 바로 쓴다: 중간에 멈추면 같은 명령으로 이어서 실행
-# 실행마다 설정(모드·서버 /info·모델 폴더·데이터 버전·커밋)을 results/v4/run_<tag>.json에 남긴다
+# 실행마다 설정(생성 위치·모델 서버 /v1/models·모델 id·데이터 버전·커밋)을 results/v4/run_<tag>.json에 남긴다
 # test 문항은 평가 전용 (README '평가 데이터 사용 제한'): 설정·프롬프트·규칙은 --split val 결과로 고른다
 import argparse
 import datetime
@@ -695,24 +695,24 @@ def git_state():
 
 
 def run_meta(app, model, fmt, split, n, stages):
-    """이번 실행의 설정: 모드(local/remote), 서버 /info(원격) 또는 같은 형식의 로컬 값, 답변 모델 폴더, 데이터 버전, 커밋"""
-    client = getattr(app.retriever, 'client', None)
-    if client is not None:
-        info = client.get_json('/info')
-    else:
-        from lawbot.model_server import info as local_info
-
-        info = local_info(app)
+    """이번 실행의 설정: 생성 위치(api/external), 모델 서버 /v1/models, 답변·임베딩·리랭커 모델 id, 데이터 버전, 커밋"""
+    client = getattr(getattr(app.retriever, 'encoder', None), 'client', None)
+    try:
+        info = {'models': client.models()} if client is not None else None
+    except Exception as e:  # 기록용: 실패해도 평가는 계속
+        info = {'error': f'{type(e).__name__}: {e}'}
     head, dirty = git_state()
     return {
         'date': datetime.datetime.now().astimezone().isoformat(timespec='seconds'),
-        'mode': 'remote' if client is not None else 'local',
+        'mode': getattr(app, 'llm_mode', 'api'),
         'split': split,
         'n': n,
         'stages': stages,
         'model': model,
         'fmt': fmt,
-        'model_dir': app.models.specs[model].path.name,
+        'model_id': app.models.specs[model].model,
+        'emb_model': app.profile.emb_model,
+        'rerank_model': getattr(app.reranker, 'model', None),
         'info': info,
         'dataset': manifest.summary(manifest.load(app.profile.articles)),
         'commit': head,

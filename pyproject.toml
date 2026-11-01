@@ -24,6 +24,10 @@ dev = [
 [tool.pytest.ini_options]
 testpaths = ["services/chatbot/tests", "services/model-server/tests"]
 addopts = "-ra --strict-markers -m 'not models'"   # 실제 모델 테스트는 -m models로 따로 실행
+filterwarnings = [
+    # OpenAI SDK가 TestClient(계약 테스트)에 요청마다 timeout을 넘김: 테스트 대역에서만 나는 경고
+    "ignore:You should not use the 'timeout' argument with the TestClient",
+]
 markers = [
     "models: 실제 모델 파일(models/)과 Apple Silicon이 필요한 테스트",
     "integration: 실제 Gradio 서버를 별도 프로세스로 띄우는 인증 테스트 (127.0.0.1만 접속)",

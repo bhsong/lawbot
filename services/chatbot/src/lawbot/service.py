@@ -1,88 +1,64 @@
-# src/lawbot/service.py  →  UI와 무관한 질의응답 흐름 (Gradio 앱이 쓰고, 이후 API 서버도 그대로 씀)
+# lawbot/service.py  →  UI와 무관한 질의응답 흐름 (Gradio 앱과 평가가 씀)
+# 모델은 모두 모델 서버(OpenAI 호환 API)에 있다: 임베딩·리랭크는 LAWBOT_MODEL_SERVER, 생성은 같은 서버 또는 LAWBOT_LLM_BASE_URL
+# 조문 인덱스·검색·하위법령 필터·프롬프트 조립은 여기(웹앱)에서 한다
 # 이 모듈은 gradio를 import하지 않는다 (tests/test_pipeline.py가 검사)
-import gc
-import importlib
 import json
 import os
 import sys
-import threading
 import time
 import uuid
-from collections import OrderedDict
 from dataclasses import dataclass
 from pathlib import Path
 
+import httpx
+from openai import OpenAI
+
 from lawbot import decree as decree_filter
 from lawbot import deploy, manifest, security
+from lawbot.api_client import Embedder, ModelLoadError, ModelServerClient, ModelServerError, wait_ready
+from lawbot.llm import LLM, SYSTEM
 from lawbot.paths import ROOT
+from lawbot.reranker import Reranker
+from lawbot.retriever import Retriever
 
 TOP_K = 3  # 답변 근거로 넘기는 조문 수 (Fast·Pro 공통)
-
-# 모델 클래스는 처음 쓸 때 import한다: 원격 모드 웹앱(모델 서버에 접속)은 torch·mlx를 올리지 않음
-# service.LLM처럼 모듈 속성으로 읽을 수 있고, 테스트는 이 이름을 가짜로 바꾼다 (바꾼 값이 우선)
-_LAZY = {'Retriever': 'lawbot.retriever', 'LLM': 'lawbot.llm', 'SYSTEM': 'lawbot.llm', 'Reranker': 'lawbot.reranker'}
+# 테스트는 Retriever·Reranker·LLM·ModelServerClient·OpenAI를 이 모듈의 속성으로 바꿔 끼운다 (load_app이 호출 때 읽음)
 
 
-def __getattr__(name):
-    if name not in _LAZY:
-        raise AttributeError(f'module {__name__!r} has no attribute {name!r}')
-    value = getattr(importlib.import_module(_LAZY[name]), name)
-    globals()[name] = value
-    return value
+class ChatModels:
+    """답변 모델 key → LLM (요청마다 key로 고른다: '현재 모델' 같은 공유 상태가 없음)
+    모델 불러오기·상주(LRU)는 모델 서버가 한다. is_loaded는 서버 /v1/models의 loaded (외부 생성 API는 항상 True)"""
 
-
-def _lazy(name):
-    return globals()[name] if name in globals() else __getattr__(name)
-
-
-def free_memory():
-    """내린 모델의 Metal 버퍼를 반납 (MLX는 해제한 버퍼를 캐시에 남겨 둠)"""
-    gc.collect()
-    try:
-        import mlx.core as mx
-
-        mx.clear_cache()
-    except ImportError:  # 테스트의 가짜 모듈 환경
-        pass
-
-
-class ModelManager:
-    """답변 모델 지연 로딩 + LRU. 상주 모델 수는 max_resident (deploy.max_resident)
-    선택은 요청마다 key로 받는다: '현재 모델' 같은 공유 상태를 두지 않아 이전 선택이 다음 질문에 섞이지 않음"""
-
-    def __init__(self, specs, loader, max_resident=2):
+    def __init__(self, specs, factory, loaded=None):
         self.specs = {s.key: s for s in specs}
-        self.loader, self.max_resident = loader, max_resident
-        self.loaded = OrderedDict()
-        self.lock = threading.Lock()  # 로딩·교체를 한 번에 하나만 (생성 자체는 Gradio concurrency_limit=1)
+        self.factory, self._loaded = factory, loaded
+        self.llms = {}
 
     def is_loaded(self, key):
-        return key in self.loaded
+        if self._loaded is None:
+            return True
+        try:
+            return self.specs[key].model in self._loaded()
+        except Exception:  # 확인 실패는 생성 요청에서 같은 오류로 드러남
+            return True
 
     def get(self, key):
-        """(모델, 이번에 로딩한 초). 이미 올라 있으면 로딩 초는 None"""
-        spec = self.specs[key]  # 없는 key는 KeyError
-        with self.lock:
-            if key in self.loaded:
-                self.loaded.move_to_end(key)
-                return self.loaded[key], None
-            while len(self.loaded) >= self.max_resident:  # 새 모델을 올리기 전에 내려서 최대 메모리를 줄임
-                self.loaded.popitem(last=False)
-                free_memory()
-            t0 = time.perf_counter()
-            llm = self.loader(spec)
-            self.loaded[key] = llm
-            return llm, time.perf_counter() - t0
+        """(LLM, None). 없는 key는 KeyError. 두 번째 값은 이전 인터페이스(로딩 초)와 맞춘 자리 (서버가 첫 요청 때 불러옴)"""
+        spec = self.specs[key]
+        if key not in self.llms:  # system 파일이 없으면 FileNotFoundError (화면에서 오류 안내)
+            self.llms[key] = self.factory(spec)
+        return self.llms[key], None
 
 
 @dataclass
 class LawbotApp:
     profile: deploy.Profile
     retriever: object
-    models: ModelManager
+    models: ChatModels
     reranker: object = None  # None: 임베딩 상위 TOP_K개 그대로 (LAWBOT_RERANKER_ENABLED=0, 기본)
     full_system: str = None  # '전체(4항목)' system: 프로필 system 파일, 없으면 llm.SYSTEM (v1)
     decree: object = None  # deploy.DecreeConfig: 시행령·시행규칙 첨부 (None: 법률 3개만, LAWBOT_DECREE_ENABLED=0 기본)
+    llm_mode: str = 'api'  # 생성 위치: 'api'(모델 서버) / 'external'(LAWBOT_LLM_BASE_URL의 외부 API)
 
 
 def uses_decrees(app, model_key):
@@ -98,7 +74,7 @@ def system_text(profile, spec):
 
 
 def check_profile_files(p):
-    """프로필의 조문 CSV·기본 system 파일이 있는지 모델 로딩 전에 확인 (v4 자산 준비 전 실행을 알기 쉽게 거부)
+    """프로필의 조문 CSV·기본 system 파일이 있는지 모델 서버에 접속하기 전에 확인
     조문 CSV가 매니페스트(조문 수·sha256)와 다르면 거부, 매니페스트가 없으면 경고만 (manifest.check)"""
     missing = [str(f) for f in (p.articles, p.system_file) if f is not None and not f.is_file()]
     if missing:
@@ -110,34 +86,53 @@ def check_profile_files(p):
     manifest.check(p.articles)
 
 
-def check_reranker(rr):
-    """켜진 리랭커의 후보 수·폴더를 모델 로딩 전에 확인"""
-    if rr.candidates < TOP_K:
-        raise ValueError(f'LAWBOT_RERANKER_CANDIDATES는 {TOP_K} 이상: {rr.candidates}')
-    if not rr.path.is_dir():
-        raise RuntimeError(
-            f'리랭커 모델 폴더가 없습니다: {rr.path}. uv run python -m lawbot.check_deploy로 확인하거나, '
-            'LAWBOT_RERANKER_ENABLED=0으로 끄고 실행하세요.'
-        )
+def server_wait():
+    try:
+        return float(os.environ.get('LAWBOT_MODEL_SERVER_WAIT') or 300)
+    except ValueError:
+        raise ValueError(f'LAWBOT_MODEL_SERVER_WAIT는 초(숫자): {os.environ["LAWBOT_MODEL_SERVER_WAIT"]!r}') from None
 
 
-def load_app(profile=None, local=False):
-    """웹앱용: 검색기 1개 (+ 켜져 있으면 리랭커 1개) + Fast/Pro 레지스트리. 기본 모델(Fast)은 미리 올리고, 2개 상주면 Pro도 시도
-    리랭커는 여기서 한 번만 올려 Fast·Pro가 함께 쓰고, 답변 모델 LRU 교체와 무관하게 상주한다
-    LAWBOT_MODEL_SERVER가 있으면 모델을 올리지 않고 모델 서버에 접속한다 (load_remote). local=True면 항상 직접 올림 (모델 서버 자신)"""
+def missing_models(available, p, rr, external):
+    """모델 서버 /v1/models에 없는 필요한 모델 [(종류, id)]. 외부 생성 API면 chat 모델은 서버에서 찾지 않음"""
+    have = {(m['id'], m.get('type')) for m in available}
+    need = [(p.emb_model, 'embedding')] + ([(rr.model, 'rerank')] if rr else [])
+    if not external:
+        need += [(s.model, 'chat') for s in p.models]
+    return [(kind, mid) for mid, kind in need if (mid, kind) not in have]
+
+
+def load_app(profile=None):
+    """웹앱·평가용 LawbotApp: 조문 인덱스(임베딩은 모델 서버) + 켜져 있으면 리랭커 + 답변 모델(Fast/Pro) 레지스트리
+    모델 서버 주소(LAWBOT_MODEL_SERVER)와 토큰(LAWBOT_MODEL_TOKEN)이 필요하다. 서버가 준비될 때까지 기다린 뒤,
+    필요한 모델 id가 서버 /v1/models에 있는지 확인하고 없으면 시작을 거부한다"""
     p = profile or deploy.get_profile()
-    url = None if local else security.model_server_url()
-    if url:
-        return load_remote(p, url)
     check_profile_files(p)
-    rr = deploy.reranker(p)  # 꺼져 있으면 None: 리랭커 모델을 올리지 않음
-    if rr:
-        check_reranker(rr)
+    rr = deploy.reranker(p)  # 꺼져 있으면 None
+    if rr and rr.candidates < TOP_K:
+        raise ValueError(f'LAWBOT_RERANKER_CANDIDATES는 {TOP_K} 이상: {rr.candidates}')
     dc = deploy.decree(p)  # 꺼져 있으면 None. 켰는데 리랭커가 꺼져 있으면 ValueError
-    Retriever, Reranker, LLM = _lazy('Retriever'), _lazy('Reranker') if rr else None, _lazy('LLM')
+    url = security.model_server_url()
+    if url is None:
+        raise RuntimeError(
+            '모델 서버 주소가 없습니다: .env에 LAWBOT_MODEL_SERVER=http://127.0.0.1:<모델 서버 포트>와 '
+            'LAWBOT_MODEL_TOKEN을 적고, uv run lawbot-model-server로 모델 서버를 띄우세요.'
+        )
+    llm_url, llm_key, external = security.llm_endpoint(url)
+    client = ModelServerClient(url, security.model_token())
+    wait = server_wait()
+    print(f'[lawbot] 모델 서버 {url} 준비 대기 (최대 {wait:g}초)', flush=True)
+    wait_ready(client, wait)
+    missing = missing_models(client.models(), p, rr, external)
+    if missing:
+        raise RuntimeError(
+            '모델 서버에 필요한 모델이 없습니다: '
+            + ', '.join(f'{kind} {mid}' for kind, mid in missing)
+            + ' (모델 서버 .env의 LAWBOT_SERVE_*와 웹앱의 LAWBOT_*_MODEL을 맞추세요)'
+        )
     t0 = time.perf_counter()
     retriever = Retriever(
-        p.emb,
+        Embedder(client, p.emb_model),
         p.articles,
         max_seq_length=p.max_seq,
         doc_style=p.doc_style,
@@ -147,72 +142,30 @@ def load_app(profile=None, local=False):
         f'[lawbot] 조문 인덱스 {time.perf_counter() - t0:.1f}초 · 법률 {getattr(retriever, "n_law", len(retriever.ids))}개'
         + (f' + 하위법령 {len(retriever.ids) - retriever.n_law}개 (max_seq {dc.max_seq})' if dc else '')
     )
-    reranker = None
-    if rr:  # 불러오기 실패는 그대로 올려 실행 중단 (Fast 모델과 같음)
-        t0 = time.perf_counter()
-        reranker = Reranker(rr.path, rr.candidates)
-        print(
-            f'[lawbot] 리랭커 {rr.path.name} 불러오기 {time.perf_counter() - t0:.1f}초 · 후보 {rr.candidates}개 → {TOP_K}개'
-        )
+    reranker = Reranker(client, rr.model, rr.candidates) if rr else None
+    # 외부 API는 셸의 프록시 설정을 따른다. 모델 서버(127.0.0.1)는 프록시를 거치지 않음
+    oa = OpenAI(base_url=llm_url, api_key=llm_key, max_retries=0, http_client=httpx.Client(trust_env=external))
 
-    def loader(spec):  # system 파일이 없으면 FileNotFoundError (화면에서 오류 안내)
+    def factory(spec):  # system 파일이 없으면 FileNotFoundError (화면에서 오류 안내)
         system = system_text(p, spec)
-        return LLM(spec.path, prompt_style=p.doc_style, **({'system': system} if system else {}))
+        return LLM(spec.model, client=oa, prompt_style=p.doc_style, **({'system': system} if system else {}))
 
-    models = ModelManager(p.models, loader, deploy.max_resident())
-    models.get(p.models[0].key)  # 기본 모델이 없으면 여기서 실행 중단
-    if models.max_resident >= 2:
-        for spec in p.models[1:]:
-            try:
-                models.get(spec.key)
-            except Exception as e:  # Pro 준비 전에도 Fast로는 실행 (선택하면 오류 안내)
-                print(f'[lawbot] {spec.label} 미리 불러오기 실패: {type(e).__name__}: {e}')
+    def loaded():
+        return {m['id'] for m in client.models() if m.get('loaded')}
+
+    models = ChatModels(p.models, factory, None if external else loaded)
     print(
-        f'[lawbot] 프로필 {p.name} · 조문 {len(retriever.ids)}개 · 리랭커 {"켜짐" if reranker else "꺼짐"} · '
-        f'하위법령 {decree_text(dc)} · 상주 {list(models.loaded)}'
+        f'[lawbot] 프로필 {p.name} · 조문 {len(retriever.ids)}개 · 리랭커 {rr.model if rr else "꺼짐"} · '
+        f'하위법령 {decree_text(dc)} · 생성 {"외부 " + llm_url if external else "모델 서버"} '
+        f'({", ".join(s.model for s in p.models)})',
+        flush=True,
     )
-    full = p.system_file.read_text(encoding='utf-8').strip() if p.system_file else _lazy('SYSTEM')
-    return LawbotApp(p, retriever, models, reranker, full, dc)
+    full = p.system_file.read_text(encoding='utf-8').strip() if p.system_file else SYSTEM
+    return LawbotApp(p, retriever, models, reranker, full, dc, 'external' if external else 'api')
 
 
 def decree_text(dc):
     return f'켜짐 (τ {dc.tau:g} · 최대 {dc.k}개 · 모델 {",".join(dc.models) or "없음"})' if dc else '꺼짐'
-
-
-def load_remote(p, url):
-    """원격 모드: 같은 LawbotApp을 모델 서버 클라이언트로 만든다 (ask·화면·평가 코드는 그대로)
-    검색 설정(리랭커·후보 수)과 상주 모델 수는 서버 기준. 웹앱은 프로필·doc_style·모델 key가 서버와 맞는지만 확인한다
-    system 문구는 웹앱 쪽 파일을 요청마다 보낸다: 개발 레포의 system 파일을 고치면 웹앱만 다시 띄워 시험"""
-    from lawbot import remote
-    from lawbot.prompts import SYSTEM
-
-    if p.system_file is not None and not p.system_file.is_file():  # 조문 CSV·모델 폴더는 서버가 확인
-        raise RuntimeError(f'프로필 {p.name}의 system 파일이 없습니다: {p.system_file}')
-    client = remote.ModelServerClient(url, security.model_token())
-    try:
-        wait = float(os.environ.get('LAWBOT_MODEL_SERVER_WAIT') or 300)
-    except ValueError:
-        raise ValueError(f'LAWBOT_MODEL_SERVER_WAIT는 초(숫자): {os.environ["LAWBOT_MODEL_SERVER_WAIT"]!r}') from None
-    print(f'[lawbot] 모델 서버 {url} 준비 대기 (최대 {wait:g}초)', flush=True)
-    remote.wait_ready(client, wait)
-    info = client.get_json('/info')
-    dc = deploy.decree(p, require_reranker=False)  # 웹앱 쪽 설정. 서버 /info의 decree와 다르면 시작 거부
-    diff = remote.check_info(info, p, dc)
-    if diff:
-        raise RuntimeError('모델 서버와 웹앱 설정이 다릅니다:\n- ' + '\n- '.join(diff))
-    for w in remote.dataset_warnings(info, p):  # 데이터 버전 차이는 경고만 (이전 서버는 dataset 없음)
-        print(f'[lawbot] 경고: {w}')
-    rr = info['reranker']
-    retriever = remote.RemoteRetriever(client)
-    reranker = remote.RemoteReranker(client, rr['candidates']) if rr else None
-    models = remote.RemoteModelManager(p.models, client, lambda spec: system_text(p, spec) or SYSTEM)
-    print(
-        f'[lawbot] 원격 모드 {url} · 서버 프로필 {info["profile"]["name"]} · 조문 {info["n_articles"]}개 · '
-        f'리랭커 {"켜짐 (후보 " + str(rr["candidates"]) + "개, 서버 설정)" if rr else "꺼짐 (서버 설정)"} · '
-        f'하위법령 {decree_text(dc)} · 상주 {info["loaded"]} (최대 {info["max_resident"]})'
-    )
-    full = p.system_file.read_text(encoding='utf-8').strip() if p.system_file else SYSTEM
-    return LawbotApp(p, retriever, models, reranker, full, dc)
 
 
 def format_system(app, model_key, fmt):
@@ -300,13 +253,14 @@ def request_log_path():
 
 def error_type(e, stage):
     """오류 유형 (로그·화면 안내 공통). stage: 오류가 난 단계 'search'·'rerank'·'load'·'generation'
-    model_server: 모델 서버 연결 실패·토큰 불일치(401)·로딩 중(503). 서버 쪽 연산 오류(500)는 단계로 나눈다
-    model_load: 답변 모델 불러오기 실패 (모델 폴더·system 파일 없음, 원격은 RemoteLoadError·RemoteValueError)"""
-    from lawbot.remote import ModelServerError
-
+    model_server: 모델 서버(생성 API) 연결 실패·토큰 불일치(401)·로딩 중(503). 서버 쪽 연산 오류(500)는 단계로 나눈다
+    model_load: 답변 모델 불러오기 실패 (서버의 모델 폴더 없음·형식 오류 = ModelLoadError, 웹앱의 system 파일 없음)
+    config: 없는 모델 key, 서버에 없는 모델 id(404)"""
     if isinstance(e, ConnectionError) or (isinstance(e, ModelServerError) and e.status in (401, 503)):
         return 'model_server'
-    if isinstance(e, KeyError):  # 없는 모델 key 등 설정 오류
+    if isinstance(e, ModelLoadError):
+        return 'model_load'
+    if isinstance(e, KeyError) or (isinstance(e, ModelServerError) and e.status == 404):
         return 'config'
     return 'model_load' if stage == 'load' else stage
 
@@ -316,7 +270,7 @@ def request_record(app, st, fmt, status, error):
     rec = {
         'ts': time.strftime('%Y-%m-%dT%H:%M:%S%z'),
         'request_id': st['request_id'],
-        'mode': 'remote' if getattr(app.retriever, 'client', None) is not None else 'local',
+        'mode': getattr(app, 'llm_mode', 'api'),
         'caller': Path(sys.argv[0]).name,
         'profile': app.profile.name,
         'model': st['model'],
@@ -336,7 +290,7 @@ CITE_FIELDS = ('cite_ok', 'cite_outside', 'cite_wrong_law', 'cite_nonexistent', 
 
 def answer_check(app, raw, hits):
     """요청 로그용 답변 요약 (내용 없이 수만): 거절 여부, 인용 수, citation.check 판정별 인용 수
-    전체 조문은 검색기(원격 모드는 서버 /articles) 기준. 판정에 실패해도 답변은 막지 않는다 (값 없음)"""
+    전체 조문은 검색기 기준. 판정에 실패해도 답변은 막지 않는다 (값 없음)"""
     try:
         from lawbot import citation
 

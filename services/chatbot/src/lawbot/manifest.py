@@ -2,9 +2,8 @@
 # 매니페스트는 조문 CSV와 같은 폴더의 manifest.json (v4: data/v4/manifest.json, v1: data/manifest.json)
 # 한 폴더에 조문 CSV가 여럿이면 manifest_<이름>.json을 더 둔다 (v4 812조문: data/v4/manifest_decree.json)
 #   → articles_file이 그 CSV 이름인 매니페스트를 고른다 (manifest.json 먼저, 그다음 manifest_*.json 이름순)
-# 검사하는 곳: 로컬 모드 load_app(= 모델 서버, 불일치면 실행 거부), check_deploy(PASS/FAIL), 모델 서버 /info의 dataset
-# 검색 인덱스는 파일이 아니라 모델 서버가 시작할 때 만든다: 대신 임베딩·4B LoRA가 학습한 dataset_version을 기록한다
-# 모델 라이브러리를 import하지 않는다 (원격 모드 웹앱도 웹앱 레포의 매니페스트를 읽어 서버 값과 비교)
+# 검사하는 곳: 웹앱 load_app(불일치면 실행 거부), check_deploy(PASS/FAIL). 조문 데이터는 웹앱에만 있다
+# 검색 인덱스는 파일이 아니라 웹앱이 시작할 때 모델 서버의 임베딩으로 만든다: 대신 임베딩·4B LoRA가 학습한 dataset_version을 기록한다
 import hashlib
 import json
 
@@ -123,7 +122,7 @@ def describe(m):
 
 
 def check(articles):
-    """로컬 모드 load_app(모델 서버)용: 불일치면 RuntimeError, 매니페스트가 없으면 경고만 출력. 매니페스트 dict 또는 None"""
+    """웹앱 load_app용: 불일치면 RuntimeError, 매니페스트가 없으면 경고만 출력. 매니페스트 dict 또는 None"""
     m = load(articles)
     if m is None:
         print(

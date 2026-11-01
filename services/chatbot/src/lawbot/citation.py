@@ -1,5 +1,5 @@
 # src/lawbot/citation.py  →  조문 키·인용 파싱·인용 검증·거절 판정 (웹앱 화면과 eval_v4 채점이 같이 쓴다)
-# 모델 라이브러리(torch·mlx)와 gradio를 import하지 않는다: 원격 모드 웹앱에서도 쓴다 (tests/test_citation.py가 검사)
+# gradio를 import하지 않는다 (평가에서도 씀, tests/test_citation.py가 검사)
 # 검색 결과 dict 형식은 그대로 쓴다: 조문 키는 웹앱 쪽에서 law + ' ' + article_id로 만든다 (retriever·서버 API 변경 없음)
 # v1 refusal.is_refusal은 기준선 재현용이라 그대로 둔다 (v1 평가 스크립트가 씀)
 import re

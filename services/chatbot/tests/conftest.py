@@ -1,5 +1,6 @@
-# tests/conftest.py  →  모든 테스트 공통 설정
-# 기본 테스트는 실제 모델·네트워크·비밀번호 없이 돈다. 실제 모델 테스트는 test_models.py (-m models)
+# tests/conftest.py  →  챗봇 테스트 공통 설정
+# 실제 모델 서버·네트워크·비밀번호 없이 돈다: load_app이 쓰는 모델 서버 클라이언트는 기본으로 가짜 (fakes.FakeServerClient)
+# 실제 모델 테스트는 모델 서버 쪽 (services/model-server/tests, -m models)
 import socket
 
 import pytest
@@ -7,18 +8,18 @@ import pytest
 ENV_KEYS = (
     'LAWBOT_USER',
     'LAWBOT_PW',
-    'LLM_PATH',
     'LAWBOT_PROFILE',
-    'LAWBOT_EMB',
-    'LAWBOT_FAST_PATH',
-    'LAWBOT_PRO_PATH',
+    'LAWBOT_EMB_MODEL',
+    'LAWBOT_FAST_MODEL',
+    'LAWBOT_PRO_MODEL',
+    'LAWBOT_RERANK_MODEL',
+    'LAWBOT_LLM_BASE_URL',
+    'LAWBOT_LLM_API_KEY',
+    'LAWBOT_LLM_ALLOW_EXTERNAL',
     'LAWBOT_PRO_SYSTEM',
-    'LAWBOT_MAX_RESIDENT',
     'LAWBOT_V4_ARTICLES',
-    'LAWBOT_V4_EMB',
     'LAWBOT_V4_SYSTEM',
     'LAWBOT_RERANKER_ENABLED',
-    'LAWBOT_RERANKER_MODEL_PATH',
     'LAWBOT_RERANKER_CANDIDATES',
     'LAWBOT_DECREE_ENABLED',
     'LAWBOT_DECREE_TAU',
@@ -84,3 +85,21 @@ def free_port():
 def set_auth(env, user='tester', pw='test-only-pw'):  # 테스트 전용 가짜 값
     env.setenv('LAWBOT_USER', user)
     env.setenv('LAWBOT_PW', pw)
+
+
+TEST_TOKEN = 'test-only-model-token-0123'  # 테스트 전용 가짜 값
+
+
+@pytest.fixture(autouse=True)
+def model_server(env):
+    """load_app이 접속하는 모델 서버와 생성 API를 가짜로 (fakes.FakeServerClient·FakeOpenAI)
+    기본: 프로필에 필요한 모델이 모두 있고 올라 있음. 테스트가 FakeServerClient.available·loaded를 바꿔 쓴다"""
+    import lawbot.service as service
+    from fakes import FakeOpenAI, FakeServerClient
+
+    env.setenv('LAWBOT_MODEL_SERVER', 'http://127.0.0.1:65535')  # 의미 없는 경계값 (가짜라 접속하지 않음)
+    env.setenv('LAWBOT_MODEL_TOKEN', TEST_TOKEN)
+    FakeServerClient.reset()
+    env.setattr(service, 'ModelServerClient', FakeServerClient)
+    env.setattr(service, 'OpenAI', FakeOpenAI)
+    return FakeServerClient

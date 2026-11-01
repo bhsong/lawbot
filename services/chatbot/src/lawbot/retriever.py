@@ -1,10 +1,10 @@
+# lawbot/retriever.py  →  조문 인덱스와 코사인 검색 (numpy). 벡터는 모델 서버의 임베딩 모델이 만든다 (api_client.Embedder)
+# 인코딩 호출은 모델 서버로 옮기기 전과 같다: 법률·하위법령 문서 목록을 각각 한 번에, 질문은 query 프롬프트로
 import numpy as np
 import pandas as pd
-import torch
-from sentence_transformers import SentenceTransformer
 
 from lawbot.decree import LAW_KIND
-from lawbot.paths import ARTICLES, EMB
+from lawbot.paths import ARTICLES
 
 # 검색 문서 문자열: 임베딩 학습 때와 글자 단위로 같아야 한다
 DOC_STYLES = {
@@ -21,9 +21,10 @@ class Retriever:
     kind 열이 없는 CSV(415·130조문)는 모두 법률
     법률 문서는 하위법령을 끈 웹앱과 같은 문서 목록·같은 호출·같은 max_seq_length로 따로 인코딩한다
     (812개를 함께 인코딩하면 길이 정렬 후 batch 구성·패딩이 바뀌어 fp16 값이 달라질 수 있음)
-    decree_max_seq: 하위법령 인코딩 최대 토큰 (deploy.DECREE_MAX_SEQ). None이면 하위법령 행을 읽지 않음"""
+    decree_max_seq: 하위법령 인코딩 최대 토큰 (deploy.DECREE_MAX_SEQ). None이면 하위법령 행을 읽지 않음
+    encoder: encode(texts, input_type, max_seq_length) → float32 배열 (api_client.Embedder, 테스트는 가짜)"""
 
-    def __init__(self, model_dir=EMB, law_csv=ARTICLES, max_seq_length=512, doc_style='v1', decree_max_seq=None):
+    def __init__(self, encoder, law_csv=ARTICLES, max_seq_length=512, doc_style='v1', decree_max_seq=None):
         law = pd.read_csv(law_csv, encoding='utf-8-sig')
         law = law[law['deleted'] == 0].reset_index(drop=True)  # v1 130개, v4 415개 조문 (+ 하위법령 397개)
         if 'article_no' in law:  # v4 CSV는 article_id에 법령명이 들어 있음('근로기준법 제26조') → 번호만 쓴다
@@ -46,24 +47,15 @@ class Retriever:
         dec_docs = DOC_STYLES[doc_style](dec).tolist() if len(dec) else []
         self.docs = law_docs + dec_docs
         self.starter = set(law.loc[law['starter'] == 1, 'article_id']) if 'starter' in law else set()
-        self.m = SentenceTransformer(str(model_dir), device='mps', model_kwargs={'torch_dtype': torch.float16})
-        self.m.max_seq_length = max_seq_length
-        self.D = self.m.encode(law_docs, normalize_embeddings=True, batch_size=4, convert_to_numpy=True).astype(
-            np.float32
-        )
+        self.encoder, self.max_seq_length = encoder, max_seq_length
+        self.D = np.asarray(encoder.encode(law_docs, 'document', max_seq_length), dtype=np.float32)
         self.D_dec = None
         if dec_docs:
-            self.m.max_seq_length = decree_max_seq
-            self.D_dec = self.m.encode(dec_docs, normalize_embeddings=True, batch_size=4, convert_to_numpy=True).astype(
-                np.float32
-            )
-            self.m.max_seq_length = max_seq_length  # 질문 인코딩은 지금과 같은 설정
-        torch.mps.empty_cache()  # 조문 인코딩에 쓴 임시 메모리 반납
+            self.D_dec = np.asarray(encoder.encode(dec_docs, 'document', decree_max_seq), dtype=np.float32)
 
-    def _encode_queries(self, queries, batch_size=16):
-        return self.m.encode(
-            list(queries), prompt_name='query', normalize_embeddings=True, batch_size=batch_size, convert_to_numpy=True
-        ).astype(np.float32)
+    def _encode_queries(self, queries):
+        """질문 목록 하나 = 서버 encode 한 번 (batch 16, query 프롬프트, 법률과 같은 max_seq)"""
+        return np.asarray(self.encoder.encode(list(queries), 'query', self.max_seq_length), dtype=np.float32)
 
     def rank_all(self, queries):
         """법률 조문 순위 (순번 0~n_law-1 = ids 앞부분)"""

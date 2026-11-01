@@ -2,7 +2,7 @@
 # 챗봇(lawbot.envfile)과 같은 규칙의 복사본: 서비스끼리 import하지 않으려고 따로 둔다 (규칙을 바꾸면 두 곳 모두)
 # 파일: LAWBOT_ENV_FILE이 가리키는 파일, 없으면 레포 최상위 .env (없으면 아무것도 안 함). LAWBOT_ENV_FILE=''이면 읽지 않음
 # 셸에 이미 있는 변수가 우선한다 (파일 값으로 덮어쓰지 않음). 형식: KEY=VALUE 한 줄씩, # 주석, 'export ' 앞머리·따옴표 허용
-# 읽는 변수는 LAWBOT_* 와 LLM_PATH만: GRADIO_* 같은 서버 설정은 security.py가 고정하므로 파일로도 바꾸지 않음
+# 읽는 변수는 LAWBOT_*만: GRADIO_* 같은 서버 설정은 security.py가 고정하므로 파일로도 바꾸지 않음
 import os
 import re
 import stat
@@ -29,7 +29,7 @@ def parse(text, name='.env'):
             value = value[1:-1]  # 따옴표 안은 그대로 (# 포함 가능)
         else:
             value = re.sub(r'\s+#.*$', '', value)  # 따옴표 없는 값 뒤 ' # 주석'
-        if not (key.startswith('LAWBOT_') or key == 'LLM_PATH') or key == 'LAWBOT_ENV_FILE':
+        if not key.startswith('LAWBOT_') or key == 'LAWBOT_ENV_FILE':
             raise ValueError(f'{name} {n}번째 줄: 이 파일에서 설정할 수 없는 변수 {key}')
         out[key] = value
     return out

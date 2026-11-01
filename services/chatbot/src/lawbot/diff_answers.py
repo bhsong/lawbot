@@ -1,6 +1,6 @@
 # src/lawbot/diff_answers.py  →  uv run python -m lawbot.diff_answers <기준.csv> <비교.csv>
 # 두 평가 결과 파일(eval_v4의 answers_*·oos_*·refusal_*)의 답변 원문이 글자 단위로 같은지 id로 맞춰 비교한다
-# 용도: 로컬 모드와 원격 모드(모델 서버)의 답변이 같은지 확인 → 같으면 로컬 모드 정확도 수치를 기준선으로 계속 쓴다
+# 용도: 구조를 바꾸기 전후(예: OpenAI 호환 모델 서버 전환)의 답변이 같은지 확인 → 같으면 이전 정확도 수치를 기준선으로 계속 쓴다
 # 모두 같고 빠진 id가 없으면 종료 코드 0, 아니면 1. 모델을 올리지 않는다
 import argparse
 import sys

@@ -2,7 +2,7 @@
 # 하위법령 첨부 웹앱 경로 스모크 (맥 전용, 실제 모델): 웹앱과 같은 load_app·service.ask로 예시 질문 3개를 Pro에 묻는다
 #   켜짐(.env/셸 설정 그대로)과, 같은 모델로 첨부만 끈 구성(decree=None)을 나란히 돌려
 #   법률 3개(순위·점수)가 같은지, 하위법령 첨부·인용, 단계별 시간, MLX 최대 메모리를 출력한다
-# 로컬·원격(LAWBOT_MODEL_SERVER) 모두 같은 명령. --out 파일 두 개를 --compare로 비교하면 로컬·원격 동등성 확인
+# 결과 JSON 두 개를 --compare로 비교하면 조문·답변이 같은지 확인 (예: 배포 전후, 모델 서버 코드 변경 전후)
 # 질문은 공개 예시 문장이라 결과 파일에 남긴다 (요청 로그에는 기존처럼 질문 원문 없음)
 import argparse
 import dataclasses
@@ -63,7 +63,7 @@ def main():
     if app.decree is None or not service.uses_decrees(app, a.model):
         raise SystemExit(f'하위법령 첨부가 {a.model}에 켜져 있어야 합니다 (LAWBOT_DECREE_ENABLED=1)')
     off = dataclasses.replace(app, decree=None)  # 같은 모델·검색기로 첨부만 끔
-    mode = 'remote' if getattr(app.retriever, 'client', None) is not None else 'local'
+    mode = getattr(app, 'llm_mode', 'api')
     out = {'mode': mode, 'model': a.model, 'decree': dataclasses.asdict(app.decree), 'questions': []}
     for q in QUESTIONS:
         on_r, off_r = run(app, a.model, q), run(off, a.model, q)
