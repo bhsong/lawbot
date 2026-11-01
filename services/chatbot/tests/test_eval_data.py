@@ -76,7 +76,7 @@ def test_oos_eval_schema(oos, live):
     assert oos['id'].is_unique and len(oos) == 102
     assert oos['category'].isin(['unrelated', 'other_labor', 'other_law']).all()
     assert ids(oos['near_lsa']) | ids(oos['near_lsa_v2']) | ids(oos['refer_lsa']) <= live
-    # 기존 82문항의 near_lsa는 README 수치의 기준이므로 그대로, 추가 문항은 near_lsa_v2와 근거(note)를 가짐
+    # 기존 82문항의 near_lsa는 v1 기록 수치의 기준이므로 그대로, 추가 문항은 near_lsa_v2와 근거(note)를 가짐
     assert oos['near_lsa'].notna().sum() == 18
     added = oos[oos['id'] >= 'OOS083']
     assert len(added) == 20 and added['near_lsa_v2'].notna().all() and added['note'].notna().all()

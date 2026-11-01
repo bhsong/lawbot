@@ -1,7 +1,7 @@
 [project]
 name = "lawbot"
 version = "0.1.0"
-description = "노동법 조문 근거 RAG 챗봇 웹앱 (Gradio). 레포 구조는 최상위 README 참고"
+description = "노동법 조문 근거 RAG 챗봇 웹앱 (Gradio). 레포 구조는 docs/architecture.md"
 authors = [
     { name = "bhsong", email = "sbh3003@gmail.com" }
 ]

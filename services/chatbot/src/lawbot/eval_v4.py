@@ -17,7 +17,7 @@
 #   compare  : 두 tag의 summary·실패 유형을 나란히 놓고 report.py 경고 기준으로 나빠진 지표를 경고
 # 결과는 results/v4/<단계>_<tag>.csv에 문항마다 한 행씩 바로 쓴다: 중간에 멈추면 같은 명령으로 이어서 실행
 # 실행마다 설정(생성 위치·모델 서버 /v1/models·모델 id·데이터 버전·커밋)을 results/v4/run_<tag>.json에 남긴다
-# test 문항은 평가 전용 (README '평가 데이터 사용 제한'): 설정·프롬프트·규칙은 --split val 결과로 고른다
+# test 문항은 평가 전용 (docs/evals/README.md '평가 데이터 사용 제한'): 설정·프롬프트·규칙은 --split val 결과로 고른다
 import argparse
 import concurrent.futures
 import datetime

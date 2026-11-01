@@ -57,7 +57,7 @@ def test_cited_articles():
 
 @pytest.mark.parametrize('name', ['refusal_v1_4bit.csv', 'oos_v1_4bit.csv'])
 def test_refusal_rule_matches_recorded_results(name):
-    # README 거절률 수치의 근거가 된 판정을 지금 규칙으로 그대로 재현해야 함
+    # v1 기록(docs/evals) 거절률 수치의 근거가 된 판정을 지금 규칙으로 그대로 재현해야 함
     o = results(name)
     assert (o['answer'].fillna('').map(is_refusal) == o['refusal']).all()
 
@@ -155,7 +155,7 @@ def test_score_one_penalties(ev):
 
 # 데이터·결과 회귀
 def test_reference_answers_score_full_marks(ev):
-    # README: 평가 파일의 모범 답변은 650문항 모두 1.0점
+    # docs/evals/README.md: 평가 파일의 모범 답변은 650문항 모두 1.0점
     assert len(ev) == 650
     scores = [score_one(r, r['reference_answer'])['total'] for _, r in ev.iterrows()]
     assert min(scores) == 1.0

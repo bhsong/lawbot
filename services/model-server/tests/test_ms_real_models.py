@@ -1,6 +1,6 @@
 # services/model-server/tests/test_ms_real_models.py  →  uv run pytest -m models services/model-server
 # 실제 모델 폴더(models/)와 Apple Silicon이 필요한 스모크 테스트 (기본 실행·CI에서는 제외)
-# 폴더는 .env와 같은 변수(LAWBOT_SERVE_*)의 첫 번째 항목, 없으면 README '모델 준비'의 기본 경로
+# 폴더는 .env와 같은 변수(LAWBOT_SERVE_*)의 첫 번째 항목, 없으면 docs/operations.md '모델 준비'의 기본 경로
 # 챗봇의 이전 test_models.py·test_reranker_models.py에서 옮김. 품질 수치는 docs/evals 기록 참고
 import csv
 import os
@@ -28,7 +28,7 @@ QUESTION = '해고 예고 없이 갑자기 해고되면 어떻게 하나요?'
 
 def need(path):
     if not path.is_dir():  # -m models로 직접 요청했으므로 건너뛰지 않고 실패
-        pytest.fail(f'모델 폴더가 없습니다: {path} (README 모델 준비 참고)')
+        pytest.fail(f'모델 폴더가 없습니다: {path} (docs/operations.md 모델 준비 참고)')
 
 
 def v4_docs():
