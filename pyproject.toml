@@ -46,7 +46,7 @@ markers = [
 line-length = 120   # 포맷터가 줄을 나누는 기준. 줄 길이 검사(E501)는 켜지 않음 (줄 끝 주석이 길어도 됨)
 target-version = "py314"
 src = ["src", "tests"]   # import 정렬에서 lawbot·tests 모듈(conftest·fakes)을 프로젝트 모듈로 봄
-# data_gd/ 등은 .gitignore에 있어 자동으로 건너뜀 (docs/plans/ruff-lint-format.md)
+# data_gd/ 등은 .gitignore에 있어 자동으로 건너뜀 (docs/archives/ruff-lint-format.md)
 
 [tool.ruff.lint]
 select = ["E4", "E7", "E9", "F", "I", "B", "UP", "RUF"]

@@ -367,9 +367,11 @@ uv run python -m lawbot.feedback_export feedback_review_<날짜>.csv --out data/
 ```bash
 uv run pytest              # 기본 테스트 전체 (모델 불필요)
 uv run pytest -m models    # 실제 모델 테스트 (models/ 필요, 기본 실행에서 제외)
+uv run ruff check          # 린트 (규칙은 pyproject.toml의 [tool.ruff])
+uv run ruff format         # 포맷 (작은따옴표, 120자)
 ```
 
-GitHub Actions(`.github/workflows/ci.yml`)가 `main` 푸시와 모든 pull request에서 macOS(Apple Silicon) 러너로 `uv sync --locked`, 문법 검사(`compileall`), `uv run pytest`를 실행합니다. 비밀정보는 쓰지 않으며, `-m models` 테스트와 평가 스크립트는 CI에서 실행하지 않습니다. 결과는 PR의 체크와 Actions 로그, `pytest-report` 아티팩트에서 볼 수 있습니다.
+GitHub Actions(`.github/workflows/ci.yml`)가 `main` 푸시와 모든 pull request에서 macOS(Apple Silicon) 러너로 `uv sync --locked`, 문법 검사(`compileall`), 린트·포맷 검사(`ruff check`·`ruff format --check`), `uv run pytest`를 실행합니다. 비밀정보는 쓰지 않으며, `-m models` 테스트와 평가 스크립트는 CI에서 실행하지 않습니다. 결과는 PR의 체크와 Actions 로그, `pytest-report` 아티팩트에서 볼 수 있습니다.
 
 **평가 실행 (v4 웹앱 구성)**
 
@@ -865,9 +867,11 @@ The default tests need no model files, network access or real password; `uv sync
 ```bash
 uv run pytest              # all default tests (no models needed)
 uv run pytest -m models    # real-model tests (needs models/, excluded by default)
+uv run ruff check          # lint (rules in [tool.ruff] in pyproject.toml)
+uv run ruff format         # format (single quotes, 120 columns)
 ```
 
-GitHub Actions (`.github/workflows/ci.yml`) runs `uv sync --locked`, a syntax check (`compileall`) and `uv run pytest` on a macOS (Apple Silicon) runner for every push to `main` and every pull request. It uses no secrets; `-m models` tests and the evaluation scripts are not run in CI. Results appear as PR checks, in the Actions log and as the `pytest-report` artifact.
+GitHub Actions (`.github/workflows/ci.yml`) runs `uv sync --locked`, a syntax check (`compileall`), lint and format checks (`ruff check`, `ruff format --check`) and `uv run pytest` on a macOS (Apple Silicon) runner for every push to `main` and every pull request. It uses no secrets; `-m models` tests and the evaluation scripts are not run in CI. Results appear as PR checks, in the Actions log and as the `pytest-report` artifact.
 
 **Run the evaluation (v4 web app setup)**
 

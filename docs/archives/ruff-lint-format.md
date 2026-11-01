@@ -1,6 +1,6 @@
 # 작업 계획: ruff 린트·포맷터 도입
 
-- 작성: 2026-11-01 · 작업 브랜치: `chore/ruff` (`main` 1116ccc에서 분기). PR은 `main` 대상, 병합은 사용자
+- 작성·실행: 2026-11-01 (결과: 이 문서 끝 "결과") · 작업 브랜치: `chore/ruff` (`main` 1116ccc에서 분기). PR은 `main` 대상, 병합은 사용자
 - 원칙: **프로그램 동작은 바꾸지 않는다.** 기본 테스트 수(405 passed, 3 deselected)가 그대로여야 한다
 - 되돌리기: 커밋을 나눠 둔다 (설정 / 수동 수정 / 자동 수정 / 포맷터). PR은 merge commit으로 병합되므로
   전체는 `git revert -m 1 <병합 커밋>`, 일부는 해당 커밋만 `git revert`
@@ -49,3 +49,12 @@
 - `uv run pytest` 405 passed, 3 deselected (전과 같음)
 - `uv run python -m compileall -q src tests`
 - 테스트가 import하지 않는 스크립트(eval_decree 등)는 `python -c "import lawbot.<모듈>"`로 전부 import 확인
+
+## 결과 (2026-11-01)
+
+- 1단계: 154건(기본 규칙) 중 선택 규칙 기준 84건 → 0건. 수동 4곳, 자동 수정 78건
+  - 계획과 다른 점: eval_v4의 `LAW_ALIASES`·`cite_section`은 **지우지 않음**. `test_citation`이 `ev.LAW_ALIASES is ci.LAW_ALIASES`로
+    재노출을 검사하는 의도된 이름이라 `# noqa: F401`로 표시. eval_decree는 `citation`에서 직접 import하도록 바꿈
+- 2단계: 63개 파일 재포맷 (+3,972 / −1,569줄). 바뀐 63개 파일 모두 포맷 전후 `ast.dump`가 같음 (동작 변화 없음)
+- 확인: `ruff check`·`ruff format --check` 통과, pytest 405 passed·3 deselected (전과 같음), integration 75 passed,
+  `compileall` 통과, lawbot 모듈 전체 import 성공 (`eval_oos`·`eval_refusal`은 import 때 v3 모델을 불러오는 구조라 원래부터 모델 없이는 실패 → 제외)
