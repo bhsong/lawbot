@@ -47,16 +47,19 @@ def main():
     d = Path(args.dir)
     missing = [f for f in NEED if not (d / f).is_file()]
     if missing:
-        raise SystemExit(f'{d}에 없는 파일: {", ".join(missing)}\n'
-                         '드라이브 labor_law/v4/decree_exp/·labor_law/v4/에서 복사하세요 (가이드 \'실행 방법\' 절)')
+        raise SystemExit(
+            f'{d}에 없는 파일: {", ".join(missing)}\n'
+            "드라이브 labor_law/v4/decree_exp/·labor_law/v4/에서 복사하세요 (가이드 '실행 방법' 절)"
+        )
     art = pd.read_csv(DATA / 'v4' / 'law_articles_v4_decree.csv', **E)
     art = art[art.deleted == 0].reset_index(drop=True)
     tok = pd.read_csv(d / 'doc_tokens.csv', **E)
     assert len(art) == 812 and (art.article_id.values == tok.article_id.values).all(), '조문 순서 불일치'
-    art['article_id'] = art['article_no']                 # retriever와 같은 규칙
+    art['article_id'] = art['article_no']  # retriever와 같은 규칙
     docs = DOC_STYLES['v4'](art).tolist()
 
     from lawbot.reranker import Reranker  # mlx는 여기서 import (위 검사는 모델 없이)
+
     rr_cfg = deploy.reranker(deploy.get_profile('v4'))
     if rr_cfg is None:
         raise SystemExit('.env에서 LAWBOT_RERANKER_ENABLED=1, LAWBOT_RERANKER_MODEL_PATH를 확인하세요')
@@ -64,10 +67,10 @@ def main():
     rr = Reranker(rr_cfg.path)
     print(f'[mlx] 리랭커 {rr_cfg.path.name} 불러오기 {time.perf_counter() - t0:.1f}초', flush=True)
 
-    for name in (['dq', 'law'] if args.set == 'all' else [args.set]):
+    for name in ['dq', 'law'] if args.set == 'all' else [args.set]:
         npz_name, out_name, n_q = SETS[name]
         z = np.load(d / npz_name)
-        T = np.concatenate([z['T_law'], z['T_dec']], 1)   # 법률 10 + 하위법령 10
+        T = np.concatenate([z['T_law'], z['T_dec']], 1)  # 법률 10 + 하위법령 10
         v = questions(name, d)
         assert len(v) == n_q == len(T), (name, len(v), len(T))
         out = d / out_name
@@ -80,8 +83,10 @@ def main():
             pd.DataFrame({'qi': qi, 'j': T[qi], 'score': s}).to_csv(out, mode='a', index=False, header=not out.exists())
             if k % 20 == 0 or k == len(todo):
                 el = time.perf_counter() - t0
-                print(f'[mlx {name}] {k}/{len(todo)} · 문항당 {el / k:.1f}초 · 남은 약 {el / k * (len(todo) - k) / 60:.0f}분',
-                      flush=True)
+                print(
+                    f'[mlx {name}] {k}/{len(todo)} · 문항당 {el / k:.1f}초 · 남은 약 {el / k * (len(todo) - k) / 60:.0f}분',
+                    flush=True,
+                )
     print('[mlx] 완료 → uv run python -m lawbot.decree_filter --scores mlx')
 
 

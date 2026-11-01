@@ -66,7 +66,9 @@ def main():
         n_dec = col.str.count(r'\|') - 2
         other = np.mean([any(gold_law.get(x) != gold_law[g] for x in s.split('|')[3:]) for s, g in zip(col, v.gold)])
         diff = int((col != v.ctx_same2).sum())
-        print(f'[law] {c}: 하위법령 평균 {n_dec.mean():.2f}개 · 다른 법 붙은 문항 {other:.3f} · same2와 다른 문항 {diff}')
+        print(
+            f'[law] {c}: 하위법령 평균 {n_dec.mean():.2f}개 · 다른 법 붙은 문항 {other:.3f} · same2와 다른 문항 {diff}'
+        )
 
     # 2) 하위법령 정답 val 444 → 질문 유형 층화 200
     qa, sp = pd.read_csv(d / 'qa_decree_v4.csv', **E), pd.read_csv(d / 'split_decree_v4.csv', **E)
@@ -74,12 +76,26 @@ def main():
     dv = dv[dv.split_emb == 'val'].reset_index(drop=True)
     assert len(dv) == 444
     dc = F.cands(pd.read_csv(d / f'{pre}dq_rr_scores.csv'), len(dv), F.npz(d / 'dq_candidates.npz'))
-    idx = np.sort(np.concatenate([g.sample(n=round(len(g) * N_DQ / len(dv)), random_state=SEED).index.values
-                                  for _, g in dv.groupby('question_type')]))
+    idx = np.sort(
+        np.concatenate(
+            [
+                g.sample(n=round(len(g) * N_DQ / len(dv)), random_state=SEED).index.values
+                for _, g in dv.groupby('question_type')
+            ]
+        )
+    )
     s = dv.loc[idx].reset_index(drop=True)
     ctx = contexts([dc[i] for i in idx], art, cfgs)
-    out = pd.DataFrame({'id': s.id, 'question': s.question, 'eval_cat': s.eval_cat, 'question_type': s.question_type,
-                        'gold': s.article_id, 'answer_key': s.answer_key}).join(ctx)
+    out = pd.DataFrame(
+        {
+            'id': s.id,
+            'question': s.question,
+            'eval_cat': s.eval_cat,
+            'question_type': s.question_type,
+            'gold': s.article_id,
+            'answer_key': s.answer_key,
+        }
+    ).join(ctx)
     out2 = DATA / 'v4' / f'decree_ctx_dq_val200{suf}.csv'
     out.to_csv(out2, index=False, **E)
     print(f'[dq] {len(out)}문항 {out.question_type.value_counts().to_dict()}')

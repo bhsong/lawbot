@@ -23,21 +23,24 @@ from lawbot.retriever import DOC_STYLES
 def read(path):
     return pd.read_csv(path, encoding='utf-8-sig')
 
+
 def colab_frame(v, split):
     """노트북 셀 2와 같은 문항 선택 (A_lsa·B_newlaw, split_emb)"""
     qa, sp, ret = read(v / 'qa_full_v4.csv'), read(v / 'split_v4.csv'), read(v / 'retrieval_v4.csv')
-    base = (qa.merge(sp[['id', 'split_emb']], on='id', validate='one_to_one')
-              .merge(ret[['id', 'top10']], on='id', validate='one_to_one'))
+    base = qa.merge(sp[['id', 'split_emb']], on='id', validate='one_to_one').merge(
+        ret[['id', 'top10']], on='id', validate='one_to_one'
+    )
     base = base[base.eval_cat.isin(['A_lsa', 'B_newlaw']) & (base.split_emb == split)].copy()
     base['ids10'] = base.top10.str.split('|')
     return base
+
 
 def docs(v, articles):
     """(앱 문서 {조문 키: 문자열}, Colab과 다른 조문 키 목록). 키는 Colab article_id('근로기준법 제26조')"""
     law = read(articles)
     law = law[law['deleted'] == 0].reset_index(drop=True)
     if 'article_no' in law:
-        law['article_id'] = law['article_no']                    # retriever와 같은 규칙
+        law['article_id'] = law['article_no']  # retriever와 같은 규칙
     app = dict(zip(law['law'] + ' ' + law['article_id'], DOC_STYLES['v4'](law)))
     cl = read(v / 'law_articles_v4.csv')
     cl = cl[cl['deleted'].astype(int) == 0]
@@ -45,18 +48,26 @@ def docs(v, articles):
     diff = sorted(k for k in colab.keys() | app.keys() if colab.get(k) != app.get(k))
     return app, diff
 
+
 def positions(frame, col):
-    return np.array([next((i + 1 for i, k in enumerate(r[col]) if k == r['article_id']), 999)
-                     for _, r in frame.iterrows()])
+    return np.array(
+        [next((i + 1 for i, k in enumerate(r[col]) if k == r['article_id']), 999) for _, r in frame.iterrows()]
+    )
+
 
 def metrics(p):
-    return {'recall@1': round(float(np.mean(p <= 1)), 5), 'recall@3': round(float(np.mean(p <= 3)), 5),
-            'mrr@3': round(float(np.where(p <= 3, 1 / p, 0).mean()), 5)}
+    return {
+        'recall@1': round(float(np.mean(p <= 1)), 5),
+        'recall@3': round(float(np.mean(p <= 3)), 5),
+        'mrr@3': round(float(np.where(p <= 3, 1 / p, 0).mean()), 5),
+    }
+
 
 def rescued_lost(frame, col):
     old = frame.apply(lambda r: r['article_id'] in r['ids10'][:3], axis=1)
     new = frame.apply(lambda r: r['article_id'] in r[col][:3], axis=1)
     return int((~old & new).sum()), int((old & ~new).sum())
+
 
 def main():
     ap = argparse.ArgumentParser()
@@ -91,13 +102,20 @@ def main():
         cs = json.loads(c.scores10)
         n_tok = [len(rr.tok.encode(pair_text(r.question, d), add_special_tokens=False)) for d in cand]
         top = sorted(cs, reverse=True)
-        rows.append({'id': r.id, 'seconds': round(sec, 4),
-                     'mlx10': '|'.join(r.ids10[i] for i in order), 'colab10': c.reranked10,
-                     'mlx_scores10': json.dumps([round(s, 8) for s in scores]), 'colab_scores10': c.scores10,
-                     'max_abs_diff': max(abs(a - b) for a, b in zip(scores, cs)),
-                     'spearman': float(pd.Series(scores).corr(pd.Series(cs), method='spearman')),
-                     'colab_margin3': top[2] - top[3],   # Colab 3위와 4위 점수 차: 작으면 양자화 오차로 뒤바뀌기 쉬움
-                     'truncated': sum(n > rr.max_mid for n in n_tok)})
+        rows.append(
+            {
+                'id': r.id,
+                'seconds': round(sec, 4),
+                'mlx10': '|'.join(r.ids10[i] for i in order),
+                'colab10': c.reranked10,
+                'mlx_scores10': json.dumps([round(s, 8) for s in scores]),
+                'colab_scores10': c.scores10,
+                'max_abs_diff': max(abs(a - b) for a, b in zip(scores, cs)),
+                'spearman': float(pd.Series(scores).corr(pd.Series(cs), method='spearman')),
+                'colab_margin3': top[2] - top[3],  # Colab 3위와 4위 점수 차: 작으면 양자화 오차로 뒤바뀌기 쉬움
+                'truncated': sum(n > rr.max_mid for n in n_tok),
+            }
+        )
         if j % 25 == 0 or j == len(frame):
             print(f'{j}/{len(frame)} 평균 {np.mean([x["seconds"] for x in rows]):.3f}초', flush=True)
     o = pd.DataFrame(rows)
@@ -111,18 +129,38 @@ def main():
     same3 = (m.mlx.str[:3].map(tuple) == m.colab.str[:3].map(tuple)).mean()
     set3 = (m.mlx.str[:3].map(frozenset) == m.colab.str[:3].map(frozenset)).mean()
     same10 = (m.mlx.map(tuple) == m.colab.map(tuple)).mean()
-    print(f'\n[Colab 대조] top1 일치 {same1:.4f} · top3 순서 일치 {same3:.4f} · top3 집합 일치 {set3:.4f} · top10 전체 일치 {same10:.4f}')
-    print(f"점수 최대 차이 중앙값 {o.max_abs_diff.median():.4f} · 최대 {o.max_abs_diff.max():.4f} · "
-          f"Spearman 평균 {o.spearman.mean():.4f} · 잘린 후보 {o.truncated.sum()}개")
-    table = [{'run': 'embedding', **metrics(positions(m, 'ids10'))},
-             {'run': 'colab_r4', **metrics(positions(m, 'colab')), **dict(zip(('rescued', 'lost'), rescued_lost(m, 'colab')))},
-             {'run': 'mlx_r4', **metrics(positions(m, 'mlx')), **dict(zip(('rescued', 'lost'), rescued_lost(m, 'mlx'))),
-              'mean_s': round(o.seconds.mean(), 4), 'p95_s': round(o.seconds.quantile(.95), 4)}]
+    print(
+        f'\n[Colab 대조] top1 일치 {same1:.4f} · top3 순서 일치 {same3:.4f} · top3 집합 일치 {set3:.4f} · top10 전체 일치 {same10:.4f}'
+    )
+    print(
+        f'점수 최대 차이 중앙값 {o.max_abs_diff.median():.4f} · 최대 {o.max_abs_diff.max():.4f} · '
+        f'Spearman 평균 {o.spearman.mean():.4f} · 잘린 후보 {o.truncated.sum()}개'
+    )
+    table = [
+        {'run': 'embedding', **metrics(positions(m, 'ids10'))},
+        {
+            'run': 'colab_r4',
+            **metrics(positions(m, 'colab')),
+            **dict(zip(('rescued', 'lost'), rescued_lost(m, 'colab'))),
+        },
+        {
+            'run': 'mlx_r4',
+            **metrics(positions(m, 'mlx')),
+            **dict(zip(('rescued', 'lost'), rescued_lost(m, 'mlx'))),
+            'mean_s': round(o.seconds.mean(), 4),
+            'p95_s': round(o.seconds.quantile(0.95), 4),
+        },
+    ]
     print(pd.DataFrame(table).to_string(index=False))
     differ = (m.mlx.str[:3].map(frozenset) != m.colab.str[:3].map(frozenset)).to_numpy()
-    flips = m[differ].apply(lambda r: int(r['article_id'] in r['colab'][:3]) - int(r['article_id'] in r['mlx'][:3]), axis=1)
-    print(f'top3 집합 불일치 {differ.sum()}건: 정답이 Colab에만 {int((flips == 1).sum())} · MLX에만 {int((flips == -1).sum())} · '
-          f'Colab 3·4위 점수 차 중앙값 불일치 {o.colab_margin3[differ].median():.4f} / 전체 {o.colab_margin3.median():.4f}')
+    flips = m[differ].apply(
+        lambda r: int(r['article_id'] in r['colab'][:3]) - int(r['article_id'] in r['mlx'][:3]), axis=1
+    )
+    print(
+        f'top3 집합 불일치 {differ.sum()}건: 정답이 Colab에만 {int((flips == 1).sum())} · MLX에만 {int((flips == -1).sum())} · '
+        f'Colab 3·4위 점수 차 중앙값 불일치 {o.colab_margin3[differ].median():.4f} / 전체 {o.colab_margin3.median():.4f}'
+    )
+
 
 if __name__ == '__main__':
     main()

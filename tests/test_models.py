@@ -8,18 +8,22 @@ from lawbot.paths import EMB, LLM_4BIT
 
 pytestmark = pytest.mark.models
 
+
 @pytest.fixture(scope='module')
 def models():
     llm_path = os.environ.get('LLM_PATH', LLM_4BIT)
     missing = [str(p) for p in (EMB, llm_path) if not os.path.isdir(p)]
-    if missing:   # -m models로 직접 요청했으므로 건너뛰지 않고 실패
+    if missing:  # -m models로 직접 요청했으므로 건너뛰지 않고 실패
         pytest.fail(f"모델 폴더가 없습니다: {', '.join(missing)} (README '모델 준비' 참고)")
     from lawbot.llm import LLM
     from lawbot.retriever import Retriever
+
     return Retriever(), LLM(llm_path)
+
 
 def test_end_to_end_answer(models):
     from lawbot.refusal import cited_articles, is_refusal
+
     R, L = models
     hits = R.search('수습 기간에도 해고 예고를 해야 하나요?', k=3)
     assert len(hits) == 3

@@ -33,10 +33,11 @@ if hard:
     cases = [(t, i, q[i], c.split('|')) for t, i, c in zip(h['test'], h['id'], h['context_ids'])]
 else:
     from lawbot.retriever import Retriever
+
     law = pd.read_csv(ARTICLES, encoding='utf-8-sig')
     chap = dict(zip(law['article_id'], law['chapter']))
     live = law.loc[law['deleted'] == 0, 'article_id'].tolist()
-    ref = dev.sample(100, random_state=42)          # eval_dev --n 100과 같은 100문항
+    ref = dev.sample(100, random_state=42)  # eval_dev --n 100과 같은 100문항
 
     # ① 다른 장 조문: 정답·헷갈리는 조문이 속한 장을 빼고 무작위 3개
     rng = np.random.default_rng(42)
@@ -49,17 +50,23 @@ else:
     # ② 비슷한 조문: 검색 순위에서 정답·헷갈리는 조문을 빼고 위에서 3개
     R = Retriever()
     rank = R.rank_all(ref['question'])
-    similar = [[a for a in R.ids[r] if a not in banned(g, c)][:3]
-               for r, g, c in zip(rank, ref['article_id'], ref['confusable_with'])]
-    cases = [(t, i, qq, ids) for t, contexts in [('다른 장 조문', other), ('비슷한 조문', similar)]
-             for i, qq, ids in zip(ref['id'], ref['question'], contexts)]
+    similar = [
+        [a for a in R.ids[r] if a not in banned(g, c)][:3]
+        for r, g, c in zip(rank, ref['article_id'], ref['confusable_with'])
+    ]
+    cases = [
+        (t, i, qq, ids)
+        for t, contexts in [('다른 장 조문', other), ('비슷한 조문', similar)]
+        for i, qq, ids in zip(ref['id'], ref['question'], contexts)
+    ]
 
-L = LLM(os.environ.get('LLM_PATH', LLM_4BIT))   # 웹앱과 같이 LLM_PATH로 다른 모델
+L = LLM(os.environ.get('LLM_PATH', LLM_4BIT))  # 웹앱과 같이 LLM_PATH로 다른 모델
 rows = []
 for test, rid, q, ids in cases:
     answer = ''.join(g.text for g in L.stream(q, [{'article_id': a} for a in ids]))
-    rows.append({'test': test, 'id': rid, 'context_ids': '|'.join(ids),
-                 'answer': answer, 'refusal': is_refusal(answer)})
+    rows.append(
+        {'test': test, 'id': rid, 'context_ids': '|'.join(ids), 'answer': answer, 'refusal': is_refusal(answer)}
+    )
     print(f'{test} {len(rows)}/{len(cases)}', end='\r')
 
 out = pd.DataFrame(rows)

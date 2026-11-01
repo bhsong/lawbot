@@ -36,7 +36,8 @@ def main():
     print(pd.DataFrame(rec).round(3))
     RESULTS.mkdir(exist_ok=True)
     pd.DataFrame({'id': dev['id'], 'article_id': dev['article_id'], 'rank': pos}).to_csv(
-        RESULTS / f'retrieval_{Path(args.emb).name}.csv', index=False, encoding='utf-8-sig')
+        RESULTS / f'retrieval_{Path(args.emb).name}.csv', index=False, encoding='utf-8-sig'
+    )
 
     if args.ids:
         sub = dev[dev['id'].isin(pd.read_csv(args.ids, encoding='utf-8-sig')['id'])]
@@ -52,26 +53,40 @@ def main():
         for g in L.stream(r['question'], hits):
             first = first or (time.time() - t0)
             text += g.text
-        rows.append({'id': r['id'], 'answer': text,
-                     'retrieved': r['article_id'] in [h['article_id'] for h in hits],
-                     'ttft': first, 'tps': g.generation_tps, 'sec': time.time() - t0,
-                     'peak_gb': g.peak_memory} | score_one(r, text))
+        rows.append(
+            {
+                'id': r['id'],
+                'answer': text,
+                'retrieved': r['article_id'] in [h['article_id'] for h in hits],
+                'ttft': first,
+                'tps': g.generation_tps,
+                'sec': time.time() - t0,
+                'peak_gb': g.peak_memory,
+            }
+            | score_one(r, text)
+        )
     o = pd.DataFrame(rows)
     name = Path(args.llm).name
     o.to_csv(RESULTS / (args.out or f'scored_{name}.csv'), index=False, encoding='utf-8-sig')
     print(f'\n[표 B·C] {name}, 질문 {len(o)}개')
-    print(pd.Series({
-        '검색 top3 적중률': o['retrieved'].mean(),
-        '조문 인용 정확도': o['cite_ok'].mean(),
-        '키워드 그룹 충족률': o['group_score'].mean(),
-        '금지 표현 없음': o['must_not_ok'].mean(),
-        '종합 점수': o['total'].mean(),
-        '종합 점수 (검색 적중 문항만)': o.loc[o['retrieved'], 'total'].mean(),
-        '평균 길이(자)': o['answer_len'].mean(),
-        '첫 토큰까지(초, 중앙값)': o['ttft'].median(),
-        '생성 속도(tok/s, 평균)': o['tps'].mean(),
-        '질문당 소요(초, 평균)': o['sec'].mean(),
-        'MLX 최대 메모리(GB)': o['peak_gb'].max()}).round(3))
+    print(
+        pd.Series(
+            {
+                '검색 top3 적중률': o['retrieved'].mean(),
+                '조문 인용 정확도': o['cite_ok'].mean(),
+                '키워드 그룹 충족률': o['group_score'].mean(),
+                '금지 표현 없음': o['must_not_ok'].mean(),
+                '종합 점수': o['total'].mean(),
+                '종합 점수 (검색 적중 문항만)': o.loc[o['retrieved'], 'total'].mean(),
+                '평균 길이(자)': o['answer_len'].mean(),
+                '첫 토큰까지(초, 중앙값)': o['ttft'].median(),
+                '생성 속도(tok/s, 평균)': o['tps'].mean(),
+                '질문당 소요(초, 평균)': o['sec'].mean(),
+                'MLX 최대 메모리(GB)': o['peak_gb'].max(),
+            }
+        ).round(3)
+    )
+
 
 if __name__ == '__main__':
     main()

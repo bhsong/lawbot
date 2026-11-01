@@ -12,9 +12,11 @@ from pathlib import Path
 
 from lawbot import envfile
 
-QUESTIONS = ['체불 융자 이자 몇프로 이하에요?',              # 임금채권보장법 시행령 제24조 기대
-             '평균임금 계산할 때 수습 기간도 들어가나요?',     # 근로기준법 시행령 제2조 기대
-             '해고 예고 없이 갑자기 해고되면 어떻게 하나요?']  # 법률 질문 (근로기준법 제26조)
+QUESTIONS = [
+    '체불 융자 이자 몇프로 이하에요?',  # 임금채권보장법 시행령 제24조 기대
+    '평균임금 계산할 때 수습 기간도 들어가나요?',  # 근로기준법 시행령 제2조 기대
+    '해고 예고 없이 갑자기 해고되면 어떻게 하나요?',
+]  # 법률 질문 (근로기준법 제26조)
 STATS = ('search', 'rerank', 'decree_search', 'decree_rerank', 'ttft', 'total', 'prompt_tokens', 'peak_gb', 'n_decree')
 
 
@@ -25,11 +27,17 @@ def hit_row(h):
 def run(app, model, q):
     from lawbot import citation, service
     from lawbot.answer_format import answer_citations
+
     *_, (_, hits, raw, st) = service.ask(app, q, model)
     used, unknown, refused = answer_citations(raw, hits)
-    return {'hits': [hit_row(h) for h in hits], 'answer': raw, 'refused': refused,
-            'cited': [citation.hit_key(h) for h in used], 'unknown': unknown,
-            'stats': {k: st.get(k) for k in STATS}}
+    return {
+        'hits': [hit_row(h) for h in hits],
+        'answer': raw,
+        'refused': refused,
+        'cited': [citation.hit_key(h) for h in used],
+        'unknown': unknown,
+        'stats': {k: st.get(k) for k in STATS},
+    }
 
 
 def main():
@@ -40,16 +48,21 @@ def main():
     a = ap.parse_args()
     if a.compare:
         x, y = (json.loads(Path(p).read_text(encoding='utf-8')) for p in a.compare)
-        same = all(x[k][q][c]['hits'] == y[k][q][c]['hits'] and x[k][q][c]['answer'] == y[k][q][c]['answer']
-                   for k in ('questions',) for q in range(len(x[k])) for c in ('on', 'off'))
-        print(f"조문·답변 동일: {same} ({x['mode']} vs {y['mode']})")
+        same = all(
+            x[k][q][c]['hits'] == y[k][q][c]['hits'] and x[k][q][c]['answer'] == y[k][q][c]['answer']
+            for k in ('questions',)
+            for q in range(len(x[k]))
+            for c in ('on', 'off')
+        )
+        print(f'조문·답변 동일: {same} ({x["mode"]} vs {y["mode"]})')
         raise SystemExit(0 if same else 1)
     envfile.load()
     from lawbot import service
+
     app = service.load_app()
     if app.decree is None or not service.uses_decrees(app, a.model):
         raise SystemExit(f'하위법령 첨부가 {a.model}에 켜져 있어야 합니다 (LAWBOT_DECREE_ENABLED=1)')
-    off = dataclasses.replace(app, decree=None)       # 같은 모델·검색기로 첨부만 끔
+    off = dataclasses.replace(app, decree=None)  # 같은 모델·검색기로 첨부만 끔
     mode = 'remote' if getattr(app.retriever, 'client', None) is not None else 'local'
     out = {'mode': mode, 'model': a.model, 'decree': dataclasses.asdict(app.decree), 'questions': []}
     for q in QUESTIONS:
@@ -59,15 +72,21 @@ def main():
         out['questions'].append({'question': q, 'on': on_r, 'off': off_r, 'law_hits_same': law_same})
         print(f'\n■ {q}')
         for h in on_r['hits']:
-            tag = f"〔{h['kind']}〕" if h.get('kind') else '      '
-            print(f"  {tag} {h['law']} {h['article_id']} · 유사도 {h['score']:.3f} · 리랭커 {h['rerank_score']:.3f} "
-                  f"(임베딩 {h['emb_rank']}위)")
+            tag = f'〔{h["kind"]}〕' if h.get('kind') else '      '
+            print(
+                f'  {tag} {h["law"]} {h["article_id"]} · 유사도 {h["score"]:.3f} · 리랭커 {h["rerank_score"]:.3f} '
+                f'(임베딩 {h["emb_rank"]}위)'
+            )
         s = on_r['stats']
-        print(f"  법률 3개 켜짐/꺼짐 동일 {law_same} · 첨부 {s['n_decree']}개 · 인용 {on_r['cited']} · 확인 안 됨 {on_r['unknown']} · "
-              f"거절 {on_r['refused']}")
-        print(f"  시간: 검색 {s['search']:.2f} · 리랭킹 {s['rerank']:.2f} · 하위법령 {s['decree_search']:.2f}+{s['decree_rerank']:.2f} · "
-              f"첫 토큰 {s['ttft']:.1f} · 완료 {s['total']:.1f}초 (꺼짐 {off_r['stats']['total']:.1f}초) · "
-              f"프롬프트 {s['prompt_tokens']} (꺼짐 {off_r['stats']['prompt_tokens']}) · peak {s['peak_gb']}GB")
+        print(
+            f'  법률 3개 켜짐/꺼짐 동일 {law_same} · 첨부 {s["n_decree"]}개 · 인용 {on_r["cited"]} · 확인 안 됨 {on_r["unknown"]} · '
+            f'거절 {on_r["refused"]}'
+        )
+        print(
+            f'  시간: 검색 {s["search"]:.2f} · 리랭킹 {s["rerank"]:.2f} · 하위법령 {s["decree_search"]:.2f}+{s["decree_rerank"]:.2f} · '
+            f'첫 토큰 {s["ttft"]:.1f} · 완료 {s["total"]:.1f}초 (꺼짐 {off_r["stats"]["total"]:.1f}초) · '
+            f'프롬프트 {s["prompt_tokens"]} (꺼짐 {off_r["stats"]["prompt_tokens"]}) · peak {s["peak_gb"]}GB'
+        )
         print('  답변(켜짐): ' + on_r['answer'].strip().replace('\n', ' ')[:300])
     if a.out:
         Path(a.out).parent.mkdir(parents=True, exist_ok=True)

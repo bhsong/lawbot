@@ -1,2 +1,2 @@
 def main() -> None:
-    print("Hello from lawbot!")
+    print('Hello from lawbot!')

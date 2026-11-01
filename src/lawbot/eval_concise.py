@@ -21,9 +21,14 @@ from lawbot.score_answers import score_one
 from lawbot.service import ask, load_app
 
 # 평가 전용 데이터(README '평가 데이터 사용 제한'): 형식 선택에 쓰지 않는다
-EVAL_ONLY = {DATA / f for f in ('labor_eval_keywords.csv', 'oos_eval.csv', 'scope_controls.csv', 'refusal_hard_cases.csv')}
-EVAL_ONLY |= {DATA / 'v4' / f for f in ('qa_full_v4.csv', 'split_v4.csv')}   # v4 test 문항이 들어 있음 (val은 따로 뽑아 쓰기)
+EVAL_ONLY = {
+    DATA / f for f in ('labor_eval_keywords.csv', 'oos_eval.csv', 'scope_controls.csv', 'refusal_hard_cases.csv')
+}
+EVAL_ONLY |= {
+    DATA / 'v4' / f for f in ('qa_full_v4.csv', 'split_v4.csv')
+}  # v4 test 문항이 들어 있음 (val은 따로 뽑아 쓰기)
 PENALTY = ('벌칙', '벌금', '징역', '과태료')
+
 
 def judge(view, raw, hits, row, finish, sec_to_view):
     """화면 글(view) 기준 지표. 인용은 원문 【근거 조문】에서 뽑은 조문 (간결형 '근거:' 줄과 같은 규칙)"""
@@ -32,17 +37,26 @@ def judge(view, raw, hits, row, finish, sec_to_view):
     gold = (row.get('law'), row['article_id']) if 'law' in row else (None, row['article_id'])
     keys = [(h.get('law') if gold[0] else None, h['article_id']) for h in used]
     retrieved = any((h.get('law') if gold[0] else None, h['article_id']) == gold for h in hits)
-    d = {'retrieved': retrieved, 'refusal': is_refusal(raw), 'cite_gold': gold in keys,
-         'n_cited': len(used), 'unknown_cites': len(unknown), 'cites_all_hits': len(used) == len(hits) > 1,
-         'penalty_in_view': any(p in view for p in PENALTY),
-         # 근거 없는 벌칙 언급 의심: 화면에 벌칙 표현이 있는데 참고 조문 중 벌칙·과태료 조문이 없음 (사람 검토용 표시)
-         'penalty_unsupported': any(p in view for p in PENALTY) and not any(
-             any(p in h['title'] for p in PENALTY) for h in hits),
-         'truncated': finish == 'length', 'view_len': len(view), 'sec_to_view': sec_to_view}
+    d = {
+        'retrieved': retrieved,
+        'refusal': is_refusal(raw),
+        'cite_gold': gold in keys,
+        'n_cited': len(used),
+        'unknown_cites': len(unknown),
+        'cites_all_hits': len(used) == len(hits) > 1,
+        'penalty_in_view': any(p in view for p in PENALTY),
+        # 근거 없는 벌칙 언급 의심: 화면에 벌칙 표현이 있는데 참고 조문 중 벌칙·과태료 조문이 없음 (사람 검토용 표시)
+        'penalty_unsupported': any(p in view for p in PENALTY)
+        and not any(any(p in h['title'] for p in PENALTY) for h in hits),
+        'truncated': finish == 'length',
+        'view_len': len(view),
+        'sec_to_view': sec_to_view,
+    }
     if isinstance(row.get('must_include'), str) and isinstance(row.get('must_not_include'), str):
         s = score_one(row, view)
         d |= {'kw_group': s['group_score'], 'kw_total': s['total'], 'must_not_ok': s['must_not_ok']}
     return d
+
 
 def run(app, question, model_key):
     """(원문, 검색 조문, 측정값, 【설명】이 처음 나온 시점 초)"""
@@ -51,6 +65,7 @@ def run(app, question, model_key):
         if t_early is None and '【설명】' in raw:
             t_early = time.perf_counter() - t0
     return raw, hits, st, t_early
+
 
 def main():
     ap = argparse.ArgumentParser()
@@ -68,7 +83,7 @@ def main():
     val = val.head(args.n) if args.n else val
 
     envfile.load()
-    os.environ['LAWBOT_MAX_RESIDENT'] = '1'     # 실험은 한 모델만 올림 (Pro 실험이면 미리 올린 Fast는 내려감)
+    os.environ['LAWBOT_MAX_RESIDENT'] = '1'  # 실험은 한 모델만 올림 (Pro 실험이면 미리 올린 Fast는 내려감)
     app = load_app()
     alt = None
     if args.alt_system == 'v1':
@@ -81,11 +96,19 @@ def main():
         base = {'id': row['id'], 'question': row['question'], 'article_id': row['article_id']}
         raw, hits, st, t_early = run(app, row['question'], args.model)
         rows.append(base | {'mode': 'full'} | judge(raw, raw, hits, row, st['finish'], st['total']) | {'raw': raw})
-        rows.append(base | {'mode': 'concise'} | judge(concise(raw, hits), raw, hits, row, st['finish'], st['total'])
-                    | {'raw': raw})
-        cut = raw.split('【설명】')[0]                # 조기 종료했다면 받았을 원문
-        rows.append(base | {'mode': 'early'} | judge(concise(cut, hits), cut, hits, row, None, t_early or st['total'])
-                    | {'raw': cut})
+        rows.append(
+            base
+            | {'mode': 'concise'}
+            | judge(concise(raw, hits), raw, hits, row, st['finish'], st['total'])
+            | {'raw': raw}
+        )
+        cut = raw.split('【설명】')[0]  # 조기 종료했다면 받았을 원문
+        rows.append(
+            base
+            | {'mode': 'early'}
+            | judge(concise(cut, hits), cut, hits, row, None, t_early or st['total'])
+            | {'raw': cut}
+        )
         if alt:
             llm, _ = app.models.get(args.model)
             sys0, llm.system = llm.system, alt
@@ -93,29 +116,41 @@ def main():
                 raw2, hits2, st2, _ = run(app, row['question'], args.model)
             finally:
                 llm.system = sys0
-            rows.append(base | {'mode': 'alt'} | judge(concise(raw2, hits2), raw2, hits2, row, st2['finish'],
-                                                           st2['total']) | {'raw': raw2})
-        print(row['id'], ' / '.join(f"{r['mode']}:{'거절' if r['refusal'] else int(r['cite_gold'])}"
-                                    for r in rows if r['id'] == row['id']))
+            rows.append(
+                base
+                | {'mode': 'alt'}
+                | judge(concise(raw2, hits2), raw2, hits2, row, st2['finish'], st2['total'])
+                | {'raw': raw2}
+            )
+        print(
+            row['id'],
+            ' / '.join(
+                f'{r["mode"]}:{"거절" if r["refusal"] else int(r["cite_gold"])}' for r in rows if r['id'] == row['id']
+            ),
+        )
     o = pd.DataFrame(rows)
     RESULTS.mkdir(exist_ok=True)
     o.to_csv(RESULTS / f'concise_{args.tag}.csv', index=False, encoding='utf-8-sig')
     hit, miss = o[o['retrieved']], o[~o['retrieved']]
-    summary = pd.DataFrame({
-        '정답 조문 인용률 (검색 적중)': hit.groupby('mode')['cite_gold'].mean(),
-        '거짓 거절률 (검색 적중)': hit.groupby('mode')['refusal'].mean(),
-        '검색 실패 시 거절률': miss.groupby('mode')['refusal'].mean(),
-        '확인 안 된 인용 포함': o.groupby('mode')['unknown_cites'].apply(lambda s: (s > 0).mean()),
-        '3개 모두 인용': o.groupby('mode')['cites_all_hits'].mean(),
-        '벌칙 언급': o.groupby('mode')['penalty_in_view'].mean(),
-        '근거 없는 벌칙 의심': o.groupby('mode')['penalty_unsupported'].mean(),
-        '잘림': o.groupby('mode')['truncated'].mean(),
-        '화면 글자 수': o.groupby('mode')['view_len'].mean(),
-        '화면 완성까지(초, 중앙값)': o.groupby('mode')['sec_to_view'].median()})
+    summary = pd.DataFrame(
+        {
+            '정답 조문 인용률 (검색 적중)': hit.groupby('mode')['cite_gold'].mean(),
+            '거짓 거절률 (검색 적중)': hit.groupby('mode')['refusal'].mean(),
+            '검색 실패 시 거절률': miss.groupby('mode')['refusal'].mean(),
+            '확인 안 된 인용 포함': o.groupby('mode')['unknown_cites'].apply(lambda s: (s > 0).mean()),
+            '3개 모두 인용': o.groupby('mode')['cites_all_hits'].mean(),
+            '벌칙 언급': o.groupby('mode')['penalty_in_view'].mean(),
+            '근거 없는 벌칙 의심': o.groupby('mode')['penalty_unsupported'].mean(),
+            '잘림': o.groupby('mode')['truncated'].mean(),
+            '화면 글자 수': o.groupby('mode')['view_len'].mean(),
+            '화면 완성까지(초, 중앙값)': o.groupby('mode')['sec_to_view'].median(),
+        }
+    )
     if 'kw_total' in o:
         summary['키워드 종합 점수'] = o.groupby('mode')['kw_total'].mean()
     print(f'\n[간결형 실험] {args.model} · val {len(val)}문항 · 검색 적중 {hit["id"].nunique()}')
     print(summary.T.round(3))
+
 
 if __name__ == '__main__':
     main()

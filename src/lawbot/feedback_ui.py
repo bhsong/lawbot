@@ -40,6 +40,7 @@ JS = """
 }
 """
 
+
 def launch_options(fb):
     """demo.launch에 더할 인자. 피드백이 꺼져 있으면(fb=None) 아무것도 넣지 않는다"""
     return {'css': CSS, 'js': JS} if fb is not None else {}

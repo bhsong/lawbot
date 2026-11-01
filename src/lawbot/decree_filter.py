@@ -45,8 +45,13 @@ def cands(scores, n_q, order=None):
             out[int(q)][0 if j < N_LAW else 1].append((int(j), float(x)))
         out = [(sorted(a, key=lambda c: -c[1]), sorted(b, key=lambda c: -c[1])) for a, b in out]
     else:
-        out = [tuple(sorted([(int(j), sc[(q, int(j))]) for j in order[k][q]], key=lambda c: -c[1])
-                     for k in ('T_law', 'T_dec')) for q in range(n_q)]
+        out = [
+            tuple(
+                sorted([(int(j), sc[(q, int(j))]) for j in order[k][q]], key=lambda c: -c[1])
+                for k in ('T_law', 'T_dec')
+            )
+            for q in range(n_q)
+        ]
     assert all(len(a) == 10 and len(b) == 10 for a, b in out), '후보 수가 10이 아님'
     return out
 
@@ -72,8 +77,9 @@ def rules():
         # 같은 법은 그대로, 다른 법은 점수 ≥ τ일 때만 (점수 순으로 섞음)
         r[f'same1+other{t}'] = lambda dec, l1, l3, t=t: [c for c in dec if c[2] == l1 or c[1] >= t]
         # 같은 법을 먼저 채우고, 남는 자리에 다른 법(점수 ≥ τ)
-        r[f'same1>other{t}'] = lambda dec, l1, l3, t=t: ([c for c in dec if c[2] == l1]
-                                                         + [c for c in dec if c[2] != l1 and c[1] >= t])
+        r[f'same1>other{t}'] = lambda dec, l1, l3, t=t: (
+            [c for c in dec if c[2] == l1] + [c for c in dec if c[2] != l1 and c[1] >= t]
+        )
         r[f'top3laws+other{t}'] = lambda dec, l1, l3, t=t: [c for c in dec if c[2] in l3 or c[1] >= t]
     return r
 
@@ -96,13 +102,22 @@ def main():
     args = ap.parse_args()
     d = Path(args.dir)
     pre, suf = ('mlx_', '_mlx') if args.scores == 'mlx' else ('', '')
-    need = ['doc_tokens.csv', 'qa_decree_v4.csv', 'split_decree_v4.csv', 'rr_per_question.csv', 'dq_candidates.npz',
-            'rr_candidates.npz', f'{pre}dq_rr_scores.csv', f'{pre}rr_scores.csv'] + (
-        ['dq_rr_scores.csv', 'rr_scores.csv'] if pre else [])
+    need = [
+        'doc_tokens.csv',
+        'qa_decree_v4.csv',
+        'split_decree_v4.csv',
+        'rr_per_question.csv',
+        'dq_candidates.npz',
+        'rr_candidates.npz',
+        f'{pre}dq_rr_scores.csv',
+        f'{pre}rr_scores.csv',
+    ] + (['dq_rr_scores.csv', 'rr_scores.csv'] if pre else [])
     missing = [f for f in need if not (d / f).is_file()]
     if missing:
-        raise SystemExit(f'{d}에 없는 파일: {", ".join(missing)}'
-                         + ('\nmlx_*는 uv run python -m lawbot.mlx_decree_scores로 만든다' if pre else ''))
+        raise SystemExit(
+            f'{d}에 없는 파일: {", ".join(missing)}'
+            + ('\nmlx_*는 uv run python -m lawbot.mlx_decree_scores로 만든다' if pre else '')
+        )
     art = load(d)
     aid = art.article_id.values
     idx = {a: i for i, a in enumerate(aid)}
@@ -141,16 +156,30 @@ def main():
             n_other = np.array([sum(parent[j] != parent[g] for j in a) for g, a in zip(lgold, la)])
             child_hit = np.array([any(aid[j] in child[g] for j in a) for g, a in zip(lgold, la)])
             add_tok = np.array([sum(ntok[j] for j in a) for a in la])
-            rows.append(dict(
-                rule=name, k=k,
-                dq_recall=hit.mean(), dq_att=np.mean([len(a) for a in da]),
-                dq_fail_filter=(~hit & in10).mean(), dq_fail_emb=(~in10).mean(),
-                law_att=n_att.mean(), law_att0=(n_att == 0).mean(),
-                law_other_ratio=n_other.sum() / max(n_att.sum(), 1), law_other_q=(n_other > 0).mean(),
-                law_child_hit=child_hit[has_child].mean(),
-                law_tok=(law3_tok + add_tok).mean(), law_tok_p95=np.percentile(law3_tok + add_tok, 95)))
-            qrows.append(dict(rule=name, k=k, **{t: hit[dv.question_type.values == t].mean()
-                                                 for t in sorted(dv.question_type.unique())}))
+            rows.append(
+                dict(
+                    rule=name,
+                    k=k,
+                    dq_recall=hit.mean(),
+                    dq_att=np.mean([len(a) for a in da]),
+                    dq_fail_filter=(~hit & in10).mean(),
+                    dq_fail_emb=(~in10).mean(),
+                    law_att=n_att.mean(),
+                    law_att0=(n_att == 0).mean(),
+                    law_other_ratio=n_other.sum() / max(n_att.sum(), 1),
+                    law_other_q=(n_other > 0).mean(),
+                    law_child_hit=child_hit[has_child].mean(),
+                    law_tok=(law3_tok + add_tok).mean(),
+                    law_tok_p95=np.percentile(law3_tok + add_tok, 95),
+                )
+            )
+            qrows.append(
+                dict(
+                    rule=name,
+                    k=k,
+                    **{t: hit[dv.question_type.values == t].mean() for t in sorted(dv.question_type.unique())},
+                )
+            )
     res = pd.DataFrame(rows)
     q = pd.DataFrame(qrows)
     res.to_csv(d / f'filter_rules{suf}.csv', index=False, encoding='utf-8-sig')
@@ -166,8 +195,10 @@ def compare(d, art):
     """fp16(Colab) vs MLX 4비트: 같은 후보 쌍의 점수 차이, τ 통과 판정, 법률 1위, 추천 규칙 첨부 집합의 일치율"""
     r = rules()
     print('\n[fp16 vs MLX] 같은 후보에서의 일치율')
-    for label, f, npz_name, n in (('하위법령 val 444', 'dq_rr_scores.csv', 'dq_candidates.npz', 444),
-                                  ('법률 val 1,110', 'rr_scores.csv', 'rr_candidates.npz', 1110)):
+    for label, f, npz_name, n in (
+        ('하위법령 val 444', 'dq_rr_scores.csv', 'dq_candidates.npz', 444),
+        ('법률 val 1,110', 'rr_scores.csv', 'rr_candidates.npz', 1110),
+    ):
         a, b = pd.read_csv(d / f), pd.read_csv(d / f'mlx_{f}')
         m = a.merge(b, on=['qi', 'j'], suffixes=('_fp16', '_mlx'), validate='one_to_one')
         assert len(m) == len(a) == len(b), f'{f}: 후보 쌍이 다름 (MLX 점수가 덜 끝났는지 확인)'
@@ -176,8 +207,10 @@ def compare(d, art):
         order = npz(d / npz_name)
         cf, cm = cands(a, n, order), cands(b, n, order)
         top1 = np.mean([x[0][0][0] == y[0][0][0] for x, y in zip(cf, cm)])
-        line = (f'  {label}: 점수 차이 중앙값 {diff.median():.4f} · p95 {diff.quantile(.95):.4f} · '
-                f'법률 1위 일치 {top1:.3f}')
+        line = (
+            f'  {label}: 점수 차이 중앙값 {diff.median():.4f} · p95 {diff.quantile(0.95):.4f} · '
+            f'법률 1위 일치 {top1:.3f}'
+        )
         for t in (0.7, 0.9):
             line += f' · 하위법령 점수≥{t} 판정 일치 {((dec.score_fp16 >= t) == (dec.score_mlx >= t)).mean():.3f}'
         print(line)

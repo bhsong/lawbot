@@ -49,8 +49,12 @@ def compute(retrieval=None, scored=None, controls=None, oos=None, refusal=None, 
         m['recall@3'] = (r['rank'] <= 3).mean()
     if (s := read(scored)) is not None:
         hit = s[s['retrieved'].astype(bool)] if 'retrieved' in s else s
-        m |= {'total': s['total'].mean(), 'total_retrieved': hit['total'].mean(),
-              'cite_ok': s['cite_ok'].mean(), 'false_refusal': refused(hit).mean()}
+        m |= {
+            'total': s['total'].mean(),
+            'total_retrieved': hit['total'].mean(),
+            'cite_ok': s['cite_ok'].mean(),
+            'false_refusal': refused(hit).mean(),
+        }
         if 'cite_strict' in s:
             m['cite_strict'] = s['cite_strict'].mean()
     if (c := read(controls)) is not None:
@@ -61,10 +65,12 @@ def compute(retrieval=None, scored=None, controls=None, oos=None, refusal=None, 
         o['verdict'] = [oos_verdict(a, x) for a, x in zip(o['answer'], o['refer_lsa'])]
         base, added = o[o['id'] <= 'OOS082'], o[o['id'] > 'OOS082']
         labor = base[base['category'] == 'other_labor']
-        m |= {'oos_refusal': (base['verdict'] == '거절').mean(),
-              'oos_near_refusal': (labor.loc[labor['near_lsa'].notna(), 'verdict'] == '거절').mean(),
-              'oos_forced': (base['verdict'] == '억지적용').mean(),
-              'oos_labor_forced': (labor['verdict'] == '억지적용').mean()}
+        m |= {
+            'oos_refusal': (base['verdict'] == '거절').mean(),
+            'oos_near_refusal': (labor.loc[labor['near_lsa'].notna(), 'verdict'] == '거절').mean(),
+            'oos_forced': (base['verdict'] == '억지적용').mean(),
+            'oos_labor_forced': (labor['verdict'] == '억지적용').mean(),
+        }
         if len(added):
             m['oos_added_forced'] = (added['verdict'] == '억지적용').mean()
     if (f := read(refusal)) is not None:

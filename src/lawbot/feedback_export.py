@@ -19,10 +19,11 @@ from lawbot.feedback_review import E, companion, private_write
 from lawbot.paths import V4_ARTICLES, V4_DECREE_ARTICLES
 
 SEED = 42
-ARTICLES = (V4_ARTICLES, V4_DECREE_ARTICLES)   # 법률 415 + 하위법령 첨부용 812조문 (하위법령 hit 대조·h_gold)
+ARTICLES = (V4_ARTICLES, V4_DECREE_ARTICLES)  # 법률 415 + 하위법령 첨부용 812조문 (하위법령 hit 대조·h_gold)
 VAL_FRAC = 0.1
 OK_VALUES = ('맞음', '틀림', '모름')
 SCOPE_VALUES = ('범위 안', '범위 밖')
+
 
 def read_review(path):
     """(검수 표, feedback_id → 전체 기록). 값이 틀린 칸은 행 번호와 함께 ValueError"""
@@ -31,8 +32,10 @@ def read_review(path):
         if c not in d:
             raise ValueError(f'{path}: 열 없음 {c}')
     d = d.map(str.strip)
-    errs = [f"{i + 2}행 h_ok {v!r} (맞음/틀림/모름)" for i, v in d['h_ok'].items() if v and v not in OK_VALUES]
-    errs += [f"{i + 2}행 h_scope {v!r} (범위 안/범위 밖)" for i, v in d['h_scope'].items() if v and v not in SCOPE_VALUES]
+    errs = [f'{i + 2}행 h_ok {v!r} (맞음/틀림/모름)' for i, v in d['h_ok'].items() if v and v not in OK_VALUES]
+    errs += [
+        f'{i + 2}행 h_scope {v!r} (범위 안/범위 밖)' for i, v in d['h_scope'].items() if v and v not in SCOPE_VALUES
+    ]
     if errs:
         raise ValueError(f'{path}: ' + '; '.join(errs[:10]))
     side = companion(path)
@@ -43,6 +46,7 @@ def read_review(path):
     if missing:
         raise ValueError(f'{side}에 없는 feedback_id: {missing[:5]}')
     return d, records
+
 
 def parse_gold(value, keys):
     """'근로기준법 제26조; 최저임금법 제6조' → [('근로기준법', '제26조'), …]. 법령명이 없거나 없는 조문이면 ValueError"""
@@ -56,17 +60,20 @@ def parse_gold(value, keys):
         out.append(cites[0])
     return out
 
+
 def article_docs(articles):
     """{(법령, 제N조): 검색 문서 문자열} (retriever.DOC_STYLES['v4']와 같은 문자열, 삭제 조문 제외)
     articles: 조문 CSV 하나 또는 여러 개 (앞 파일부터 합친다. 하위법령 법령명은 '근로기준법 시행령'이라 키가 겹치지 않음)"""
     if isinstance(articles, (list, tuple)):
         return {k: v for a in articles for k, v in article_docs(a).items()}
     from lawbot.retriever import DOC_STYLES
+
     law = pd.read_csv(articles, **E)
     law = law[law['deleted'] == 0].reset_index(drop=True)
     if 'article_no' in law:
         law['article_id'] = law['article_no']
     return dict(zip(zip(law['law'], law['article_id']), DOC_STYLES['v4'](law)))
+
 
 def assign_split(ids, frac=VAL_FRAC):
     """feedback_id → 'train'/'val' (random_state=42)"""
@@ -74,17 +81,21 @@ def assign_split(ids, frac=VAL_FRAC):
     val = set(s.sample(frac=frac, random_state=SEED)) if len(s) else set()
     return {i: 'val' if i in val else 'train' for i in s}
 
+
 def export(review_csv, out, articles=ARTICLES, frac=VAL_FRAC):
     """요약 줄 목록. out 폴더에 CSV 4개"""
     from lawbot.llm import build_prompt_v4
+
     out = Path(out)
     check_private(out, '--out')
     d, records = read_review(review_csv)
     docs = article_docs(articles)
     d = d[(d['h_ok'] != '') | (d['h_gold'] != '')]
-    golds = {f: parse_gold(g, set(docs)) for f, g in zip(d['feedback_id'], d['h_gold'])}   # 틀린 칸이 있으면 쓰기 전에 멈춤
+    golds = {
+        f: parse_gold(g, set(docs)) for f, g in zip(d['feedback_id'], d['h_gold'])
+    }  # 틀린 칸이 있으면 쓰기 전에 멈춤
     skipped = [f for f in d['feedback_id'] if records[f].get('profile') != 'v4']
-    d = d[~d['feedback_id'].isin(skipped)]          # v1 기록은 형식이 달라 내보내지 않음
+    d = d[~d['feedback_id'].isin(skipped)]  # v1 기록은 형식이 달라 내보내지 않음
     split = assign_split(d['feedback_id'], frac)
     stale = 0
     qs, pairs, sft, kto = [], [], [], []
@@ -93,44 +104,72 @@ def export(review_csv, out, articles=ARTICLES, frac=VAL_FRAC):
         r, sp = records[f], split[f]
         hits = r['hits']
         stale += any(docs.get((h.get('law'), h['article_id'])) != h['doc'] for h in hits)
-        qs.append({'feedback_id': f, 'split': sp, 'question': r['question'], 'label': r['label'], 'reason': r['reason']}
-                  | {c: row[c] for c in ('h_ok', 'h_gold', 'h_scope', 'h_note')})
+        qs.append(
+            {'feedback_id': f, 'split': sp, 'question': r['question'], 'label': r['label'], 'reason': r['reason']}
+            | {c: row[c] for c in ('h_ok', 'h_gold', 'h_scope', 'h_note')}
+        )
         gold = golds[f]
         if gold:
             top = hits[0] if hits and r.get('reason') == 'retrieval' else None
             neg = top['doc'] if top and (top.get('law'), top['article_id']) not in gold else ''
-            pairs += [{'feedback_id': f, 'split': sp, 'question': r['question'], 'positive': docs[g],
-                       'negative': neg, 'gold': citation.key(*g)} for g in gold]
+            pairs += [
+                {
+                    'feedback_id': f,
+                    'split': sp,
+                    'question': r['question'],
+                    'positive': docs[g],
+                    'negative': neg,
+                    'gold': citation.key(*g),
+                }
+                for g in gold
+            ]
         if row['h_ok'] in ('맞음', '틀림'):
-            ex = {'feedback_id': f, 'split': sp, 'model': r['model'], 'fmt': r['fmt'], 'system': r['system'],
-                  'prompt': build_prompt_v4(hits, r['question']), 'completion': r['answer_raw']}
+            ex = {
+                'feedback_id': f,
+                'split': sp,
+                'model': r['model'],
+                'fmt': r['fmt'],
+                'system': r['system'],
+                'prompt': build_prompt_v4(hits, r['question']),
+                'completion': r['answer_raw'],
+            }
             kto.append(ex | {'label': row['h_ok'] == '맞음'})
             if row['h_ok'] == '맞음' and r['label'] == 'like':
                 sft.append(ex)
     out.mkdir(parents=True, exist_ok=True)
     for name, rows in (('fb_questions', qs), ('fb_emb_pairs', pairs), ('fb_sft', sft), ('fb_kto', kto)):
         private_write(out / f'{name}.csv', '﻿' + pd.DataFrame(rows).to_csv(index=False))
-    lines = [f'검수한 질문 {len(qs)} (val {sum(s == "val" for s in split.values())}) · 임베딩 쌍 {len(pairs)} '
-             f'(hard negative {sum(bool(p["negative"]) for p in pairs)}) · SFT {len(sft)} · KTO {len(kto)} → {out}']
+    lines = [
+        f'검수한 질문 {len(qs)} (val {sum(s == "val" for s in split.values())}) · 임베딩 쌍 {len(pairs)} '
+        f'(hard negative {sum(bool(p["negative"]) for p in pairs)}) · SFT {len(sft)} · KTO {len(kto)} → {out}'
+    ]
     if skipped:
         lines.append(f'v4 프로필이 아니어서 뺌 {len(skipped)}: {skipped[:5]}')
     no_gold = [f for f, g in golds.items() if not g and records[f].get('reason') == 'retrieval' and f not in skipped]
-    if no_gold:                          # 검색 오류는 정답 조문이 있어야 임베딩 쌍이 된다
+    if no_gold:  # 검색 오류는 정답 조문이 있어야 임베딩 쌍이 된다
         lines.append(f'⚠ 검색 오류인데 h_gold가 빈 행 {len(no_gold)}: {no_gold[:5]}')
     if stale:
-        lines.append(f'⚠ 저장한 참고 조문이 지금 조문 CSV와 다른 기록 {stale}건 (법령 데이터가 바뀜: dataset_version 확인)')
+        lines.append(
+            f'⚠ 저장한 참고 조문이 지금 조문 CSV와 다른 기록 {stale}건 (법령 데이터가 바뀜: dataset_version 확인)'
+        )
     return lines
+
 
 def main(argv=None):
     ap = argparse.ArgumentParser(description='검수 CSV → 학습·개발용 CSV (fb_questions·fb_emb_pairs·fb_sft·fb_kto)')
     ap.add_argument('review', help='사람이 채운 feedback_review_<날짜>.csv (같은 이름의 .jsonl이 옆에 있어야 함)')
     ap.add_argument('--out', default='data/feedback/')
-    ap.add_argument('--articles', nargs='+', default=[str(a) for a in ARTICLES],
-                    help='정답 조문·참고 조문 본문을 찾을 조문 CSV (기본: v4 법률 + 하위법령 첨부용)')
+    ap.add_argument(
+        '--articles',
+        nargs='+',
+        default=[str(a) for a in ARTICLES],
+        help='정답 조문·참고 조문 본문을 찾을 조문 CSV (기본: v4 법률 + 하위법령 첨부용)',
+    )
     ap.add_argument('--val-frac', type=float, default=VAL_FRAC)
     a = ap.parse_args(argv)
     for line in export(a.review, a.out, a.articles, a.val_frac):
         print(line)
+
 
 if __name__ == '__main__':
     main()

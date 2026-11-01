@@ -9,17 +9,21 @@ from fakes import FakeLLM, FakeRetriever
 
 port, call_log = int(sys.argv[1]), Path(sys.argv[2])
 
+
 class RecordingLLM(FakeLLM):
     """chat이 실제로 실행됐는지 테스트 프로세스가 알 수 있도록 질문을 한 줄씩 기록"""
+
     def stream(self, question, hits, **kw):
         with call_log.open('a', encoding='utf-8') as f:
             f.write(question.replace('\n', ' ') + '\n')
         yield from super().stream(question, hits, **kw)
 
+
 def fake_module(name, **attrs):
     m = types.ModuleType(name)
     m.__dict__.update(attrs)
     return m
+
 
 # 실제 모델 모듈(torch·sentence_transformers·mlx_lm) 대신 가짜 모듈: 모델 파일 불필요, 기동이 빠름
 sys.modules['lawbot.retriever'] = fake_module('lawbot.retriever', Retriever=FakeRetriever)
