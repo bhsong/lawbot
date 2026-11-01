@@ -111,7 +111,7 @@ uv run hf download mlx-community/Qwen3.8-27B-4bit --local-dir models/v4/qwen3.8_
 uv run mlx_lm.convert --hf-path Qwen/Qwen3-Reranker-4B --mlx-path models/v4/reranker_4b_mlx_4bit -q --q-bits 4 --q-group-size 64 --dtype float16
 ```
 
-이전 v1(근로기준법 130조문) 구성은 `LAWBOT_PROFILE=v1`로 실행하며, 아래 파일을 씁니다. 조문·평가 데이터(`data/`)와 평가 결과(`results/`)는 저장소에 포함되어 있고, 평가 스크립트(`lawbot-eval` 등)는 v1 파일을 씁니다.
+이전 v1(근로기준법 130조문) 구성은 `LAWBOT_PROFILE=v1`로 실행하며, 아래 파일을 씁니다. 조문·평가 데이터(`data/`)와 평가 결과(`results/`)는 저장소에 포함되어 있고, v1 평가 결과도 이 파일 기준입니다.
 
 ```
 models/
@@ -142,7 +142,7 @@ uv run lawbot-app
 - 셸에서 `export`한 변수가 있으면 그 값이 `.env`보다 우선합니다. 한 번만 다르게 실행할 때는 `LAWBOT_RERANKER_ENABLED=0 uv run lawbot-app`처럼 앞에 붙입니다.
 - 다른 파일을 쓰려면 `LAWBOT_ENV_FILE=.env.small uv run lawbot-app`(예: 소형 맥의 Fast 4B 설정), 파일을 읽지 않으려면 `LAWBOT_ENV_FILE=`.
 - `.env`에는 `LAWBOT_*`와 `LLM_PATH`만 적을 수 있습니다. 서버 주소는 바꿀 수 없고, 웹앱 포트는 `LAWBOT_PORT`로 정합니다(아래 참고).
-- `lawbot-model-server`, `check_deploy`, `bench_models`, `bench_ui`, `verify_reranker`, `eval_concise`도 같은 `.env`를 읽습니다.
+- `lawbot-model-server`, `check_deploy`, `eval_concise`도 같은 `.env`를 읽습니다.
 - 값에 공백이나 ` #`이 들어가면 작은따옴표로 감쌉니다: `LAWBOT_PW='a b#c'`.
 
 비밀번호를 파일에 두지 않으려면 `.env`의 `LAWBOT_PW=` 줄을 지우고 실행할 때 입력하거나 macOS 키체인에서 꺼내 씁니다(zsh).
@@ -196,7 +196,7 @@ LAWBOT_PROFILE=v1 LAWBOT_MODELS= LAWBOT_RERANKER_ENABLED=0 uv run lawbot-app
 | `LAWBOT_DECREE_K` | 아니요 | 붙일 하위법령 최대 수 (기본 `2`) |
 | `LAWBOT_DECREE_MODELS` | 아니요 | 하위법령을 붙일 답변 모델 key (기본 `pro`. Fast는 참고 조문 3개로 학습했고 첨부를 평가하지 않음) |
 | `LAWBOT_V4_DECREE_ARTICLES` | 아니요 | 하위법령을 켰을 때 쓰는 812조문 CSV (기본 `data/v4/law_articles_v4_decree.csv`). 켜면 `LAWBOT_V4_ARTICLES` 대신 이 파일 |
-| `LLM_PATH` | 아니요 | 평가 스크립트(`eval_oos`·`eval_refusal`)가 쓸 sLLM 폴더 (예: `models/sllm_mlx_8bit`). 웹앱은 쓰지 않음 |
+| `LLM_PATH` | 아니요 | 실제 모델 테스트(`pytest -m models`)가 쓸 sLLM 폴더 (예: `models/sllm_mlx_8bit`). 웹앱은 쓰지 않음 |
 | `LAWBOT_PORT` | 아니요 | 웹앱 포트 (1024–65535). 없으면 기존 기본값. 운영·개발을 함께 띄울 때는 서로 다른 값 |
 | `LAWBOT_INSTANCE` | 아니요 | 화면·탭 제목에 붙일 이름 (예: `운영`, `개발`, 40자 이하) |
 | `LAWBOT_MODEL_SERVER` | 아니요 | 모델 서버 주소 `http://127.0.0.1:<모델 서버 포트>`. 있으면 원격 모드(웹앱은 모델을 올리지 않음), 비우면 로컬 모드 |
@@ -235,19 +235,13 @@ LAWBOT_RERANKER_ENABLED=0 uv run lawbot-app    # 한 번만 끄고 실행
 
 - 통과한 하위법령이 없으면 붙이지 않고, 프롬프트는 꺼짐과 글자 단위로 같습니다. 참고 조문 형식은 법률과 같은 `[n] 법령명 제N조(제목)`입니다(예: `[4] 근로기준법 시행령 제2조(…)`).
 - 첨부는 `LAWBOT_DECREE_MODELS`의 모델만(기본 Pro) 받습니다. Fast는 하위법령을 찾지도 않으므로 지금과 같습니다.
-- 법률 415개는 지금과 같은 호출(max_seq 2,304)로 따로 인코딩하고, 하위법령은 3,072토큰으로 따로 인코딩합니다(최장 3,017토큰). `uv run python -m lawbot.verify_decree_emb`가 법률 임베딩이 비트 단위로 같은지와 인코딩 시간을 확인합니다.
+- 법률 415개는 지금과 같은 호출(max_seq 2,304)로 따로 인코딩하고, 하위법령은 3,072토큰으로 따로 인코딩합니다(최장 3,017토큰). 법률 임베딩이 비트 단위로 같은지는 첨부 작업 때 확인했습니다([기록](docs/evals/2026-10-31-decree-attach.md)).
 - 리랭커가 꺼져 있거나 v1 프로필이면 모델을 올리기 전에 실행을 거부합니다. 하위법령 리랭킹 오류도 법률과 같이 화면에 오류로 표시합니다(되돌리지 않음).
 - 화면: 하위법령 카드는 `〔시행령〕`·`〔시행규칙〕` 표시와 함께 법률 카드 뒤에 놓이고, 인용한 조문은 펼치고 나머지는 접습니다. 간결형 근거 줄·경고는 법률과 같은 규칙입니다. 측정 줄에 하위법령 시간과 첨부 수, 요청 로그에 `decree_search_ms`·`decree_rerank_ms`·`decree`·`n_decree`가 남습니다.
 - 원격 모드: 웹앱의 켜짐·τ·k가 모델 서버 `/info`의 `decree`와 다르면 시작을 거부합니다(첨부할 모델은 웹앱이 정함). 모델 서버 API는 2입니다.
 - 812조문 매니페스트는 `data/v4/manifest_decree.json`(데이터 `v4-decree`)입니다. 기존 `data/v4/manifest.json`은 415조문 그대로입니다.
 
-Colab 실험(transformers fp16)과의 순위 일치는 같은 질문·임베딩 Top 10으로 따로 대조합니다. 실험 폴더(Drive `labor_law/v4`)를 내려받아 지정합니다. 기본은 val이며, test는 기록된 수치와 대조할 때만 쓰고 설정 조정에 쓰지 않습니다.
-
-```zsh
-uv run python -m lawbot.verify_reranker --colab ~/Downloads/v4 --split val     # → results/reranker_verify_val_mlx4bit.csv
-uv run python -m lawbot.bench_models --tag m32_v4_rr                            # .env 그대로 (리랭커 포함) 지연·메모리
-LAWBOT_RERANKER_ENABLED=0 uv run python -m lawbot.bench_models --tag m32_v4     # 비교 기준
-```
+Colab 실험(transformers fp16)과의 순위 일치는 리랭커 도입 때 val로 대조했습니다(`results/reranker_verify_val_mlx4bit.csv`).
 
 **상시 운영과 개발 동시 실행 (모델 서버)**
 
@@ -320,7 +314,7 @@ LAWBOT_RERANKER_ENABLED=0 uv run python -m lawbot.bench_models --tag m32_v4     
 - 모델 서버는 요청을 한 번에 하나만 처리합니다. 개발 화면에서 질문하는 동안 휴대폰 질문은 기다립니다. 정지 버튼·간결형 조기 종료로 연결이 끊기면 바로 다음 요청을 받지만, 휴대폰이 연결을 끊지 않고 사라지면 생성이 최대 길이(1024토큰)에서 끝날 때까지 기다립니다.
 - 검색 설정(리랭커 사용·후보 수)과 상주 모델 수는 모델 서버(운영 `.env`)가 기준입니다. 원격 모드 웹앱의 `LAWBOT_RERANKER_*`·`LAWBOT_MAX_RESIDENT`는 쓰지 않습니다. 웹앱은 시작할 때 프로필·`doc_style`·모델 key·API 버전이 서버와 같은지 확인하고, 다르면 실행을 거부합니다.
 - 같은 브라우저에서 운영·개발 화면에 번갈아 로그인할 때 로그인 쿠키가 겹치면, 개발 화면은 `http://localhost:<개발 포트>`로 접속합니다(호스트가 다르면 쿠키가 분리됨).
-- `eval_v4`, `eval_concise`, `bench_models`는 원격 모드로도 돌아갑니다. 결과의 `peak_gb`·MLX 메모리는 모델 서버 프로세스 값입니다. `verify_reranker`, `eval_dev`, `eval_refusal`, `eval_oos`, `diag_*`는 모델을 직접 올리는 로컬 모드 전용이므로 실행 전에 모델 서버를 멈춥니다.
+- `eval_v4`, `eval_concise`는 원격 모드로도 돌아갑니다. 결과의 `peak_gb`·MLX 메모리는 모델 서버 프로세스 값입니다.
 
 **법령 데이터 버전 (매니페스트)**
 
@@ -398,33 +392,9 @@ uv run lawbot-eval-v4 decree --split val     # 하위법령 정답 val 444 첨�
 - 2026.4.7 근로기준법 개정으로 임금체불 벌칙이 제109조(3년·3천만원)에서 제107조(5년·5천만원)로 옮겨졌습니다. v4 정답은 개정 후 기준이고, 키워드가 개정 전 형량인 2문항(Q2443·Q2453)만 평가 때 개정 후 형량으로 바꿉니다(`eval_v4.KEYWORD_FIX`, 평가 파일은 그대로).
 - 범위 밖 질문 중 남녀고용평등법·최저임금법·퇴직급여법·기간제법·임금채권보장법·파견법이 출처인 27문항은 이제 범위 안이므로 거절하면 오답, 그 법을 인용하면 정답으로 봅니다. 나머지 75문항만 거절률을 잽니다.
 
-**시행령·시행규칙 첨부 실험 (val)**
+**완료된 실험**
 
-Colab에서 저장한 리랭커 점수와 후보(`data/decree_exp/`)로 필터 규칙을 비교하고, 고정한 참고 조문으로 답변을 평가합니다. test 문항(`split_v4.csv`·`split_decree_v4.csv`)은 쓰지 않습니다.
-
-```zsh
-uv run python -m lawbot.decree_filter                 # 필터 규칙 비교 (CPU, 수 초) → data/decree_exp/filter_rules.csv
-uv run python -m lawbot.mlx_decree_scores             # 같은 후보를 맥 MLX 4비트 리랭커로 다시 채점 (약 1.5시간, 이어서 실행)
-uv run python -m lawbot.decree_filter --scores mlx    # MLX 점수로 같은 비교 + fp16과 일치율
-uv run python -m lawbot.build_decree_ctx              # 답변 평가용 참고 조문 고정 → data/v4/decree_ctx_*.csv
-uv run python -m lawbot.eval_decree --ctx data/v4/decree_ctx_val200_rules.csv --tag pro --keys <answer_key_v4.csv>
-uv run python -m lawbot.eval_decree --ctx data/v4/decree_ctx_dq_val200.csv --tag pro_dq
-```
-
-- `eval_decree`는 답변 모델만 올립니다. `.env`에 `LAWBOT_MODEL_SERVER`가 있으면 그 서버로 생성하므로, 모델 서버를 내린 상태에서는 `LAWBOT_MODEL_SERVER= uv run …`으로 로컬 모드로 실행합니다.
-- 같은 참고 조문이면 저장된 답을 다시 씁니다(탐욕 디코딩). 결과 파일에 이어 쓰며 열 순서를 기존 파일에 맞춥니다.
-
-아래는 이전 v1(근로기준법 130조문, 4B) 평가 스크립트입니다. README 성능 수치와 `results/`의 기준선이 이 결과입니다.
-
-```bash
-uv run lawbot-eval --n 0      # 검색 성능만 (650문항)
-uv run lawbot-eval --n 100    # 검색 + 답변 생성·채점 (무작위 100문항), 검색 순위는 results/retrieval_<임베딩폴더>.csv
-uv run python -m lawbot.eval_oos       # 범위 밖 질문 102개 거절률·억지 적용률 → results/oos_v2_4bit.csv
-uv run python -m lawbot.eval_refusal   # 무관한 조문 / 비슷한 조문만 줄 때 거절률 (각 100문항) → results/refusal_v2_4bit.csv
-uv run python -m lawbot.eval_refusal --hard   # 근거 없이 주장했던 81건을 같은 참고 조문으로 다시 → results/refusal_hard_4bit.csv
-```
-
-문항별 결과는 `results/`에 저장됩니다. 마지막 인자로 파일 이름을 바꿀 수 있습니다(예: `uv run python -m lawbot.eval_oos oos_v3_4bit.csv`). `oos_v1_4bit.csv`(82문항)와 `refusal_v1_4bit.csv`는 README 수치와 테스트의 기준선이므로 기본 설정으로는 덮어쓰지 않습니다. `eval_oos`와 `eval_refusal`은 `LLM_PATH`의 모델을 씁니다.
+완료된 실험 스크립트(v1 평가, 리랭커·하위법령 검증, 벤치마크)는 2026-11-01에 정리했습니다. 결과는 `docs/evals/`와 `results/`에, 코드는 Git 기록에 남아 있습니다. 시행령·시행규칙 첨부 실험의 입력(`data/decree_exp/`, `data/v4/decree_ctx_*.csv`)은 테스트가 운영 필터와 대조하는 데 계속 씁니다. v1 범위 밖·거절 기준선(`oos_v1_4bit.csv`, `refusal_v1_4bit.csv`)도 README 수치와 테스트의 기준선으로 남깁니다.
 
 **개선 전후 비교**
 
@@ -441,25 +411,9 @@ uv run python -m lawbot.eval_refusal --hard   # 근거 없이 주장했던 81건
 | 범위 안 대조군 거짓 거절률 / 종합 점수 | 0.05(20문항 중 1개) 넘게 나빠짐 |
 
 ```bash
-# 기준선 보강: 현재 모델로 한 번 (기록된 v1_4bit 행에는 Recall@3·대조군·102문항·재평가가 없음)
-uv run lawbot-eval --n 0                                                        # results/retrieval_emb_final_v3_fp16.csv
-uv run lawbot-eval --ids data/scope_controls.csv --out scored_controls_v1_4bit.csv
-uv run python -m lawbot.eval_oos oos_v1_4bit_102.csv
-uv run python -m lawbot.eval_refusal --hard refusal_hard_v1_4bit.csv
 uv run python -m lawbot.report --tag v1_4bit_full --retrieval retrieval_emb_final_v3_fp16.csv \
   --scored scored_sllm_mlx_4bit.csv --controls scored_controls_v1_4bit.csv --oos oos_v1_4bit_102.csv \
   --refusal refusal_v1_4bit.csv --hard refusal_hard_v1_4bit.csv --baseline v1_4bit
-
-# 개선한 모델: 같은 평가를 다른 파일 이름으로 돌리고 기준선과 비교 (--strict면 경고 시 종료 코드 1)
-export LLM_PATH=models/sllm_v3_mlx_4bit
-uv run lawbot-eval --llm $LLM_PATH --n 100 --out scored_v3_4bit.csv
-uv run lawbot-eval --llm $LLM_PATH --ids data/scope_controls.csv --out scored_controls_v3_4bit.csv
-uv run python -m lawbot.eval_oos oos_v3_4bit.csv
-uv run python -m lawbot.eval_refusal refusal_v3_4bit.csv
-uv run python -m lawbot.eval_refusal --hard refusal_hard_v3_4bit.csv
-uv run python -m lawbot.report --tag v3_4bit --retrieval retrieval_emb_final_v3_fp16.csv \
-  --scored scored_v3_4bit.csv --controls scored_controls_v3_4bit.csv --oos oos_v3_4bit.csv \
-  --refusal refusal_v3_4bit.csv --hard refusal_hard_v3_4bit.csv --baseline v1_4bit_full --strict
 ```
 
 `metrics.csv`에는 기존 결과로 만든 `v1_4bit`(기준선)과 `v1_4bit_hybrid`(실패한 하이브리드 검색 실험) 두 행이 들어 있습니다. 하이브리드 검색은 범위 밖 거절률이 0.671 → 0.683으로 올랐지만 억지 적용률도 0.256 → 0.268로 올라, 거절률만으로는 개선이라고 볼 수 없었습니다.
@@ -487,17 +441,9 @@ src/lawbot/
 ├── feedback_export.py # 검수 CSV → dev 질문·임베딩 쌍·SFT·KTO CSV
 ├── eval_v4.py         # v4 웹앱 구성 평가 (lawbot-eval-v4)
 ├── diff_answers.py    # 두 평가 결과의 답변 원문 글자 단위 비교
-├── decree_filter.py   # 하위법령 첨부 필터 규칙 비교 (저장된 리랭커 점수, CPU)
-├── mlx_decree_scores.py # 하위법령 실험 후보를 맥 MLX 4비트 리랭커로 다시 채점
-├── build_decree_ctx.py  # 하위법령 답변 평가용 참고 조문 고정
-├── eval_decree.py     # 하위법령 첨부 답변 평가 (참고 조문 고정, 답변 모델만)
-├── verify_decree_emb.py # 하위법령을 켜도 법률 임베딩이 같은지 확인 (맥, 임베딩만)
-├── eval_dev.py        # 검색·답변 평가
 ├── score_answers.py   # 키워드 기반 채점기
 ├── refusal.py         # 거절 판정 (【결론】에 '확인할 수 없'), 범위 밖 답변 판정 (거절·안내·억지적용·미인용)
-├── report.py          # 평가 결과를 metrics.csv 한 행으로 모으고 기준 실행과 비교
-├── eval_oos.py        # 범위 밖 질문 거절률
-└── eval_refusal.py    # 무관한 / 비슷한 조문 제공 시 거절률, --hard: 근거 없이 주장했던 사례 재평가
+└── report.py          # 평가 결과를 metrics.csv 한 행으로 모으고 기준 실행과 비교
 deploy/launchd/        # 상시 운영용 launchd 템플릿 (모델 서버·웹앱)
 ```
 
@@ -517,7 +463,7 @@ deploy/launchd/        # 상시 운영용 launchd 템플릿 (모델 서버·웹�
   - 2026-10-19에 근로기준법과 개념이 겹치는 다른 노동법 질문 20개(OOS083–102)를 추가했습니다. 근거 조문(`note`)은 [Legalize KR](https://github.com/legalize-kr/legalize-kr) 법령 원문으로 확인했습니다. v1 성능 수치([기록](docs/evals/2026-10-18-v1.md))는 추가 전 82문항 기준입니다.
   - 답변은 거절, 안내(`refer_lsa`에 적힌, 다른 법에 맡기는 조문만 인용), 억지적용(그 밖의 근로기준법 조문으로 답함), 미인용(거절 문구도 인용도 없음)으로 판정합니다. `near_lsa`는 README 수치의 기준이고, `near_lsa_v2`는 누락을 보완한 표시입니다.
 - **범위 안 대조군**: 다른 노동법 질문과 닮았지만 근로기준법으로 답해야 하는 테스트 문항 20개입니다(`data/scope_controls.csv`, `twin_oos`에 짝 문항). 범위 밖 거절을 늘리는 개선이 이 문항들까지 거절하게 만들지 않는지 확인합니다.
-- **근거 없는 주장 사례**: `refusal_v1_4bit.csv`에서 거절하지 않은 86건을 억지적용 77, 지어냄 4, 근거밖_정답 2, 결론타당 3으로 분류했습니다(`data/refusal_hard_cases.csv`). 억지적용·지어냄 81건은 `eval_refusal --hard`로 다시 평가합니다.
+- **근거 없는 주장 사례**: `refusal_v1_4bit.csv`에서 거절하지 않은 86건을 억지적용 77, 지어냄 4, 근거밖_정답 2, 결론타당 3으로 분류했습니다(`data/refusal_hard_cases.csv`). 억지적용·지어냄 81건은 같은 참고 조문으로 다시 평가했습니다(`results/refusal_hard_v1_4bit.csv`).
 - **평가 데이터 사용 제한**: `data/labor_eval_keywords.csv`, `data/oos_eval.csv`, `data/scope_controls.csv`, `data/refusal_hard_cases.csv`와 `data/v4/split_v4.csv`·`data/decree_exp/split_decree_v4.csv`의 test 문항은 평가 전용입니다. 모델 학습이나 설정 선택에 쓰지 마세요.
 - **`results/` 안내**: 채점 전 모델 원본 출력과 문항별 점수이며, 점수가 낮은 답변은 법적으로 틀린 내용을 포함합니다.
 
@@ -660,7 +606,7 @@ uv run hf download mlx-community/Qwen3.8-27B-4bit --local-dir models/v4/qwen3.8_
 uv run mlx_lm.convert --hf-path Qwen/Qwen3-Reranker-4B --mlx-path models/v4/reranker_4b_mlx_4bit -q --q-bits 4 --q-group-size 64 --dtype float16
 ```
 
-The previous v1 setup (130 Labor Standards Act articles) runs with `LAWBOT_PROFILE=v1` and uses the files below. The article and evaluation data (`data/`) and evaluation results (`results/`) are included in the repository; the evaluation scripts (`lawbot-eval` and others) use the v1 files.
+The previous v1 setup (130 Labor Standards Act articles) runs with `LAWBOT_PROFILE=v1` and uses the files below. The article and evaluation data (`data/`) and evaluation results (`results/`) are included in the repository; the v1 evaluation results are based on these files.
 
 ```
 models/
@@ -687,7 +633,7 @@ open -e .env              # fill LAWBOT_USER= and LAWBOT_PW=, then save
 uv run lawbot-app
 ```
 
-`.env` is git-ignored. Variables already exported in the shell win over the file (e.g. `LAWBOT_RERANKER_ENABLED=0 uv run lawbot-app` for a one-off run). `LAWBOT_ENV_FILE=<file>` picks another file and `LAWBOT_ENV_FILE=` disables it. Only `LAWBOT_*` and `LLM_PATH` are allowed in the file. `lawbot-model-server`, `check_deploy`, `bench_models`, `bench_ui`, `verify_reranker` and `eval_concise` read the same file. To keep the password out of the file, delete the `LAWBOT_PW=` line and use `read -rs 'LAWBOT_PW?Password: ' && export LAWBOT_PW` or the macOS Keychain (`LAWBOT_PW="$(security find-generic-password -a lawbot -s lawbot -w)" uv run lawbot-app`).
+`.env` is git-ignored. Variables already exported in the shell win over the file (e.g. `LAWBOT_RERANKER_ENABLED=0 uv run lawbot-app` for a one-off run). `LAWBOT_ENV_FILE=<file>` picks another file and `LAWBOT_ENV_FILE=` disables it. Only `LAWBOT_*` and `LLM_PATH` are allowed in the file. `lawbot-model-server`, `check_deploy` and `eval_concise` read the same file. To keep the password out of the file, delete the `LAWBOT_PW=` line and use `read -rs 'LAWBOT_PW?Password: ' && export LAWBOT_PW` or the macOS Keychain (`LAWBOT_PW="$(security find-generic-password -a lawbot -s lawbot -w)" uv run lawbot-app`).
 
 If the v4 files (article CSV, 4B system prompt) are missing, the app refuses to start before loading any model and says what is missing. Until v4 is ready, run v1:
 
@@ -730,7 +676,7 @@ The web app is local-only, for use on this Mac. The address is fixed to `127.0.0
 | `LAWBOT_DECREE_K` | No | Maximum decree articles attached (default `2`) |
 | `LAWBOT_DECREE_MODELS` | No | Answer model keys that get decrees (default `pro`; Fast was trained with 3 articles and attachment was not evaluated for it) |
 | `LAWBOT_V4_DECREE_ARTICLES` | No | 812-article CSV used when decrees are on (default `data/v4/law_articles_v4_decree.csv`); replaces `LAWBOT_V4_ARTICLES` while on |
-| `LLM_PATH` | No | SLM folder used by the evaluation scripts (`eval_oos`, `eval_refusal`), e.g. `models/sllm_mlx_8bit`. Not used by the web app |
+| `LLM_PATH` | No | SLM folder used by the real-model tests (`pytest -m models`), e.g. `models/sllm_mlx_8bit`. Not used by the web app |
 | `LAWBOT_PORT` | No | Web app port (1024–65535). Previous default if unset. Use different values when running production and development together |
 | `LAWBOT_INSTANCE` | No | Name appended to the page and tab title (e.g. `운영`, `개발`; at most 40 characters) |
 | `LAWBOT_MODEL_SERVER` | No | Model server URL `http://127.0.0.1:<model server port>`. Set: remote mode (the web app loads no models). Empty: local mode |
@@ -755,7 +701,7 @@ uv run pytest -m models tests/test_reranker_models.py   # real load + scoring sm
 LAWBOT_RERANKER_ENABLED=0 uv run lawbot-app    # one-off run without it
 ```
 
-Reranker errors (e.g. NaN scores) are shown as errors instead of silently falling back to the embedding order. A missing folder, or enabling it with the v1 profile, stops the app before any model is loaded. Agreement with the Colab run (transformers fp16) is checked separately on the same questions and embedding top 10 with `uv run python -m lawbot.verify_reranker --colab <v4 folder> --split val`; latency and memory with `lawbot.bench_models` run once with the reranker on and once off.
+Reranker errors (e.g. NaN scores) are shown as errors instead of silently falling back to the embedding order. A missing folder, or enabling it with the v1 profile, stops the app before any model is loaded. Agreement with the Colab run (transformers fp16) was checked on val when the reranker was added (`results/reranker_verify_val_mlx4bit.csv`).
 
 **Enforcement decrees and rules (optional, v4)**
 
@@ -769,7 +715,7 @@ When enabled (`LAWBOT_DECREE_ENABLED=1`; on in `.env.example`), Act retrieval is
 
 - When nothing passes, nothing is attached and the prompt is identical, character for character, to the decree-off prompt. Attached articles use the same `[n] law Art. N(title)` format (e.g. `[4] 근로기준법 시행령 제2조(…)`).
 - Only models in `LAWBOT_DECREE_MODELS` (default Pro) get decrees. Fast does not even search them, so it behaves as before.
-- The 415 Act articles are encoded exactly as before (max_seq 2,304) and the decrees separately at 3,072 tokens (longest 3,017). `uv run python -m lawbot.verify_decree_emb` checks that the Act embeddings are bit-identical and reports encoding time.
+- The 415 Act articles are encoded exactly as before (max_seq 2,304) and the decrees separately at 3,072 tokens (longest 3,017). The Act embeddings were checked to be bit-identical when decrees were added ([record](docs/evals/2026-10-31-decree-attach.md)).
 - Enabling it without the reranker, or with the v1 profile, stops the app before any model is loaded. Decree reranking errors are shown as errors, like Act reranking.
 - Screen: decree cards carry a `〔시행령〕`/`〔시행규칙〕` tag and come after the Act cards; cited articles are expanded and the rest folded. The concise citation line and warnings follow the same rules as for Acts. The stats line shows decree time and count; the request log adds `decree_search_ms`, `decree_rerank_ms`, `decree` and `n_decree`.
 - Remote mode: the web app refuses to start if its on/off, τ or k differ from the model server's `/info` `decree` (which models get decrees is the web app's choice). The model server API is version 2.
@@ -821,7 +767,7 @@ Constraints:
 - The model server handles one request at a time, so a phone question waits while a development question is generating. Stop buttons and concise early stop disconnect and free it at once; a phone that disappears without disconnecting holds it until generation reaches the length limit (1024 tokens).
 - Retrieval settings (reranker, candidate count) and resident model count come from the model server (production `.env`); a remote-mode web app ignores `LAWBOT_RERANKER_*` and `LAWBOT_MAX_RESIDENT`. At startup it checks that profile, `doc_style`, model keys and API version match the server and refuses to start otherwise.
 - If login cookies clash when switching between production and development in one browser, open development at `http://localhost:<dev port>` (a different host keeps separate cookies).
-- `eval_v4`, `eval_concise` and `bench_models` also run in remote mode; their `peak_gb` and MLX memory are the model server's. `verify_reranker`, `eval_dev`, `eval_refusal`, `eval_oos` and `diag_*` load models directly (local mode only), so stop the model server first.
+- `eval_v4` and `eval_concise` also run in remote mode; their `peak_gb` and MLX memory are the model server's.
 
 **Law data version (manifest)**
 
@@ -892,30 +838,9 @@ With decrees attached for the model, the default tag gets `_dec` (e.g. `pro_conc
 
 Citations count only with the right law name; abbreviations (`퇴직급여법`, `고평법`, …) are accepted, and `근로기준법 시행령 제5조` (Enforcement Decree) is a different article from the Act's Art. 5. Citation parsing, refusal detection and per-citation checks (`ok` / `outside` / `wrong_law` / `nonexistent` / `ambiguous`; `nonexistent` means not among all articles of the active setup: 415, or 812 with decrees on) live in `lawbot.citation`, shared with the web view. `summary` rescores saved answers only, so files stay unchanged when the rules do. `uv run python -m lawbot.diff_answers <base.csv> <new.csv>` checks that two runs produced the same answers (exit code 0 when identical). The 2026-04-07 amendment moved the wage-arrears penalty from Art. 109 (3 years / 30M won) to Art. 107 (5 years / 50M won); the v4 gold labels follow the amended law, and the two keyword rows that still expected the old penalty (Q2443, Q2453) are updated at scoring time (`eval_v4.KEYWORD_FIX`; the data file is unchanged).
 
-Enforcement-decree experiment (validation only; test questions in `split_v4.csv` and `split_decree_v4.csv` are not used):
+**Finished experiments**
 
-```zsh
-uv run python -m lawbot.decree_filter                 # compare filter rules from saved scores (CPU) → data/decree_exp/filter_rules.csv
-uv run python -m lawbot.mlx_decree_scores             # rescore the same candidates with the Mac MLX 4-bit reranker (~1.5 h, resumable)
-uv run python -m lawbot.decree_filter --scores mlx    # same comparison on MLX scores + agreement with fp16
-uv run python -m lawbot.build_decree_ctx              # fix contexts for answer evaluation → data/v4/decree_ctx_*.csv
-uv run python -m lawbot.eval_decree --ctx data/v4/decree_ctx_val200_rules.csv --tag pro --keys <answer_key_v4.csv>
-uv run python -m lawbot.eval_decree --ctx data/v4/decree_ctx_dq_val200.csv --tag pro_dq
-```
-
-`eval_decree` loads only the answer model. If `.env` sets `LAWBOT_MODEL_SERVER`, it generates through that server; with the server stopped, run `LAWBOT_MODEL_SERVER= uv run …` for local mode. Identical contexts reuse saved answers (greedy decoding), and appended rows follow the existing file's column order.
-
-The previous v1 evaluation scripts (130 articles, 4B), which produced the README numbers and the baselines in `results/`:
-
-```bash
-uv run lawbot-eval --n 0      # retrieval only (650 questions)
-uv run lawbot-eval --n 100    # retrieval + generation + scoring (100 random questions); retrieval ranks go to results/retrieval_<embedding-folder>.csv
-uv run python -m lawbot.eval_oos       # refusal and forced-answer rate on 102 out-of-scope questions → results/oos_v2_4bit.csv
-uv run python -m lawbot.eval_refusal   # refusal given unrelated / similar articles only (100 each) → results/refusal_v2_4bit.csv
-uv run python -m lawbot.eval_refusal --hard   # re-ask the 81 unsupported-claim cases with the same articles → results/refusal_hard_4bit.csv
-```
-
-Per-question results are written to `results/`. A final argument changes the file name (e.g. `uv run python -m lawbot.eval_oos oos_v3_4bit.csv`). `oos_v1_4bit.csv` (82 questions) and `refusal_v1_4bit.csv` are the baselines behind the README numbers and tests, so the defaults never overwrite them.
+Finished experiment scripts (v1 evaluation, reranker and decree verification, benchmarks) were removed on 2026-11-01. Their results remain in `docs/evals/` and `results/`, and the code in the Git history. The decree-experiment inputs (`data/decree_exp/`, `data/v4/decree_ctx_*.csv`) are still used by tests that check the production filter against them, and the v1 out-of-scope and refusal baselines (`oos_v1_4bit.csv`, `refusal_v1_4bit.csv`) stay as the baselines behind the README numbers and tests.
 
 **Comparing before and after a change**
 
@@ -931,7 +856,7 @@ With `--baseline`, it shows the baseline run side by side and warns about side e
 | False refusal rate (retrieval hits) | rises by more than 0.01 |
 | In-scope control false refusals / total score | worsens by more than 0.05 (1 of 20) |
 
-See the Korean section above for the full command sequence: first complete the baseline with the current model (Recall@3, controls, 102 out-of-scope questions, hard-case re-evaluation), then run the same evaluations for a new model under different file names and compare with `--baseline v1_4bit_full --strict`. `eval_oos` and `eval_refusal` use the model in `LLM_PATH`.
+See the Korean section above for an example `lawbot.report` command on the saved v1 results.
 
 `metrics.csv` already holds two rows built from existing results: `v1_4bit` (baseline) and `v1_4bit_hybrid` (the failed hybrid retrieval experiment). Hybrid retrieval raised out-of-scope refusal from 0.671 to 0.683, but its forced-answer rate also rose from 0.256 to 0.268, so higher refusal alone was not an improvement.
 
@@ -958,17 +883,9 @@ src/lawbot/
 ├── feedback_export.py # review CSV → dev questions, embedding pairs, SFT and KTO CSVs
 ├── eval_v4.py         # v4 web app evaluation (lawbot-eval-v4)
 ├── diff_answers.py    # character-level comparison of answers from two evaluation runs
-├── decree_filter.py   # compare decree-attachment filter rules (saved reranker scores, CPU)
-├── mlx_decree_scores.py # rescore decree-experiment candidates with the Mac MLX 4-bit reranker
-├── build_decree_ctx.py  # fix contexts for the decree answer evaluation
-├── eval_decree.py     # answer evaluation with decrees attached (fixed contexts, answer model only)
-├── verify_decree_emb.py # check that Act embeddings are unchanged with decrees on (Mac, embedding only)
-├── eval_dev.py        # retrieval and answer evaluation
 ├── score_answers.py   # keyword-based answer scorer
 ├── refusal.py         # refusal detection ('확인할 수 없' in the conclusion), out-of-scope verdicts (refusal, referral, forced, uncited)
-├── report.py          # combine evaluation results into a metrics.csv row and compare with a baseline
-├── eval_oos.py        # refusal on out-of-scope questions
-└── eval_refusal.py    # refusal given unrelated / similar articles, --hard: re-evaluate unsupported-claim cases
+└── report.py          # combine evaluation results into a metrics.csv row and compare with a baseline
 deploy/launchd/        # launchd templates for the always-on setup (model server, web app)
 ```
 
@@ -988,7 +905,7 @@ deploy/launchd/        # launchd templates for the always-on setup (model server
   - On 2026-10-19, 20 other-labor-law questions that overlap with Labor Standards Act concepts (OOS083-102) were added. Their legal basis (`note`) was checked against statute text from [Legalize KR](https://github.com/legalize-kr/legalize-kr). The v1 results ([record](docs/evals/2026-10-18-v1.md)) use the original 82.
   - Answers are classified as refusal, referral (cites only an article in `refer_lsa` that delegates to another law), forced (answers with any other Labor Standards Act article), or uncited (neither a refusal phrase nor a citation). `near_lsa` is the basis of the README numbers; `near_lsa_v2` fills in missing labels.
 - **In-scope controls**: 20 test questions that resemble other-labor-law questions but must be answered under the Labor Standards Act (`data/scope_controls.csv`, paired via `twin_oos`). They check that raising out-of-scope refusal does not make the model refuse these too.
-- **Unsupported-claim cases**: The 86 non-refusals in `refusal_v1_4bit.csv` are labeled forced 77, fabricated 4, correct-but-unsupported 2 and reasonable 3 (`data/refusal_hard_cases.csv`). The 81 forced and fabricated cases are re-evaluated with `eval_refusal --hard`.
+- **Unsupported-claim cases**: The 86 non-refusals in `refusal_v1_4bit.csv` are labeled forced 77, fabricated 4, correct-but-unsupported 2 and reasonable 3 (`data/refusal_hard_cases.csv`). The 81 forced and fabricated cases were re-evaluated with the same articles (`results/refusal_hard_v1_4bit.csv`).
 - **Evaluation-only data**: `data/labor_eval_keywords.csv`, `data/oos_eval.csv`, `data/scope_controls.csv`, `data/refusal_hard_cases.csv` and the test questions in `data/v4/split_v4.csv` and `data/decree_exp/split_decree_v4.csv` are for evaluation only. Do not use them for training or model selection.
 - **About `results/`**: These are raw model outputs with per-question scores. Low-scoring answers contain legally incorrect statements.
 

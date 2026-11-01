@@ -1,6 +1,6 @@
 # tests/test_reranker_models.py  →  uv run pytest -m models   (맥 + 리랭커 MLX 폴더 필요, 기본 실행·CI에서는 제외)
 # 실제 Qwen3-Reranker-4B MLX 4비트로 토크나이저·로딩·채점을 확인하는 스모크 테스트
-# 폴더: LAWBOT_RERANKER_MODEL_PATH 또는 models/v4/reranker_4b_mlx_4bit. 실험과의 순위 일치는 lawbot.verify_reranker로 잰다
+# 폴더: LAWBOT_RERANKER_MODEL_PATH 또는 models/v4/reranker_4b_mlx_4bit. 실험과의 순위 일치는 results/reranker_verify_val_mlx4bit.csv
 import os
 from pathlib import Path
 

@@ -360,7 +360,7 @@ def test_env_file_warns_for_token(env, tmp_path, capsys):
     assert 'chmod 600' in out and 'LAWBOT_MODEL_TOKEN' in out and TOKEN not in out
 
 
-# ---- 운영 도구: check_deploy·bench_models ----
+# ---- 운영 도구: check_deploy ----
 def test_check_deploy_model_server(fakes):
     from lawbot import check_deploy
 
@@ -385,15 +385,6 @@ def test_check_deploy_model_server(fakes):
     assert any(lv == 'FAIL' and '연결할 수 없습니다' in m for lv, m in server_lines())  # 서버가 꺼져 있음
     fakes.setenv('LAWBOT_MODEL_SERVER', 'http://example.com:80')
     assert any(lv == 'FAIL' and '모델 서버 주소' in m for lv, m in server_lines())
-
-
-def test_bench_models_reports_server_memory(fakes):
-    from lawbot import bench_models, model_server
-
-    fakes.setattr(model_server, 'mlx_memory', lambda: {'active': 18.5, 'peak': 20.4, 'cache': 0.5})
-    with serve(local_app(fakes)) as (_, url):
-        m = bench_models.memory(connect(fakes, url))
-        assert m['mlx_active_gb'] == 18.5 and m['mlx_peak_gb'] == 20.4 and 'mps_driver_gb' not in m
 
 
 def test_proxy_env_is_ignored(fakes):

@@ -1,7 +1,7 @@
 # src/lawbot/report.py  →  uv run python -m lawbot.report --tag <실행이름> [파일 지정] [--baseline <기준 실행이름>]
 # results/의 평가 결과를 한 행으로 모아 results/metrics.csv에 추가하고, 기준 실행과 비교해 부작용을 경고한다 (생성 없이 바로 끝남)
-#   검색: retrieval_*.csv (eval_dev) / 답변: scored_*.csv (eval_dev) / 범위 밖: oos_*.csv (eval_oos)
-#   거절: refusal_*.csv (eval_refusal) / 재평가: refusal_hard_*.csv (eval_refusal --hard) / 대조군: scored_controls_*.csv (eval_dev --ids)
+#   검색: retrieval_*.csv / 답변: scored_*.csv / 범위 밖: oos_*.csv / 거절: refusal_*.csv / 재평가: refusal_hard_*.csv / 대조군: scored_controls_*.csv
+#   (v1 평가 스크립트 eval_dev·eval_oos·eval_refusal의 결과. 스크립트는 2026-11-01 정리, Git 기록에 있음)
 # 범위 밖 지표는 기준선과 비교할 수 있게 기존 82문항(OOS001–082)으로 재고, 추가 20문항은 oos_added_*로 따로 잰다
 import argparse
 import sys
