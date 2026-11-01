@@ -80,7 +80,6 @@ class LawbotApp:
     profile: deploy.Profile
     retriever: object
     models: ModelManager
-    early_stop: bool = False
     reranker: object = None  # None: 임베딩 상위 TOP_K개 그대로 (LAWBOT_RERANKER_ENABLED=0, 기본)
     full_system: str = None  # '전체(4항목)' system: 프로필 system 파일, 없으면 llm.SYSTEM (v1)
     decree: object = None  # deploy.DecreeConfig: 시행령·시행규칙 첨부 (None: 법률 3개만, LAWBOT_DECREE_ENABLED=0 기본)
@@ -173,7 +172,7 @@ def load_app(profile=None, local=False):
         f'하위법령 {decree_text(dc)} · 상주 {list(models.loaded)}'
     )
     full = p.system_file.read_text(encoding='utf-8').strip() if p.system_file else _lazy('SYSTEM')
-    return LawbotApp(p, retriever, models, deploy.early_stop(), reranker, full, dc)
+    return LawbotApp(p, retriever, models, reranker, full, dc)
 
 
 def decree_text(dc):
@@ -213,7 +212,7 @@ def load_remote(p, url):
         f'하위법령 {decree_text(dc)} · 상주 {info["loaded"]} (최대 {info["max_resident"]})'
     )
     full = p.system_file.read_text(encoding='utf-8').strip() if p.system_file else SYSTEM
-    return LawbotApp(p, retriever, models, deploy.early_stop(), reranker, full, dc)
+    return LawbotApp(p, retriever, models, reranker, full, dc)
 
 
 def format_system(app, model_key, fmt):
@@ -363,13 +362,13 @@ def log_request(app, st, fmt, status, error=None):
         print(f'[lawbot] 경고: 요청 로그를 쓰지 못했습니다 ({path}: {type(e).__name__})')
 
 
-def ask(app, question, model_key, k=TOP_K, early_stop=False, fmt=None):
+def ask(app, question, model_key, k=TOP_K, fmt=None):
     """질문 하나: (단계, 검색 조문, 답변 원문, 측정값)을 차례로 돌려준다
     단계 'load'(모델 전환 대기) → 'generate'(토큰마다) → 'done'. 조문은 생성 전에 정해짐
     fmt: 화면 형식 ('full'/'concise'). 주면 format_system으로 system을 고름 (None이면 모델 기본, 평가 스크립트)
     hits: 법률 k개 + 첨부한 하위법령 (하위법령 첨부 모델일 때만, 없으면 법률 k개만 = 지금과 같은 리스트)
     측정값(초): search, rerank(리랭커가 켜져 있을 때만), decree_search·decree_rerank(하위법령 첨부 모델일 때만), load(이번에 로딩했을 때만), ttft(생성 호출→첫 토큰, 프리필),
-    first_text(질문 수신→첫 글자), total, early_stop_at(간결형 조기 종료 시점) / tps, prompt_tokens, prompt_tps(프리필 속도), gen_tokens, peak_gb, finish
+    first_text(질문 수신→첫 글자), total / tps, prompt_tokens, prompt_tps(프리필 속도), gen_tokens, peak_gb, finish
     질문마다 요청 로그 한 줄 (log_request): 성공 ok / 오류 error(유형은 예외의 lawbot_error에도 붙여 화면 안내에 씀) /
     중간에 멈춤 cancelled (정지 버튼 등으로 생성기를 닫음)"""
     t0 = time.perf_counter()
@@ -393,9 +392,6 @@ def ask(app, question, model_key, k=TOP_K, early_stop=False, fmt=None):
                 st['first_text'] = time.perf_counter() - t0
             raw += r.text
             yield 'generate', hits, raw, st
-            if early_stop and '【설명】' in raw:  # 간결형은 결론·근거 조문까지만 보여 줌
-                st['early_stop_at'] = time.perf_counter() - t0
-                break
         st['total'] = time.perf_counter() - t0
         for name, attr in (
             ('tps', 'generation_tps'),

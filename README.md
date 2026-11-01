@@ -142,7 +142,7 @@ uv run lawbot-app
 - 셸에서 `export`한 변수가 있으면 그 값이 `.env`보다 우선합니다. 한 번만 다르게 실행할 때는 `LAWBOT_RERANKER_ENABLED=0 uv run lawbot-app`처럼 앞에 붙입니다.
 - 다른 파일을 쓰려면 `LAWBOT_ENV_FILE=.env.small uv run lawbot-app`(예: 소형 맥의 Fast 4B 설정), 파일을 읽지 않으려면 `LAWBOT_ENV_FILE=`.
 - `.env`에는 `LAWBOT_*`와 `LLM_PATH`만 적을 수 있습니다. 서버 주소는 바꿀 수 없고, 웹앱 포트는 `LAWBOT_PORT`로 정합니다(아래 참고).
-- `lawbot-model-server`, `check_deploy`, `eval_concise`도 같은 `.env`를 읽습니다.
+- `lawbot-model-server`, `check_deploy`도 같은 `.env`를 읽습니다.
 - 값에 공백이나 ` #`이 들어가면 작은따옴표로 감쌉니다: `LAWBOT_PW='a b#c'`.
 
 비밀번호를 파일에 두지 않으려면 `.env`의 `LAWBOT_PW=` 줄을 지우고 실행할 때 입력하거나 macOS 키체인에서 꺼내 씁니다(zsh).
@@ -187,7 +187,6 @@ LAWBOT_PROFILE=v1 LAWBOT_MODELS= LAWBOT_RERANKER_ENABLED=0 uv run lawbot-app
 | `LAWBOT_V4_ARTICLES` / `LAWBOT_V4_EMB` / `LAWBOT_V4_SYSTEM` | 아니요 | v4 조문 CSV / 임베딩 폴더 / 4B system 파일 (기본 `data/v4/articles_v4.csv`, `models/v4/emb_v4_fp16`, `data/v4/system_v4.txt`) |
 | `LAWBOT_EMB` | 아니요 | v1 검색 임베딩 폴더 (기본 `models/emb_final_v3_fp16`) |
 | `LAWBOT_MAX_RESIDENT` | 아니요 | 동시에 올려 둘 답변 모델 수. `2`(기본, Fast·Pro 모두 상주, 전환 대기 없음) 또는 `1`(선택한 모델만, 바꿀 때 다시 불러옴) |
-| `LAWBOT_EARLY_STOP` | 아니요 | `1`이면 간결 형식에서 【설명】이 시작될 때 생성을 멈춤 (기본 꺼짐, 검증 전) |
 | `LAWBOT_RERANKER_ENABLED` | 아니요 | `1`이면 임베딩 상위 후보를 Qwen3-Reranker-4B로 다시 정렬해 상위 3개를 씀 (기본 `0`: 리랭커를 올리지 않고 기존 임베딩 상위 3개). v4 프로필 전용 |
 | `LAWBOT_RERANKER_MODEL_PATH` | 아니요 | 리랭커 MLX 폴더 (기본 `models/v4/reranker_4b_mlx_4bit`) |
 | `LAWBOT_RERANKER_CANDIDATES` | 아니요 | 리랭커에 넘길 임베딩 후보 수 (기본 `10`, 실험값. 3 이상) |
@@ -311,10 +310,10 @@ Colab 실험(transformers fp16)과의 순위 일치는 리랭커 도입 때 val�
 
 - 웹앱 쪽 코드(`app.py`, `service.ask`, `answer_format.py`, system 파일)는 개발 웹앱만 다시 띄워 시험합니다. system 문구는 웹앱이 자기 레포의 파일을 요청마다 보냅니다.
 - 서버 쪽 코드(`llm.py`의 프롬프트 조립, `reranker.py`, `retriever.py`, `model_server.py`)는 개발용 모델 서버로 시험합니다. 운영 모델 서버를 멈추고(`launchctl bootout …/com.lawbot.model-server`), 개발 레포에서 다른 포트로 띄운 뒤(`LAWBOT_MODEL_SERVER_PORT=<시험 포트> uv run lawbot-model-server`) 개발 웹앱을 그 포트로 연결합니다(`LAWBOT_MODEL_SERVER=http://127.0.0.1:<시험 포트> uv run lawbot-app`). 메모리 때문에 모델 서버는 한 번에 하나만 띄웁니다.
-- 모델 서버는 요청을 한 번에 하나만 처리합니다. 개발 화면에서 질문하는 동안 휴대폰 질문은 기다립니다. 정지 버튼·간결형 조기 종료로 연결이 끊기면 바로 다음 요청을 받지만, 휴대폰이 연결을 끊지 않고 사라지면 생성이 최대 길이(1024토큰)에서 끝날 때까지 기다립니다.
+- 모델 서버는 요청을 한 번에 하나만 처리합니다. 개발 화면에서 질문하는 동안 휴대폰 질문은 기다립니다. 정지 버튼으로 연결이 끊기면 바로 다음 요청을 받지만, 휴대폰이 연결을 끊지 않고 사라지면 생성이 최대 길이(1024토큰)에서 끝날 때까지 기다립니다.
 - 검색 설정(리랭커 사용·후보 수)과 상주 모델 수는 모델 서버(운영 `.env`)가 기준입니다. 원격 모드 웹앱의 `LAWBOT_RERANKER_*`·`LAWBOT_MAX_RESIDENT`는 쓰지 않습니다. 웹앱은 시작할 때 프로필·`doc_style`·모델 key·API 버전이 서버와 같은지 확인하고, 다르면 실행을 거부합니다.
 - 같은 브라우저에서 운영·개발 화면에 번갈아 로그인할 때 로그인 쿠키가 겹치면, 개발 화면은 `http://localhost:<개발 포트>`로 접속합니다(호스트가 다르면 쿠키가 분리됨).
-- `eval_v4`, `eval_concise`는 원격 모드로도 돌아갑니다. 결과의 `peak_gb`·MLX 메모리는 모델 서버 프로세스 값입니다.
+- `eval_v4`는 원격 모드로도 돌아갑니다. 결과의 `peak_gb`·MLX 메모리는 모델 서버 프로세스 값입니다.
 
 **법령 데이터 버전 (매니페스트)**
 
@@ -640,7 +639,7 @@ open -e .env              # fill LAWBOT_USER= and LAWBOT_PW=, then save
 uv run lawbot-app
 ```
 
-`.env` is git-ignored. Variables already exported in the shell win over the file (e.g. `LAWBOT_RERANKER_ENABLED=0 uv run lawbot-app` for a one-off run). `LAWBOT_ENV_FILE=<file>` picks another file and `LAWBOT_ENV_FILE=` disables it. Only `LAWBOT_*` and `LLM_PATH` are allowed in the file. `lawbot-model-server`, `check_deploy` and `eval_concise` read the same file. To keep the password out of the file, delete the `LAWBOT_PW=` line and use `read -rs 'LAWBOT_PW?Password: ' && export LAWBOT_PW` or the macOS Keychain (`LAWBOT_PW="$(security find-generic-password -a lawbot -s lawbot -w)" uv run lawbot-app`).
+`.env` is git-ignored. Variables already exported in the shell win over the file (e.g. `LAWBOT_RERANKER_ENABLED=0 uv run lawbot-app` for a one-off run). `LAWBOT_ENV_FILE=<file>` picks another file and `LAWBOT_ENV_FILE=` disables it. Only `LAWBOT_*` and `LLM_PATH` are allowed in the file. `lawbot-model-server` and `check_deploy` read the same file. To keep the password out of the file, delete the `LAWBOT_PW=` line and use `read -rs 'LAWBOT_PW?Password: ' && export LAWBOT_PW` or the macOS Keychain (`LAWBOT_PW="$(security find-generic-password -a lawbot -s lawbot -w)" uv run lawbot-app`).
 
 If the v4 files (article CSV, 4B system prompt) are missing, the app refuses to start before loading any model and says what is missing. Until v4 is ready, run v1:
 
@@ -674,7 +673,6 @@ The web app is local-only, for use on this Mac. The address is fixed to `127.0.0
 | `LAWBOT_V4_ARTICLES` / `LAWBOT_V4_EMB` / `LAWBOT_V4_SYSTEM` | No | v4 article CSV / embedding folder / 4B system prompt file (defaults `data/v4/articles_v4.csv`, `models/v4/emb_v4_fp16`, `data/v4/system_v4.txt`) |
 | `LAWBOT_EMB` | No | v1 retrieval embedding folder (default `models/emb_final_v3_fp16`) |
 | `LAWBOT_MAX_RESIDENT` | No | Answer models kept in memory: `2` (default, Fast and Pro both resident, no switch wait) or `1` (selected model only, reloads on switch) |
-| `LAWBOT_EARLY_STOP` | No | `1` stops generation when 【설명】 starts in the concise format (off by default, not yet validated) |
 | `LAWBOT_RERANKER_ENABLED` | No | `1` re-ranks the embedding candidates with Qwen3-Reranker-4B and keeps the top 3 (default `0`: no reranker is loaded, plain embedding top 3). v4 profile only |
 | `LAWBOT_RERANKER_MODEL_PATH` | No | Reranker MLX folder (default `models/v4/reranker_4b_mlx_4bit`) |
 | `LAWBOT_RERANKER_CANDIDATES` | No | Embedding candidates passed to the reranker (default `10`, the experiment value; at least 3) |
@@ -771,10 +769,10 @@ Constraints:
 
 - Web-app-side changes (`app.py`, `service.ask`, `answer_format.py`, system prompt files) are tested by restarting only the development web app; the web app sends its own system prompt with every request.
 - Server-side changes (prompt assembly in `llm.py`, `reranker.py`, `retriever.py`, `model_server.py`) need a development model server: stop the production one, start one from the development repo on another port (`LAWBOT_MODEL_SERVER_PORT=<test port> uv run lawbot-model-server`) and point the development web app at it. Run only one model server at a time because of memory.
-- The model server handles one request at a time, so a phone question waits while a development question is generating. Stop buttons and concise early stop disconnect and free it at once; a phone that disappears without disconnecting holds it until generation reaches the length limit (1024 tokens).
+- The model server handles one request at a time, so a phone question waits while a development question is generating. Stop buttons disconnect and free it at once; a phone that disappears without disconnecting holds it until generation reaches the length limit (1024 tokens).
 - Retrieval settings (reranker, candidate count) and resident model count come from the model server (production `.env`); a remote-mode web app ignores `LAWBOT_RERANKER_*` and `LAWBOT_MAX_RESIDENT`. At startup it checks that profile, `doc_style`, model keys and API version match the server and refuses to start otherwise.
 - If login cookies clash when switching between production and development in one browser, open development at `http://localhost:<dev port>` (a different host keeps separate cookies).
-- `eval_v4` and `eval_concise` also run in remote mode; their `peak_gb` and MLX memory are the model server's.
+- `eval_v4` also runs in remote mode; their `peak_gb` and MLX memory are the model server's.
 
 **Law data version (manifest)**
 

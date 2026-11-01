@@ -151,7 +151,7 @@ class Bot:
 def fake_app(rerank=True):
     p = deploy.get_profile('v4')
     models = service.ModelManager(p.models, Bot, 1)
-    return service.LawbotApp(p, Ret(), models, False, RR() if rerank else None, 'FULL SYSTEM')
+    return service.LawbotApp(p, Ret(), models, RR() if rerank else None, 'FULL SYSTEM')
 
 
 def frame(n=6):
@@ -228,15 +228,6 @@ def test_main_refuses_v1(env, monkeypatch):
     monkeypatch.setattr('sys.argv', ['eval_v4', 'answers'])
     with pytest.raises(SystemExit, match='v4 프로필'):
         ev.main()
-
-
-def test_eval_concise_refuses_v4_test_files(env):
-    import lawbot.eval_concise as ec
-
-    for f in ('qa_full_v4.csv', 'split_v4.csv'):
-        env.setattr('sys.argv', ['eval_concise', '--val', str(DATA / 'v4' / f), '--tag', 'x'])
-        with pytest.raises(SystemExit, match='평가 전용'):
-            ec.main()
 
 
 def test_default_stage_is_all(env, monkeypatch, tmp_path):

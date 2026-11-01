@@ -208,8 +208,3 @@ def decree(profile, require_reranker=True):
     if bad or len(set(keys)) != len(keys):
         raise ValueError(f'LAWBOT_DECREE_MODELS는 {", ".join(known)} 중에서 쉼표로: {value!r}')
     return DecreeConfig(tau, int(raw), keys)
-
-
-def early_stop():
-    """간결형에서 【설명】이 시작되면 생성을 멈출지. val 실험(eval_concise)으로 확인하기 전에는 끈다"""
-    return os.environ.get('LAWBOT_EARLY_STOP', '0') == '1'

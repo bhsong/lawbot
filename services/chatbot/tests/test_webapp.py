@@ -24,12 +24,10 @@ class PathLLM(FakeLLM):
             yield types.SimpleNamespace(text=c, generation_tps=20.0, finish_reason='stop')
 
 
-def make_app(env, resident=2, llm=PathLLM, early_stop=False):
+def make_app(env, resident=2, llm=PathLLM):
     env.setattr(service, 'Retriever', FakeRetriever)
     env.setattr(service, 'LLM', llm)
     env.setenv('LAWBOT_MAX_RESIDENT', str(resident))
-    if early_stop:
-        env.setenv('LAWBOT_EARLY_STOP', '1')
     return service.load_app()
 
 
@@ -204,30 +202,6 @@ def test_empty_and_truncated_answer(env):
     assert list(chat('질문', [], 'fast', 'concise'))[-1][0] == app_mod.EMPTY
     Odd.text, Odd.finish = '【결론】길게', 'length'
     assert '⚠ 최대 길이에서 잘림' in list(chat('질문', [], 'fast', 'full'))[-1][2]
-
-
-def test_early_stop_cuts_generation(env):
-    seen = []
-
-    class Long(FakeLLM):
-        def stream(self, question, hits):
-            for c in (
-                '【결론】',
-                '예고해야 합니다.',
-                '\n【근거 조문】\n제26조(해고의 예고)\n',
-                '【설명】',
-                '- 긴 설명',
-                '【참고】',
-            ):
-                seen.append(c)
-                yield types.SimpleNamespace(text=c)
-
-    chat = app_mod.make_chat(make_app(env, llm=Long, early_stop=True))
-    text, _, stats = list(chat('질문', [], 'fast', 'concise'))[-1]
-    assert text == '예고해야 합니다.\n\n근거: 근로기준법 제26조(해고의 예고)'
-    assert '간결형 조기 종료' in stats and seen[-1] == '【설명】'
-    seen.clear()  # 전체 형식은 조기 종료하지 않음
-    assert list(chat('질문', [], 'fast', 'full'))[-1][0].endswith('【참고】') and seen[-1] == '【참고】'
 
 
 # ---- 간결형 ----
@@ -409,14 +383,6 @@ def test_check_deploy_article_number_format(env, tmp_path):
     assert not any('형식이 아님' in m for lv, m in out)
 
 
-def test_eval_concise_refuses_test_set(env):
-    import lawbot.eval_concise as ec
-
-    env.setattr('sys.argv', ['eval_concise', '--val', str(paths.EVAL), '--tag', 'x'])
-    with pytest.raises(SystemExit, match='평가 전용'):
-        ec.main()
-
-
 # ---- 실행 설정 파일 (.env) ----
 from lawbot import envfile
 
@@ -442,18 +408,18 @@ def test_env_file_loading(env, tmp_path, capsys):
     f = tmp_path / 'lawbot.env'
     f.write_text(
         '# 주석\nexport LAWBOT_PROFILE=v4\nLAWBOT_USER = \'me\'\nLAWBOT_PW="p w#1"\n'
-        'LAWBOT_MODELS=pro  # 끝 주석\nLAWBOT_EARLY_STOP=1\n',
+        'LAWBOT_MODELS=pro  # 끝 주석\nLAWBOT_INSTANCE=파일\n',
         encoding='utf-8',
     )
     f.chmod(0o600)
     env.setenv('LAWBOT_ENV_FILE', str(f))
     env.delenv('LAWBOT_PROFILE')  # conftest의 v1을 지워 파일 값이 들어가게
-    env.setenv('LAWBOT_EARLY_STOP', '0')  # 셸 값이 우선
+    env.setenv('LAWBOT_INSTANCE', '셸')  # 셸 값이 우선
     assert envfile.load() == f
     import os
 
     assert (os.environ['LAWBOT_PROFILE'], os.environ['LAWBOT_USER'], os.environ['LAWBOT_PW']) == ('v4', 'me', 'p w#1')
-    assert os.environ['LAWBOT_MODELS'] == 'pro' and os.environ['LAWBOT_EARLY_STOP'] == '0'
+    assert os.environ['LAWBOT_MODELS'] == 'pro' and os.environ['LAWBOT_INSTANCE'] == '셸'
     out = capsys.readouterr().out
     assert 'p w#1' not in out and '경고' not in out  # 값은 출력하지 않음
     f.chmod(0o644)

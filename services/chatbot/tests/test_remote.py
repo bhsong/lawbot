@@ -63,7 +63,7 @@ def test_remote_matches_local(fakes, reranker, resident):
     with serve(srv) as (_, url):
         rem = connect(fakes, url)
         assert (rem.reranker is None) == (not reranker)  # 리랭커 설정은 서버 기준
-        assert rem.full_system == loc.full_system and rem.early_stop == loc.early_stop
+        assert rem.full_system == loc.full_system
         for model, fmt in (('pro', None), ('fast', 'full'), ('pro', 'full'), ('fast', None), ('pro', 'concise')):
             a, b = (
                 run(loc, '수습 기간에도 해고 예고?', model, fmt=fmt),
@@ -95,24 +95,6 @@ def test_system_sent_per_request(fakes):
         ):
             run(rem, '질문', model, fmt=fmt)
             assert srv.models.loaded[model].calls[-1]['system'] == want, (model, fmt)
-
-
-def test_early_stop_closes_stream(fakes):
-    # 간결형 조기 종료: 원격 생성기를 닫으면 서버 생성도 멈춤
-    fakes.setattr(GenLLM, 'chunks', ['【결론】', '답', '【설명】'] + ['더'] * 2000)
-    fakes.setattr(GenLLM, 'delay', 0.001)
-    srv = local_app(fakes)
-    with serve(srv) as (server, url):
-        rem = connect(fakes, url)
-        steps = run(rem, '질문', 'fast', early_stop=True)
-        assert steps[-1][2] == '【결론】답【설명】' and 'early_stop_at' in steps[-1][3]
-        llm = srv.models.loaded['fast']
-        deadline = time.monotonic() + 10
-        while not llm.closed and time.monotonic() < deadline:
-            time.sleep(0.01)
-        assert llm.closed and llm.yielded < 2003
-        assert server.model_lock.acquire(timeout=5)
-        server.model_lock.release()
 
 
 # ---- 웹앱 화면 (app.py) ----
@@ -272,7 +254,7 @@ def test_remote_manager_follows_server(fakes):
         assert m.max_resident == 1 and m.loaded == ['fast'] and m.is_loaded('fast') and not m.is_loaded('pro')
         llm, load_s = m.get('pro')
         assert load_s is not None and m.loaded == ['pro']
-        assert m.get('pro') == (llm, None)  # 같은 RemoteLLM (llm.system을 바꾸면 계속 적용: eval_concise)
+        assert m.get('pro') == (llm, None)  # 같은 RemoteLLM (llm.system을 바꾸면 계속 적용)
         with pytest.raises(KeyError):
             m.get('ultra')
 
@@ -300,7 +282,7 @@ def test_eval_v4_retrieval_same_remote(fakes, tmp_path):
     def app_v4():
         models = service.ModelManager(p.models, lambda spec: GenLLM(spec.path), 1)
         models.get('pro')
-        return service.LawbotApp(p, V4Ret(), models, False, RR(), 'FULL')
+        return service.LawbotApp(p, V4Ret(), models, RR(), 'FULL')
 
     loc = app_v4()
     with serve(app_v4()) as (_, url):

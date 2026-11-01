@@ -283,7 +283,7 @@ DC = deploy.DecreeConfig(0.9, 2, ('pro',))
 def make(dc=DC, ret=None):
     p = deploy.get_profile('v4')
     models = service.ModelManager(p.models, Bot, 2)
-    return service.LawbotApp(p, ret or DecRet(decree=dc is not None), models, False, RR(), 'FULL', dc)
+    return service.LawbotApp(p, ret or DecRet(decree=dc is not None), models, RR(), 'FULL', dc)
 
 
 def ask(a, q, model, **kw):

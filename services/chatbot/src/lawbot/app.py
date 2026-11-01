@@ -118,8 +118,6 @@ def fmt_stats(label, stage, st):
         if st.get('tps'):
             parts.append(f'{st["tps"]:.1f} tok/s')
         parts.append(f'완료 {st["total"]:.1f}초')
-        if 'early_stop_at' in st:
-            parts.append('간결형 조기 종료')
         if st.get('finish') == 'length':
             parts.append('⚠ 최대 길이에서 잘림')
     else:
@@ -144,10 +142,9 @@ def make_chat(app, fb=None):
         spec = app.models.specs.get(model_key)
         if spec is None or fmt not in ('concise', 'full'):
             raise gr.Error(f'알 수 없는 선택: {model_key!r}, {fmt!r}')
-        early = fmt == 'concise' and app.early_stop
         yield SEARCHING, '', searching_stats(app, model_key)
         try:
-            for stage, hits, raw, st in ask(app, message, model_key, early_stop=early, fmt=fmt):
+            for stage, hits, raw, st in ask(app, message, model_key, fmt=fmt):
                 src = fmt_sources(hits)  # 생성 중에는 조문을 모두 펼쳐 둔다
                 if stage == 'load':
                     yield f'⏳ {spec.label} 불러오는 중…', src, fmt_stats(spec.label, stage, st)
