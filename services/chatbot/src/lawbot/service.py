@@ -27,6 +27,7 @@ from lawbot.api_client import (
     request_timeout,
     wait_ready,
 )
+from lawbot.embed_cache import EmbedCache
 from lawbot.hits import Hit, Timing
 from lawbot.llm import LLM
 from lawbot.paths import ROOT
@@ -169,6 +170,7 @@ def load_app(settings=None):
         p.articles,
         max_seq_length=p.max_seq,
         **({'decree_max_seq': dc.max_seq} if dc else {}),
+        **({'cache': EmbedCache(cfg.embed_cache)} if cfg.embed_cache else {}),
     )
     log.info(
         f'조문 인덱스 {time.perf_counter() - t0:.1f}초 · 법률 {getattr(retriever, "n_law", len(retriever.ids))}개'

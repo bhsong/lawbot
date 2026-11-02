@@ -25,6 +25,7 @@ class Settings:
     server_wait: float  # 시작할 때 모델 서버 준비 대기 (초)
     read_timeout: float  # 질문 처리 중 응답 조각 사이 최대 대기 (초)
     request_log: Path | None  # 요청 로그 파일 (None이면 기록 안 함)
+    embed_cache: Path | None  # 조문 임베딩 캐시 폴더 (None이면 매번 임베딩, LAWBOT_EMBED_CACHE=0)
     # 웹 화면만 (web=True일 때만 읽음. 평가·점검 명령은 None)
     auth: tuple | None = None  # (사용자, 비밀번호)
     port: int | None = None
@@ -37,6 +38,16 @@ MISSING_SERVER = (
     '모델 서버 주소가 없습니다: .env에 LAWBOT_MODEL_SERVER=http://127.0.0.1:<모델 서버 포트>와 '
     'LAWBOT_MODEL_TOKEN을 적고, uv run lawbot-model-server로 모델 서버를 띄우세요.'
 )
+
+
+def embed_cache_dir(env):
+    """LAWBOT_EMBED_CACHE: '1'(기본)이면 캐시 폴더, '0'이면 None"""
+    from lawbot.embed_cache import CACHE_DIR
+
+    value = (env.get('LAWBOT_EMBED_CACHE') or '1').strip()
+    if value not in ('0', '1'):
+        raise ValueError(f'LAWBOT_EMBED_CACHE는 0 또는 1: {value!r}')
+    return CACHE_DIR if value == '1' else None
 
 
 def load(env=None, web=False):
@@ -71,6 +82,7 @@ def load(env=None, web=False):
     take('server_wait', lambda: service.server_wait(env))
     take('read_timeout', lambda: service.read_timeout(env))
     take('request_log', lambda: service.request_log_path(env))
+    take('embed_cache', lambda: embed_cache_dir(env))
     if web:
         from lawbot import app  # gradio를 import하므로 웹 화면일 때만
 

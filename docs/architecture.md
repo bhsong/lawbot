@@ -39,6 +39,7 @@ tools/lawbot-tools/    # 평가·분석 도구 (패키지 lawbot_tools, uv run l
 services/chatbot/src/lawbot/
 ├── paths.py           # 데이터 경로
 ├── retriever.py       # 조문 인덱스·코사인 검색 (벡터는 모델 서버 임베딩, 법률·하위법령 인덱스 따로)
+├── embed_cache.py     # 조문 임베딩 캐시 (cache/embeddings/, 확인용 벡터로 모델 변경 감지)
 ├── reranker.py        # 리랭커 클라이언트: 모델 서버 점수 → 정렬 (동점은 임베딩 순위)
 ├── decree.py          # 시행령·시행규칙 첨부 필터 (same1+other0.9, 웹앱·평가 공통)
 ├── llm.py             # 프롬프트 구성, openai SDK로 생성 스트림

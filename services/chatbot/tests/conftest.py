@@ -53,6 +53,7 @@ def env(request, monkeypatch):
     from lawbot.api_client import REQUEST_ID
 
     REQUEST_ID.set(None)  # 앞 테스트의 질문 요청 id가 남지 않게
+    monkeypatch.setenv('LAWBOT_EMBED_CACHE', '0')  # 레포의 cache/에 쓰지 않음 (캐시 테스트는 직접 지정)
     monkeypatch.setenv('LAWBOT_ENV_FILE', '')  # 개발자의 .env를 읽지 않음 (envfile 테스트는 직접 지정)
     monkeypatch.setenv(
         'LAWBOT_REQUEST_LOG', ''

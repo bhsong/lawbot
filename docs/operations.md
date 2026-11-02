@@ -130,6 +130,7 @@ LAWBOT_PW="$(security find-generic-password -a lawbot -s lawbot -w)" uv run lawb
 | `LAWBOT_PORT` | 아니요 | 웹앱 포트 (1024–65535). 없으면 기존 기본값. 운영·개발을 함께 띄울 때는 서로 다른 값 |
 | `LAWBOT_INSTANCE` | 아니요 | 화면·탭 제목에 붙일 이름 (예: `운영`, `개발`, 40자 이하) |
 | `LAWBOT_CHAT_CONCURRENCY` | 아니요 | 웹앱이 동시에 처리하는 질문 수 (1–16, 기본 `1`). 모델 서버의 `LAWBOT_MAX_CONCURRENT`보다 크면 넘는 질문은 서버에서 기다림 |
+| `LAWBOT_EMBED_CACHE` | 아니요 | `1`(기본)이면 조문 임베딩을 `cache/embeddings/`(Git 제외)에 저장해 다음 시작 때 다시 쓴다. 시작할 때 조문 1개만 다시 임베딩해 확인하고, 다르면(모델 폴더가 바뀜) 전체를 다시 임베딩. `0`이면 매번 임베딩 |
 | `LAWBOT_REQUEST_LOG` | 아니요 | 요청 로그 파일 하나로 정함 (기본: 레포 최상위 `logs/requests-YYYY-MM.jsonl`, 달마다 새 파일). 빈 값이면 기록하지 않음 |
 | `LAWBOT_FEEDBACK` | 아니요 | `1`이면 답변마다 👍·깃발 버튼을 달고 누른 답을 저장 (기본 `0`, `0`·`1`만) |
 | `LAWBOT_FEEDBACK_DIR` | 아니요 | 피드백 저장 폴더 (기본 레포 최상위 `feedback/`). 레포 안이면 `.gitignore`에 걸리는 경로만 허용. 운영은 레포 밖 절대 경로 권장 |
@@ -279,7 +280,7 @@ client.chat.completions.create(
 - 웹앱 쪽 코드(`services/chatbot`: 검색·리랭킹 정렬·하위법령 필터·프롬프트 조립·화면, system 파일, 조문 데이터)는 개발 웹앱만 다시 띄워 시험합니다.
 - 모델 서버 코드(`services/model-server`)는 개발용 모델 서버로 시험합니다. 운영 모델 서버를 멈추고(`launchctl bootout …/com.lawbot.model-server`), 개발 레포에서 다른 포트로 띄운 뒤(`LAWBOT_MODEL_SERVER_PORT=<시험 포트> uv run lawbot-model-server`) 개발 웹앱을 그 포트로 연결합니다(`LAWBOT_MODEL_SERVER=http://127.0.0.1:<시험 포트> uv run lawbot-app`). 메모리 때문에 모델 서버는 한 번에 하나만 띄웁니다.
 - 모델 서버는 기본(`LAWBOT_MAX_CONCURRENT=1`)으로 생성을 한 번에 하나만 합니다. 개발 화면에서 질문하는 동안 휴대폰 질문은 기다립니다. 정지 버튼으로 연결이 끊기면 바로 다음 요청을 받지만, 휴대폰이 연결을 끊지 않고 사라지면 생성이 최대 길이(1024토큰)에서 끝날 때까지 기다립니다.
-- 웹앱은 시작할 때 조문 인덱스를 모델 서버의 임베딩으로 만듭니다(812조문 기준 수십 초). 운영·개발 웹앱이 각자 만듭니다.
+- 웹앱은 시작할 때 조문 인덱스를 모델 서버의 임베딩으로 만듭니다(812조문 기준 수십 초). 같은 조문·모델이면 다음 시작부터는 `cache/embeddings/`의 캐시를 씁니다(`LAWBOT_EMBED_CACHE`). 운영·개발 웹앱은 각자 레포 폴더에 캐시를 둡니다.
 - 같은 브라우저에서 운영·개발 화면에 번갈아 로그인할 때 로그인 쿠키가 겹치면, 개발 화면은 `http://localhost:<개발 포트>`로 접속합니다(호스트가 다르면 쿠키가 분리됨).
 - `eval_v4`도 같은 모델 서버를 씁니다. 결과의 `peak_gb`는 모델 서버 프로세스 값입니다.
 

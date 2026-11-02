@@ -31,3 +31,6 @@ data/feedback/
 
 # 법령 변경 수집기 실행 데이터 (저장소 클론·상태 DB·이벤트, services/monitor/README.md)
 services/monitor/data/
+
+# 조문 임베딩 캐시 (lawbot.embed_cache, 다시 만들 수 있음)
+cache/

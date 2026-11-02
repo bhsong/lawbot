@@ -25,7 +25,7 @@ class Retriever:
     decree_max_seq: 하위법령 인코딩 최대 토큰 (deploy.DECREE_MAX_SEQ). None이면 하위법령 행을 읽지 않음
     encoder: encode(texts, input_type, max_seq_length) → float32 배열 (api_client.Embedder, 테스트는 가짜)"""
 
-    def __init__(self, encoder, law_csv, max_seq_length, decree_max_seq=None):
+    def __init__(self, encoder, law_csv, max_seq_length, decree_max_seq=None, cache=None):
         law = pd.read_csv(law_csv, encoding='utf-8-sig')
         law = law[law['deleted'] == 0].reset_index(drop=True)  # 415개 조문 (+ 하위법령 397개)
         if 'article_no' in law:  # article_id에 법령명이 들어 있으면('근로기준법 제26조') 번호만 쓴다
@@ -49,10 +49,14 @@ class Retriever:
         self.docs = law_docs + dec_docs
         self.starter = set(law.loc[law['starter'] == 1, 'article_id']) if 'starter' in law else set()
         self.encoder, self.max_seq_length = encoder, max_seq_length
-        self.D = np.asarray(encoder.encode(law_docs, 'document', max_seq_length), dtype=np.float32)
-        self.D_dec = None
-        if dec_docs:
-            self.D_dec = np.asarray(encoder.encode(dec_docs, 'document', decree_max_seq), dtype=np.float32)
+        self.D = self._encode_docs(law_docs, max_seq_length, cache)
+        self.D_dec = self._encode_docs(dec_docs, decree_max_seq, cache) if dec_docs else None
+
+    def _encode_docs(self, docs, max_seq, cache):
+        """조문 문서 목록 하나 = 서버 encode 한 번. cache(embed_cache.EmbedCache)가 있으면 맞는 캐시를 쓴다"""
+        if cache is not None:
+            return cache.encode(self.encoder, docs, max_seq)
+        return np.asarray(self.encoder.encode(docs, 'document', max_seq), dtype=np.float32)
 
     def _encode_queries(self, queries):
         """질문 목록 하나 = 서버 encode 한 번 (batch 16, query 프롬프트, 법률과 같은 max_seq)"""
