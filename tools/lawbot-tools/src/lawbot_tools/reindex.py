@@ -1,7 +1,7 @@
 # src/lawbot_tools/reindex.py  →  uv run lawbot-reindex <새 조문 CSV> --dataset-version v4.1 --reference-date 2026-12-08
-# 법 개정이 반영된 조문 CSV를 웹앱에 넣는 입구 (CSV를 만드는 일은 하지 않음: docs/data-provenance.md, 다음 작업)
+# 법 개정이 반영된 조문 CSV를 웹앱에 넣는 입구 (CSV는 lawbot-build-articles가 만든다)
 #   1. CSV 검사 (열·중복·조문 번호 형식·빈 본문·종류). 실패하면 아무것도 쓰지 않고 종료 코드 2
-#   2. 매니페스트 새로 쓰기 (데이터 버전·기준일·조문 수·sha256). 그 CSV의 이전 매니페스트는 <이름>.json.prev로 보관 (manifest_*.json 찾기에 걸리지 않게)
+#   2. 매니페스트 새로 쓰기 (데이터 버전·기준일·조문 수(법령별·종류별)·sha256·출처 커밋 --source-ref). 그 CSV의 이전 매니페스트는 <이름>.json.prev로 보관 (manifest_*.json 찾기에 걸리지 않게)
 #   3. 모델 서버로 조문 임베딩 캐시를 미리 만든다 (웹앱 재시작 때 확인용 1개만 임베딩, lawbot.embed_cache)
 #   4. 웹앱 재시작 안내 (직접 재시작하지 않음)
 # 캐시는 이 명령을 실행한 레포 폴더의 cache/에 생긴다: 운영에 넣을 때는 운영 worktree에서 실행
@@ -52,19 +52,26 @@ def validate(csv):
     return errors, live
 
 
+def source(old, ref):
+    """이전 매니페스트의 출처. ref를 주면 그 값으로 (lawbot-build-articles가 출력한 legalize-kr HEAD)"""
+    src = dict((old or {}).get('source') or DEFAULT_SOURCE)
+    if ref is not None:
+        src['ref'] = ref
+    return src
+
+
 def new_manifest(csv, live, old, args):
     by_kind = live['kind'].value_counts().to_dict() if 'kind' in live else {manifest.DEFAULT_KIND: len(live)}
     m = {
         'dataset_version': args.dataset_version,
         'reference_date': args.reference_date,
         'collected_date': args.collected_date or datetime.date.today().isoformat(),
-        'source': (old or {}).get('source') or DEFAULT_SOURCE,
+        'source': source(old, args.source_ref),
         'articles_file': csv.name,
         'articles_sha256': manifest.sha256(csv),
         'articles_total': len(live),
     }
-    if 'kind' not in live:
-        m['articles_by_law'] = live['law'].value_counts().to_dict()
+    m['articles_by_law'] = live['law'].value_counts().to_dict()  # 하위법령 CSV도 문서(법령·시행령·시행규칙)별로
     m['articles_by_kind'] = by_kind
     m['trained_on'] = (old or {}).get('trained_on') or {}
     return m
@@ -111,6 +118,7 @@ def main(argv=None):
     ap.add_argument('--dataset-version', required=True, help='새 데이터 버전 (예: v4.1)')
     ap.add_argument('--reference-date', required=True, help='법령 기준일 YYYY-MM-DD')
     ap.add_argument('--collected-date', help='수집일 (기본 오늘)')
+    ap.add_argument('--source-ref', help='원문 커밋 (lawbot-build-articles 출력의 legalize-kr HEAD). 없으면 이전 값')
     ap.add_argument('--check', action='store_true', help='검사만 (아무것도 쓰지 않음)')
     ap.add_argument('--no-cache', action='store_true', help='임베딩 캐시를 만들지 않음 (모델 서버에 접속하지 않음)')
     args = ap.parse_args(argv)
