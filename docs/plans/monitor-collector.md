@@ -61,7 +61,7 @@
 | --- | --- | --- | --- |
 | **PR 1** | 뼈대(workspace 멤버, 설정·상태·이벤트), `legalize_git`(법령·행정규칙, 첨부 목록 비교), 실행기(실패 격리·요약·`collector_failing`), CLI(`bootstrap`/`collect --only`/`replay`), 로그, launchd 템플릿, README | 없음 | 1, 2, 3, 7 |
 | **PR 2** | 법제처 OC 스파이크 → `utils/http.py`, `pdf_text.py`. 별표·서식·고시 첨부 파일 받기 → 텍스트 해시 비교 → diff 이벤트(`attachment_*`). 법령 이벤트에 개정문·제·개정 이유 채우기. 5번 소스 확정 | `LAW_OC` (있음) | 0(법제처), 4, 5 |
-| **PR 3** | 국민참여입법센터(`lawmaking`, OC로 되는지 스파이크) + 국회(`assembly`) | `LAW_OC`, `DATA_GO_KR_KEY` (아직 없음 → 키를 받은 뒤) | 0(나머지), 6 |
+| **PR 3** | 국민참여입법센터(`lawmaking`) + 국회(`assembly`, 열린국회정보) | 국민참여입법센터 정보공개 신청 ID, 열린국회정보 인증키 (둘 다 아직 없음 → 키를 받은 뒤. `LAW_OC`로는 401, [스파이크](../evals/2026-11-02-monitor-spike-lawmaking.md)) | 0(나머지), 6 |
 
 PR 2의 첨부 수집은 원 계획서의 `lawgo_forms`(목록을 API로 조회)와 달리 **목록은 git 저장소 머리말에서 읽고, 파일만 법제처에서 받는다**. 법제처 별표서식 목록 API에 서식별 개정일이 있으면(스파이크로 확인) 그것으로 받을 파일을 줄인다. 없으면 개정 커밋이 들어온 법령의 첨부를 모두 받는다 (소득세법 시행규칙 기준 약 250개, 0.5초 간격으로 약 3~5분, 개정 때만).
 
@@ -160,6 +160,7 @@ services/monitor/
 
 - 법제처 (PR 2): 별표서식 목록 API에 서식별 개정일·개정구분이 있는지 / 법령 본문 조회의 개정문·제개정이유 필드 / 행정규칙 상세의 첨부 목록 (admrule-kr 머리말과 같은지) / `flDownload.do` 링크를 OC 없이 받을 수 있는지 / 맥미니 IP에서 OC 호출 / `lxml`·`pdfplumber`의 3.14 휠 (`uv lock` 결과) / 지급명세서 전산매체 제출요령의 실제 소스.
 - 국민참여입법센터·국회 (PR 3): 목록 엔드포인트, OC로 되는지, 게시물 ID·제목·의견제출 기한 필드, 서비스키 발급.
+  - 2026-11-02 확인: 목록 주소는 `opinion.lawmaking.go.kr/rest/ogLmPp`(입법예고)·`ptcpAdmPp`(행정예고). 기존 `LAW_OC`로는 `retMsg` 401이라 국민참여입법센터 정보공개 신청이 따로 필요하다. 국회는 공공데이터포털이 아니라 열린국회정보(`open.assembly.go.kr`) 인증키를 쓴다. 게시물 필드는 키를 받은 뒤 확인 ([기록](../evals/2026-11-02-monitor-spike-lawmaking.md)).
 - 실제 호출은 각 PR에서 요청 URL(키는 가린 채)과 응답 견본을 `services/monitor/tests/fixtures/`에, 확인 결과를 `docs/evals/<날짜>-monitor-spike.md`에 남긴다 (원 계획서의 `docs/spike-notes.md` 대신 레포 규칙).
 
 ## 8. 정하지 않은 것 (PR 1 리뷰 때 다시 볼 것)
