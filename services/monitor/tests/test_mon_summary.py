@@ -317,5 +317,35 @@ def test_cli_daily(tmp_path, legalize, monkeypatch, capsys):
     assert runs == 2
 
 
+def test_cli_daily_runs_checks_before_summary(tmp_path, legalize, monkeypatch, capsys):
+    """daily: collect → 점검(checks) → summarize. 점검 결과 줄이 요약 md '점검' 절에. 1(확인 필요)은 정상, 그 밖은 실패"""
+    import sys
+
+    monkeypatch.setenv('LAW_OC', 'TESTOC77')
+    monkeypatch.setenv('LAWBOT_MODEL_SERVER', 'http://127.0.0.1:9')
+    monkeypatch.setenv('LAWBOT_MODEL_TOKEN', TOKEN)
+    differ = repr([sys.executable, '-c', 'import sys; print("articles same=no changed=6"); sys.exit(1)'])
+    cfg = tmp_path / 'targets.yaml'
+    cfg.write_text(
+        f'repos: {{legalize-kr: "{legalize.url}", admrule-kr: "file:///none"}}\n'
+        'laws: [{name: 소득세법, category: 1}]\nadmrules: {names: [], keyword_rules: []}\n'
+        f'checks: [{{name: 챗봇 조문 데이터, command: {differ}}}]\n',
+        encoding='utf-8',
+    )
+    base = ['--home', str(tmp_path / 'h'), '--config', str(cfg)]
+    assert cli.main([*base, 'bootstrap', '--only', 'legalize_law']) == 0
+    assert cli.main([*base, 'daily', '--only', 'legalize_law']) == 0
+    assert '챗봇 조문 데이터 — 확인 필요: articles same=no changed=6' in capsys.readouterr().out
+    md = next((tmp_path / 'h' / 'data' / 'summaries').glob('*.md')).read_text(encoding='utf-8')
+    assert '## 점검' in md and '- 챗봇 조문 데이터 — 확인 필요: `articles same=no changed=6`' in md
+
+    broken = repr([sys.executable, '-c', 'import sys; sys.exit(3)'])
+    cfg.write_text(cfg.read_text(encoding='utf-8').replace(differ, broken), encoding='utf-8')
+    assert cli.main([*base, 'daily', '--only', 'legalize_law']) == 1  # 점검 실패는 daily 실패
+    second = [p for p in (tmp_path / 'h' / 'data' / 'summaries').glob('*.md') if p.stem != '2026-11-02']
+    md = second[0].read_text(encoding='utf-8')  # 같은 날 두 번째: 2026-11-02-HHMMSS.md
+    assert '- 챗봇 조문 데이터 — 점검 실패: `(출력 없음, 종료 코드 3)`' in md
+
+
 def test_fixed_now_is_kst():
     assert FIXED_NOW.utcoffset().total_seconds() == 9 * 3600

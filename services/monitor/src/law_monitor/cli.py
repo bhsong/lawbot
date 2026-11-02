@@ -1,4 +1,4 @@
-"""law-monitor 명령: bootstrap / collect / replay (원 계획서 5.5).
+"""law-monitor 명령: bootstrap / collect / replay / summarize / check / daily (원 계획서 5.5).
 
 종료 코드: 0 성공, 1 수집기 일부 실패(나머지는 저장됨), 2 실행 전 거부(설정 오류, 기준점 없음, 다른 실행 중 등).
 """
@@ -43,13 +43,27 @@ def build_parser() -> argparse.ArgumentParser:
         '--events-dir', type=Path, help='이 폴더의 이벤트(replay 결과)를 요약해 그 폴더에 summary.md (상태 변경 없음)'
     )
 
-    d = sub.add_parser('daily', help='매일 실행(launchd): collect 다음 summarize. collect가 일부 실패해도 요약은 함')
+    sub.add_parser('check', help='점검(checks)만 실행: 결과 줄 출력 (요약·상태 안 바뀜)')
+
+    d = sub.add_parser(
+        'daily', help='매일 실행(launchd): collect → 점검(checks) → summarize. collect가 일부 실패해도 점검·요약은 함'
+    )
     d.add_argument('--only', help='이 수집기만 (디버깅용)')
     return p
 
 
-def _summarize(monitor: Monitor, run_line: str | None = None, events_dir: Path | None = None) -> int:
-    result = monitor.summarize(events_dir=events_dir, run_line=run_line)
+def _check(monitor: Monitor) -> tuple[list, int]:
+    """점검 실행·출력. 종료 코드: 점검 실패가 있으면 1 (확인 필요는 0)"""
+    results = monitor.check()
+    for r in results:
+        print(f'check {r.name} — {r.status}: {r.line}')
+    return results, (1 if any(r.failed for r in results) else 0)
+
+
+def _summarize(
+    monitor: Monitor, run_line: str | None = None, events_dir: Path | None = None, checks: list | None = None
+) -> int:
+    result = monitor.summarize(events_dir=events_dir, run_line=run_line, checks=checks)
     print(f'summarize events={result.events} calls={result.calls} pending={result.pending} → {result.path}')
     if result.failed:
         print(f'law-monitor: 요약 실패: {result.failed}', file=sys.stderr)
@@ -66,8 +80,10 @@ def _daily(monitor: Monitor, only: str | None) -> int:
     except (BootstrapRequired, MissingSecret) as e:
         print(f'law-monitor: {e}', file=sys.stderr)
         code = 2
+    results, check_code = _check(monitor)
+    code = max(code, check_code)
     try:
-        code = max(code, _summarize(monitor, run_line=line))
+        code = max(code, _summarize(monitor, run_line=line, checks=results))
     except MissingSecret as e:
         print(f'law-monitor: {e}', file=sys.stderr)
         code = 2
@@ -110,6 +126,8 @@ def _run(args, paths: Paths) -> int:
         return _summarize(monitor, events_dir=args.events_dir)
     if args.command == 'daily':
         return _daily(monitor, args.only)
+    if args.command == 'check':
+        return _check(monitor)[1]
     if args.command == 'replay':
         events = monitor.replay(args.repo, args.since, args.until)
         print(f'replay events={len(events)} → {monitor.paths.replay}')

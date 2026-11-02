@@ -34,3 +34,6 @@ services/monitor/data/
 
 # 조문 임베딩 캐시 (lawbot.embed_cache, 다시 만들 수 있음)
 cache/
+
+# 운영 조문 데이터 (lawbot-articles-update가 관리, git 밖: docs/plans/articles-auto-update.md)
+data/live/

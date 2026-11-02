@@ -91,7 +91,11 @@ def check_decree(p, out):
         )
     live = law[law['deleted'] == 0]
     got = live.loc[live['kind'] != '법률', 'kind'].value_counts().to_dict()
-    out.append(('OK' if got == EXPECTED_DECREE else 'FAIL', f'하위법령 조문 {got} (기대 {EXPECTED_DECREE})'))
+    by_kind = (manifest.load(p.articles) or {}).get('articles_by_kind') or {}
+    expected = {
+        k: v for k, v in by_kind.items() if k != manifest.DEFAULT_KIND
+    } or EXPECTED_DECREE  # 갱신된 데이터는 매니페스트 수
+    out.append(('OK' if got == expected else 'FAIL', f'하위법령 조문 {got} (기대 {expected})'))
     laws = set(live.loc[live['kind'] == '법률', 'law'])
     orphan = live[(live['kind'] != '법률') & ~live['parent_law'].isin(laws)]
     out.append(
@@ -105,7 +109,7 @@ def check_decree(p, out):
             ),
         )
     )
-    base = paths.V4_ARTICLES
+    base = deploy._path('LAWBOT_V4_ARTICLES', paths.V4_ARTICLES, os.environ)  # data/live로 바꿨으면 그 법률 CSV와
     if base.is_file():
         cols = ['law', 'article_no', 'title', 'text']
         a = live.loc[live['kind'] == '법률', cols].reset_index(drop=True)

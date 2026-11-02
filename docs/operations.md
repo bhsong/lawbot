@@ -298,11 +298,22 @@ client.chat.completions.create(
   uv run lawbot-build-articles --repo ../legalize-kr --asof 2026-12-08 --out-dir data/v4.1         # 새 기준일로 만들기
   ```
 
+- **자동 갱신** (운영): 웹앱은 git 밖 `data/live/`의 조문 CSV를 읽고(`.env`: `LAWBOT_V4_ARTICLES=data/live/articles_v4.csv`, `LAWBOT_V4_DECREE_ARTICLES=data/live/law_articles_v4_decree.csv`), `law-monitor daily`(06:30)가 `lawbot-articles-update --restart`로 그날 시행 중인 법에 맞춰 새 CSV·임베딩·확인·보관(`data/live/archive/`)·전환·웹앱 재시작을 합니다. 결과는 monitor 요약 md '점검' 절과 `services/monitor/data/articles/<날짜>.md` ([data-provenance.md](data-provenance.md) 6절).
+
+  ```zsh
+  uv run lawbot-articles-update --init                      # 처음 한 번: data/v4 → data/live (그다음 .env를 data/live로)
+  uv run lawbot-articles-update --repo services/monitor/data/repos/legalize-kr --report-dir /tmp/articles   # 손으로 갱신 (재시작 없이)
+  uv run lawbot-articles-update --rollback --restart        # 바로 전 데이터로 되돌리고 재시작
+  uv run lawbot-articles-check --repo services/monitor/data/repos/legalize-kr --asof 2026-12-08   # 미리 보기 (아무것도 안 바꿈)
+  ```
+
+  재시작은 launchd `com.lawbot.web`의 작업 폴더가 그 명령을 실행한 레포일 때만 합니다 (개발 worktree에서 실행하면 `restart=skipped`). 종료 코드 0 바뀐 것 없음 · 1 갱신함 · 2 실패(지금 데이터 그대로).
+
 - 조문 CSV를 바꾸면 `lawbot-reindex`로 매니페스트를 새 데이터 버전으로 바꾸고 임베딩 캐시를 미리 만든 뒤 웹앱을 재시작합니다. 운영에 넣을 때는 운영 worktree에서 실행합니다(캐시가 그 폴더의 `cache/`에 생김).
 
   ```zsh
   uv run lawbot-reindex data/v4/articles_v4.csv --dataset-version v4.1 --reference-date 2026-12-08 --check   # 검사만
-  uv run lawbot-reindex data/v4/articles_v4.csv --dataset-version v4.1 --reference-date 2026-12-08           # 매니페스트 + 캐시
+  uv run lawbot-reindex data/v4/articles_v4.csv --dataset-version v4.1 --reference-date 2026-12-08 --source-ref <legalize-kr HEAD>   # 매니페스트 + 캐시
   uv run python -m lawbot.check_deploy && launchctl kickstart -k gui/$(id -u)/com.lawbot.web
   ```
 

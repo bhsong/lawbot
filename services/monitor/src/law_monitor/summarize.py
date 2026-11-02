@@ -219,6 +219,7 @@ def write_summary(
     run_line: str | None,
     ran_at: str,
     window: str | None = None,
+    checks: list | None = None,
 ) -> tuple[SummaryResult, list[str]]:
     """요약 md를 쓰고 (결과, 요약을 끝낸 event_id 목록)을 돌려준다."""
     groups, warnings = group(events)
@@ -275,6 +276,7 @@ def write_summary(
         md += [text]
     if failed:
         md += ['## 요약 실패', '', f'- {failed}', f'- 대기 이벤트 {pending}건: 다음 실행에서 다시 요약합니다', '']
+    md += check_lines(checks or [])
     if warnings:
         md += ['## 경고', '']
         for w in warnings:
@@ -285,6 +287,13 @@ def write_summary(
     out_path.write_text('\n'.join(md).rstrip('\n') + '\n', encoding='utf-8')
     log.info('summarize events=%d calls=%d pending=%d → %s', len(events), calls, pending, out_path.name)
     return SummaryResult(out_path, len(events), calls, failed, pending), done
+
+
+def check_lines(results: list) -> list[str]:
+    """'점검' 절 (law_monitor.checks.Result): 점검마다 상태와 결과 줄"""
+    if not results:
+        return []
+    return ['## 점검', '', *(f'- {r.name} — {r.status}: `{r.line}`' for r in results), '']
 
 
 def load_events(home: Path, items: list[tuple[str, str | None]]) -> tuple[list[dict], dict[str, str]]:

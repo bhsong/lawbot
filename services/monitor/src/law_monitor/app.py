@@ -12,6 +12,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 
+from law_monitor import checks as checks_mod
 from law_monitor.collectors.base import Collector, CollectResult, RunContext
 from law_monitor.collectors.legalize_git import LegalizeGitCollector, default_collectors
 from law_monitor.config import Config
@@ -123,7 +124,12 @@ class Monitor:
             )
         return result.events
 
-    def summarize(self, *, events_dir=None, run_line: str | None = None) -> SummaryResult:
+    def check(self) -> list:
+        """설정의 점검(checks) 명령을 차례로 실행 (law_monitor.checks). 상태는 바꾸지 않는다"""
+        with _file_log(self.paths, self.now()):
+            return checks_mod.run(self.config.checks, self.paths)
+
+    def summarize(self, *, events_dir=None, run_line: str | None = None, checks: list | None = None) -> SummaryResult:
         """대기 이벤트(processed_at 없음)를 요약해 data/summaries/YYYY-MM-DD.md를 쓴다 (2단계).
 
         events_dir를 주면 그 폴더의 이벤트 JSON(replay 결과)을 요약해 그 폴더의 summary.md에 쓰고 상태는 바꾸지 않는다.
@@ -169,6 +175,7 @@ class Monitor:
                 run_line=run_line,
                 ran_at=now.isoformat(timespec='seconds'),
                 window=window,
+                checks=checks,
             )
             if run_id is not None:
                 finished = self.now().isoformat(timespec='seconds')

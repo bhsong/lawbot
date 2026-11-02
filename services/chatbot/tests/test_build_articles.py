@@ -287,8 +287,29 @@ def test_in_force_composes_articles_by_their_own_effective_date(tmp_path):
         '제3조': ('처음 벌칙', '2020-01-01'),
     }  # 제4조(시행 전 신설)는 없음
     assert used[-1]['시행 전'] == 2
+    assert used[-1]['pending'] == [('제2조', '2027-01-01'), ('제4조', '2027-01-01')]  # 조문과 그 시행일
     later = {a['no']: a['text'] for a in b.in_force(repo, PATH, '2027-01-01')[0]}
     assert later['제2조'] == '시행 전 정의 <개정 2026.4.7>' and '제4조' in later
+
+
+def test_commits_since_lists_amendments_after_source_ref(tmp_path):
+    """매니페스트 source.ref 이후 들어온 개정: 커밋·공포일·공포번호·시행일자. ref가 클론에 없으면 None"""
+    repo = make_repo(
+        tmp_path,
+        [
+            ('2020-01-01', '100', '2020-01-01', V1, ''),
+            ('2026-04-07', '200', '2026-10-08', V2, ADD2),
+        ],
+    )
+    first = repo.history[PATH][-1][0]
+    got = b.commits_since(repo, first, {'시험법': PATH})
+    assert [(c['doc'], c['date'], c['공포번호'], c['시행일자']) for c in got] == [
+        ('시험법', '2026-04-07', '200', '2026-10-08')
+    ]
+    assert got[0]['subject'] == '법률: 시험법 (일부개정)'
+    assert b.commits_since(repo, repo.head(), {'시험법': PATH}) == []
+    assert b.commits_since(repo, 'f' * 40, {'시험법': PATH}) is None
+    assert b.commits_since(repo, None, {'시험법': PATH}) is None
 
 
 def test_in_force_ignores_format_only_change_of_a_pending_article(tmp_path):

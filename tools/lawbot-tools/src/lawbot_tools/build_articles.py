@@ -380,7 +380,8 @@ def in_force(repo: Repo, path, asof):
         cur_order = list(arts)
         sched = schedule(md, fm, cur_order, asof)
         expiries += expiry_clauses(own_addendum(md, fm['공포번호']) or '')
-        applied = waiting = 0
+        applied = 0
+        waiting: list[tuple[str, str]] = []  # 시행 전이라 반영하지 않은 (조문, 시행일)
         for no in dict.fromkeys(list(prev) + cur_order):
             old, new = prev.get(no), arts.get(no)
             if old == new:
@@ -411,7 +412,7 @@ def in_force(repo: Repo, path, asof):
                     applied += 1
                 else:
                     pending.add(no)
-                    waiting += 1
+                    waiting.append((no, date))
             if old is None or old['chapter'] != new['chapter']:
                 if sched.chapter(new['chapter']) <= asof:
                     cur['chapter'] = new['chapter']
@@ -425,7 +426,8 @@ def in_force(repo: Repo, path, asof):
                 '공포번호': fm.get('공포번호'),
                 '시행일자': fm.get('시행일자'),
                 '반영': applied,
-                '시행 전': waiting,
+                '시행 전': len(waiting),
+                'pending': waiting,
             }
         )
     unknown = {no: a['unknown'] for no, a in state.items() if a.get('unknown')}
@@ -480,6 +482,39 @@ def expire(arts, expiries, asof, path):
             last = (nxt[0] if nxt else len(lines)) - 1
             lines[last] += mark
         a['text'] = '\n'.join(lines)
+
+
+def commits_since(repo: Repo, ref, paths):
+    """ref(매니페스트 source.ref) 뒤에 문서 파일을 바꾼 커밋 [{doc, sha, date(공포일), subject, 공포번호, 시행일자}] 오래된 것부터.
+    ref가 없거나 클론에 없으면 None (커밋 날짜가 공포일이라 날짜로는 '그 뒤에 들어온 것'을 알 수 없다)"""
+    if not ref:
+        return None
+    try:
+        repo.git('cat-file', '-e', f'{ref}^{{commit}}')
+    except subprocess.CalledProcessError:
+        return None
+    docs = {path: doc for doc, path in paths.items()}
+    out = repo.git(
+        'log', '--reverse', '--format=@%H %ad %s', '--date=short', '--name-only', f'{ref}..HEAD', '--', *docs
+    )
+    found, cur = [], None
+    for line in out.splitlines():
+        if line.startswith('@'):
+            sha, date, subject = line[1:].split(' ', 2)
+            cur = (sha, date, subject)
+        elif line.strip() in docs and cur:
+            fm = front(repo.show(cur[0], line.strip()))
+            found.append(
+                {
+                    'doc': docs[line.strip()],
+                    'sha': cur[0],
+                    'date': cur[1],
+                    'subject': cur[2],
+                    '공포번호': str(int(fm.get('공포번호', '0'))),
+                    '시행일자': fm.get('시행일자'),
+                }
+            )
+    return found
 
 
 # ── 조문 참조 (사용자 스크립트 그대로) ─────────────────────────────

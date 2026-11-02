@@ -51,6 +51,7 @@ class Config:
     admrule_names: tuple[AdmruleName, ...]
     keyword_rules: tuple[KeywordRule, ...]
     prelegislation_keywords: tuple[str, ...]
+    checks: tuple = ()  # law_monitor.checks.Check: daily에서 부르는 점검 명령
 
     def law_category(self, folder: str) -> int | None:
         return next((law.category for law in self.laws if law.name == folder), None)
@@ -106,7 +107,9 @@ def from_dict(data: dict) -> Config:
         )
 
     pre = tuple((data.get('prelegislation') or {}).get('keywords') or ())
-    return Config(dict(repos), laws, forms, tuple(names), tuple(rules), pre)
+    from law_monitor import checks  # checks가 ConfigError를 쓰므로 여기서
+
+    return Config(dict(repos), laws, forms, tuple(names), tuple(rules), pre, checks.parse(data.get('checks')))
 
 
 def _name(value, where: str) -> str:
