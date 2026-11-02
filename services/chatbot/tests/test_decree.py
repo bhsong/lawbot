@@ -9,11 +9,10 @@ import numpy as np
 import pandas as pd
 import pytest
 
-import lawbot.app as app_mod
 import lawbot.retriever as retriever_mod
 import lawbot.service as service
 import lawbot_tools.eval_v4 as ev
-from lawbot import answer_format, citation, decree, deploy, manifest, view
+from lawbot import answer_format, citation, decree, deploy, manifest, view, web
 from lawbot.llm import build_prompt
 from lawbot.paths import DATA, V4_ARTICLES, V4_DECREE_ARTICLES
 
@@ -441,34 +440,42 @@ def test_concise_and_cards_with_decree():
     assert '⚠ 검색된 조문에서 확인되지 않은 인용: 제9조' in answer_format.concise(bad, hits)
     used, unknown, no = answer_format.answer_citations(raw, hits)
     assert used == [dec[0], law[0]] and unknown == [] and not no
-    cards = app_mod.fmt_sources(hits, used, no)
-    shown, folded = cards.split('검색만 된 조문')
-    assert '**근로기준법 제2조 정의**' in shown and '**〔시행령〕 근로기준법 시행령 제2조' in shown
-    assert shown.index('근로기준법 제2조 정의') < shown.index('〔시행령〕')  # 인용 그룹에서도 법률 먼저
-    assert '〔시행규칙〕 근로기준법 시행규칙 제2조' in folded and '<details>' in folded
-    assert folded.index('근로기준법 제26조') < folded.index('〔시행규칙〕')
-    assert '(하위법령 임베딩 2위)' in shown and '(임베딩 1위)' in shown
-    allcards = app_mod.fmt_sources(hits)  # 생성 중: 모두 펼침, 법률 → 하위법령
-    assert '<details>' not in allcards and allcards.index('정의') < allcards.index('〔시행령〕') < allcards.index(
-        '〔시행규칙〕'
+    shown, folded = web.sources_data(hits, used, no)['groups']
+    assert (shown['label'], shown['open'], folded['label'], folded['open']) == (
+        view.CITED_LABEL,
+        True,
+        '검색만 된 조문',
+        False,
     )
+    titles = [i['title'] for i in shown['items']]
+    assert titles[0] == '근로기준법 제2조 정의' and titles[1].startswith(
+        '〔시행령〕 근로기준법 시행령 제2조'
+    )  # 인용 묶음도 법률 먼저
+    rest = [i['title'] for i in folded['items']]
+    assert (
+        rest[-1].startswith('〔시행규칙〕 근로기준법 시행규칙 제2조')
+        and rest.index('근로기준법 제26조 해고의 예고') < len(rest) - 1
+    )
+    scores = [i['scores'] for i in shown['items']]
+    assert '(임베딩 1위)' in scores[0] and '(하위법령 임베딩 2위)' in scores[1]
+    [everything] = web.sources_data(hits)['groups']  # 생성 중: 모두 펼침, 법률 → 하위법령
+    assert everything['open'] and [i['decree'] for i in everything['items']] == [False, False, False, True, True]
+    assert [i['title'][:5] for i in everything['items'][3:]] == ['〔시행령〕', '〔시행규칙']
 
 
 def test_screen_texts(env):
     on, off = make(), make(None)
-    assert '시행령·시행규칙' in app_mod.searching_stats(on, 'pro') and '시행령' not in app_mod.searching_stats(
-        on, 'fast'
-    )
+    assert '시행령·시행규칙' in view.searching_stats(on, 'pro') and '시행령' not in view.searching_stats(on, 'fast')
     assert view.sources_title(on) == '검색된 조문 (법률 3개 + 시행령·시행규칙 최대 2개)'
     assert view.sources_title(off) == '검색된 조문 (상위 3개)'
     assert 'Lawbot Pro는 관련 시행령·시행규칙을 최대 2개' in view.intro_text(on)
     assert view.intro_text(off) == '질문과 관련된 조문 3개를 찾아 그 조문을 근거로 답합니다. '
     st = {'search': 0.1, 'rerank': 1.9, 'decree_search': 0.05, 'decree_rerank': 2.0, 'n_decree': 2, 'load': None}
-    assert '시행령·시행규칙 2.05초 (2개 첨부)' in app_mod.fmt_stats('Pro', 'generate', st)
+    assert '시행령·시행규칙 2.05초 (2개 첨부)' in view.fmt_stats('Pro', 'generate', st)
     env.setenv('LAWBOT_RERANKER_ENABLED', '1')
     env.setenv('LAWBOT_DECREE_ENABLED', '1')
     a = dataclasses.replace(on, profile=deploy.get_profile())
-    assert app_mod.data_notice(a) == '법령 기준일 2026-10-20 (데이터 v4-decree · 법률 415 · 시행령 273 · 시행규칙 124)'
+    assert view.data_notice(a) == '법령 기준일 2026-10-20 (데이터 v4-decree · 법률 415 · 시행령 273 · 시행규칙 124)'
 
 
 def test_check_deploy_decree(env):

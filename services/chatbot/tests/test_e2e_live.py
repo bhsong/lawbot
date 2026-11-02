@@ -16,8 +16,8 @@ import pytest
 import e2e_support as e2e
 from conftest import free_port
 from lawbot import llm, manifest
-from lawbot.app import EXAMPLES
 from lawbot.paths import ROOT
+from lawbot.view import EXAMPLES
 from lawbot_common import envfile
 from lawbot_model_server import revision
 
@@ -128,7 +128,7 @@ def live(tmp_path_factory):
     port = free_port()
     env = {k: v for k, v in s.env.items() if k not in LOCAL}
     env.update(LAWBOT_REQUEST_LOG=str(s.request_log), LAWBOT_FEEDBACK='0', LAWBOT_MODELS='pro')
-    s.web = e2e.start_webapp(tmp, port, **env)
+    s.web = e2e.start_web(tmp, port, **env)
     s.url = f'http://127.0.0.1:{port}'
     yield s
     s.web.stop()
@@ -175,8 +175,7 @@ def run_scenario(live, page, name):
     row.update({k: log.get(k) for k in ('status', 'error_type', 'total_ms', 'ttft_ms', 'n_decree', 'refused')})
     assert text.strip() and not text.startswith('⏳'), text  # 스트리밍이 끝나고 비어 있지 않은 답
     assert (log['mode'], log['status'], log['error_type']) == ('api', 'ok', None), log
-    law_cards = [line for line in src.splitlines() if '유사도' in line and '〔' not in line]
-    assert len(law_cards) == 3, src  # 법률 조문 카드 3개
+    assert len(e2e.law_cards(page)) == 3, src  # 법률 조문 카드 3개
     for part in ('검색', '리랭킹', '첫 토큰', '완료'):
         assert part in st, (part, st)
     if name != 'out_of_scope':

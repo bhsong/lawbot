@@ -32,9 +32,9 @@ def example_env():
 
 
 def clean_env(**kw):
-    """개발자 셸의 LAWBOT_*·Gradio 설정을 빼고 시작 (레포 .env도 읽지 않음)"""
-    env = {k: v for k, v in os.environ.items() if not k.startswith(('LAWBOT_', 'GRADIO_'))}
-    env.update(GRADIO_ANALYTICS_ENABLED='False', LAWBOT_ENV_FILE='')
+    """개발자 셸의 LAWBOT_* 설정을 빼고 시작 (레포 .env도 읽지 않음)"""
+    env = {k: v for k, v in os.environ.items() if not k.startswith('LAWBOT_')}
+    env.update(LAWBOT_ENV_FILE='')
     env.update(kw)
     return env
 
@@ -79,25 +79,9 @@ class Proc:
                 self.p.wait()
 
 
-def start_webapp(log_dir, port, **env):
-    """실제 웹앱(lawbot.app.main)을 127.0.0.1:<port>에 띄우고 로그인 화면이 뜰 때까지 기다린다"""
-    web = Proc(
-        'webapp',
-        [sys.executable, '-c', 'from lawbot.app import main; main()'],
-        clean_env(
-            **(env | {'LAWBOT_USER': USER, 'LAWBOT_PW': PW, 'LAWBOT_PORT': str(port)})
-        ),  # 테스트 로그인·포트가 .env 값보다 우선
-        log_dir,
-    )
-    web.wait_http(f'http://127.0.0.1:{port}/', lambda r: r.status_code == 200)
-    return web
-
-
 def start_web(log_dir, port, **env):
-    """새 화면 API(lawbot.web, 빌드한 SPA 포함)를 127.0.0.1:<port>에 띄우고 로그인 확인 API가 401을 줄 때까지 기다린다
-    화면 파일이 없으면 실패 (CI는 테스트 전에 npm run build)"""
-    if not (ROOT / 'services/chatbot/frontend/dist/index.html').is_file():
-        pytest.fail('새 화면 빌드가 없습니다: services/chatbot/frontend에서 npm ci && npm run build')
+    """실제 웹앱(lawbot.web, 빌드한 화면 포함)을 127.0.0.1:<port>에 띄우고 로그인 확인 API가 401을 줄 때까지 기다린다
+    화면 빌드가 없거나 소스와 다르면 웹앱이 시작을 거부하고 테스트가 실패한다 (CI는 테스트 전에 npm run build)"""
     web = Proc(
         'web',
         [sys.executable, '-m', 'lawbot.web', '--port', str(port)],
@@ -110,9 +94,9 @@ def start_web(log_dir, port, **env):
 
 class Stack:
     """웹앱 1개 + 가짜 모델 서버 1개. 모델 서버는 같은 포트에서 모드만 바꿔 다시 띄운다 (웹앱은 그대로)
-    start: 웹앱 시작 함수 (기본 start_webapp = Gradio 화면, start_web = 새 화면). extra_env: 웹앱 환경 변수 추가"""
+    extra_env: 웹앱 환경 변수 추가"""
 
-    def __init__(self, tmp, read_timeout, start=None, **extra_env):
+    def __init__(self, tmp, read_timeout, **extra_env):
         self.tmp, self.ms, self.mode, self.n = tmp, None, None, 0
         self.token = TEST_TOKEN  # 모델 서버에는 환경 변수로 넘김 (e2e_model_server를 이 프로세스에서 import하지 않음)
         self.ms_port, self.web_port = free_port(), free_port()
@@ -132,7 +116,7 @@ class Stack:
             LAWBOT_MODEL_SERVER_WAIT='30',
         )
         web_env.update(extra_env)
-        self.web = (start or start_webapp)(tmp, self.web_port, **web_env)
+        self.web = start_web(tmp, self.web_port, **web_env)
 
     def ensure(self, mode):
         """모델 서버가 mode로 떠 있게 한다 (이미 그 모드로 살아 있으면 그대로)"""
@@ -170,18 +154,16 @@ def request_log(path):
     return [json.loads(line) for line in p.read_text(encoding='utf-8').splitlines()] if p.exists() else []
 
 
-# ---- 화면 조작 (Gradio 6.30: 0단계 확인 결과, docs/archives/e2e-playwright.md 5절) ----
+# ---- 화면 조작 (역할·라벨·테스트 id로 찾는다) ----
 def textbox(page):
-    """질문 입력창. 로그인 화면의 사용자명 칸도 data-testid=textbox(input)라서 textarea로 좁힌다"""
-    return page.locator('textarea[data-testid=textbox]')
+    return page.get_by_role('textbox', name='질문')
 
 
 def login(page, url, user=USER, pw=PW):
     page.goto(url)
-    page.locator('input[type=password]').wait_for()
-    page.locator('input[type=text]').first.fill(user)
-    page.locator('input[type=password]').fill(pw)
-    page.get_by_role('button', name='Login').click()
+    page.get_by_label('사용자명').fill(user)
+    page.get_by_label('비밀번호').fill(pw)
+    page.get_by_role('button', name='로그인').click()
 
 
 def ask(page, question):
@@ -190,15 +172,22 @@ def ask(page, question):
 
 
 def answer(page):
-    return page.get_by_test_id('bot').last
+    return page.get_by_test_id('answer').last
 
 
 def stats(page):
-    return page.locator('#lawbot-stats')
+    return page.get_by_test_id('lawbot-stats').last
 
 
 def sources(page):
-    return page.locator('#lawbot-sources')
+    """데스크톱 오른쪽 조문 패널 (휴대폰 시트에도 같은 test id가 있어 첫 번째)"""
+    return page.get_by_test_id('lawbot-sources').first
+
+
+def law_cards(page):
+    """조문 패널의 법률 조문 카드 글 (하위법령 카드는 〔시행령〕·〔시행규칙〕 표시가 있어 뺀다)"""
+    cards = [c.inner_text() for c in sources(page).get_by_test_id('source-card').all()]
+    return [c for c in cards if '〔' not in c]
 
 
 def wait_done(page, timeout=ANSWER_TIMEOUT):

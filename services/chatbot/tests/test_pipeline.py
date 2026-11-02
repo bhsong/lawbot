@@ -13,6 +13,7 @@ from openai.types.chat import ChatCompletionChunk
 
 import lawbot.retriever as retriever_mod
 import lawbot.service as service
+from chat_support import run
 from conftest import set_auth
 from fakes import HITS, FakeLLM, FakeRetriever
 from lawbot.api_client import ModelLoadError, ModelServerError
@@ -274,22 +275,22 @@ def fake_models(env):
     env.setattr(service, 'LLM', FakeLLM)
 
 
-def test_service_does_not_import_gradio():
-    # 핵심 흐름은 UI와 독립: 다른 UI·API 서버가 gradio 없이 가져다 쓸 수 있어야 함
-    code = 'import sys, lawbot.service; print("gradio" in sys.modules)'
+def test_service_does_not_import_web_server():
+    # 핵심 흐름은 화면과 독립: 평가 스크립트가 웹 서버(fastapi) 없이 가져다 쓸 수 있어야 함
+    code = 'import sys, lawbot.service; print("fastapi" in sys.modules)'
     out = subprocess.run([sys.executable, '-c', code], capture_output=True, text=True, check=True)
     assert out.stdout.strip() == 'False'
 
 
-# ---- 웹앱 ----
+# ---- 웹앱 (lawbot.web) ----
 @pytest.fixture
-def app(env, fake_models):
-    """가짜 모델을 쓰는 lawbot.app. launch는 실제 서버 대신 설정만 기록한다"""
-    import lawbot.app as app
+def web(env, fake_models):
+    """가짜 모델을 쓰는 lawbot.web. uvicorn.run은 실제 서버 대신 설정만 기록한다"""
+    import lawbot.web as web
 
-    env.setattr(app, 'launched', [], raising=False)  # 테스트가 끝나면 지워짐
-    env.setattr(app.gr.Blocks, 'launch', lambda demo, **kw: app.launched.append((demo, kw)))
-    return app
+    env.setattr(web, 'launched', [], raising=False)  # 테스트가 끝나면 지워짐
+    env.setattr(web.uvicorn, 'run', lambda api, **kw: web.launched.append((api, kw)))
+    return web
 
 
 def test_import_does_not_check_auth_or_load_models(env):
@@ -297,90 +298,79 @@ def test_import_does_not_check_auth_or_load_models(env):
     FakeRetriever.created = FakeLLM.created = 0
     env.setattr(service, 'Retriever', FakeRetriever)
     env.setattr(service, 'LLM', FakeLLM)
-    sys.modules.pop('lawbot.app', None)
+    sys.modules.pop('lawbot.web', None)
     try:
-        import lawbot.app
-
-        assert not hasattr(lawbot.app, 'demo')
         assert FakeRetriever.created == 0 and FakeLLM.created == 0
     finally:
-        sys.modules.pop('lawbot.app', None)
+        sys.modules.pop('lawbot.web', None)
 
 
-def test_build_demo_with_fakes_needs_no_auth(app):
+def test_create_app_with_fakes_needs_no_auth_check(web):
     lawbot = service.load_app()
     FakeRetriever.created = FakeLLM.created = 0
-    demo = app.build_demo(lawbot)
-    assert isinstance(demo, app.gr.Blocks) and demo.title == '노동법 챗봇'
+    web.create_app(lawbot, ('u', 'p'))
     assert FakeRetriever.created == 0 and FakeLLM.created == 0  # 넘겨준 객체 외에 모델을 만들지 않음
-    assert app.launched == []
+    assert web.launched == []
 
 
-def test_app_refuses_to_start_without_auth_before_loading_models(app):
+def test_app_refuses_to_start_without_auth_before_loading_models(web, env):
+    env.setattr(web, 'require_build', lambda dist: None)
     with pytest.raises(RuntimeError, match='LAWBOT_USER'):
-        app.main()
+        web.main([])
     assert FakeRetriever.created == 0 and FakeLLM.created == 0
-    assert app.launched == []
+    assert web.launched == []
 
 
-def test_app_launches_local_only(app, env):
+def test_app_launches_local_only(web, env):
     set_auth(env)
-    env.setenv('GRADIO_SERVER_NAME', '0.0.0.0')
-    env.setenv('GRADIO_SHARE', 'True')
-    app.main()
-    [(demo, launched)] = app.launched
-    assert demo.title == '노동법 챗봇'
-    assert launched == {
-        'server_name': '127.0.0.1',
-        'server_port': 7860,
-        'auth': ('tester', 'test-only-pw'),
-        'share': False,
-    }
+    env.setattr(web, 'require_build', lambda dist: None)
+    for k, v in (('GRADIO_SERVER_NAME', '0.0.0.0'), ('UVICORN_HOST', '0.0.0.0'), ('UVICORN_PORT', '80')):
+        env.setenv(k, v)  # 주소를 바꾸는 환경 변수는 무시
+    web.main([])
+    [(api, launched)] = web.launched
+    assert launched == {'host': '127.0.0.1', 'port': 7860, 'log_level': 'warning'}
     assert FakeRetriever.created == 1 and FakeLLM.created == 0  # 검색기 1개. 답변 모델 클라이언트는 첫 질문 때
 
 
-def test_app_loads_models_via_service(app, env):
-    # main은 service.load_app으로 만든 검색기·모델(LAWBOT_FAST_MODEL 반영)을 화면에 넘긴다
+def test_app_loads_models_via_service(web, env):
+    # main은 service.load_app으로 만든 검색기·모델(LAWBOT_FAST_MODEL 반영)을 API에 넘긴다
     set_auth(env)
+    env.setattr(web, 'require_build', lambda dist: None)
     env.setenv('LAWBOT_FAST_MODEL', 'lawbot-fast-8bit')
-    build, apps = app.build_demo, []
-    env.setattr(app, 'build_demo', lambda a: apps.append(a) or build(a))
-    app.main()
+    create, apps = web.create_app, []
+    env.setattr(web, 'create_app', lambda a, *rest: apps.append(a) or create(a, *rest))
+    web.main([])
     [a] = apps
     assert isinstance(a.retriever, FakeRetriever)
     assert a.models.get('fast')[0].path == 'lawbot-fast-8bit'  # FakeLLM의 첫 인자 = API 모델 id
-    assert len(app.launched) == 1
+    assert len(web.launched) == 1
 
 
-def test_chat_streams_answer_with_sources(app):
+def test_chat_streams_answer_with_sources(web):
     lawbot = service.load_app()
-    chat = app.make_chat(lawbot)
-    assert chat.__name__ == 'chat'  # Gradio API 이름(/gradio_api/call/chat)
-    steps = list(chat('수습 기간에도 해고 예고?', [], 'fast', 'full'))
-    # 먼저 처리 중 문구(조문 없음), 그다음 토큰마다 누적 답변, 마지막은 생성 완료 후 측정값(완료 시간·tok/s)을 채운 같은 답변
-    assert steps[0] == (app.SEARCHING, '', '⏳ 조문 검색 중…')
-    steps = steps[1:]
-    assert [t for t, _, _ in steps] == [
+    r = run(lawbot, '수습 기간에도 해고 예고?', 'fast', 'full')
+    # 먼저 처리 중 문구, 조문, 그다음 토큰마다 누적 답변, 끝나면 측정값(완료 시간·tok/s)과 같은 답변
+    assert r.events[0] == ('status', {'text': '⏳ 조문 검색 중…'})
+    assert [d['text'] for e, d in r.events if e == 'answer'] == [
         '【결론】',
         '【결론】예고해야',
         '【결론】예고해야 합니다.',
-        '【결론】예고해야 합니다.',
     ]
-    src = steps[-1][1]
-    assert all(s == src for _, s, _ in steps)  # 근거 조문 칸은 답변 내내 같음 (인용이 없으면 끝나도 세 개 모두 펼침)
-    assert '**근로기준법 제26조 해고의 예고** · 유사도 0.912' in src
-    assert '30일 전에 예고' in src
-    assert src.count('제26조 해고의 예고') == 1  # 조문 본문 첫 줄(제목 줄)은 중복 표시 안 함
+    assert r.done['text'] == '【결론】예고해야 합니다.'
+    first, final = [d for e, d in r.events if e == 'sources']
+    assert first == final  # 인용이 없으면 끝나도 세 개 모두 펼침
+    assert '근로기준법 제26조 해고의 예고 · 유사도 0.912' in r.src
+    assert '30일 전에 예고' in r.src
+    assert r.src.count('제26조 해고의 예고') == 1  # 조문 본문 첫 줄(제목 줄)은 중복 표시 안 함
     assert lawbot.retriever.query == '수습 기간에도 해고 예고?'
     assert lawbot.models.llms['fast'].args == ('수습 기간에도 해고 예고?', HITS)
-    assert steps[-1][2].startswith('Lawbot Fast · 검색') and '완료' in steps[-1][2]
+    assert r.stats.startswith('Lawbot Fast · 검색') and '완료' in r.stats
 
 
-def test_chat_generation_failure_is_not_hidden(app):
-    # 생성 실패를 빈 답변이나 부분 답변으로 끝내지 않고 안내 문구(gr.Error)로 올린다. 원래 예외는 __cause__
-    # (원래 예외를 그대로 올리면 화면에 안내 없이 'Error' 표시만 남음: 2026-11-02 e2e_stub에서 확인)
+def test_chat_generation_failure_is_not_hidden(web, capsys):
+    # 생성 실패를 빈 답변이나 부분 답변으로 끝내지 않고 안내 문구로 알린다. 원래 예외는 서버 로그에
     FakeLLM.chunks = ['【결론】', RuntimeError('generation failed')]
-    chat = app.make_chat(service.load_app())
-    with pytest.raises(app.gr.Error, match='답변을 생성하지 못했습니다') as ei:
-        list(chat('질문', [], 'fast', 'full'))
-    assert 'generation failed' in str(ei.value.__cause__)
+    r = run(service.load_app(), '질문', 'fast', 'full')
+    assert r.error.startswith('답변을 생성하지 못했습니다') and r.done is None
+    out = capsys.readouterr().out
+    assert 'generation failed' in out and 'Traceback' in out

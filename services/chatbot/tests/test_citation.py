@@ -146,10 +146,10 @@ def test_cited_hits_wrong_law_and_order():
 
 
 def test_no_model_imports():
-    """인용 판정·화면 후처리는 torch·mlx·gradio를 올리지 않는다"""
+    """인용 판정·화면 후처리는 torch·mlx·웹 서버를 올리지 않는다"""
     code = (
         'import sys, lawbot.citation, lawbot.answer_format; '
-        "print(sorted(m for m in ('torch', 'mlx', 'mlx_lm', 'sentence_transformers', 'gradio') if m in sys.modules))"
+        "print(sorted(m for m in ('torch', 'mlx', 'mlx_lm', 'sentence_transformers', 'fastapi') if m in sys.modules))"
     )
     out = subprocess.run([sys.executable, '-c', code], capture_output=True, text=True, check=True).stdout
     assert out.strip() == '[]'
@@ -158,7 +158,7 @@ def test_no_model_imports():
 def test_chatbot_never_imports_model_libraries():
     """모델은 모두 모델 서버에: 웹앱·평가·배포 검사는 torch·mlx·sentence_transformers·모델 서버 패키지를 올리지 않는다"""
     code = (
-        'import sys, lawbot.app, lawbot.service, lawbot_tools.eval_v4, lawbot.check_deploy, lawbot_tools.smoke_decree; '
+        'import sys, lawbot.web, lawbot.service, lawbot_tools.eval_v4, lawbot.check_deploy, lawbot_tools.smoke_decree; '
         "print(sorted(m for m in ('torch', 'mlx', 'mlx_lm', 'sentence_transformers', 'lawbot_model_server') "
         'if m in sys.modules))'
     )

@@ -114,6 +114,15 @@ def test_login_sets_private_cookie_and_logout(client):
     assert client.get('/api/me').status_code == 401
 
 
+def test_cookie_secure_only_over_https(lawbot):
+    """Tailscale 등 https 프록시(X-Forwarded-Proto)를 거치면 Secure. 127.0.0.1의 http에서는 빼야 쿠키가 저장된다"""
+    app = web.create_app(lawbot, (USER, PW))
+    with TestClient(app, base_url='https://testserver') as c:
+        assert 'secure' in login(c).headers['set-cookie'].lower()
+    with TestClient(app) as c:
+        assert 'secure' not in login(c).headers['set-cookie'].lower()
+
+
 def test_post_must_be_json(client):
     r = client.post('/api/login', data={'user': USER, 'password': PW})
     assert r.status_code == 415
@@ -350,16 +359,62 @@ def test_without_build_only_api(lawbot, tmp_path):
 
 
 # ---- 모듈 경계 ----
-def test_web_and_view_do_not_import_gradio():
-    code = 'import sys, lawbot.web, lawbot.view, lawbot.settings; print("gradio" in sys.modules)'
-    out = subprocess.run([sys.executable, '-c', code], capture_output=True, text=True, check=True)
-    assert out.stdout.strip() == 'False'
-
-
-def test_web_settings_load_does_not_import_gradio(env):
+def test_view_and_settings_do_not_import_web_server(env):
+    """화면 문구·설정 검사는 웹 서버(fastapi) 없이 (평가·배포 검사 명령도 씀)"""
     from conftest import set_auth
 
     set_auth(env)
-    code = 'import sys, lawbot.settings as s; s.load(web=True); print("gradio" in sys.modules)'
+    code = 'import sys, lawbot.view, lawbot.settings as s; s.load(web=True); print("fastapi" in sys.modules)'
     out = subprocess.run([sys.executable, '-c', code], capture_output=True, text=True, check=True)
     assert out.stdout.strip() == 'False'
+
+
+# ---- 화면 빌드 확인 (lawbot-app 시작 때) ----
+def frontend(tmp_path):
+    """작은 화면 소스 폴더와 그 지문으로 만든 dist (npm run build가 쓰는 build.json과 같은 형식)"""
+    root = tmp_path / 'frontend'
+    (root / 'src' / 'components').mkdir(parents=True)
+    for rel, text in {
+        'src/main.tsx': 'main',
+        'src/components/A.tsx': 'a',
+        'index.html': '<html>',
+        'package.json': '{}',
+        'package-lock.json': '{}',
+        'tsconfig.json': '{}',
+        'vite.config.ts': 'cfg',
+        'fingerprint.ts': 'fp',
+    }.items():
+        (root / rel).write_text(text, encoding='utf-8')
+    dist = root / 'dist'
+    dist.mkdir()
+    (dist / 'index.html').write_text('<html>', encoding='utf-8')
+    (dist / 'build.json').write_text(json.dumps({'source': web.source_fingerprint(root)}), encoding='utf-8')
+    return root, dist
+
+
+def test_build_matches_sources(tmp_path):
+    root, dist = frontend(tmp_path)
+    web.require_build(dist)  # 통과
+    (root / 'src' / 'components' / 'A.tsx').write_text('changed', encoding='utf-8')
+    with pytest.raises(RuntimeError, match='npm ci && npm run build'):
+        web.require_build(dist)
+
+
+def test_build_missing_or_unreadable(tmp_path):
+    root, dist = frontend(tmp_path)
+    (dist / 'build.json').write_text('not json', encoding='utf-8')
+    with pytest.raises(RuntimeError, match='npm ci && npm run build'):
+        web.require_build(dist)
+    (dist / 'build.json').unlink()
+    with pytest.raises(RuntimeError, match='npm ci && npm run build'):
+        web.require_build(dist)
+    with pytest.raises(RuntimeError, match='npm ci && npm run build'):
+        web.require_build(tmp_path / 'none')
+
+
+def test_fingerprint_ignores_files_outside_sources(tmp_path):
+    root, dist = frontend(tmp_path)
+    (root / 'node_modules').mkdir()
+    (root / 'node_modules' / 'x.js').write_text('x', encoding='utf-8')
+    (root / 'README.md').write_text('notes', encoding='utf-8')
+    web.require_build(dist)

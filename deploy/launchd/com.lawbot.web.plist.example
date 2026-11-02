@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<!-- Lawbot 운영 웹앱 (Gradio, 모델 없음: 모델 서버에 접속) 상시 실행 템플릿
+<!-- Lawbot 운영 웹앱 (FastAPI + 빌드한 React 화면, 모델 없음: 모델 서버에 접속) 상시 실행 템플릿
      자리표시를 채워 ~/Library/LaunchAgents/com.lawbot.web.plist로 복사 (docs/operations.md "상시 운영과 개발 동시 실행"):
        __UV__       which uv로 찾은 절대 경로 (launchd의 PATH에는 uv가 없음)
        __PROD_DIR__ 운영 worktree 절대 경로 (.env는 이 폴더에서 envfile이 읽음)

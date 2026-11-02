@@ -6,8 +6,8 @@ import sys
 from importlib.metadata import PackageNotFoundError, version
 
 PACKAGES = (
-    'gradio',
-    'gradio-client',
+    'fastapi',
+    'uvicorn',
     'mlx',
     'mlx-metal',
     'mlx-lm',

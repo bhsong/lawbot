@@ -8,7 +8,7 @@
      └─ 리랭커: Qwen3-Reranker-4B (튜닝 없음, MLX 4비트) → 상위 3개
          ├─ (Pro만) 시행령·시행규칙 397개 중 임베딩 상위 10개 → 같은 리랭커 → 필터 → 최대 2개를 법률 3개 뒤에 첨부
          └─ 답변: Qwen3.8-27B (튜닝 없음, MLX 4비트, 간결형) / 소형 맥은 Qwen3-4B + v4 LoRA (법률 3개만)
-             └─ 답변 + 근거 조문 표시 (Gradio)
+             └─ 답변 스트리밍(SSE) + 근거 조문 표시 (React 화면)
 ```
 
 모델(임베딩·리랭커·답변)은 모두 모델 서버(`services/model-server`, OpenAI 호환 API)에서 돌고, 웹앱(`services/chatbot`)은 조문 인덱스·검색 정렬·하위법령 필터·프롬프트 조립·화면을 맡습니다. 생성만 OpenAI 호환 클라우드 모델로 바꿀 수 있습니다.
@@ -19,7 +19,7 @@
 | --- | --- | --- |
 | 임베딩 검색 | Qwen3-Embedding-0.6B, sentence-transformers | 질문→조문 대조학습 + hard negative, 3에폭 |
 | 답변 생성 | Qwen3-4B + LoRA (r=16), mlx-lm | 정답 조문 위주 학습 + 거절 샘플 135개 포함 |
-| 웹 UI | Gradio | 답변 스트리밍, 근거 조문 패널 |
+| 웹 UI | FastAPI + React (Vite) | 로그인, 답변 스트리밍(SSE), 근거 조문 패널, 휴대폰 하단 시트 |
 | 학습 | Google Colab (NVIDIA L4) | TRL SFTTrainer, PEFT |
 
 ## 레포 구성
@@ -45,16 +45,20 @@ services/chatbot/src/lawbot/
 ├── llm.py             # 프롬프트 구성, openai SDK로 생성 스트림
 ├── api_client.py      # 모델 서버 클라이언트 (임베딩·리랭크·모델 목록, 프록시 무시)
 ├── service.py         # UI와 무관한 질의응답 흐름 (모델 서버 접속, 검색 → 답변 스트리밍)
-├── app.py             # Gradio 웹앱
+├── web.py             # 웹앱 (lawbot-app): 로그인·화면 설정·질문 SSE·피드백 API, 빌드한 화면 파일, 빌드 지문 확인
+├── view.py            # 화면 문구·조문 카드 묶음·측정 줄·오류 안내
 ├── hits.py            # 검색 결과·측정값 dict의 모양 (TypedDict: 타입 검사용)
 ├── settings.py        # 실행 설정 객체: 시작할 때 한 번 읽어 모두 검증 (틀린 값은 한꺼번에)
-├── security.py        # 로컬 전용 실행 설정 (127.0.0.1, 로그인 필수, 공유 링크 없음, 포트·모델 서버·생성 API 주소 검증)
+├── security.py        # 로컬 전용 실행 설정 (127.0.0.1, 로그인 필수, 포트·모델 서버·생성 API 주소 검증)
 ├── citation.py        # 인용 파싱·형식 검증·거절 판정·비교용 정규화 (웹앱 화면과 eval_v4 채점이 같이 씀)
 ├── check_deploy.py    # 배포 점검 (조문 CSV·system·설정·모델 서버 접속, uv run python -m lawbot.check_deploy)
 ├── answer_format.py   # 간결형 화면 후처리 (결론 + 근거 줄)
 ├── manifest.py        # 법령 데이터 매니페스트 검사 (조문 수·sha256·기준일)
-├── feedback.py        # 답변 피드백 저장 (LAWBOT_FEEDBACK, feedback/*.jsonl)
-└── feedback_ui.py     # 피드백 깃발의 터치 기기 보정 CSS·JS
+└── feedback.py        # 답변 피드백 저장 (LAWBOT_FEEDBACK, feedback/*.jsonl)
+services/chatbot/frontend/   # 화면 (React + TypeScript, npm run build → dist/, Git 제외)
+├── src/useChatStream.ts     # 질문 하나의 SSE를 읽어 화면 상태로 (sse.ts 파서, turns.ts 이벤트 적용)
+├── src/App.tsx              # 로그인 → 상단 모델·형식 버튼, 대화, 입력창, 오른쪽 조문 패널·휴대폰 시트
+└── fingerprint.ts           # 소스 지문 → dist/build.json (웹앱이 시작할 때 비교)
 tools/lawbot-tools/src/lawbot_tools/
 ├── eval_v4.py         # v4 웹앱 구성 평가 (lawbot-eval-v4)
 ├── score_answers.py   # 키워드 기반 채점기

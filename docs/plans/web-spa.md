@@ -71,6 +71,11 @@ Gradio가 하던 일을 옮긴다. `service.ask`와 `app.py`의 문구·조립 �
 | **PR 2** | `frontend/` SPA. **가짜 데이터로 화면을 먼저 만들어 스크린샷(데스크톱·휴대폰·다크·생성 중·오류)을 사용자에게 보이고 승인 뒤 연결**. CI에 Node(설치·`tsc`·Vitest·빌드) 추가. SPA 대역 E2E | 그대로 |
 | **PR 3** | `lawbot-app`이 FastAPI+SPA를 띄움(launchd plist 그대로), Gradio·`feedback_ui.py`·Gradio 테스트 제거, `gradio` 의존성 제거, `docs/operations.md` 운영 반영 절차에 빌드 추가, `e2e_live`를 새 화면으로 (실행은 승인 후). 휴대폰 접속 경로(Tailscale) 확인 후 https일 때 쿠키 `Secure` | 제거 |
 
+## 진행 (2026-11-03)
+
+- PR 1 (#51), PR 2 (#52) 병합.
+- PR 3: `lawbot-app` = `lawbot.web:main`. Gradio·`feedback_ui.py`·Gradio 테스트 제거, `gradio` 의존성 제거. 화면 빌드 지문(`dist/build.json`)이 소스와 다르면 시작 거부. https(`X-Forwarded-Proto`, uvicorn이 127.0.0.1에서 온 것만 믿음)일 때 쿠키 `Secure`. Gradio chat 함수를 쓰던 테스트는 `chat_support.run`(`web.chat_events`)으로 같은 기대값을 검사. `e2e_live` 1차(2026-11-03)는 조문 카드를 Gradio 기준으로 세는 테스트 오류로 3개 모두 실패(모델 서버 경로는 성공, [기록](../evals/2026-11-03-e2e-live-spa.md)). 그래서 카드를 `source-card` test id로 세는 `e2e_support.law_cards`를 추가해 대역 E2E와 같이 씀. 2차(같은 날 07:03, `ccd1e00`)에서 3개 모두 통과. 남은 것: 운영 반영 뒤 휴대폰 확인(Tailscale `X-Forwarded-Proto` 포함).
+
 ## 5. 테스트 (구현보다 먼저)
 
 ### PR 1

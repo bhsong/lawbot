@@ -6,6 +6,7 @@ README의 "사용법"을 자세히 적은 문서입니다. 구조는 [architectu
 
 - Apple Silicon 맥(M 시리즈), 메모리 8GB 이상
 - [uv](https://docs.astral.sh/uv/) (Python 3.14는 `uv sync` 때 자동 설치)
+- Node.js (`services/chatbot/frontend/.nvmrc`의 버전, 화면 빌드용)
 - 학습된 모델 파일 (아래 "모델 준비" 참고)
 
 ## 설치
@@ -14,7 +15,10 @@ README의 "사용법"을 자세히 적은 문서입니다. 구조는 [architectu
 git clone https://github.com/bhsong/lawbot.git
 cd lawbot
 uv sync
+(cd services/chatbot/frontend && npm ci && npm run build)   # 화면 파일 (dist/, Git 제외)
 ```
+
+화면 코드(`services/chatbot/frontend`)가 바뀌면 다시 빌드합니다. 빌드가 없거나 지금 소스와 다르면 `lawbot-app`이 시작을 거부합니다(`dist/build.json`의 소스 지문 비교).
 
 ## 모델 준비
 
@@ -71,7 +75,7 @@ uv run lawbot-app            # 터미널 2: 모델 서버가 준비될 때까지
 - `.env`는 `.gitignore`에 들어 있어 Git에 올라가지 않습니다. `.env.example`에는 비밀번호를 적지 마세요.
 - 셸에서 `export`한 변수가 있으면 그 값이 `.env`보다 우선합니다. 한 번만 다르게 실행할 때는 `LAWBOT_RERANKER_ENABLED=0 uv run lawbot-app`처럼 앞에 붙입니다.
 - 다른 파일을 쓰려면 `LAWBOT_ENV_FILE=.env.small uv run lawbot-app`(예: 소형 맥의 Fast 4B 설정), 파일을 읽지 않으려면 `LAWBOT_ENV_FILE=`.
-- 새 화면(개발 중, [계획](plans/web-spa.md)): 화면 파일을 먼저 빌드하고(`cd services/chatbot/frontend && npm ci && npm run build`, Node는 `.nvmrc`), `uv run lawbot-web --port <다른 포트>`로 같은 설정의 새 화면을 Gradio 화면과 나란히 띄웁니다. 시작할 때 `lawbot-app`처럼 모델 서버로 조문 인덱스를 만듭니다(임베딩 캐시가 있으면 호출 없음). 화면을 고치는 중에는 `LAWBOT_WEB_URL=http://127.0.0.1:<lawbot-web 포트> npm run dev`로 Vite 개발 서버를 띄우면 `/api`가 `lawbot-web`으로 넘어갑니다. 운영은 계속 `lawbot-app`입니다.
+- 화면을 고치는 중에는 `lawbot-app`을 띄운 채 `services/chatbot/frontend`에서 `LAWBOT_WEB_URL=http://127.0.0.1:<웹앱 포트> npm run dev`로 Vite 개발 서버를 띄웁니다. `/api`는 웹앱으로 넘어가고 화면은 고치는 즉시 바뀝니다. 다 고친 뒤 `npm run build`를 해야 `lawbot-app`이 새 화면을 냅니다.
 - `.env`에는 `LAWBOT_*`만 적을 수 있습니다. 서버 주소는 바꿀 수 없고, 웹앱 포트는 `LAWBOT_PORT`로 정합니다(아래 참고).
 - 값에 공백이나 ` #`이 들어가면 작은따옴표로 감쌉니다: `LAWBOT_PW='a b#c'`.
 
@@ -98,7 +102,7 @@ LAWBOT_PW="$(security find-generic-password -a lawbot -s lawbot -w)" uv run lawb
 
 웹앱은 모델을 폴더가 아니라 모델 id로 고르고(`LAWBOT_*_MODEL`), 모델 폴더와 상주 수는 모델 서버 설정(`LAWBOT_SERVE_*`, `LAWBOT_MAX_RESIDENT`)입니다. 아래 표가 전체 변수입니다(상대 경로는 저장소 최상위 기준).
 
-웹앱은 이 맥에서만 쓰는 로컬 전용입니다. 주소는 `127.0.0.1` 고정이고, 포트는 `.env`의 `LAWBOT_PORT`(없으면 기존 기본값)입니다. 브라우저에서 `http://127.0.0.1:<포트>`로 접속해 로그인합니다. 같은 네트워크의 다른 기기에서는 접속할 수 없으며, Gradio 공개 공유 링크(`share`)도 만들지 않습니다. 주소·공유 설정은 바꿀 수 없고, `GRADIO_SERVER_NAME`·`GRADIO_SERVER_PORT` 같은 Gradio 환경 변수는 무시합니다(`services/chatbot/src/lawbot/security.py`). 상시 운영할 때는 `.env`에 `LAWBOT_PORT`를 따로 정하세요.
+웹앱은 이 맥에서만 쓰는 로컬 전용입니다. 주소는 `127.0.0.1` 고정이고, 포트는 `.env`의 `LAWBOT_PORT`(없으면 기존 기본값)입니다. 브라우저에서 `http://127.0.0.1:<포트>`로 접속해 로그인합니다. 같은 네트워크의 다른 기기에서는 접속할 수 없습니다. 주소는 바꿀 수 없습니다(`services/chatbot/src/lawbot/security.py`). 로그인 세션은 웹앱 메모리에만 있어 웹앱을 다시 띄우면 다시 로그인합니다. https(Tailscale)로 접속하면 로그인 쿠키에 `Secure`가 붙습니다. 상시 운영할 때는 `.env`에 `LAWBOT_PORT`를 따로 정하세요.
 
 웹앱(`lawbot-app`, `check_deploy`, `eval_v4`):
 
@@ -216,8 +220,8 @@ client.chat.completions.create(
 맥 미니에서 운영 웹앱을 계속 켜 두고(휴대폰은 Tailscale로 접속) 같은 맥에서 개발 웹앱도 띄울 때도 모델 서버 하나를 두 웹앱이 함께 씁니다. 웹앱마다 27B와 리랭커를 따로 올리면 32GB를 넘기 때문입니다.
 
 ```
-휴대폰 ──(Tailscale HTTPS, tailscale serve)──▶ 127.0.0.1:<운영 포트>  운영 웹앱 (Gradio, 모델 없음)
-맥 브라우저 ─────────────────────────────────▶ 127.0.0.1:<개발 포트>  개발 웹앱 (Gradio, 모델 없음)
+휴대폰 ──(Tailscale HTTPS, tailscale serve)──▶ 127.0.0.1:<운영 포트>  운영 웹앱 (FastAPI + React 화면, 모델 없음)
+맥 브라우저 ─────────────────────────────────▶ 127.0.0.1:<개발 포트>  개발 웹앱 (FastAPI + React 화면, 모델 없음)
                                                    │  둘 다 OpenAI 호환 HTTP + 토큰
                                                    ▼
                                      127.0.0.1:<모델 서버 포트>  모델 서버 (1개)
@@ -241,6 +245,7 @@ client.chat.completions.create(
    ln -s ~/Work/lawbot/models models            # 모델 파일 공유
    cp ~/Work/lawbot/.env .env && chmod 600 .env # .env.example대로 (모델 서버 블록 + 맨 아래 운영 블록)
    uv sync --frozen
+   (cd services/chatbot/frontend && npm ci && npm run build)   # 화면 파일
    ```
 
    운영 `.env`는 `.env.example` 그대로(모델 서버 + 웹앱) `LAWBOT_INSTANCE=운영`, `LAWBOT_PORT`를 더하고, 개발 레포 `.env`는 `.env.dev.example`대로 웹앱 설정만 적습니다. 두 `.env`의 `LAWBOT_MODEL_SERVER`·`LAWBOT_MODEL_TOKEN`은 같아야 하고, 웹앱이 고르는 모델 id(`LAWBOT_*_MODEL`)는 운영 `.env`의 `LAWBOT_SERVE_*`에 있어야 합니다.
@@ -267,6 +272,8 @@ client.chat.completions.create(
    launchctl kickstart -k gui/$(id -u)/com.lawbot.web          # 재시작 (모델 서버 코드가 바뀌면 com.lawbot.model-server도)
    launchctl bootout gui/$(id -u)/com.lawbot.web               # 해제 (모델 서버도 같은 방식)
    ```
+
+   새 커밋을 운영에 반영할 때 화면 코드(`services/chatbot/frontend`)가 바뀌었으면 웹앱 재시작 전에 운영 worktree에서 `npm ci && npm run build`를 다시 합니다. 빠뜨리면 웹앱이 시작을 거부하므로 `~/Library/Logs/lawbot/web.log`에서 확인합니다.
 
    종료되면 launchd가 다시 띄웁니다(`KeepAlive`). 모델 로딩에 실패하면 모델 서버는 종료 코드 1로 끝나고 30초 간격(`ThrottleInterval`)으로 다시 시도합니다. 맥이 잠자기에 들어가지 않게 설정합니다.
 5. 휴대폰에서는 Tailscale로 운영 웹앱 포트만 tailnet 안에 HTTPS로 노출합니다. 공개 인터넷에 여는 `tailscale funnel`은 쓰지 않습니다. 인자 형식은 Tailscale 버전마다 다를 수 있으니 `tailscale serve --help`로 확인합니다.
@@ -334,7 +341,7 @@ uv run python -m lawbot_tools.log_summary --caller lawbot-app  # 평가 실행 �
 
 ## 답변 피드백 (선택, `LAWBOT_FEEDBACK=1`)
 
-답변마다 👍과 깃발(이유: 검색 오류·답변 오류·불필요한 거절·기타)이 붙습니다. 마우스는 깃발에 올리면, 휴대폰은 깃발을 탭하면 이유가 보입니다. 누르면 그 답을 만든 입력 전체(질문, 참고 조문(첨부된 시행령·시행규칙 포함)과 첨부 설정, system, 답변 원문·화면 글, 인용 판정, 측정값, 데이터 버전, 커밋, `request_id`)를 `feedback/feedback_YYYY-MM.jsonl`(Git 제외, 권한 600)에 한 줄씩 덧붙입니다. 질문 원문은 이 파일에만, 버튼을 누른 답에만 남습니다. 앱을 다시 시작하기 전의 답이나 화면 글이 기록과 다른 답에는 저장하지 않습니다. Gradio 기본 flagging(`.gradio/flagged`)은 항상 끕니다.
+답변마다 👍과 깃발(이유: 검색 오류·답변 오류·불필요한 거절·기타)이 붙습니다. 깃발을 누르면(휴대폰은 탭) 이유 목록이 열립니다. 누르면 그 답을 만든 입력 전체(질문, 참고 조문(첨부된 시행령·시행규칙 포함)과 첨부 설정, system, 답변 원문·화면 글, 인용 판정, 측정값, 데이터 버전, 커밋, `request_id`)를 `feedback/feedback_YYYY-MM.jsonl`(Git 제외, 권한 600)에 한 줄씩 덧붙입니다. 질문 원문은 이 파일에만, 버튼을 누른 답에만 남습니다. 앱을 다시 시작하기 전의 답이나 다른 로그인 세션의 답에는 저장하지 않습니다.
 
 저장한 줄은 바로 학습에 쓰지 않고 검수를 거칩니다.
 
@@ -345,13 +352,12 @@ uv run python -m lawbot_tools.feedback_export feedback_review_<날짜>.csv --out
 
 - `feedback_review`: 같은 답은 마지막 선택만 남기고 해제는 뺍니다. 평가 데이터(v4 test 2,075·val 1,110문항, 하위법령 질문 val 444·test 1,880문항, `oos_eval`, `scope_controls`, `refusal_hard_cases`, `labor_eval_keywords`)와 같은 질문(공백·문장부호 무시)과 유사도 0.9 이상인 질문을 빼고, 뺀 id를 출력합니다. 엑셀·Numbers에서 `h_ok`(맞음/틀림/모름), `h_gold`(`법령명 제N조`, 여러 개면 `;`), `h_scope`(범위 안/범위 밖), `h_note`를 채웁니다. `--keep 이전 CSV`로 채운 칸을 이어받습니다
 - `feedback_export`(맥에서 실행): `fb_questions.csv`(dev 질문), `fb_emb_pairs.csv`(정답 조문 positive, 검색 오류는 검색 1위를 hard negative), `fb_sft.csv`(맞음 + 👍), `fb_kto.csv`(맞음/틀림 라벨). 프롬프트는 저장한 조문(첨부된 시행령·시행규칙 포함)으로 `llm.build_prompt_v4`를 다시 불러 만들고, `h_gold`에는 법률과 하위법령 조문(`근로기준법 시행령 제2조`)을 모두 쓸 수 있으며, 피드백 안에서 `random_state=42`로 val을 뗍니다. 평가는 계속 기존 test로만 합니다
-- 깃발의 터치 보정(`feedback_ui.py`)은 Gradio 6.30.0 내부 이름에 기댑니다. Gradio를 올리면 맥 브라우저와 휴대폰에서 다시 확인하세요
 
 > 주의: 비밀번호를 소스 코드, 셸 설정 파일, 스크립트, `.env.example` 등 Git에 올라가는 파일에 적지 마세요. 파일에 둘 때는 Git에서 제외된 `.env`(권한 600)에만 두고, 더 안전하게는 실행할 때 입력하거나 macOS 키체인을 쓰세요.
 
 ## 테스트 실행
 
-기본 테스트는 모델 파일, 네트워크, 실제 비밀번호 없이 돌아갑니다. `uv sync`와 브라우저 E2E용 Chromium 설치(`uv run playwright install chromium`, 한 번)만 하면 됩니다. 두 서비스의 테스트(`services/*/tests`)를 함께 돌리고, 실제 모델 대신 가짜 모델·가짜 모델 서버를 넣으며, 테스트 중 외부 네트워크 접속은 막습니다. 챗봇 클라이언트와 실제 모델 서버 앱(가짜 모델)이 OpenAI SDK로 통하는지 보는 계약 테스트도 들어 있습니다. `data/`·`results/`는 읽기만 합니다.
+기본 테스트는 모델 파일, 네트워크, 실제 비밀번호 없이 돌아갑니다. `uv sync`, 화면 빌드(`npm ci && npm run build`, 브라우저 E2E가 씀), 브라우저 E2E용 Chromium 설치(`uv run playwright install chromium`, 한 번)만 하면 됩니다. 두 서비스의 테스트(`services/*/tests`)를 함께 돌리고, 실제 모델 대신 가짜 모델·가짜 모델 서버를 넣으며, 테스트 중 외부 네트워크 접속은 막습니다. 챗봇 클라이언트와 실제 모델 서버 앱(가짜 모델)이 OpenAI SDK로 통하는지 보는 계약 테스트도 들어 있습니다. `data/`·`results/`는 읽기만 합니다.
 
 ```bash
 uv run pytest              # 기본 테스트 전체 (모델 불필요)
@@ -360,14 +366,14 @@ uv run pytest -m e2e_stub  # 브라우저 E2E (대역)만: Playwright → 실제
 uv run ruff check          # 린트 (규칙은 pyproject.toml의 [tool.ruff])
 uv run ruff format         # 포맷 (작은따옴표, 120자)
 uv run pyright             # 타입 검사 (웹앱 런타임·모델 서버·monitor·공통 패키지, 평가 도구 제외)
+(cd services/chatbot/frontend && npm run typecheck && npm test)   # 화면: tsc, Vitest
 ```
 
 브라우저 E2E는 두 층입니다. `e2e_stub`(기본 실행·CI 포함)는 임베딩·리랭크·답변 생성 세 호출을 모두 가짜 모델로 바꾼 것이라 **실제 모델 연결 확인이 아닙니다**. 설정은 `.env.example`(운영 구성)과 같게 띄우고, 실패한 테스트만 `results/e2e_stub/<시각>-<테스트>/`에 스크린샷·화면 HTML·프로세스 출력·요청 로그를 남깁니다(성공하면 남기지 않음, 진단 후 지움). 실제 공유 모델 서버로 하는 `e2e_live`는 승인 후 맥 미니의 개발 worktree에서만 실행합니다([계획](archives/e2e-playwright.md)).
 
 브라우저 E2E를 새로 쓰거나 고칠 때:
 
-- 질문 입력창은 `textarea[data-testid=textbox]`로 찾습니다. 로그인 화면의 사용자명 칸도 `data-testid=textbox`라서 `textarea`로 구분합니다.
-- 브라우저 언어는 `en-US`로 고정합니다. Gradio 기본 문구(버튼·안내)에 기대는 확인이 있습니다.
+- 화면 요소는 역할·라벨·테스트 id로 찾습니다(`e2e_support`: 입력창 `textbox` 이름 '질문', 답변 `answer`, 측정 줄 `lawbot-stats`, 조문 패널 `lawbot-sources`). CSS 클래스에 기대지 않습니다.
 - 브라우저는 `services/chatbot/tests/conftest.py`의 모듈 범위 픽스처를 씁니다. `pytest-playwright`는 쓰지 않습니다(세션 내내 이벤트 루프를 열어 두어 뒤 테스트의 `asyncio.run()`을 깨뜨림).
 
 ```bash

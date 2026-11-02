@@ -10,7 +10,7 @@ LINE = re.compile(r'(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)')
 
 
 def lawbot_keys(key):
-    """레포 최상위 .env (웹앱·모델 서버): LAWBOT_*만. GRADIO_* 같은 서버 설정은 코드가 고정하므로 파일로 바꾸지 않음"""
+    """레포 최상위 .env (웹앱·모델 서버): LAWBOT_*만. 다른 서버 설정(주소 등)은 코드가 고정하므로 파일로 바꾸지 않음"""
     return key.startswith('LAWBOT_') and key != 'LAWBOT_ENV_FILE'
 
 

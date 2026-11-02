@@ -40,7 +40,7 @@ filterwarnings = [
 ]
 markers = [
     "models: 실제 모델 파일(models/)과 Apple Silicon이 필요한 테스트",
-    "integration: 실제 Gradio 서버를 별도 프로세스로 띄우는 인증 테스트 (127.0.0.1만 접속)",
+    "integration: 실제 웹앱 서버를 별도 프로세스로 띄우는 테스트 (127.0.0.1만 접속)",
     "network: 실제 외부 API·git 저장소에 접속하는 테스트 (services/monitor, 기본 실행에서 제외)",
     "e2e_stub: 브라우저 E2E (대역): Playwright → 실제 웹앱 → 실제 모델 서버 앱 + 가짜 모델 (127.0.0.1만, 기본 실행·CI 포함)",
     "e2e_live: 브라우저 E2E (실제 모델): 개발 웹앱 → 공유 모델 서버. 승인 후 맥 미니에서만 (기본 실행에서 제외)",
