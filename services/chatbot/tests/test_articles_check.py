@@ -1,4 +1,4 @@
-# tests/test_articles_check.py  →  조문 데이터 점검 (lawbot_tools.articles_check, 계획 docs/plans/monitor-article-check.md)
+# tests/test_articles_check.py  →  조문 데이터 점검 (lawbot_tools.articles_check, 계획 docs/archives/monitor-article-check.md)
 # 오늘 시행 중인 법으로 만든 조문과 지금 데이터를 비교한다. 생성기(build)는 가짜로 바꿔 끼우고, 실제 원문은 -m network
 import json
 import os

@@ -112,21 +112,23 @@ v4 조문 데이터(`data/v4/articles_v4.csv` 법률 415조문, `data/v4/law_art
 
 ## 6. 개정 목록을 갱신하는 방법
 
-`lawbot-articles-check`가 **그날 시행 중인 법**으로 조문을 만들어 지금 데이터와 비교한다 (2026-11-02, [계획](plans/monitor-article-check.md)). 데이터는 바꾸지 않고 보고서만 쓴다.
+2026-11-02부터 **자동**이다 ([계획](plans/articles-auto-update.md)). 운영 웹앱은 git 밖 `data/live/`의 조문 CSV를 읽고, `law-monitor daily`(매일 06:30)가 legalize-kr 클론을 갱신한 뒤 `lawbot-articles-update`를 부른다.
 
-```zsh
-uv run lawbot-articles-check --repo ../legalize-kr --report-dir <폴더>               # 오늘 기준
-uv run lawbot-articles-check --repo ../legalize-kr --asof 2026-12-08 --report-dir <폴더>   # 그날 기준 미리 보기
-```
+1. 그날 시행 중인 법으로 조문을 만들어 `data/live`와 비교한다. 같으면 아무것도 안 한다
+2. 다르면 새 CSV·매니페스트(`live-<기준일>`, `source.ref`)를 만들고, 임베딩 캐시를 만들고, 바뀐 조문이 검색되는지 확인한다
+3. 지금 파일을 `data/live/archive/<이름>_<이전 기준일>`로 보관하고 새 파일로 바꾼 뒤 웹앱을 재시작한다. 웹앱이 응답하지 않으면 되돌린다
+4. 결과 한 줄이 monitor 요약 md '점검' 절에, 보고서가 `services/monitor/data/articles/<날짜>.md`에 남는다 (바뀐 조문 diff, 시행 예정, 들어온 개정)
 
-- 보고서: 답변 근거가 다른 조문(본문·제목·삭제 여부), 시행 예정 개정(3절 표와 같은 내용), 데이터를 만든 뒤(매니페스트 `source.ref` 이후) 들어온 개정, 다르면 다시 만드는 명령
-- 3절 표는 보고서의 '시행 예정'과 '들어온 개정'을 보고 갱신한다. 맨 위 "확인한 날"과 Legalize KR 최신 커밋도 바꾼다
-- 매일 자동으로 돌리는 것(monitor 연결)은 monitor 구현이 더 진행된 뒤에 한다 (계획 2.2절)
+- 되돌리기: `uv run lawbot-articles-update --rollback --restart` (운영 worktree에서)
+- 미리 보기(아무것도 안 바꿈): `uv run lawbot-articles-check --repo services/monitor/data/repos/legalize-kr --asof 2026-12-08`
+- 3절 표는 보고서의 '시행 예정'과 '들어온 개정'을 보고 갱신한다 (기록용)
+- `data/v4`는 학습 기준 데이터라 바뀌지 않는다. 자동 갱신된 본문은 임베딩·4B가 학습하지 않은 본문이다 (매니페스트 `trained_on`은 v4 그대로). 큰 개정이면 val로 확인한다
 
 ## 7. 한계
 
-- 답변은 2026-10-20 시행 조문을 근거로 한다. 3절의 개정이 시행된 뒤에는 해당 조문에 대해 시행 중인 법과 다른 근거로 답한다. 화면에는 "법령 기준일"만 표시하고, 조문별 안내는 하지 않는다
-- 3절은 확인한 날까지의 기록이다. 그 뒤 공포된 개정은 `lawbot-articles-check`(6절)를 돌려야 보인다 (아직 자동 실행 없음)
+- 화면에는 "법령 기준일"(`data/live` 매니페스트)만 표시하고, 조문별 시행일 안내는 하지 않는다
+- 답변 근거는 `data/live`이고 매일 06:30에 그날 시행 중인 법으로 갱신된다 (6절). 3절 표는 확인한 날까지의 기록이다
+- 자동 갱신의 확인은 '바뀐 조문이 자기 본문으로 검색되는지'까지다. 답변 품질 평가(val)는 자동으로 돌리지 않는다
 - 내용 요약은 확인한 개정만 적었다 (근로기준법 제54조 등은 비워 둠)
 - 대조는 조문 본문(공백·서식 제외)과 제목만 한다. 별표·서식(첨부파일)은 데이터에 없고 대조하지 않았다
 

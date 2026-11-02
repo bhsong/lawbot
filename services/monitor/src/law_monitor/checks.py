@@ -1,4 +1,4 @@
-"""점검(checks): config/targets.yaml의 `checks`에 적은 명령을 하위 프로세스로 실행한다 (계획: docs/plans/monitor-article-check.md).
+"""점검(checks): config/targets.yaml의 `checks`에 적은 명령을 하위 프로세스로 실행한다 (계획: docs/archives/monitor-article-check.md).
 
 monitor가 다른 패키지를 import하지 않고 결과만 받는다. 예: 챗봇 조문 데이터 점검(lawbot-articles-check)이 monitor가
 갱신한 legalize-kr 클론으로 '오늘 시행 중인 법'과 지금 데이터를 비교한다.

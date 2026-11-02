@@ -3,7 +3,7 @@
 - 작성일: 2026-11-02
 - 목표: 매일 아침 monitor가 돌 때 "챗봇 조문 데이터가 **오늘 시행 중인 법**과 같은지"를 확인하고, 다르면 무엇이 언제부터 다른지와 다시 만드는 명령을 요약 md에 남긴다. CSV를 바꾸거나 웹앱을 재시작하는 일은 자동으로 하지 않는다 (본문이 바뀌면 임베딩·4B 평가를 다시 봐야 하므로 사람이 판단).
 - 앞 작업: 조문 CSV 생성기 `lawbot-build-articles` (PR #45, [archives/article-generator.md](../archives/article-generator.md)).
-- **상태 (2026-11-02, 사용자 결정)**: 2.1 점검 명령 `lawbot-articles-check`만 구현했다. **2.2 monitor 연결은 하지 않고 설계만 남긴다** — monitor가 아직 구현 중이라, monitor가 더 진행된 뒤 이 설계를 다시 보고 연결한다. 그때까지 점검은 손으로 실행한다.
+- **상태 (2026-11-02)**: 2.1 점검 명령 `lawbot-articles-check`를 구현했다. 2.2 monitor 연결은 한때 미뤘다가(사용자가 앞 답변을 오해) 같은 날 [자동 갱신 계획](../plans/articles-auto-update.md)에서 이 설계 그대로 연결했다. 이 문서는 그 계획으로 이어져 끝났다.
 
 ## 1. 미리 확인한 사실
 
@@ -30,7 +30,7 @@ uv run lawbot-articles-check --repo <legalize-kr 클론> [--asof YYYY-MM-DD] [--
 - 보고서: `--report-dir`를 주면 `<기준일>.md`로 쓴다. 마지막 줄은 한 줄 요약 `articles same=… changed=… pending=… next=… new=… → <보고서>`.
 - 종료 코드: 0 같음, 1 답변 근거가 다른 조문 있음, 2 실행 실패 (생성기 실패 포함: 부칙을 못 읽는 등).
 
-### 2.2 monitor 연결 (차후, 설계만)
+### 2.2 monitor 연결 (→ articles-auto-update에서 구현)
 
 구현해 보았을 때(되돌림) 아래 설계로 monitor 테스트 73개가 통과했고, 실제 클론으로 `law-monitor check`가 끝까지 동작했다. 다시 할 때 그대로 쓸 수 있다.
 

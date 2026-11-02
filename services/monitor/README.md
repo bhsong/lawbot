@@ -6,6 +6,7 @@
 - 지금 있는 수집기: `legalize_law`([legalize-kr](https://github.com/legalize-kr/legalize-kr), 법률·시행령·시행규칙), `legalize_admrule`([admrule-kr](https://github.com/legalize-kr/admrule-kr), 고시 등). 변경은 공개 git 저장소에서 찾고, 이벤트마다 법제처 Open API로 개정문·제개정이유를 채웁니다 ([계획](../../docs/archives/monitor-lawgo.md)).
 - 별표·서식: `forms` 대상 법령과 추적 행정규칙은 신·구판의 별표·서식 텍스트를 비교해 바뀐 것만 `lawgo_forms`·`lawgo_admrul` 이벤트로 만들고, 그 서식의 PDF·HWP 원본을 받습니다.
 - 요약(2단계): 요약하지 않은 이벤트를 운영 모델 서버의 `qwen3.8-27b-4bit`로 요약해 `data/summaries/YYYY-MM-DD.md`를 만듭니다 ([계획](../../docs/archives/monitor-summary.md)).
+- 점검: `config/targets.yaml`의 `checks` 명령을 `daily`에서 부르고 결과 줄을 요약 md에 붙입니다. 지금은 챗봇 조문 데이터 자동 갱신(`lawbot-articles-update`) 하나입니다 ([계획](../../docs/plans/articles-auto-update.md)).
 - 아직 없는 것: 입법예고·국회 법안(PR 3). 한눈에 보기 5번 전자신고 파일 레이아웃(지급명세서 전산매체 제출요령)은 수집하지 않고 3단계 연례 리마인드로 합니다 ([결정](../../docs/plans/monitor-collector.md) 9절).
 
 ## 설치
@@ -28,7 +29,8 @@ uv run law-monitor collect --only legalize_law
 uv run law-monitor replay --repo legalize-kr --from <커밋> --to <커밋>   # 과거 구간 → data/replay/ (상태 안 바뀜)
 uv run law-monitor summarize              # 대기 이벤트 → 모델 요약 → data/summaries/YYYY-MM-DD.md
 uv run law-monitor summarize --events-dir data/replay/<구간>   # replay 결과 요약 → 그 폴더의 summary.md (상태 안 바뀜)
-uv run law-monitor daily                  # launchd가 매일 실행: collect 다음 summarize
+uv run law-monitor check                  # 점검(checks)만: 결과 줄 출력 (요약·상태 안 바뀜)
+uv run law-monitor daily                  # launchd가 매일 실행: collect → 점검 → summarize
 ```
 
 - 마지막 줄이 실행 요약입니다: `collectors=2 ok=2 failed=0 events=1`. 같은 줄이 `logs/collector-YYYYMMDD.log` 끝에도 남습니다.
@@ -49,6 +51,15 @@ uv run law-monitor daily                  # launchd가 매일 실행: collect �
 - 같은 날 두 번 실행하면 두 번째 파일은 `YYYY-MM-DD-HHMMSS.md`입니다 (앞 파일을 덮지 않음).
 - 모델 서버가 실패하면(시도 3번) md에 "요약 실패, 대기 이벤트 N건"을 쓰고 그 이벤트는 대기로 둡니다. 다음 실행에서 밀린 것까지 요약합니다.
 - 요약은 참고용입니다. md 머리에도 "시행일·금액·서식 내용은 원문으로 확인"이라고 씁니다.
+
+## 점검 (checks)
+
+`config/targets.yaml`의 `checks`에 이름과 명령을 적으면 `daily`가 collect 다음에 차례로 실행합니다. monitor는 그 명령을 import하지 않고 하위 프로세스로 부릅니다.
+
+- 자리표시: `{bin}`(law-monitor와 같은 venv의 bin 폴더), `{home}`, `{data}`, `{repos}`
+- 종료 코드 약속: 0 이상 없음, 1 확인 필요, 그 밖·시간 초과(15분)·명령 없음은 점검 실패. 결과 줄은 표준 출력의 마지막 줄입니다
+- 요약 md 끝 '점검' 절에 `- 이름 — 상태: \`결과 줄\``로 적습니다. 점검 실패가 있으면 `daily` 종료 코드가 1입니다 (요약은 그대로 씀)
+- 챗봇 조문 데이터: monitor가 갱신한 `data/repos/legalize-kr`로 그날 시행 중인 조문을 만들어 레포 `data/live`와 비교하고, 다르면 새 CSV·임베딩·확인·보관·전환·웹앱 재시작까지 합니다 (`lawbot-articles-update --restart`, 약 1~2분). 보고서는 `data/articles/<날짜>.md`. 결과 줄 예: `articles updated=no same=yes changed=0 pending=30 next=2026-11-27 new=0 → …`, `articles updated=yes asof=2026-11-27 changed=6 archive=2026-10-20 restart=ok → …`
 
 ## 이벤트
 

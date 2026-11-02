@@ -1,4 +1,4 @@
-"""조문 데이터 점검: 오늘 시행 중인 법으로 만든 조문과 지금 데이터(data/v4)를 비교한다 (계획: docs/plans/monitor-article-check.md)
+"""조문 데이터 점검: 오늘 시행 중인 법으로 만든 조문과 지금 데이터(data/v4)를 비교한다 (계획: docs/archives/monitor-article-check.md)
 
     uv run lawbot-articles-check --repo <legalize-kr 클론> [--asof YYYY-MM-DD] [--data-dir data/v4] [--report-dir DIR]
 

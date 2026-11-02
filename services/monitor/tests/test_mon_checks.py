@@ -1,4 +1,4 @@
-"""점검(checks): targets.yaml에 적은 명령을 daily에서 부르고 결과 줄을 요약 md에 (계획 docs/plans/monitor-article-check.md).
+"""점검(checks): targets.yaml에 적은 명령을 daily에서 부르고 결과 줄을 요약 md에 (계획 docs/archives/monitor-article-check.md).
 
 monitor는 점검 명령을 import하지 않고 하위 프로세스로 부른다 (예: 챗봇 조문 데이터 점검 lawbot-articles-check).
 종료 코드 약속: 0 이상 없음, 1 확인 필요, 그 밖·시간 초과·명령 없음은 점검 실패.

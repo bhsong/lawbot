@@ -4,7 +4,7 @@
 - 사용자 결정 (2026-11-02): 조문 DB(지금은 CSV) 자동화는 Lawbot의 중요한 목표. 지금 레포로 가능하면 미루지 않는다.
   - 위치: 운영 worktree의 **git 밖 `data/live/`**. 바꾸기 전 파일은 날짜를 붙여 `data/live/archive/`에 보관
   - 재시작: **자동**. monitor가 06:30에 돌 때 같이
-  - 매일 실행: **monitor와 지금 연결** ([monitor-article-check.md](monitor-article-check.md) 2.2절 설계를 그대로 살림)
+  - 매일 실행: **monitor와 지금 연결** ([monitor-article-check.md](../archives/monitor-article-check.md) 2.2절 설계를 그대로 살림)
 - 앞 작업: 생성기 `lawbot-build-articles`(PR #45), 점검 `lawbot-articles-check`(PR #46, 이 PR에 이어서).
 
 ## 1. 미리 확인한 사실
@@ -41,7 +41,7 @@ uv run lawbot-articles-update --rollback [--restart]   # 바로 전 파일로 �
 
 ### 2.2 monitor 연결
 
-[monitor-article-check.md](monitor-article-check.md) 2.2절 그대로 (`checks` 설정, 하위 프로세스, `law-monitor check`, `daily`: collect → checks → summarize, 요약 md '점검' 절, 15분 상한). `targets.yaml`의 명령만 `lawbot-articles-update ... --restart`로.
+[monitor-article-check.md](../archives/monitor-article-check.md) 2.2절 그대로 (`checks` 설정, 하위 프로세스, `law-monitor check`, `daily`: collect → checks → summarize, 요약 md '점검' 절, 15분 상한). `targets.yaml`의 명령만 `lawbot-articles-update ... --restart`로.
 
 ### 2.3 그 밖
 
@@ -79,3 +79,9 @@ uv run lawbot-articles-update --rollback [--restart]   # 바로 전 파일로 �
 - 전체 val 평가 자동 실행 (오래 걸림, 큰 개정 때 손으로).
 - 임베딩·4B 재학습.
 - 웹앱이 재시작 없이 새 CSV를 읽는 기능.
+
+## 진행
+
+- 구현 (PR #46에 이어서, 2026-11-02): monitor 점검 연결(되돌렸던 커밋 다시), `check_deploy`(법률 행 기준 = `LAWBOT_V4_ARTICLES`, 하위법령 수 = 매니페스트), `.gitignore` `data/live/`, `lawbot-articles-update`, `targets.yaml` 점검 명령 `--restart`. 확인 기록: [docs/evals/2026-11-02-articles-auto-update.md](../evals/2026-11-02-articles-auto-update.md).
+- 설계와 다르게 한 것: 하위법령 조문 수 기대값도 `check_deploy`에 고정(273·124)돼 있어 매니페스트에서 읽게 함 (조문 수가 바뀌는 개정 대비).
+- **남은 것: 운영 반영** (사용자 승인 후) — 운영 worktree 갱신 → `uv run lawbot-articles-update --init` → 운영 `.env`에 `LAWBOT_V4_ARTICLES`·`LAWBOT_V4_DECREE_ARTICLES`(data/live) → `check_deploy` → 웹앱 재시작 → `law-monitor check`로 한 번 확인. 끝나면 이 문서를 archives로.
