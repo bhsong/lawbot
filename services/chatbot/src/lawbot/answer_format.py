@@ -1,4 +1,4 @@
-# src/lawbot/answer_format.py  →  모델 원문(4섹션)을 화면용 간결형으로 바꾸는 후처리 (gradio 미사용)
+# src/lawbot/answer_format.py  →  모델 원문(4섹션)을 화면용 간결형으로 바꾸는 후처리 (웹 서버 미사용)
 # 모델 입력([참고 조문])과 원문 출력은 바꾸지 않는다. 화면 형식만 바꾼다
 import re
 

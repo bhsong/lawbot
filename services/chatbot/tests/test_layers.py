@@ -3,8 +3,8 @@ import subprocess
 import sys
 
 RUNTIME = (
-    'app service api_client llm retriever reranker decree deploy security citation answer_format '
-    'feedback feedback_ui manifest envfile paths check_deploy'
+    'web view settings service api_client llm retriever reranker decree deploy security citation answer_format '
+    'feedback manifest envfile paths check_deploy'
 ).split()
 
 

@@ -10,8 +10,8 @@ from fastapi.testclient import TestClient
 from openai import OpenAI
 
 import lawbot.api_client as ac
-import lawbot.app as app_mod
 import lawbot.service as service
+from chat_support import run
 from conftest import TEST_TOKEN
 from lawbot import security
 from lawbot_model_server import api as server_api
@@ -427,7 +427,8 @@ def test_end_to_end_through_real_server_app(env, real_server, tmp_path):
     )
     assert kw == {'max_tokens': 1024, 'temperature': 0.0, 'top_p': None, 'enable_thinking': False}
     assert a.models.is_loaded('fast')
-    text, src, stats = list(app_mod.make_chat(a)('해고 예고?', [], 'fast', 'concise'))[-1]
+    r = run(a, '해고 예고?', 'fast', 'concise')
+    text, stats = r.text, r.stats
     assert text.startswith('예고해야 합니다.') and '25.0 tok/s' in stats
 
 
@@ -471,8 +472,7 @@ def test_server_errors_reach_web_app_as_known_types(env, real_server):
         raise FileNotFoundError('모델 폴더 없음')
 
     real_server.loaders['chat'] = broken
-    with pytest.raises(app_mod.gr.Error, match='Lawbot Pro 모델을 불러오지 못했습니다'):
-        list(app_mod.make_chat(a)('질문', [], 'pro', 'full'))
+    assert run(a, '질문', 'pro', 'full').error.startswith('Lawbot Pro 모델을 불러오지 못했습니다')
     env.setenv('LAWBOT_PRO_MODEL', '없는-모델')
     with pytest.raises(RuntimeError, match='chat 없는-모델'):  # 시작할 때 /v1/models로 확인
         service.load_app()

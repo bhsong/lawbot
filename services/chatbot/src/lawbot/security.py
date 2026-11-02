@@ -1,4 +1,4 @@
-# lawbot/security.py  →  로컬 전용 실행 설정 (app.py가 모델 서버에 접속하기 전에 호출)
+# lawbot/security.py  →  로컬 전용 실행 설정 (web.py가 모델 서버에 접속하기 전에 settings로 읽음)
 # 웹앱 주소는 127.0.0.1 고정, 포트는 .env의 LAWBOT_PORT. 모델 서버(임베딩·리랭크·생성)는 http://127.0.0.1:<포트>만
 # 생성(chat completions)만 다른 OpenAI 호환 주소로 바꿀 수 있다: LAWBOT_LLM_BASE_URL + LAWBOT_LLM_ALLOW_EXTERNAL=1 (https만)
 import os
@@ -6,7 +6,7 @@ from urllib.parse import urlsplit
 
 from lawbot_common.ports import parse_port
 
-SERVER_NAME = '127.0.0.1'  # 고정값: 환경변수(GRADIO_SERVER_NAME 등)나 설정으로 바꾸지 않음
+SERVER_NAME = '127.0.0.1'  # 고정값: 환경변수나 설정으로 바꾸지 않음
 SERVER_PORT = 7860  # LAWBOT_PORT가 없을 때의 기존 기본값 (하위 호환). 운영에서는 .env에 LAWBOT_PORT를 따로 정함
 INSTANCE_MAX = 40
 
@@ -115,8 +115,3 @@ def auth(env=None):
     if bad:
         raise RuntimeError(f'인증 환경 변수가 없거나 비어 있어 실행을 거부합니다: {", ".join(bad)}')
     return user, pw
-
-
-def get_local_launch_config(env=None):
-    """demo.launch(**config)에 넘길 설정. 인증 정보가 없거나 비어 있으면 RuntimeError, 포트가 잘못되면 ValueError"""
-    return {'server_name': SERVER_NAME, 'server_port': server_port(env), 'auth': auth(env), 'share': False}

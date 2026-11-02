@@ -4,8 +4,8 @@ import json
 
 import pytest
 
-import lawbot.app as app_mod
 import lawbot.service as service
+from chat_support import run
 from fakes import FakeLLM, FakeRetriever
 from lawbot.api_client import ModelLoadError, ModelServerError, ModelServerTimeout
 from lawbot_tools import log_summary
@@ -98,25 +98,24 @@ def test_log_summary_reads_monthly_and_legacy(env, tmp_path, capsys):
     assert '요청 3건' in capsys.readouterr().out
 
 
-def test_generation_error(env, log):
-    chat = app_mod.make_chat(local_app(env))
+def test_generation_error(env, log, capsys):
+    a = local_app(env)
     env.setattr(FakeLLM, 'chunks', ['【결론】', RuntimeError('생성 실패')])
-    with pytest.raises(app_mod.gr.Error, match='답변을 생성하지 못했습니다') as ei:  # 화면 안내, 원래 예외는 __cause__
-        list(chat(QUESTION, [], 'fast', 'full'))
-    assert '생성 실패' in str(ei.value.__cause__)
+    r = run(a, QUESTION, 'fast', 'full')
+    assert r.error.startswith('답변을 생성하지 못했습니다')  # 화면 안내
+    assert '생성 실패' in capsys.readouterr().out  # 원래 예외는 서버 로그에
     r = lines(log)[-1]
     assert (r['status'], r['error_type']) == ('error', 'generation')
 
 
 def test_model_load_error(env, log, tmp_path):
     env.setenv('LAWBOT_PRO_SYSTEM', str(tmp_path / '없음.txt'))
-    chat = app_mod.make_chat(local_app(env, resident=1))
-    with pytest.raises(app_mod.gr.Error, match='Lawbot Pro 모델을 불러오지 못했습니다'):
-        list(chat(QUESTION, [], 'pro', 'concise'))
+    r = run(local_app(env, resident=1), QUESTION, 'pro', 'concise')
+    assert r.error.startswith('Lawbot Pro 모델을 불러오지 못했습니다')
     assert (lines(log)[-1]['status'], lines(log)[-1]['error_type']) == ('error', 'model_load')
 
 
-def test_rerank_error(env, log):
+def test_rerank_error(env, log, capsys):
     a = local_app(env)
 
     class Broken:
@@ -126,9 +125,9 @@ def test_rerank_error(env, log):
             raise RuntimeError('리랭커 점수 오류')
 
     a.reranker = Broken()
-    with pytest.raises(app_mod.gr.Error, match='조문 순위를 매기지 못했습니다') as ei:
-        list(app_mod.make_chat(a)(QUESTION, [], 'fast', 'full'))  # 임베딩 순위로 되돌리지 않음
-    assert '리랭커 점수 오류' in str(ei.value.__cause__)
+    r = run(a, QUESTION, 'fast', 'full')
+    assert r.error.startswith('조문 순위를 매기지 못했습니다') and not r.text  # 임베딩 순위로 되돌리지 않음
+    assert '리랭커 점수 오류' in capsys.readouterr().out
     r = lines(log)[-1]
     assert (r['error_type'], r['reranker']) == ('rerank', True) and r['search_ms'] is not None
 
@@ -163,12 +162,11 @@ def test_error_type(e, stage, kind):
 
 def test_server_down_is_model_server(env, log):
     """생성 중 모델 서버 연결이 끊기면 오류 유형 model_server (화면은 '모델 서버가 준비되지 않았습니다')"""
-    chat = app_mod.make_chat(local_app(env))
-    list(chat(QUESTION, [], 'fast', 'full'))
+    a = local_app(env)
+    run(a, QUESTION, 'fast', 'full')
     assert lines(log)[-1]['mode'] == 'api' and lines(log)[-1]['status'] == 'ok'
     env.setattr(FakeLLM, 'chunks', [ConnectionError('모델 서버에 연결할 수 없습니다')])
-    with pytest.raises(app_mod.gr.Error, match='모델 서버가 준비되지 않았습니다'):
-        list(chat(QUESTION, [], 'fast', 'full'))
+    assert run(a, QUESTION, 'fast', 'full').error.startswith('모델 서버가 준비되지 않았습니다')
     r = lines(log)[-1]
     assert (r['status'], r['error_type'], r['mode']) == ('error', 'model_server', 'api')
 
@@ -189,10 +187,9 @@ def test_server_down_is_model_server(env, log):
     ],
 )
 def test_timeout_and_busy_are_logged_and_shown(env, log, error, kind, shown):
-    chat = app_mod.make_chat(local_app(env))
+    a = local_app(env)
     env.setattr(FakeLLM, 'chunks', [error])
-    with pytest.raises(app_mod.gr.Error, match=shown):
-        list(chat(QUESTION, [], 'fast', 'full'))
+    assert run(a, QUESTION, 'fast', 'full').error.startswith(shown)
     r = lines(log)[-1]
     assert (r['status'], r['error_type']) == ('error', kind)
 

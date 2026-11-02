@@ -2,7 +2,7 @@
 # 답변이 끝난 턴의 입력 전체(질문·참고 조문·system·답변 원문·판정·측정값)를 메모리에 두었다가,
 # 사용자가 그 답에 버튼을 누르면 LAWBOT_FEEDBACK_DIR/feedback_YYYY-MM.jsonl에 한 줄을 덧붙인다
 # 질문 원문은 이 파일에만, 버튼을 누른 답에만 남는다 (요청 로그·콘솔 로그에는 남기지 않음)
-# 이 모듈은 gradio·모델 라이브러리(mlx·torch)를 import하지 않는다 (tests/test_feedback.py가 검사)
+# 이 모듈은 웹 서버(fastapi)·모델 라이브러리(mlx·torch)를 import하지 않는다 (tests/test_feedback.py가 검사)
 import fcntl
 import hashlib
 import json
@@ -22,11 +22,9 @@ log = logger('lawbot', 'lawbot')
 
 DEFAULT_DIR = ROOT / 'feedback'  # .gitignore
 REASONS = {'검색 오류': 'retrieval', '답변 오류': 'answer', '불필요한 거절': 'false_refusal', '기타': 'other'}
-LIKE = 'Like'  # Gradio Chatbot이 👍 아이콘으로 그리는 문자열
-OPTIONS = [LIKE, *REASONS]  # 'Dislike'는 넣지 않는다 (👎 없음). 나머지는 깃발 아래 선택지
 TURNS_PER_SESSION = 50  # 세션마다 최근 턴만 둔다 (메모리 상한)
 MAX_SESSIONS = 200  # 오래된 세션은 LRU로 버림
-DEDUP_S = 2.0  # 이유 클릭 한 번이 이벤트 두 번으로 들어온다: 같은 값이 이 안에 다시 오면 저장 안 함
+DEDUP_S = 2.0  # 같은 답변에 같은 버튼이 이 안에 다시 오면(두 번 누름) 저장 안 함
 HIT_FIELDS = (
     'law',
     'article_id',
@@ -127,35 +125,6 @@ def turn_id(session, n, request_id):
     return hashlib.sha256(f'{session}:{n}:{request_id}'.encode()).hexdigest()[:16]
 
 
-def assistant_index(history, index):
-    """Chatbot 메시지 위치 → 몇 번째 assistant 메시지인지 (0부터). assistant 메시지가 아니면 None"""
-    if isinstance(index, (list, tuple)):  # 2차원 형식(튜플 index)이면 첫 값이 메시지 위치
-        index = index[0]
-    if not isinstance(index, int) or not 0 <= index < len(history) or role(history[index]) != 'assistant':
-        return None
-    return sum(role(m) == 'assistant' for m in history[:index])
-
-
-def role(m):
-    return m.get('role') if isinstance(m, dict) else getattr(m, 'role', None)
-
-
-def text_of(value):
-    """Chatbot 메시지 값(문자열, {'type': 'text', 'text': …}, 그 목록)에서 글만 이어 붙인다"""
-    if value is None:
-        return ''
-    if isinstance(value, str):
-        return value
-    if isinstance(value, dict):
-        for k in ('text', 'content', 'value'):
-            if k in value:
-                return text_of(value[k])
-        return ''
-    if isinstance(value, (list, tuple)):
-        return ''.join(text_of(v) for v in value)
-    return text_of(getattr(value, 'content', None))
-
-
 def model_system(app, model_key, fmt):
     """이번 요청에 쓴 system 전문: format_system(화면 형식) → 모델·프로필 system 파일
     service.load_app의 factory와 같은 순서"""
@@ -215,13 +184,13 @@ def turn_record(app, question, hits, raw, shown, model_key, fmt, st):
 
 
 class Feedback:
-    """웹앱 하나의 피드백 저장소: 메모리의 턴 기록 + JSONL 파일 (Gradio 이벤트 함수는 app.py가 이것을 부른다)"""
+    """웹앱 하나의 피드백 저장소: 메모리의 턴 기록 + JSONL 파일 (web.py의 채팅·피드백 API가 부른다)"""
 
     def __init__(self, folder):
         self.folder = Path(folder)
         self.turns = OrderedDict()  # session → OrderedDict(assistant 순번 → (turn_id, 기록))
         self.recent = {}  # (turn_id, liked) → 마지막으로 받은 시각
-        self.counts = OrderedDict()  # session → 다음 순번 (새 화면 web.py: 화면 history 대신 서버가 순번을 매김)
+        self.counts = OrderedDict()  # session → 다음 순번
         self.lock = threading.Lock()
 
     def remember(self, session, n, record):
@@ -238,46 +207,14 @@ class Feedback:
             while len(self.turns) > MAX_SESSIONS:
                 self.turns.popitem(last=False)
 
-    def lookup(self, session, n):
+    def duplicate(self, tid, key, now):
         with self.lock:
-            return self.turns.get(session, {}).get(n)
-
-    def label(self, liked):
-        """Gradio liked 값 → (label, reason). True: 👍, 이유 문자열: 깃발, ''·None·False: 해제. 모르는 값은 None"""
-        if liked is True:
-            return 'like', None
-        if liked in (None, False, ''):  # 프론트엔드는 선택을 풀면 ''를 보낸다 (Gradio 6.30.0)
-            return 'cleared', None
-        if isinstance(liked, str) and liked in REASONS:
-            return 'flag', REASONS[liked]
-        return None
-
-    def duplicate(self, tid, liked, now):
-        with self.lock:
-            last = self.recent.get((tid, liked))
-            self.recent[(tid, liked)] = now
+            last = self.recent.get((tid, key))
+            self.recent[(tid, key)] = now
             if len(self.recent) > 1000:
                 cutoff = now - DEDUP_S
                 self.recent = {k: t for k, t in self.recent.items() if t >= cutoff}
             return last is not None and now - last < DEDUP_S
-
-    def on_like(self, session, history, index, value, liked, now=None):
-        """버튼 이벤트 하나. 저장한 줄(dict)을 돌려주고, 저장하지 않으면 None (이유는 콘솔에 turn_id만)"""
-        now = time.monotonic() if now is None else now
-        lab = self.label(liked)
-        if lab is None:
-            log.info(f'피드백: 알 수 없는 선택 {liked!r} → 저장 안 함')
-            return None
-        n = assistant_index(history or [], index)
-        found = None if n is None else self.lookup(session, n)
-        if found is None:  # 앱 재시작·대화가 바뀜: 화면 글만으로는 저장하지 않는다 (참고 조문이 없음)
-            log.info(f'피드백: 기록이 없는 답변 (turn {"?" if n is None else n}) → 저장 안 함')
-            return None
-        tid, record = found
-        if text_of(value).strip() != record['answer_shown'].strip():  # 엉뚱한 답에 라벨이 붙지 않게
-            log.info(f'피드백: 화면 글이 기록과 다름 (turn_id {tid}) → 저장 안 함')
-            return None
-        return self.save_row(tid, record, lab, liked, now)
 
     def save_row(self, tid, record, lab, key, now):
         """(label, reason) 한 줄 저장. 같은 key가 DEDUP_S 안에 다시 오면 저장하지 않고 None"""
@@ -294,7 +231,7 @@ class Feedback:
         return row
 
     def remember_turn(self, session, record):
-        """새 화면(web.py): 세션의 다음 순번에 끝난 턴을 두고 turn_id를 돌려준다"""
+        """세션의 다음 순번에 끝난 턴을 두고 turn_id를 돌려준다"""
         with self.lock:
             n = self.counts.pop(session, 0)
             self.counts[session] = n + 1
@@ -304,7 +241,7 @@ class Feedback:
         return turn_id(session, n, record['request_id'])
 
     def save(self, session, tid, label, reason=None, now=None):
-        """새 화면의 버튼 하나. label: like·flag·cleared, flag면 reason은 REASONS의 값(retrieval 등)
+        """화면의 버튼 하나. label: like·flag·cleared, flag면 reason은 REASONS의 값(retrieval 등)
         저장한 줄 (같은 버튼이 DEDUP_S 안에 다시 오면 None). 모르는 label·reason은 ValueError, 이 세션에 없는 turn_id는 LookupError"""
         if label not in ('like', 'flag', 'cleared') or (reason not in REASONS.values() if label == 'flag' else reason):
             raise ValueError(f'알 수 없는 피드백: {label!r}, {reason!r}')

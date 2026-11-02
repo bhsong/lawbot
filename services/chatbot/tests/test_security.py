@@ -6,22 +6,20 @@ import sys
 import pytest
 
 from conftest import set_auth
-from lawbot.security import get_local_launch_config
+from lawbot import security
 
 
 # 정상 설정
 def test_valid_config(env):
     set_auth(env)
-    cfg = get_local_launch_config()
-    assert cfg['server_name'] == '127.0.0.1'
-    assert cfg['server_port'] == 7860
-    assert cfg['auth'] == ('tester', 'test-only-pw')
-    assert cfg['share'] is False
+    assert security.SERVER_NAME == '127.0.0.1'
+    assert security.server_port() == 7860
+    assert security.auth() == ('tester', 'test-only-pw')
 
 
 def test_username_is_stripped(env):
     set_auth(env, user='  tester  ')
-    assert get_local_launch_config()['auth'][0] == 'tester'
+    assert security.auth()[0] == 'tester'
 
 
 # 잘못된 설정
@@ -44,7 +42,7 @@ def test_invalid_config_rejected(env, user, pw, missing):
     if pw is not None:
         env.setenv('LAWBOT_PW', pw)
     with pytest.raises(RuntimeError) as e:
-        get_local_launch_config()
+        security.auth()
     for name in missing:
         assert name in str(e.value)
 
@@ -52,26 +50,15 @@ def test_invalid_config_rejected(env, user, pw, missing):
 def test_error_does_not_leak_password(env):
     env.setenv('LAWBOT_PW', 'secret-should-not-appear')
     with pytest.raises(RuntimeError) as e:
-        get_local_launch_config()
+        security.auth()
     assert 'secret-should-not-appear' not in str(e.value)
 
 
-# 로컬 전용 설정
-def test_gradio_env_cannot_expose_server(env):
-    set_auth(env)
-    env.setenv('GRADIO_SERVER_NAME', '0.0.0.0')
-    env.setenv('GRADIO_SERVER_PORT', '8080')
-    env.setenv('GRADIO_SHARE', 'True')
-    cfg = get_local_launch_config()
-    assert cfg['server_name'] == '127.0.0.1'
-    assert cfg['server_port'] == 7860
-    assert cfg['share'] is False
-
-
+# 로컬 전용 설정 (주소를 바꾸는 환경 변수 무시: test_pipeline.test_app_launches_local_only)
 def test_no_model_libraries_loaded():
     # security 모듈은 모델·UI 라이브러리를 끌어오지 않아야 함
     # 다른 테스트가 같은 프로세스에서 이미 import했을 수 있으므로 새 인터프리터에서 확인
-    mods = ('lawbot.app', 'lawbot.retriever', 'lawbot.llm', 'sentence_transformers', 'mlx_lm', 'torch', 'gradio')
+    mods = ('lawbot.web', 'lawbot.retriever', 'lawbot.llm', 'sentence_transformers', 'mlx_lm', 'torch', 'fastapi')
     code = f'import sys, lawbot.security\nprint(",".join(m for m in {mods!r} if m in sys.modules))'
     out = subprocess.run([sys.executable, '-c', code], capture_output=True, text=True, check=True)
     assert out.stdout.strip() == ''
@@ -79,7 +66,6 @@ def test_no_model_libraries_loaded():
 
 # 웹앱 포트 (LAWBOT_PORT) · 인스턴스 이름 (LAWBOT_INSTANCE)
 from conftest import free_port
-from lawbot import security
 
 
 @pytest.mark.parametrize('value', [None, '', '   '], ids=['unset', 'empty', 'blank'])
@@ -88,16 +74,13 @@ def test_port_defaults_to_legacy(env, value):
         env.setenv('LAWBOT_PORT', value)
     set_auth(env)
     assert security.server_port() == security.SERVER_PORT
-    assert get_local_launch_config()['server_port'] == security.SERVER_PORT
 
 
 def test_port_from_env(env):
     port = free_port()
     set_auth(env)
     env.setenv('LAWBOT_PORT', str(port))
-    env.setenv('GRADIO_SERVER_PORT', str(free_port()))  # Gradio 변수는 계속 무시
-    cfg = get_local_launch_config()
-    assert cfg['server_port'] == port and cfg['server_name'] == '127.0.0.1'
+    assert security.server_port() == port
 
 
 @pytest.mark.parametrize('value', ['1023', '65536', '0', '-1', 'abc', '12.5'])
@@ -105,7 +88,7 @@ def test_port_invalid_rejected(env, value):
     set_auth(env)
     env.setenv('LAWBOT_PORT', value)
     with pytest.raises(ValueError, match='LAWBOT_PORT'):
-        get_local_launch_config()
+        security.server_port()
 
 
 def test_port_same_as_model_server_rejected(env):

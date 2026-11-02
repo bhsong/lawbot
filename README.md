@@ -23,7 +23,7 @@ Lawbot은 대한민국 노동법 질문에 조문을 근거로 답하는 검색 
 ### 구성
 
 ```
-브라우저 ──▶ 웹앱 (services/chatbot, Gradio)  ──┐
+브라우저 ──▶ 웹앱 (services/chatbot, React 화면)──┐
              조문 검색·정렬·프롬프트·화면         │  OpenAI 호환 HTTP + 토큰 (127.0.0.1)
                                                   ▼
              법령 변경 수집기 (services/monitor) ──▶ 모델 서버 (services/model-server)
@@ -43,11 +43,12 @@ Lawbot은 대한민국 노동법 질문에 조문을 근거로 답하는 검색 
 
 ### 사용법
 
-**요구 사항**: Apple Silicon 맥(27B 모델은 32GB), [uv](https://docs.astral.sh/uv/), 학습된 모델 파일(용량이 커서 저장소에 없음, [모델 준비](docs/operations.md#모델-준비)).
+**요구 사항**: Apple Silicon 맥(27B 모델은 32GB), [uv](https://docs.astral.sh/uv/), Node.js(화면 빌드), 학습된 모델 파일(용량이 커서 저장소에 없음, [모델 준비](docs/operations.md#모델-준비)).
 
 ```zsh
 git clone https://github.com/bhsong/lawbot.git && cd lawbot
 uv sync
+(cd services/chatbot/frontend && npm ci && npm run build)   # 화면 파일
 cp .env.example .env && chmod 600 .env   # 로그인 정보, 모델 서버 포트·주소·토큰(openssl rand -hex 32)을 채움
 
 uv run lawbot-model-server               # 터미널 1: 모델을 올린 뒤 'ready'
@@ -99,7 +100,7 @@ This is a learning and portfolio project. Its answers are informational and do n
 ### Components
 
 ```
-Browser ──▶ Web app (services/chatbot, Gradio)  ──┐
+Browser ──▶ Web app (services/chatbot, React UI)──┐
             retrieval, ranking, prompt, UI          │  OpenAI-compatible HTTP + token (127.0.0.1)
                                                     ▼
             Law change monitor (services/monitor) ──▶ Model server (services/model-server)
@@ -119,11 +120,12 @@ Final results of the current web app setup (v4: fine-tuned embedding → reranke
 
 ### Usage
 
-**Requirements**: Apple Silicon Mac (32 GB for the 27B model), [uv](https://docs.astral.sh/uv/), trained model files (not in the repository because of their size; see [model preparation](docs/operations.md#모델-준비)).
+**Requirements**: Apple Silicon Mac (32 GB for the 27B model), [uv](https://docs.astral.sh/uv/), Node.js (to build the UI), trained model files (not in the repository because of their size; see [model preparation](docs/operations.md#모델-준비)).
 
 ```zsh
 git clone https://github.com/bhsong/lawbot.git && cd lawbot
 uv sync
+(cd services/chatbot/frontend && npm ci && npm run build)   # UI files
 cp .env.example .env && chmod 600 .env   # fill in login, model server port/address/token (openssl rand -hex 32)
 
 uv run lawbot-model-server               # terminal 1: loads models, then 'ready'

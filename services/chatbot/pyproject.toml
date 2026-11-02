@@ -1,14 +1,13 @@
 [project]
 name = "lawbot"
 version = "0.1.0"
-description = "노동법 조문 근거 RAG 챗봇 웹앱 런타임 (Gradio). 평가·분석 도구는 tools/lawbot-tools. 레포 구조는 docs/architecture.md"
+description = "노동법 조문 근거 RAG 챗봇 웹앱 런타임 (FastAPI + React 화면). 평가·분석 도구는 tools/lawbot-tools. 레포 구조는 docs/architecture.md"
 authors = [
     { name = "bhsong", email = "sbh3003@gmail.com" }
 ]
 requires-python = ">=3.14"
 dependencies = [   # 모델 라이브러리(mlx·torch)는 쓰지 않음: 모델은 모두 모델 서버(services/model-server)에
     "fastapi>=0.143.3",
-    "gradio>=6.30.0",
     "httpx>=0.28.1",
     "lawbot-common",
     "numpy>=2.0",
@@ -19,8 +18,7 @@ dependencies = [   # 모델 라이브러리(mlx·torch)는 쓰지 않음: 모델
 
 [project.scripts]
 # 레포 최상위에서 uv run lawbot-app 으로 실행 (평가 명령 lawbot-eval-v4는 tools/lawbot-tools)
-lawbot-app = "lawbot.app:main"
-lawbot-web = "lawbot.web:main"  # 새 화면 API (PR 1·2 동안 개발 확인용, docs/plans/web-spa.md)
+lawbot-app = "lawbot.web:main"  # 화면은 services/chatbot/frontend (npm run build → dist)
 
 [tool.uv.sources]
 lawbot-common = { workspace = true }

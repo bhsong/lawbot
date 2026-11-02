@@ -5,6 +5,7 @@
 # 테스트 프로세스에서 import하지 않는다 (ms_fakes가 다른 이름으로 한 번 더 로드되어 모델 서버 테스트의 가짜 상태가 갈라짐)
 #   normal     바로 답한다. 답은 프롬프트의 첫 번째 조문을 근거로 든다 (어떤 조문이 검색돼도 인용·검색만 구분이 보임)
 #   stream     normal과 같은 답, 토큰마다 STREAM_S초 (화면에서 답이 조각으로 늘어나는지 보이게)
+#   long       stream과 같은 간격, 결론 뒤 설명 30줄 (중지가 모델 서버 생성까지 멈추는지 보이게)
 #   slow       토큰마다 SLOW_S초 (웹앱 read timeout보다 길게)
 #   chat_error 첫 토큰 뒤 생성 중 예외
 #   busy       동시 생성 1·대기 1, 토큰마다 BUSY_S초 (테스트가 요청 2개로 자리를 채움)
@@ -39,15 +40,23 @@ class E2EChat(ms_fakes.FakeChat):
             chunks = [chunks[0], RuntimeError('가짜 생성 오류')]
         elif self.mode == 'busy':
             chunks = ['.'] * 40
+        elif self.mode == 'long':
+            chunks = chunks + ['\n【설명】\n'] + ['- 설명\n'] * 30
         self.chunks = chunks
-        yield from super().stream(messages, **kw)
+        sent = 0
+        try:
+            for piece in super().stream(messages, **kw):
+                sent += 1
+                yield piece
+        finally:  # 테스트가 로그로 확인: 중지하면 끝까지 생성하지 않음
+            print(f'e2e chat end {sent}/{len(chunks)}', flush=True)
 
 
 def main():
     port, mode = int(sys.argv[1]), sys.argv[2]
     ms_fakes.reset_fakes()
     E2EChat.mode = mode
-    ms_fakes.FakeChat.delay = {'stream': STREAM_S, 'slow': SLOW_S, 'busy': BUSY_S}.get(mode, 0.0)
+    ms_fakes.FakeChat.delay = {'stream': STREAM_S, 'long': STREAM_S, 'slow': SLOW_S, 'busy': BUSY_S}.get(mode, 0.0)
     # 모델 id는 실제 서버와 같은 변수(LAWBOT_SERVE_*, 테스트가 .env.example 값을 넘김)에서. 폴더는 쓰지 않음 (가짜 모델)
     entries = [
         e

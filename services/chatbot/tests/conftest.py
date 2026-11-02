@@ -37,10 +37,6 @@ ENV_KEYS = (
     'LAWBOT_MODEL_SERVER_WAIT',
     'LAWBOT_FEEDBACK',
     'LAWBOT_FEEDBACK_DIR',
-    'GRADIO_CHAT_FLAGGING_MODE',
-    'GRADIO_SERVER_NAME',
-    'GRADIO_SERVER_PORT',
-    'GRADIO_SHARE',
 )
 
 
@@ -57,7 +53,7 @@ def pytest_runtest_makereport(item, call):
 
 @pytest.fixture(autouse=True)
 def env(request, monkeypatch):
-    """개발자 셸의 인증·Gradio 환경 변수를 지우고, 외부 네트워크 접속을 막는다
+    """개발자 셸의 인증 환경 변수를 지우고, 외부 네트워크 접속을 막는다
     (integration·e2e 테스트는 127.0.0.1의 테스트 서버 접속만 허용)"""
     for k in ENV_KEYS:
         monkeypatch.delenv(k, raising=False)
@@ -136,6 +132,6 @@ def browser():
 @pytest.fixture
 def page(browser):
     """테스트마다 쿠키가 비어 있는 새 브라우저 컨텍스트"""
-    ctx = browser.new_context(locale='en-US')  # Gradio 기본 문구(Login·Select example)를 영어로 고정
+    ctx = browser.new_context(locale='ko-KR')
     yield ctx.new_page()
     ctx.close()

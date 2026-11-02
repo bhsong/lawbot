@@ -1,7 +1,7 @@
-# lawbot/service.py  →  UI와 무관한 질의응답 흐름 (Gradio 앱과 평가가 씀)
+# lawbot/service.py  →  UI와 무관한 질의응답 흐름 (웹앱 web.py와 평가가 씀)
 # 모델은 모두 모델 서버(OpenAI 호환 API)에 있다: 임베딩·리랭크는 LAWBOT_MODEL_SERVER, 생성은 같은 서버 또는 LAWBOT_LLM_BASE_URL
 # 조문 인덱스·검색·하위법령 필터·프롬프트 조립은 여기(웹앱)에서 한다
-# 이 모듈은 gradio를 import하지 않는다 (tests/test_pipeline.py가 검사)
+# 이 모듈은 웹 서버(fastapi)를 import하지 않는다 (tests/test_pipeline.py가 검사)
 import json
 import os
 import sys
@@ -391,7 +391,7 @@ def ask(app, question, model_key, k=TOP_K, fmt=None):
     st: Timing = {'model': model_key, 'load': None, 'request_id': uuid.uuid4().hex[:12]}
     stage, logged = 'search', False
     try:
-        # 요청 id를 모델 서버 요청 헤더로 (단계마다 다시 넣음: Gradio는 생성기의 next()를 매번 다른 스레드 문맥에서 부름)
+        # 요청 id를 모델 서버 요청 헤더로 (단계마다 다시 넣음: 웹앱은 생성기의 next()를 매번 다른 스레드 문맥에서 부름)
         REQUEST_ID.set(st['request_id'])
         law_hits, decree_hits = retrieve(app, question, k, st, model_key)
         hits = law_hits + decree_hits

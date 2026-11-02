@@ -1,9 +1,9 @@
-# lawbot/web.py  →  새 화면(SPA)용 API 서버. uv run lawbot-web [--port N]
-# PR 1·2 동안 개발 트리에서 Gradio 화면(lawbot-app)과 나란히 확인하는 임시 명령. PR 3에서 lawbot-app이 이것을 띄운다
+# lawbot/web.py  →  웹앱: uv run lawbot-app [--port N]
 # 로그인(메모리 세션 쿠키) · 화면 설정 · 질문 하나를 SSE로 · 답변 피드백 · 빌드한 SPA 파일 (docs/plans/web-spa.md 2절)
-# 주소는 127.0.0.1 고정. 이 모듈은 gradio를 import하지 않는다
+# 주소는 127.0.0.1 고정
 import argparse
 import asyncio
+import hashlib
 import hmac
 import json
 import os
@@ -31,6 +31,17 @@ from lawbot_common.logs import logger
 log = logger('lawbot', 'lawbot')
 
 DIST = ROOT / 'services' / 'chatbot' / 'frontend' / 'dist'  # npm run build 결과 (git 제외)
+# 화면 소스 지문을 만드는 파일·폴더 (frontend/fingerprint.ts의 SOURCES와 같아야 함)
+SOURCES = (
+    'src',
+    'index.html',
+    'package.json',
+    'package-lock.json',
+    'tsconfig.json',
+    'vite.config.ts',
+    'fingerprint.ts',
+)
+REBUILD = '화면 파일을 다시 만드세요: services/chatbot/frontend에서 npm ci && npm run build'
 COOKIE = 'lawbot_session'
 SESSION_TTL = 7 * 24 * 3600  # 초. 서버를 다시 띄워도 세션이 사라진다 (메모리)
 MAX_SESSIONS = 200
@@ -71,6 +82,34 @@ class Sessions:
     def drop(self, token):
         with self.lock:
             self.items.pop(token, None)
+
+
+def source_fingerprint(root):
+    """화면 소스의 sha256: 경로(posix)를 정렬해 '경로 NUL 내용 NUL'을 이어 붙인 해시 (fingerprint.ts와 같은 규칙)"""
+    root = Path(root)
+    files = sorted(
+        p.relative_to(root).as_posix()
+        for name in SOURCES
+        for p in ([root / name] if (root / name).is_file() else (root / name).rglob('*'))
+        if p.is_file()
+    )
+    h = hashlib.sha256()
+    for rel in files:
+        h.update(rel.encode() + b'\0' + (root / rel).read_bytes() + b'\0')
+    return h.hexdigest()
+
+
+def require_build(dist):
+    """빌드한 화면이 지금 소스와 같은지 (운영 반영 때 빌드를 빠뜨리면 옛 화면이 새 API를 부른다). 다르면 RuntimeError"""
+    dist = Path(dist)
+    if not (dist / 'index.html').is_file():
+        raise RuntimeError(f'화면 파일이 없습니다 ({dist}). {REBUILD}')
+    try:
+        built = json.loads((dist / 'build.json').read_text(encoding='utf-8'))['source']
+    except (OSError, ValueError, KeyError, TypeError) as e:
+        raise RuntimeError(f'화면 빌드 정보(build.json)를 읽지 못했습니다. {REBUILD}') from e
+    if built != source_fingerprint(dist.parent):
+        raise RuntimeError(f'화면 파일이 지금 소스와 다릅니다. {REBUILD}')
 
 
 def sse(event, data):
@@ -136,12 +175,11 @@ def chat_events(app, question, model_key, fmt, remember=None):
                 except Exception as e:  # 피드백 기록 실패는 답변을 막지 않는다
                     log.warning(f'경고: 피드백용 턴 기록 실패 ({type(e).__name__})')
             yield 'done', {'text': text, 'finish': st.get('finish'), 'turn_id': tid}
-    except AskError as err:  # 유형(kind)은 요청 로그의 error_type과 같음
+    except AskError as err:  # 유형(kind)은 요청 로그의 error_type과 같음. 원래 예외는 __cause__
         msg = view.error_message(err.kind, err.__cause__, spec)
-        if msg is None:  # 설정 오류: 화면에는 자세한 값을 보이지 않고 서버 로그에 남긴다
-            log.error(f'설정 오류로 답하지 못했습니다 ({err.kind})', exc_info=err)
-            msg = CONFIG_ERROR
-        yield 'error', {'kind': err.kind, 'message': msg}
+        # 원래 예외와 traceback은 서버 로그에 남긴다 (화면에는 안내 문구만, 설정 오류는 자세한 값도 숨김)
+        log.error(f'질문 처리 실패 ({err.kind}, {err.stage})', exc_info=err.__cause__ or err)
+        yield 'error', {'kind': err.kind, 'message': CONFIG_ERROR if msg is None else msg}
 
 
 def current(request: Request):
@@ -226,7 +264,9 @@ def create_app(app, auth: tuple[str, str], concurrency: int = 1, fb=None, dist=D
         if not (isinstance(user, str) and isinstance(pw, str) and matches(user, pw)):
             await asyncio.sleep(LOGIN_FAIL_DELAY)
             raise HTTPException(401, '사용자명 또는 비밀번호가 틀렸습니다.')
-        response.set_cookie(COOKIE, sessions.create(user), httponly=True, samesite='strict', path='/')
+        # https(Tailscale 등 프록시의 X-Forwarded-Proto, uvicorn이 127.0.0.1에서 온 것만 믿음)일 때만 Secure
+        secure = request.url.scheme == 'https'
+        response.set_cookie(COOKIE, sessions.create(user), httponly=True, samesite='strict', path='/', secure=secure)
         return {'user': user}
 
     @api.post('/api/logout', dependencies=[Depends(require_json)])
@@ -254,7 +294,7 @@ def create_app(app, auth: tuple[str, str], concurrency: int = 1, fb=None, dist=D
         )
 
     async def stream(request, events):
-        """동시 처리 수(LAWBOT_CHAT_CONCURRENCY)만큼만 생성. 자리가 없으면 기다린다 (Gradio 대기열과 같은 동작)
+        """동시 처리 수(LAWBOT_CHAT_CONCURRENCY)만큼만 생성. 자리가 없으면 기다린다
         ask는 동기 생성기라 한 단계씩 스레드에서 돌린다. 연결이 끊기면 닫아서 요청 로그에 cancelled를 남긴다
         끊김은 조각마다 직접 확인한다 (보내기 실패만으로는 브라우저 중지를 놓친다: 2026-11-02 e2e_stub에서 확인)"""
         if slots.locked():
@@ -308,16 +348,17 @@ def mount_spa(api, dist):
 
 
 def main(argv=None):
-    parser = argparse.ArgumentParser(description='새 화면(SPA)용 API 서버 (127.0.0.1)')
-    parser.add_argument('--port', help='포트 (기본: .env의 LAWBOT_PORT). Gradio 화면과 나란히 띄울 때 다른 값')
+    parser = argparse.ArgumentParser(description='노동법 챗봇 웹앱 (127.0.0.1, 로그인 필수)')
+    parser.add_argument('--port', help='포트 (기본: .env의 LAWBOT_PORT). 테스트에서 빈 포트로 띄울 때')
     args = parser.parse_args(argv)
     envfile.load()  # .env (셸에 있는 변수 우선). 설정을 읽기 전에
     cfg = settings.load(web=True)  # 인증·포트·모델·피드백 폴더를 모두 검사 (모델 서버에 접속하기 전에)
+    require_build(DIST)  # 화면 파일이 없거나 소스와 다르면 모델 서버에 접속하기 전에 거부
     port = security.server_port(dict(os.environ, LAWBOT_PORT=args.port)) if args.port else cfg.port
     if cfg.auth is None or port is None or cfg.chat_concurrency is None:  # load(web=True)가 채운다
         raise RuntimeError('웹 설정(로그인·포트·동시 처리 수)을 읽지 못했습니다.')
     api = create_app(load_app(cfg), cfg.auth, cfg.chat_concurrency, cfg.feedback)
-    log.info(f'새 화면 API: http://{security.SERVER_NAME}:{port}')
+    log.info(f'웹앱: http://{security.SERVER_NAME}:{port}')
     uvicorn.run(api, host=security.SERVER_NAME, port=port, log_level='warning')
 
 

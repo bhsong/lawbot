@@ -1,5 +1,5 @@
 # src/lawbot/citation.py  →  조문 키·인용 파싱·인용 검증·거절 판정 (웹앱 화면과 eval_v4 채점이 같이 쓴다)
-# gradio를 import하지 않는다 (평가에서도 씀, tests/test_citation.py가 검사)
+# 웹 서버(fastapi)를 import하지 않는다 (평가에서도 씀, tests/test_citation.py가 검사)
 # 검색 결과 dict 형식은 그대로 쓴다: 조문 키는 웹앱 쪽에서 law + ' ' + article_id로 만든다 (retriever·서버 API 변경 없음)
 # 평가 도구(lawbot_tools)의 refusal.is_refusal(【결론】에 '확인할 수 없')은 키워드 채점과 v1 기록 재현 테스트가 쓴다
 import re

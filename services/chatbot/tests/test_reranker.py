@@ -4,9 +4,9 @@ import json
 
 import pytest
 
-import lawbot.app as app_mod
 import lawbot.reranker as rr_mod
 import lawbot.service as service
+from chat_support import run
 from fakes import FakeLLM, FakeRetriever, FakeServerClient
 from lawbot import check_deploy, deploy
 from lawbot.llm import build_prompt
@@ -213,9 +213,8 @@ def test_enabled_reranks_top10_to_top3(env, tmp_path, capsys):
 
 def test_reranker_loaded_once(env, tmp_path):
     a = v4_app(env, tmp_path, enabled=True)
-    chat = app_mod.make_chat(a)
     for key in ('fast', 'pro', 'fast'):
-        list(chat('질문', [], key, 'full'))
+        run(a, '질문', key, 'full')
     assert FakeReranker.created == 1 and len(a.reranker.calls) == 3
 
 
@@ -242,26 +241,27 @@ def test_enabled_refuses_before_loading(env, tmp_path, model_server):
     assert FakeRetriever.created == FakeLLM.created == FakeReranker.created == 0
 
 
-def test_reranker_failure_is_not_hidden(env, tmp_path):
-    # 리랭커 오류를 임베딩 순위로 몰래 되돌리지 않고 안내 문구(gr.Error)로 올린다. 원래 예외는 __cause__. 답변 생성도 하지 않음
+def test_reranker_failure_is_not_hidden(env, tmp_path, capsys):
+    # 리랭커 오류를 임베딩 순위로 몰래 되돌리지 않고 안내 문구로 알린다. 원래 예외는 서버 로그에. 답변 생성도 하지 않음
     a = v4_app(env, tmp_path, enabled=True)
     FakeReranker.fail = RuntimeError('리랭커 점수가 올바르지 않습니다')
-    chat = app_mod.make_chat(a)
-    with pytest.raises(app_mod.gr.Error, match='조문 순위를 매기지 못했습니다') as ei:
-        list(chat('질문', [], 'fast', 'full'))
-    assert '점수가 올바르지' in str(ei.value.__cause__)
+    r = run(a, '질문', 'fast', 'full')
+    assert r.error.startswith('조문 순위를 매기지 못했습니다') and r.kind == 'rerank'
+    assert '점수가 올바르지' in capsys.readouterr().out
     assert 'fast' not in a.models.llms  # 답변 모델을 부르지 않음
 
 
 def test_chat_shows_rerank_info(env, tmp_path):
     a = v4_app(env, tmp_path, enabled=True)
-    text, src, stats = list(app_mod.make_chat(a)('해고 예고?', [], 'fast', 'full'))[-1]
+    r = run(a, '해고 예고?', 'fast', 'full')
+    text, src, stats = r.text, r.src, r.stats
     assert text == '【결론】예고해야 합니다.'  # 스트리밍 답변 그대로
     assert src.index('제10조') < src.index('제9조') < src.index('제8조')
-    assert '**근로기준법 제10조 제목10** · 유사도 0.900 · 리랭커 1.000 (임베딩 10위)' in src
+    assert '근로기준법 제10조 제목10 · 유사도 0.900 · 리랭커 1.000 (임베딩 10위)' in src
     assert '리랭킹' in stats and stats.index('검색') < stats.index('리랭킹')
     off = v4_app(env, tmp_path, enabled=False)
-    _, src, stats = list(app_mod.make_chat(off)('해고 예고?', [], 'fast', 'full'))[-1]
+    r = run(off, '해고 예고?', 'fast', 'full')
+    src, stats = r.src, r.stats
     assert '리랭커' not in src and '리랭킹' not in stats
 
 

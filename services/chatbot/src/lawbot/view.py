@@ -1,6 +1,5 @@
-# lawbot/view.py  →  화면 문구와 조문 카드·측정 줄 조립 (Gradio 화면 app.py와 새 화면 API web.py가 함께 씀)
-# 이 모듈은 gradio를 import하지 않는다 (tests/test_web.py가 검사)
-import html
+# lawbot/view.py  →  화면 문구와 조문 카드 묶음·측정 줄 조립 (web.py가 화면에 보냄)
+# 이 모듈은 웹 서버(fastapi)를 import하지 않는다 (tests/test_web.py가 검사)
 import os
 
 from lawbot import manifest
@@ -15,14 +14,12 @@ EXAMPLES = [
     '육아휴직을 썼다고 불이익을 줘도 되나요?',
 ]
 EMPTY = '답변을 생성하지 못했습니다. 다시 질문해 주세요.'
-SEARCHING = '⏳ 조문을 찾는 중…'  # '⏳'로 시작하는 문구는 첫 글자 측정에서 제외 (화면 지연 측정 기준)
-WRITING = '⏳ 답변을 쓰는 중…'
+WRITING = '⏳ 답변을 쓰는 중…'  # '⏳'로 시작하는 문구는 첫 글자 측정에서 제외 (화면 지연 측정 기준)
 DISCLAIMER = '법률 자문이 아닌 참고용 답변입니다.'
 DISABLED_MODEL = '이 기기에서는 사용하지 않는 모델입니다. 다른 답변 모델을 고르세요.'
 FORMATS = [('간결', 'concise'), ('전체 (4항목)', 'full')]
 CITED_LABEL = '✅ 답변에서 인용한 조문'
-# 검색·리랭킹·생성 단계 오류의 화면 안내 (요청 로그 error_type → 문구). 원래 예외를 그대로 올리면 Gradio가 안내 없이
-# 'Error' 표시만 남기고 말풍선은 '답변을 쓰는 중…'에 멈춘다 (2026-11-02 e2e_stub에서 확인)
+# 검색·리랭킹·생성 단계 오류의 화면 안내 (요청 로그 error_type → 문구)
 STAGE_ERRORS = {
     'search': '조문을 검색하지 못했습니다',
     'rerank': '조문 순위를 매기지 못했습니다',
@@ -47,18 +44,6 @@ def source_body(h):
     return h['doc'].split('\n', 1)[1]
 
 
-def source_card(h):
-    return f'**{source_title(h)}** · {source_scores(h)}\n\n{source_body(h)}'
-
-
-def folded_card(h):
-    """접힌 조문 카드 (펼치면 본문). 본문은 빈 줄 뒤에 두어 Markdown으로 그린다"""
-    return (
-        f'<details><summary><b>{html.escape(source_title(h))}</b> · {source_scores(h)}</summary>\n\n'
-        f'{source_body(h)}\n\n</details>'
-    )
-
-
 def source_groups(hits, cited=None, refused=False):
     """오른쪽 조문 카드 묶음 [(제목 또는 None, 펼침 여부, 조문 목록)]. cited(답변에서 인용한 검색 결과 조문)를 주면
     인용한 조문은 펼쳐서 먼저, 나머지는 접어서 뒤에. 생성 중이거나(cited=None) 인용을 찾지 못한 답변은 모두 펼친다
@@ -73,19 +58,6 @@ def source_groups(hits, cited=None, refused=False):
     if rest:
         groups.append(('검색됐지만 답변에 쓰지 않은 조문' if refused else '검색만 된 조문', False, rest))
     return groups
-
-
-def fmt_sources(hits, cited=None, refused=False):
-    """source_groups를 Markdown 한 덩어리로 (Gradio 화면)"""
-    parts = []
-    for label, opened, group in source_groups(hits, cited, refused):
-        if label is None:
-            parts.append('\n\n---\n\n'.join(source_card(h) for h in group))
-        elif opened:
-            parts.append(f'**{label}**\n\n' + '\n\n---\n\n'.join(source_card(h) for h in group))
-        else:
-            parts.append(f'**{label}** (눌러서 펼치기)\n\n' + '\n\n'.join(folded_card(h) for h in group))
-    return '\n\n---\n\n'.join(parts)
 
 
 def data_notice(app):

@@ -1,18 +1,18 @@
-# tests/test_feedback.py  →  답변 피드백(B6): 화면 버튼·저장 기록·검수·내보내기 (가짜 모델, 피드백 파일은 tmp_path에만)
+# tests/test_feedback.py  →  답변 피드백(B6): 턴 기록·저장 줄·검수·내보내기 (가짜 모델, 피드백 파일은 tmp_path에만)
+# 화면 버튼과 HTTP 경로는 test_web.py, 화면 표시는 frontend의 Vitest
 import json
 import stat
 import subprocess
 import sys
 import threading
-import types
 
 import pandas as pd
 import pytest
 
-import lawbot.app as app_mod
 import lawbot.service as service
+from chat_support import run
 from fakes import FakeLLM, FakeRetriever
-from lawbot import feedback, feedback_ui
+from lawbot import feedback, web
 from lawbot.paths import ROOT
 from lawbot_tools import feedback_export, feedback_review
 
@@ -28,10 +28,6 @@ def local_app(env):
     return service.load_app()
 
 
-def req(session='s1'):
-    return types.SimpleNamespace(session_hash=session)
-
-
 def lines(folder):
     return [
         json.loads(x)
@@ -40,78 +36,50 @@ def lines(folder):
     ]
 
 
-def turn(chat, history, question=QUESTION, model='fast', fmt='full', session='s1'):
-    """한 턴을 돌리고 Chatbot에 보일 history(질문·답변 추가)를 돌려준다"""
-    text = list(chat(question, history, model, fmt, req(session)))[-1][0]
-    return history + [{'role': 'user', 'content': question}, {'role': 'assistant', 'content': text}]
+def turn(a, fb, question=QUESTION, model='fast', fmt='full', session='s1'):
+    """한 턴을 돌리고 (turn_id, 화면 글). 웹앱처럼 끝난 턴을 세션의 다음 순번에 기억한다"""
+    done = run(a, question, model, fmt, remember=lambda record: fb.remember_turn(session, record)).done
+    return done['turn_id'], done['text']
 
 
-def like_deps(demo):
-    cfg = demo.get_config_file()
-    return [d for d in cfg['dependencies'] if any(t[1] == 'like' for t in d['targets'])]
-
-
-# ---- T1·T2·T3: 화면 구성 ----
+# ---- T1·T2·T3: 켜기·끄기, 화면에 알리는 이유 ----
 def test_disabled_by_default(env, tmp_path):
     assert feedback.from_env() is None
-    demo = app_mod.build_demo(local_app(env))
-    assert like_deps(demo) == []  # 버튼(.like 의존성) 없음
-    bot = next(b for b in demo.blocks.values() if isinstance(b, app_mod.gr.Chatbot))
-    assert not bot.feedback_options
-    assert feedback_ui.launch_options(None) == {}
+    assert web.config_data(local_app(env), None)['feedback'] == {'enabled': False, 'reasons': []}  # 버튼 없음
     env.setenv('LAWBOT_FEEDBACK', 'yes')
     with pytest.raises(ValueError, match='LAWBOT_FEEDBACK'):
         feedback.enabled()
 
 
-def test_gradio_flagging_never(env, tmp_path):
-    env.setenv('GRADIO_CHAT_FLAGGING_MODE', 'manual')  # 기본 피드백(.gradio/flagged 저장)을 켜는 변수
-    made = []
-
-    class Recorded(app_mod.gr.ChatInterface):
-        def __init__(self, *a, **kw):
-            super().__init__(*a, **kw)
-            made.append(self)
-
-    env.setattr(app_mod.gr, 'ChatInterface', Recorded)
-    for fb in (None, feedback.Feedback(tmp_path)):
-        demo = app_mod.build_demo(local_app(env), fb)
-        assert made[-1].flagging_mode == 'never'
-        assert len(like_deps(demo)) == (0 if fb is None else 1)  # Gradio 기본 flag 이벤트가 없음
-
-
-def test_api_inputs_unchanged_and_feedback_private(env, tmp_path):
-    demo = app_mod.build_demo(local_app(env), feedback.Feedback(tmp_path))
-    cfg = demo.get_config_file()
-    [chat] = [d for d in cfg['dependencies'] if d.get('api_name') == 'chat']
-    comps = {c['id']: c for c in cfg['components']}
-    assert [comps[i]['type'] for i in chat['inputs'] if comps[i]['type'] != 'state'] == ['textbox', 'radio', 'radio']
-    [like] = like_deps(demo)
-    assert like['api_visibility'] == 'private'
-    bot = next(b for b in demo.blocks.values() if isinstance(b, app_mod.gr.Chatbot))
-    assert list(bot.feedback_options) == ['Like', '검색 오류', '답변 오류', '불필요한 거절', '기타']
-    assert 'Dislike' not in bot.feedback_options and 'copy' in bot.buttons
+def test_reasons_offered_to_screen(env, tmp_path):
+    cfg = web.config_data(local_app(env), feedback.Feedback(tmp_path))['feedback']
+    assert cfg['enabled'] and [(r['label'], r['value']) for r in cfg['reasons']] == [
+        ('검색 오류', 'retrieval'),
+        ('답변 오류', 'answer'),
+        ('불필요한 거절', 'false_refusal'),
+        ('기타', 'other'),
+    ]  # 👎는 없음 (👍와 깃발만)
 
 
 # ---- T4·T5: 저장 기록 ----
 def test_like_saves_full_turn(env, tmp_path):
     a = local_app(env)
     fb = feedback.Feedback(tmp_path)
-    chat = app_mod.make_chat(a, fb)
-    h = turn(chat, [], fmt='concise', model='pro')
+    tid, shown = turn(a, fb, fmt='concise', model='pro')
     expected = list(service.ask(a, QUESTION, 'pro', fmt='concise'))[-1]
-    row = fb.on_like('s1', h, 1, [h[1]['content']], True)
+    row = fb.save('s1', tid, 'like')
     assert row is not None and lines(tmp_path) == [row]
-    assert (row['label'], row['reason'], row['question'], row['model'], row['fmt']) == (
+    assert (row['label'], row['reason'], row['question'], row['model'], row['fmt'], row['turn_id']) == (
         'like',
         None,
         QUESTION,
         'pro',
         'concise',
+        tid,
     )
     assert row['hits'] == expected[1] and row['answer_raw'] == expected[2]
     assert row['system'] == service.system_text(a.profile, a.models.specs['pro'])  # Pro 간결형 system 파일
-    assert row['answer_shown'] == h[1]['content'] != row['answer_raw']  # 간결형: 화면 글은 후처리
+    assert row['answer_shown'] == shown != row['answer_raw']  # 간결형: 화면 글은 후처리
     assert row['refused'] is False and row['citations'] == [
         {'law': '근로기준법', 'article_id': '제26조', 'verdict': 'ok'}
     ]
@@ -122,81 +90,75 @@ def test_like_saves_full_turn(env, tmp_path):
 def test_full_format_system_and_default(env, tmp_path):
     a = local_app(env)
     fb = feedback.Feedback(tmp_path)
-    chat = app_mod.make_chat(a, fb)
-    h = turn(chat, [], model='pro', fmt='full')  # 간결형 모델에서 '전체' → 4항목 system
-    h = turn(chat, h, model='fast', fmt='full')  # Fast: 모델 기본 system (프로필 4항목 system 파일)
-    r1 = fb.on_like('s1', h, 1, h[1]['content'], True)
-    r2 = fb.on_like('s1', h, 3, h[3]['content'], True)
+    t1, _ = turn(a, fb, model='pro', fmt='full')  # 간결형 모델에서 '전체' → 4항목 system
+    t2, _ = turn(a, fb, model='fast', fmt='full')  # Fast: 모델 기본 system (프로필 4항목 system 파일)
+    r1, r2 = fb.save('s1', t1, 'like'), fb.save('s1', t2, 'like')
     assert r1['system'] == a.full_system and r2['system'] == service.system_text(a.profile, a.models.specs['fast'])
 
 
 def test_labels_reasons_and_dedup(env, tmp_path):
+    a = local_app(env)
     fb = feedback.Feedback(tmp_path)
-    chat = app_mod.make_chat(local_app(env), fb)
-    h = turn(chat, [])
-    h = turn(chat, h, question='두 번째 질문')
-    v = h[3]['content']
+    first, _ = turn(a, fb)
+    second, _ = turn(a, fb, question='두 번째 질문')
     t = 100.0
-    for liked, label, reason in (
-        (True, 'like', None),
-        ('검색 오류', 'flag', 'retrieval'),
-        ('답변 오류', 'flag', 'answer'),
-        ('불필요한 거절', 'flag', 'false_refusal'),
-        ('기타', 'flag', 'other'),
-        ('', 'cleared', None),
+    for label, reason in (
+        ('like', None),
+        ('flag', 'retrieval'),
+        ('flag', 'answer'),
+        ('flag', 'false_refusal'),
+        ('flag', 'other'),
+        ('cleared', None),
     ):
-        row = fb.on_like('s1', h, 3, [v], liked, now=t)
+        row = fb.save('s1', second, label, reason, now=t)
         assert (row['label'], row['reason'], row['question']) == (label, reason, '두 번째 질문')
-        assert fb.on_like('s1', h, 3, [v], liked, now=t + 0.5) is None  # 이유 클릭 한 번 = 이벤트 두 번
+        assert fb.save('s1', second, label, reason, now=t + 0.5) is None  # 같은 버튼이 바로 다시 오면 한 번만
         t += 10
-    assert fb.on_like('s1', h, 3, [v], True, now=t + 2.5) is not None  # 2초가 지나면 다시 저장
-    old = fb.on_like('s1', h, 1, [h[1]['content']], '답변 오류', now=t)  # 이전 답변의 버튼은 그 답변의 turn_id로
-    assert old['question'] == QUESTION and old['turn_id'] != lines(tmp_path)[0]['turn_id']
-    assert fb.on_like('s1', h, 3, [v], '엉뚱한 값') is None
+    assert fb.save('s1', second, 'like', now=t + 2.5) is not None  # 2초가 지나면 다시 저장
+    old = fb.save('s1', first, 'flag', 'answer', now=t)  # 이전 답변의 버튼은 그 답변의 turn_id로
+    assert old['question'] == QUESTION and old['turn_id'] == first != second
+    for label, reason in (('dislike', None), ('flag', '기타'), ('flag', None), ('like', 'answer')):
+        with pytest.raises(ValueError):
+            fb.save('s1', second, label, reason)
     assert len(lines(tmp_path)) == 8
 
 
-def test_launch_passes_touch_css_js(env, tmp_path):
+def test_folder_made_only_when_saving(env, tmp_path):
+    """피드백을 켜도 버튼을 누르기 전에는 파일·폴더를 만들지 않는다"""
     from conftest import set_auth
 
     set_auth(env)
-    local_app(env)
-    launched = []
-    env.setattr(app_mod.gr.Blocks, 'launch', lambda demo, **kw: launched.append(kw))
-    env.setattr(app_mod, 'load_app', lambda *a: local_app(env))
-    app_mod.main()
-    assert 'css' not in launched[-1] and 'js' not in launched[-1]  # 기본: 꺼짐
     env.setenv('LAWBOT_FEEDBACK', '1')
     env.setenv('LAWBOT_FEEDBACK_DIR', str(tmp_path / 'fb'))
-    app_mod.main()
-    assert launched[-1]['css'] == feedback_ui.CSS and launched[-1]['js'] == feedback_ui.JS
-    assert 'lawbot-touch' in feedback_ui.CSS and '(hover: none)' in feedback_ui.JS and 'pointerdown' in feedback_ui.JS
-    assert not (tmp_path / 'fb').exists()  # 버튼을 누르기 전에는 파일을 만들지 않음
+    env.setattr(web, 'load_app', lambda *a: local_app(env))
+    env.setattr(web, 'require_build', lambda dist: None)
+    env.setattr(web.uvicorn, 'run', lambda *a, **kw: None)
+    web.main([])
+    assert not (tmp_path / 'fb').exists()
 
 
-# ---- T6: 기록이 없거나 다른 답 ----
-def test_unknown_or_changed_turn_not_saved(env, tmp_path, capsys):
+# ---- T6: 기록이 없는 답 ----
+def test_unknown_turn_not_saved(env, tmp_path, capsys):
+    a = local_app(env)
     fb = feedback.Feedback(tmp_path)
-    chat = app_mod.make_chat(local_app(env), fb)
-    h = turn(chat, [])
+    tid, _ = turn(a, fb)
     restarted = feedback.Feedback(tmp_path)  # 앱 재시작: 메모리 기록 없음
-    assert restarted.on_like('s1', h, 1, h[1]['content'], True) is None
-    assert fb.on_like('s2', h, 1, h[1]['content'], True) is None  # 다른 세션
-    assert fb.on_like('s1', h, 1, '다른 답변', True) is None  # 화면 글이 기록과 다름
-    assert fb.on_like('s1', h, 0, h[0]['content'], True) is None  # 사용자 메시지
+    for store, session in ((restarted, 's1'), (fb, 's2')):  # 다른 세션
+        with pytest.raises(LookupError):
+            store.save(session, tid, 'like')
     assert lines(tmp_path) == []
     out = capsys.readouterr().out
-    assert '저장 안 함' in out and '고유문구XYZ' not in out and '예고해야' not in out  # 콘솔에 질문·답변 없음
+    assert '고유문구XYZ' not in out and '예고해야' not in out  # 콘솔에 질문·답변 없음
 
 
-def test_retry_replaces_turn(env, tmp_path):
+def test_retry_is_a_new_turn(env, tmp_path):
+    a = local_app(env)
     fb = feedback.Feedback(tmp_path)
-    chat = app_mod.make_chat(local_app(env), fb)
-    h1 = turn(chat, [])
-    h2 = turn(chat, [], question='고쳐 쓴 질문')  # 재시도·편집: 같은 순번에 새 답
-    row = fb.on_like('s1', h2, 1, h2[1]['content'], True)
-    assert row['question'] == '고쳐 쓴 질문'
-    assert fb.lookup('s1', 0)[0] != feedback.turn_id('s1', 0, 'x') and h1 != h2
+    t1, _ = turn(a, fb)
+    t2, _ = turn(a, fb, question='고쳐 쓴 질문')  # 다시 묻기·고쳐 묻기: 새 턴
+    assert t1 != t2
+    assert fb.save('s1', t2, 'like')['question'] == '고쳐 쓴 질문'
+    assert fb.save('s1', t1, 'like')['question'] == QUESTION
 
 
 def test_memory_limits(env, tmp_path):
@@ -204,21 +166,10 @@ def test_memory_limits(env, tmp_path):
     rec = {'request_id': 'r'}
     for n in range(feedback.TURNS_PER_SESSION + 5):
         fb.remember('s', n, rec)
-    assert len(fb.turns['s']) == feedback.TURNS_PER_SESSION and fb.lookup('s', 0) is None
+    assert len(fb.turns['s']) == feedback.TURNS_PER_SESSION and 0 not in fb.turns['s']
     for i in range(feedback.MAX_SESSIONS + 3):
-        fb.remember(f'x{i}', 0, rec)
-    assert len(fb.turns) == feedback.MAX_SESSIONS and 's' not in fb.turns
-
-
-def test_index_and_value_shapes():
-    h = [
-        {'role': 'user', 'content': 'q'},
-        {'role': 'assistant', 'content': 'a'},
-        types.SimpleNamespace(role='user', content='q2'),
-        types.SimpleNamespace(role='assistant', content='b'),
-    ]
-    assert [feedback.assistant_index(h, i) for i in (1, 3, (3, 0), 0, 9, None)] == [0, 1, 1, None, None, None]
-    assert feedback.text_of(['가', {'type': 'text', 'text': '나'}]) == '가나' and feedback.text_of(None) == ''
+        fb.remember_turn(f'x{i}', rec)
+    assert len(fb.turns) == len(fb.counts) == feedback.MAX_SESSIONS and 's' not in fb.turns
 
 
 # ---- T7: 저장 폴더·권한 ----
@@ -250,7 +201,7 @@ def test_file_mode_600(env, tmp_path):
 def test_feedback_module_has_no_model_imports():
     code = (
         'import sys, lawbot.feedback, lawbot_tools.feedback_review\n'
-        "print(','.join(m for m in ('mlx', 'mlx_lm', 'torch', 'sentence_transformers', 'gradio', 'lawbot.llm') "
+        "print(','.join(m for m in ('mlx', 'mlx_lm', 'torch', 'sentence_transformers', 'fastapi', 'lawbot.llm') "
         'if m in sys.modules))'
     )
     out = subprocess.run([sys.executable, '-c', code], capture_output=True, text=True, check=True)
@@ -465,12 +416,11 @@ def test_decree_turn_record(env, tmp_path):
     env.setattr(td.RR, 'ERROR', None)
     a = td.make()
     fb = feedback.Feedback(tmp_path)
-    chat = app_mod.make_chat(a, fb)
     q = '해고 예고?'
-    h = turn(chat, [], question=q, model='pro', fmt='concise')
+    tid, _ = turn(a, fb, question=q, model='pro', fmt='concise')
     _, hits, _, st = list(service.ask(a, q, 'pro', fmt='concise'))[-1]
     assert len(hits) > 3 and st['n_decree'] == len(hits) - 3
-    row = fb.on_like('s1', h, 1, [h[1]['content']], True)
+    row = fb.save('s1', tid, 'like')
     assert row['hits'] == json.loads(json.dumps(hits, default=feedback.jsonable, ensure_ascii=False))
     assert [x.get('kind') for x in row['hits'][3:]] and all(
         x['kind'] in ('시행령', '시행규칙') for x in row['hits'][3:]
@@ -478,8 +428,8 @@ def test_decree_turn_record(env, tmp_path):
     assert all('kind' not in x for x in row['hits'][:3]) and row['hits'][3]['parent_law']
     assert row['decree'] == {'tau': 0.9, 'k': 2} and row['n_decree'] == st['n_decree']
     assert row['timing']['decree_rerank'] is not None
-    h = turn(chat, h, question=q, model='fast', fmt='full')
-    row = fb.on_like('s1', h, 3, [h[3]['content']], True)
+    tid, _ = turn(a, fb, question=q, model='fast', fmt='full')
+    row = fb.save('s1', tid, 'like')
     assert row['decree'] is None and row['n_decree'] is None and len(row['hits']) == 3
 
 

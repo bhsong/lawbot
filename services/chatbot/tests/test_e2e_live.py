@@ -16,8 +16,8 @@ import pytest
 import e2e_support as e2e
 from conftest import free_port
 from lawbot import llm, manifest
-from lawbot.app import EXAMPLES
 from lawbot.paths import ROOT
+from lawbot.view import EXAMPLES
 from lawbot_common import envfile
 from lawbot_model_server import revision
 
@@ -128,7 +128,7 @@ def live(tmp_path_factory):
     port = free_port()
     env = {k: v for k, v in s.env.items() if k not in LOCAL}
     env.update(LAWBOT_REQUEST_LOG=str(s.request_log), LAWBOT_FEEDBACK='0', LAWBOT_MODELS='pro')
-    s.web = e2e.start_webapp(tmp, port, **env)
+    s.web = e2e.start_web(tmp, port, **env)
     s.url = f'http://127.0.0.1:{port}'
     yield s
     s.web.stop()
