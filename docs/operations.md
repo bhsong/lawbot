@@ -234,11 +234,11 @@ client.chat.completions.create(
 2. 운영 worktree를 만듭니다(배포할 태그 기준, 1회).
 
    ```zsh
-   cd ~/lawbot
-   git worktree add --detach ~/lawbot-prod <태그>
-   cd ~/lawbot-prod
-   ln -s ~/lawbot/models models                 # 모델 파일 공유
-   cp ~/lawbot/.env .env && chmod 600 .env      # .env.example대로 (모델 서버 블록 + 맨 아래 운영 블록)
+   cd ~/Work/lawbot
+   git worktree add --detach ~/Work/lawbot-prod <태그>
+   cd ~/Work/lawbot-prod
+   ln -s ~/Work/lawbot/models models            # 모델 파일 공유
+   cp ~/Work/lawbot/.env .env && chmod 600 .env # .env.example대로 (모델 서버 블록 + 맨 아래 운영 블록)
    uv sync --frozen
    ```
 
@@ -257,7 +257,7 @@ client.chat.completions.create(
    ```zsh
    mkdir -p ~/Library/Logs/lawbot
    for k in model-server web; do
-     sed -e "s|__UV__|$(which uv)|g" -e "s|__PROD_DIR__|$HOME/lawbot-prod|g" -e "s|__LOG_DIR__|$HOME/Library/Logs/lawbot|g" \
+     sed -e "s|__UV__|$(which uv)|g" -e "s|__PROD_DIR__|$HOME/Work/lawbot-prod|g" -e "s|__LOG_DIR__|$HOME/Library/Logs/lawbot|g" \
        deploy/launchd/com.lawbot.$k.plist.example > ~/Library/LaunchAgents/com.lawbot.$k.plist
      launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.lawbot.$k.plist   # 등록·시작
    done
@@ -362,6 +362,12 @@ uv run pyright             # 타입 검사 (웹앱 런타임·모델 서버·mon
 ```
 
 브라우저 E2E는 두 층입니다. `e2e_stub`(기본 실행·CI 포함)는 임베딩·리랭크·답변 생성 세 호출을 모두 가짜 모델로 바꾼 것이라 **실제 모델 연결 확인이 아닙니다**. 설정은 `.env.example`(운영 구성)과 같게 띄우고, 실패한 테스트만 `results/e2e_stub/<시각>-<테스트>/`에 스크린샷·화면 HTML·프로세스 출력·요청 로그를 남깁니다(성공하면 남기지 않음, 진단 후 지움). 실제 공유 모델 서버로 하는 `e2e_live`는 승인 후 맥 미니의 개발 worktree에서만 실행합니다([계획](archives/e2e-playwright.md)).
+
+브라우저 E2E를 새로 쓰거나 고칠 때:
+
+- 질문 입력창은 `textarea[data-testid=textbox]`로 찾습니다. 로그인 화면의 사용자명 칸도 `data-testid=textbox`라서 `textarea`로 구분합니다.
+- 브라우저 언어는 `en-US`로 고정합니다. Gradio 기본 문구(버튼·안내)에 기대는 확인이 있습니다.
+- 브라우저는 `services/chatbot/tests/conftest.py`의 모듈 범위 픽스처를 씁니다. `pytest-playwright`는 쓰지 않습니다(세션 내내 이벤트 루프를 열어 두어 뒤 테스트의 `asyncio.run()`을 깨뜨림).
 
 ```bash
 uv run pytest -m e2e_live services/chatbot/tests/test_e2e_live.py   # 레포 .env의 모델 서버로 질문 3개 (순서대로, 재시도 없음)
