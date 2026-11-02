@@ -172,22 +172,13 @@ def test_error_timeout(stack, ui):
 
 
 def test_error_generation(stack, ui):
-    """지금 화면: 안내 문구 없이 말풍선은 '답변을 쓰는 중…'에 멈추고 측정 줄 위에 Gradio의 'Error' 표시만 (2026-11-02 E2E에서 발견)"""
+    """생성 중 오류: 안내 문구가 뜨고 가짜 답을 보이지 않는다 (예전에는 안내 없이 'Error' 표시만: 2026-11-02 발견·수정)"""
     stack.ensure('chat_error')
     before = len(e2e.request_log(stack.request_log))
     e2e.ask(ui, QUESTION)
-    e2e.stats(ui).get_by_text('Error', exact=True).wait_for(timeout=e2e.ANSWER_TIMEOUT)
-    assert [r['status'] for r in new_log_rows(stack, before)] == ['error']
+    error_toast(ui, '답변을 생성하지 못했습니다')
+    assert [r['error_type'] for r in new_log_rows(stack, before)] == ['generation']
     assert FAKE_ANSWER not in e2e.answer(ui).inner_text()
-
-
-@pytest.mark.xfail(
-    strict=True, reason='생성 오류 안내 문구 없음 (app.make_chat이 원래 예외를 그대로 올림). 고치면 xfail을 뗀다'
-)
-def test_error_generation_shows_message(stack, ui):
-    stack.ensure('chat_error')
-    e2e.ask(ui, QUESTION)
-    error_toast(ui, '답변을 생성하지 못했습니다', timeout=5_000)
 
 
 def test_error_server_down(stack, ui):

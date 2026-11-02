@@ -101,8 +101,9 @@ def test_log_summary_reads_monthly_and_legacy(env, tmp_path, capsys):
 def test_generation_error(env, log):
     chat = app_mod.make_chat(local_app(env))
     env.setattr(FakeLLM, 'chunks', ['【결론】', RuntimeError('생성 실패')])
-    with pytest.raises(RuntimeError, match='생성 실패'):
+    with pytest.raises(app_mod.gr.Error, match='답변을 생성하지 못했습니다') as ei:  # 화면 안내, 원래 예외는 __cause__
         list(chat(QUESTION, [], 'fast', 'full'))
+    assert '생성 실패' in str(ei.value.__cause__)
     r = lines(log)[-1]
     assert (r['status'], r['error_type']) == ('error', 'generation')
 
@@ -125,8 +126,9 @@ def test_rerank_error(env, log):
             raise RuntimeError('리랭커 점수 오류')
 
     a.reranker = Broken()
-    with pytest.raises(RuntimeError, match='리랭커 점수 오류'):
+    with pytest.raises(app_mod.gr.Error, match='조문 순위를 매기지 못했습니다') as ei:
         list(app_mod.make_chat(a)(QUESTION, [], 'fast', 'full'))  # 임베딩 순위로 되돌리지 않음
+    assert '리랭커 점수 오류' in str(ei.value.__cause__)
     r = lines(log)[-1]
     assert (r['error_type'], r['reranker']) == ('rerank', True) and r['search_ms'] is not None
 

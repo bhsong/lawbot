@@ -20,12 +20,14 @@
 - (같은 PR의 3단계로 옮김) 모델 가중치 revision 노출은 5절 3단계에서 설계를 이 문서에 추가한 뒤 한다.
 - 품질 평가(인용 정확도·거절률): 기존 `docs/evals`·`tools/` 그대로.
 
+범위 추가 (사용자 결정 2026-11-02): `e2e_stub`가 찾은 화면 문제를 이 PR에서 고친다. 검색·리랭킹·생성 중 오류가 나면 웹앱이 원래 예외를 그대로 올려, 화면에는 안내 없이 측정 줄 위 "Error" 표시만 남고 말풍선은 "답변을 쓰는 중…"에 멈췄다. → 다른 오류처럼 `gr.Error` 안내("답변을 생성하지 못했습니다 (예외 이름). 다시 질문해 주세요." 등, `app.STAGE_ERRORS`). 원래 예외는 `__cause__`, 요청 로그·터미널 로그는 그대로. 설정 오류(`config`)는 지금처럼 원래 예외.
+
 ## 1. 결정
 
 | 항목 | 결정 | 이유 |
 | --- | --- | --- |
 | 브라우저 도구 | Playwright Python, Chromium만, headless | 사용자 결정 (2026-11-02). pytest와 같은 프로세스에서 돈다 |
-| pytest 연동 | `pytest-playwright` 플러그인 (`page` 픽스처). pytest 9와 맞지 않으면 `playwright`만 쓰고 픽스처를 직접 둔다 | 0단계에서 확인 |
+| pytest 연동 | `playwright`만 쓰고 브라우저 픽스처는 `tests/conftest.py`에 모듈 범위로 직접 둔다 | 처음엔 `pytest-playwright`였으나 세션 내내 이벤트 루프를 열어 두어 뒤 테스트의 `asyncio.run()`이 깨짐(모델 서버 테스트 17개 실패, 2026-11-02) |
 | 가짜 모델의 위치 | 모델 서버 **앱 뒤**(Registry에 `ms_fakes`의 가짜 모델). `ModelServerClient`는 진짜 | HTTP·SSE·토큰 인증·오류 본문을 진짜 코드가 지난다. 계약 테스트와 같은 경계 |
 | 세 추론 호출 | 임베딩·리랭크·chat 모두 가짜(`e2e_stub`) 또는 모두 실제(`e2e_live`). 섞지 않음 | 일부만 실제로 부른 결과를 live로 보고하지 않기 위해 |
 | 웹앱 코드 | 그대로 `lawbot.app.main()` 실행. 바꾸는 것은 선택자용 `elem_id`(조문 카드·측정 줄)만 | Gradio DOM 구조에 기대지 않기 위해. 화면 동작은 바뀌지 않음 |
@@ -63,9 +65,9 @@ pytest (Playwright) ──▶ 127.0.0.1:<빈 포트 A>  웹앱 프로세스 (law
 | `test_example_click` | 예시 질문을 누르면 같은 흐름으로 답이 나온다 |
 | `test_request_log_api_mode` | 요청 로그 한 줄: `mode=api`, 오류 유형 없음, 질문 원문은 남지 않음(기존 로그 규칙) |
 | `test_error_timeout` | `slow` 모드 + 짧은 read timeout → "모델 서버 응답이 없습니다" 안내 |
-| `test_error_generation` | `chat_error` 모드 → 화면에 오류 표시, 임베딩 순위로 되돌린 답을 보이지 않음 |
+| `test_error_generation` | `chat_error` 모드 → "답변을 생성하지 못했습니다" 안내, 가짜 답을 보이지 않음, 요청 로그 `generation` |
 | `test_error_server_down` | 웹앱이 뜬 뒤 가짜 모델 서버를 종료 → "모델 서버가 준비되지 않았습니다" 안내 |
-| `test_error_busy` | 가짜 서버 `LAWBOT_MAX_QUEUED=1`·`slow`, 테스트가 직접 chat 요청 2개로 자리를 채운 뒤 브라우저 질문 → "모델 서버가 바쁩니다" |
+| `test_error_busy` | 가짜 서버 동시 1·대기 1. 테스트가 직접 chat 요청을 보내 생성 시작을 확인한 뒤 두 번째로 대기 자리를 채우고 브라우저 질문 → "모델 서버가 바쁩니다" (동시에 보내면 둘째가 503을 받는 경쟁이 있음) |
 
 정확한 문장 일치는 가짜 답변 문자열에 대해서만 한다(가짜이므로 고정). 실행 시간 목표: `e2e_stub` 전체 60초 이내(맥 기준).
 

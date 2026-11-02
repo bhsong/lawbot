@@ -163,7 +163,7 @@ uv run pytest -m models services/model-server   # 실제 로딩·채점 스모�
 LAWBOT_RERANKER_ENABLED=0 uv run lawbot-app    # 한 번만 끄고 실행
 ```
 
-리랭커 오류(점수가 NaN 등)는 임베딩 순위로 몰래 되돌리지 않고 화면에 오류로 표시합니다. 모델 서버에 리랭커 모델 id가 없으면 웹앱이 시작을 거부합니다. 화면의 조문 카드에는 리랭커 점수와 원래 임베딩 순위가, 측정 줄에는 리랭킹 시간이 나오고, 터미널에는 질문마다 검색·리랭킹·첫 토큰·완료 시간이 한 줄씩 남습니다.
+리랭커 오류(점수가 NaN 등)는 임베딩 순위로 몰래 되돌리지 않고 "조문 순위를 매기지 못했습니다"로 안내합니다. 모델 서버에 리랭커 모델 id가 없으면 웹앱이 시작을 거부합니다. 화면의 조문 카드에는 리랭커 점수와 원래 임베딩 순위가, 측정 줄에는 리랭킹 시간이 나오고, 터미널에는 질문마다 검색·리랭킹·첫 토큰·완료 시간이 한 줄씩 남습니다.
 
 ## 시행령·시행규칙 첨부 (선택, v4)
 
@@ -329,7 +329,7 @@ uv run python -m lawbot_tools.log_summary                      # 상태별 건�
 uv run python -m lawbot_tools.log_summary --caller lawbot-app  # 평가 실행 제외
 ```
 
-오류 유형은 화면 안내와 같습니다. `model_server`(서버 연결 실패·토큰 불일치·로딩 중)는 "모델 서버가 준비되지 않았습니다", `model_load`(모델 서버의 모델 폴더 없음·형식 오류, 웹앱의 system 파일 없음)는 "모델을 불러오지 못했습니다"로 안내합니다. `model_server_timeout`(질문 처리 중 응답 조각 사이가 `LAWBOT_MODEL_READ_TIMEOUT`을 넘음)은 "모델 서버 응답이 없습니다", `model_server_busy`(모델 서버 대기열이 `LAWBOT_MAX_QUEUED`개로 가득 참)는 "모델 서버가 바쁩니다"로 안내합니다. 요청 로그의 `mode`는 `api`(모델 서버에서 생성) 또는 `external`(외부 생성 API)입니다. 리랭킹·생성 오류는 임베딩 순위로 되돌리지 않고 그대로 오류로 표시합니다.
+오류 유형은 화면 안내와 같습니다. `model_server`(서버 연결 실패·토큰 불일치·로딩 중)는 "모델 서버가 준비되지 않았습니다", `model_load`(모델 서버의 모델 폴더 없음·형식 오류, 웹앱의 system 파일 없음)는 "모델을 불러오지 못했습니다"로 안내합니다. `model_server_timeout`(질문 처리 중 응답 조각 사이가 `LAWBOT_MODEL_READ_TIMEOUT`을 넘음)은 "모델 서버 응답이 없습니다", `model_server_busy`(모델 서버 대기열이 `LAWBOT_MAX_QUEUED`개로 가득 참)는 "모델 서버가 바쁩니다"로 안내합니다. 요청 로그의 `mode`는 `api`(모델 서버에서 생성) 또는 `external`(외부 생성 API)입니다. `search`·`rerank`·`generation`(검색·리랭킹·생성 중 오류)은 "조문을 검색하지 못했습니다"·"조문 순위를 매기지 못했습니다"·"답변을 생성하지 못했습니다"로 안내하고, 임베딩 순위로 되돌리지 않습니다.
 
 ## 답변 피드백 (선택, `LAWBOT_FEEDBACK=1`)
 
