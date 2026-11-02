@@ -71,7 +71,7 @@ ignore = [
 quote-style = "single"   # 기존 코드가 작은따옴표
 
 [tool.pyright]
-# 웹앱 런타임·모델 서버·monitor·공통 패키지만 (평가 도구 tools/는 pandas 위주라 제외, docs/plans/engineering-cleanup.md 7.4)
+# 웹앱 런타임·모델 서버·monitor·공통 패키지만 (평가 도구 tools/는 pandas 위주라 제외, docs/archives/engineering-cleanup.md 7.4)
 include = ["packages/lawbot-common/src", "services/chatbot/src", "services/model-server/src", "services/monitor/src"]
 pythonVersion = "3.14"
 typeCheckingMode = "basic"
