@@ -15,7 +15,8 @@ def split(text: str) -> tuple[dict, str]:
     if end < 0:
         return {}, text
     meta = yaml.safe_load(text[4:end]) or {}
-    return _plain(meta), text[end + 5 :].lstrip('\n')
+    plain = _plain(meta)
+    return (plain if isinstance(plain, dict) else {}), text[end + 5 :].lstrip('\n')
 
 
 def _plain(value):

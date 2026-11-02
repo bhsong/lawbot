@@ -355,9 +355,9 @@ def test_decree_rerank_error_not_hidden(rr, tmp_path):
     log = tmp_path / 'req.jsonl'
     rr.setenv('LAWBOT_REQUEST_LOG', str(log))
     rr.setattr(RR, 'ERROR', RuntimeError('리랭커 고장'))
-    with pytest.raises(RuntimeError, match='리랭커 고장') as e:
+    with pytest.raises(service.AskError, match='리랭커 고장') as e:
         ask(make(), '해고', 'pro')
-    assert e.value.lawbot_error == 'rerank'
+    assert (e.value.kind, e.value.stage) == ('rerank', 'rerank') and isinstance(e.value.__cause__, RuntimeError)
     assert json.loads(log.read_text())['error_type'] == 'rerank'
 
 

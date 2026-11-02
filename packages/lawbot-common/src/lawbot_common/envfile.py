@@ -57,7 +57,7 @@ def load(default, root, secrets, tag):
         if env:  # 직접 지정한 파일이 없으면 오류
             raise FileNotFoundError(f'LAWBOT_ENV_FILE 파일 없음: {path}')
         return None
-    values = read(path, lawbot_keys)
+    values = read(path, lawbot_keys) or {}  # 위에서 파일이 있는 것을 확인함
     found = [k for k in secrets if values.get(k)]
     if found and path.stat().st_mode & (stat.S_IRWXG | stat.S_IRWXO):  # 값은 출력하지 않고 변수 이름만
         print(

@@ -10,6 +10,7 @@ import time
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
+from typing import cast
 
 import httpx
 from openai import OpenAI
@@ -25,6 +26,7 @@ from lawbot.api_client import (
     request_timeout,
     wait_ready,
 )
+from lawbot.hits import Hit, Timing
 from lawbot.llm import LLM
 from lawbot.paths import ROOT
 from lawbot.reranker import Reranker
@@ -32,6 +34,14 @@ from lawbot.retriever import Retriever
 
 TOP_K = 3  # 답변 근거로 넘기는 조문 수 (Fast·Pro 공통)
 # 테스트는 Retriever·Reranker·LLM·ModelServerClient·OpenAI를 이 모듈의 속성으로 바꿔 끼운다 (load_app이 호출 때 읽음)
+
+
+class AskError(Exception):
+    """ask 중 오류: kind(요청 로그 error_type·화면 안내 기준), stage(실패한 단계). 원래 예외는 __cause__"""
+
+    def __init__(self, kind, stage, cause):
+        super().__init__(f'{type(cause).__name__}: {cause}')
+        self.kind, self.stage = kind, stage
 
 
 class ChatModels:
@@ -65,7 +75,7 @@ class LawbotApp:
     retriever: object
     models: ChatModels
     reranker: object = None  # None: 임베딩 상위 TOP_K개 그대로 (LAWBOT_RERANKER_ENABLED=0, 기본)
-    full_system: str = None  # '전체(4항목)' system: 프로필 system 파일
+    full_system: str | None = None  # '전체(4항목)' system: 프로필 시스템 파일
     decree: object = None  # deploy.DecreeConfig: 시행령·시행규칙 첨부 (None: 법률 3개만, LAWBOT_DECREE_ENABLED=0 기본)
     llm_mode: str = 'api'  # 생성 위치: 'api'(모델 서버) / 'external'(LAWBOT_LLM_BASE_URL의 외부 API)
     settings: object = None  # lawbot.settings.Settings (load_app이 넣음. 테스트·평가의 가짜 앱은 None)
@@ -162,8 +172,13 @@ def load_app(settings=None):
     )
     reranker = Reranker(client, rr.model, rr.candidates, timeout=limit) if rr else None
     # 외부 API는 셸의 프록시 설정을 따른다. 모델 서버(127.0.0.1)는 프록시를 거치지 않음
+    # openai 3.x는 타입 선언이 httpx2 기준이지만 httpx.Client·httpx.Timeout을 그대로 받아 쓴다 (2026-11-02 확인: 읽기 상한·trust_env 적용)
     oa = OpenAI(
-        base_url=llm_url, api_key=llm_key, max_retries=0, timeout=limit, http_client=httpx.Client(trust_env=external)
+        base_url=llm_url,
+        api_key=llm_key,
+        max_retries=0,
+        timeout=limit,  # pyright: ignore[reportArgumentType]
+        http_client=httpx.Client(trust_env=external),  # pyright: ignore[reportArgumentType]
     )
 
     def factory(spec):  # system 파일이 없으면 FileNotFoundError (화면에서 오류 안내)
@@ -196,7 +211,7 @@ def format_system(app, model_key, fmt):
     return None
 
 
-def retrieve(app, question, k, st, model_key=None):
+def retrieve(app, question, k, st: Timing, model_key=None) -> tuple[list[Hit], list[Hit]]:
     """(법률 근거 조문 k개, 첨부할 하위법령 목록). 리랭커가 없으면 기존과 같은 임베딩 상위 k개,
     있으면 임베딩 상위 reranker.candidates개를 리랭킹해 점수순 k개. 측정값 search·rerank(초)를 st에 적는다
     model_key가 하위법령 첨부 모델이면(uses_decrees) 하위법령 후보 decree.candidates개를 같은 리랭커로 채점하고
@@ -221,7 +236,7 @@ def retrieve(app, question, k, st, model_key=None):
     return hits, retrieve_decrees(app, question, hits[0]['law'], st)
 
 
-def retrieve_decrees(app, question, top1_law, st):
+def retrieve_decrees(app, question, top1_law, st: Timing) -> list[Hit]:
     """하위법령 후보 검색 → 리랭킹(후보 전부 점수) → 필터. 첨부 목록 (평가는 st['decree_candidates']도 씀)"""
     dc = app.decree
     st['_stage'] = 'search'
@@ -353,10 +368,10 @@ def ask(app, question, model_key, k=TOP_K, fmt=None):
     hits: 법률 k개 + 첨부한 하위법령 (하위법령 첨부 모델일 때만, 없으면 법률 k개만 = 지금과 같은 리스트)
     측정값(초): search, rerank(리랭커가 켜져 있을 때만), decree_search·decree_rerank(하위법령 첨부 모델일 때만), load(이번에 로딩했을 때만), ttft(생성 호출→첫 토큰, 프리필),
     first_text(질문 수신→첫 글자), total / tps, prompt_tokens, prompt_tps(프리필 속도), gen_tokens, peak_gb, finish
-    질문마다 요청 로그 한 줄 (log_request): 성공 ok / 오류 error(유형은 예외의 lawbot_error에도 붙여 화면 안내에 씀) /
+    질문마다 요청 로그 한 줄 (log_request): 성공 ok / 오류 error(AskError로 감싸 올림: kind는 요청 로그 error_type과 같고 화면 안내에 씀) /
     중간에 멈춤 cancelled (정지 버튼 등으로 생성기를 닫음)"""
     t0 = time.perf_counter()
-    st = {'model': model_key, 'load': None, 'request_id': uuid.uuid4().hex[:12]}
+    st: Timing = {'model': model_key, 'load': None, 'request_id': uuid.uuid4().hex[:12]}
     stage, logged = 'search', False
     try:
         law_hits, decree_hits = retrieve(app, question, k, st, model_key)
@@ -386,7 +401,7 @@ def ask(app, question, model_key, k=TOP_K, fmt=None):
             ('finish', 'finish_reason'),
         ):
             st[name] = getattr(last, attr, None)
-        st |= answer_check(app, raw, hits)
+        st |= cast(Timing, answer_check(app, raw, hits))
         log_timing(st)
         log_request(app, st, fmt, 'ok')
         logged = True
@@ -400,8 +415,8 @@ def ask(app, question, model_key, k=TOP_K, fmt=None):
     except Exception as e:
         if stage == 'search':
             stage = st.get('_stage', 'search')  # 법률·하위법령 검색('search') 또는 리랭킹('rerank')에서 실패
-        e.lawbot_error = error_type(e, stage)
+        kind = error_type(e, stage)
         if not logged:
             st['total'] = time.perf_counter() - t0
-            log_request(app, st, fmt, 'error', e.lawbot_error)
-        raise
+            log_request(app, st, fmt, 'error', kind)
+        raise AskError(kind, stage, e) from e

@@ -7,6 +7,8 @@
 # - launch(css=…) 안의 @media는 적용되지 않아 터치 구분은 <html>의 lawbot-touch class로 한다
 # - 터치에서는 click이 오지 않아 pointerdown(캡처 단계)을 쓴다
 
+from typing import Any
+
 CSS = """
 html.lawbot-touch .extra-feedback-options {
   position: static !important;
@@ -41,6 +43,6 @@ JS = """
 """
 
 
-def launch_options(fb):
+def launch_options(fb) -> dict[str, Any]:
     """demo.launch에 더할 인자. 피드백이 꺼져 있으면(fb=None) 아무것도 넣지 않는다"""
     return {'css': CSS, 'js': JS} if fb is not None else {}

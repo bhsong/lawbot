@@ -5,6 +5,8 @@ import os
 from dataclasses import dataclass
 from pathlib import Path
 
+from lawbot.deploy import DecreeConfig, Profile, RerankerConfig
+
 
 class SettingsError(ValueError, RuntimeError):
     """설정 오류 모음. 값은 넣지 않는다 (비밀번호·토큰). 기존 호출부의 except ValueError·RuntimeError와 맞도록 둘 다"""
@@ -12,9 +14,9 @@ class SettingsError(ValueError, RuntimeError):
 
 @dataclass(frozen=True)
 class Settings:
-    profile: object  # deploy.Profile (LAWBOT_MODELS로 고른 답변 모델 포함)
-    reranker: object  # deploy.RerankerConfig 또는 None
-    decree: object  # deploy.DecreeConfig 또는 None
+    profile: Profile  # LAWBOT_MODELS로 고른 답변 모델 포함
+    reranker: RerankerConfig | None
+    decree: DecreeConfig | None
     model_server: str  # http://127.0.0.1:<포트>
     model_token: str
     llm_url: str  # 생성 API base_url (모델 서버 /v1 또는 외부)

@@ -3,6 +3,7 @@
 # 프록시 환경 변수를 쓰지 않는다 (trust_env=False): 질문이 맥 밖(프록시)으로 나가지 않게 127.0.0.1에 직접 접속
 import base64
 import time
+from typing import Any, Literal
 
 import httpx
 import numpy as np
@@ -101,20 +102,24 @@ class ModelServerClient:
         """[{id, type, loaded, …}] (/v1/models)"""
         return [m.model_dump() for m in self._parsed(api.ModelsResponse, 'GET', api.MODELS_PATH).data]
 
-    def embed(self, model, texts, input_type='document', max_seq_length=None, timeout=None):
+    def embed(
+        self, model, texts, input_type: Literal['query', 'document'] = 'document', max_seq_length=None, timeout=None
+    ):
         """(len(texts), dim) float32. base64로 받아 비트 그대로. timeout: 질문이면 request_timeout(…), 없으면 제한 없음"""
-        req = api.EmbeddingRequest(
-            model=model,
-            input=[str(t) for t in texts],
-            encoding_format='base64',
-            input_type=input_type,
-            **({'max_seq_length': int(max_seq_length)} if max_seq_length else {}),
-        )
+        fields: dict[str, Any] = {'model': model, 'input': [str(t) for t in texts], 'encoding_format': 'base64'}
+        fields['input_type'] = input_type
+        if max_seq_length:
+            fields['max_seq_length'] = int(max_seq_length)
+        req = api.EmbeddingRequest(**fields)  # 넘긴 필드만 본문에 (exclude_unset)
         res = self._parsed(
             api.EmbeddingResponse, 'POST', api.EMBEDDINGS_PATH, req.model_dump(exclude_unset=True), timeout
         )
         data = sorted(res.data, key=lambda d: d.index)
-        return np.stack([np.frombuffer(base64.b64decode(d.embedding), dtype='<f4') for d in data]).astype(np.float32)
+        if not all(isinstance(d.embedding, str) for d in data):
+            raise ModelServerError('모델 서버 응답 형식이 아닙니다 (/v1/embeddings: base64가 아님)')
+        return np.stack([np.frombuffer(base64.b64decode(str(d.embedding)), dtype='<f4') for d in data]).astype(
+            np.float32
+        )
 
     def rerank(self, model, query, documents, instruction=None, timeout=None):
         """문서 순서대로 점수 목록 (정렬은 호출한 쪽이 한다)"""
@@ -122,7 +127,7 @@ class ModelServerClient:
             model=model, query=query, documents=list(documents), **({'instruction': instruction} if instruction else {})
         )
         res = self._parsed(api.RerankResponse, 'POST', api.RERANK_PATH, req.model_dump(exclude_unset=True), timeout)
-        scores = [None] * len(documents)
+        scores: list[float | None] = [None] * len(documents)
         for item in res.results:
             scores[item.index] = item.relevance_score
         if any(s is None for s in scores):
@@ -137,7 +142,7 @@ class Embedder:
     def __init__(self, client, model, query_timeout=None):
         self.client, self.model, self.query_timeout = client, model, query_timeout
 
-    def encode(self, texts, input_type='document', max_seq_length=None):
+    def encode(self, texts, input_type: Literal['query', 'document'] = 'document', max_seq_length=None):
         timeout = self.query_timeout if input_type == 'query' else None
         return self.client.embed(self.model, texts, input_type, max_seq_length, timeout)
 

@@ -3,6 +3,7 @@
 import re
 
 from lawbot.citation import OK, check, hit_law, parse, refused
+from lawbot.hits import Hit
 
 SECTION = re.compile(r'【(결론|근거 조문|설명|참고)】')
 
@@ -16,11 +17,11 @@ def sections(raw):
     }
 
 
-def hit_label(h):
+def hit_label(h: Hit) -> str:
     return f'{hit_law(h)} {h["article_id"]}({h["title"]})'
 
 
-def cited_hits(cite_text, hits):
+def cited_hits(cite_text, hits: list[Hit]):
     """【근거 조문】 글에서 실제로 인용한 조문: (검색 결과의 조문, 검색 결과에 없거나 법령을 특정할 수 없는 번호)
     인용 파싱·판정은 eval_v4 채점과 같은 citation 모듈: 줄임말('퇴직급여법')을 인정하고, 법령명 없이 이어 쓴 번호는
     앞의 법령으로 본다. 법령명이 전혀 없으면 그 번호의 검색 결과가 하나뿐일 때만 인정"""
@@ -34,7 +35,7 @@ def cited_hits(cite_text, hits):
     return used, unknown
 
 
-def concise(raw, hits, done=True):
+def concise(raw, hits: list[Hit], done=True):
     """간결형: 결론 + '근거: ' 실제 인용 조문만. 4섹션 표시가 없으면 원문 그대로 (형식을 벗어난 답변을 숨기지 않음)"""
     sec = sections(raw)
     if '결론' not in sec:
@@ -57,7 +58,7 @@ def concise(raw, hits, done=True):
     return out
 
 
-def answer_citations(raw, hits):
+def answer_citations(raw, hits: list[Hit]):
     """생성이 끝난 답변의 (인용한 검색 결과 조문, 검색 결과에서 확인되지 않은 번호, 거절 여부). 화면의 조문 카드 구분에 씀
     【결론】 형식이면 【근거 조문】만, 형식을 벗어난 답변은 전체에서 인용을 찾는다 (간결형과 같은 기준)"""
     if refused(raw):
@@ -67,7 +68,7 @@ def answer_citations(raw, hits):
     return used, unknown, False
 
 
-def render(raw, hits, fmt, done=True):
+def render(raw, hits: list[Hit], fmt, done=True):
     """fmt: 'concise'(간결형) / 'full'(모델 원문 4섹션)
     전체 형식도 생성이 끝나면 검색 결과에서 확인되지 않은 인용을 원문 아래에 경고한다 (간결형과 같은 문구)"""
     if fmt == 'concise':

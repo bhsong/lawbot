@@ -2,6 +2,8 @@
 # 웹앱이 쓸 조문 CSV·매니페스트·system·검색 설정과 웹앱 포트를 검사하고, 모델 서버에 접속해 필요한 모델 id가 있는지 본다
 # 모델 폴더(양자화·어댑터·토크나이저) 검사는 모델 서버 쪽: uv run python -m lawbot_model_server.check
 # 실패 항목이 있으면 종료 코드 1
+# pyright: reportAttributeAccessIssue=false, reportCallIssue=false, reportArgumentType=false, reportOptionalMemberAccess=false
+# ↑ 배포 점검: pandas 필터 결과를 ndarray로 잘못 추론 (pandas 타입 선언 한계). 이 파일의 다른 검사는 그대로
 import hashlib
 import os
 import sys

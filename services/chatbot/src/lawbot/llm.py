@@ -8,6 +8,7 @@ import httpx
 import openai
 
 from lawbot.api_client import ModelServerError, ModelServerTimeout, error_from_body
+from lawbot.hits import Hit
 
 
 def _clean(s):
@@ -15,7 +16,7 @@ def _clean(s):
     return re.sub(r' <(?:개정|신설)[^<>]*>', '', s)
 
 
-def build_prompt(hits, question):
+def build_prompt(hits: list[Hit], question: str) -> str:
     """[참고 조문] 프롬프트: 검색 결과의 법령명·조문 번호·제목·본문 (7개 법률은 조문 번호가 겹쳐 법령명을 붙임)
     미확인: v4 학습 노트북의 [참고 조문] 형식과 글자 단위로 대조해야 함"""
     blocks = [

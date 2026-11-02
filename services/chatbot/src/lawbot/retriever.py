@@ -1,9 +1,14 @@
 # lawbot/retriever.py  →  조문 인덱스와 코사인 검색 (numpy). 벡터는 모델 서버의 임베딩 모델이 만든다 (api_client.Embedder)
 # 인코딩 호출은 모델 서버로 옮기기 전과 같다: 법률·하위법령 문서 목록을 각각 한 번에, 질문은 query 프롬프트로
+# pyright: reportAttributeAccessIssue=false, reportCallIssue=false, reportArgumentType=false, reportOptionalMemberAccess=false
+# ↑ pandas 필터 결과를 ndarray로 잘못 추론 (pandas 타입 선언 한계). 이 파일의 다른 검사는 그대로
+from typing import cast
+
 import numpy as np
 import pandas as pd
 
 from lawbot.decree import LAW_KIND
+from lawbot.hits import Hit
 
 
 def doc_text(law):
@@ -57,22 +62,24 @@ class Retriever:
         """법률 조문 순위 (순번 0~n_law-1 = ids 앞부분)"""
         return np.argsort(-(self._encode_queries(queries) @ self.D.T), axis=1)
 
-    def _hit(self, i, score):
-        h = {'article_id': self.ids[i], 'title': self.titles[i], 'doc': self.docs[i], 'score': score}
-        return h | {'law': self.laws[i]}
+    def _hit(self, i, score) -> Hit:
+        return Hit(article_id=self.ids[i], title=self.titles[i], doc=self.docs[i], score=score, law=self.laws[i])
 
-    def search(self, query, k=3):
+    def search(self, query, k=3) -> list[Hit]:
         """법률 조문 상위 k개 (하위법령을 켜도 같음)"""
         s = self.D @ self._encode_queries([query])[0]
         return [self._hit(i, float(s[i])) for i in np.argsort(-s)[:k]]
 
-    def search_decrees(self, query, k=10):
+    def search_decrees(self, query, k=10) -> list[Hit]:
         """하위법령 조문 상위 k개. 법률 hit 형식 + kind('시행령'·'시행규칙')·parent_law('근로기준법')"""
         if self.D_dec is None:
             raise ValueError('하위법령 검색 인덱스가 없습니다 (LAWBOT_DECREE_ENABLED=1로 시작해야 함)')
         s = self.D_dec @ self._encode_queries([query])[0]
         return [
-            self._hit(self.n_law + i, float(s[i]))
-            | {'kind': self.kinds[self.n_law + i], 'parent_law': self.parent_laws[self.n_law + i]}
+            cast(
+                Hit,
+                self._hit(self.n_law + i, float(s[i]))
+                | {'kind': self.kinds[self.n_law + i], 'parent_law': self.parent_laws[self.n_law + i]},
+            )
             for i in np.argsort(-s)[:k]
         ]

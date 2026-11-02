@@ -37,6 +37,11 @@ jobs:
       - name: 포맷 검사 (고치려면 uv run ruff format)
         run: uv run ruff format --check
 
+      - name: 타입 검사 (pyright, 범위는 pyproject.toml [tool.pyright])
+        run: uv run pyright
+        env:
+          PYRIGHT_PYTHON_IGNORE_WARNINGS: '1'
+
       - name: 테스트
         run: uv run pytest --junitxml=pytest-report.xml
 

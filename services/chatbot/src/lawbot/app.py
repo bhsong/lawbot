@@ -8,7 +8,7 @@ from lawbot import envfile, feedback, feedback_ui, manifest, settings
 from lawbot.answer_format import answer_citations, render
 from lawbot.decree import is_decree
 from lawbot.security import SERVER_NAME, instance_name
-from lawbot.service import ask, load_app, uses_decrees
+from lawbot.service import AskError, ask, load_app, uses_decrees
 
 # v4 Fast로 검색·답변을 확인한 질문 (근로기준법 제26조, 최저임금법 제6조, 남녀고용평등법 제19조)
 EXAMPLES = [
@@ -122,7 +122,7 @@ def make_chat(app, fb=None):
     # 이름이 chat인 함수를 넘겨야 Gradio API 이름(/gradio_api/call/chat)이 유지됨
     # API 입력은 [질문, 모델 key, 형식] 세 개 (Gradio 6.30은 빠진 입력을 기본값으로 채우지 않음)
     # request(gr.Request)는 Gradio가 넣는 특수 인자: API 입력 수는 그대로. fb(feedback.Feedback)가 있으면 끝난 턴을 기억한다
-    def chat(message, history, model_key, fmt, request: gr.Request = None):  # 단일 턴: history는 순번에만 씀
+    def chat(message, history, model_key, fmt, request: gr.Request | None = None):  # 단일 턴: history는 순번에만 씀
         if not (message or '').strip():
             yield '질문을 입력해 주세요.', '', ''
             return
@@ -157,8 +157,8 @@ def make_chat(app, fb=None):
                 elif not text.strip():  # 표시 기호를 쓰는 중 (간결형)
                     text = WRITING
                 yield text, src, fmt_stats(spec.label, stage, st)
-        except Exception as e:  # 유형은 service.ask가 붙임 (요청 로그의 error_type과 같음)
-            kind = getattr(e, 'lawbot_error', None)
+        except AskError as err:  # 유형(kind)은 요청 로그의 error_type과 같음. 원래 예외는 __cause__
+            kind, e = err.kind, err.__cause__
             if kind == 'model_server_timeout':
                 raise gr.Error(f'모델 서버 응답이 없습니다 ({e}). 잠시 뒤 다시 질문하세요.') from e
             if kind == 'model_server_busy':
@@ -173,7 +173,7 @@ def make_chat(app, fb=None):
                     f'{spec.label} 모델을 불러오지 못했습니다: {spec.model} ({type(e).__name__}). '
                     'uv run python -m lawbot_model_server.check와 uv run python -m lawbot.check_deploy로 확인하세요.'
                 ) from e
-            raise  # 리랭킹·생성 중 오류는 그대로 올림 (Gradio가 오류로 표시)
+            raise (e or err) from None  # 리랭킹·생성 중 오류는 원래 예외 그대로 (Gradio가 오류로 표시)
 
     return chat
 
@@ -309,8 +309,9 @@ def main():
     a = load_app(cfg)
     fb = cfg.feedback  # LAWBOT_FEEDBACK=1이면 저장 폴더를 확인한 Feedback
     demo = build_demo(a, fb) if fb is not None else build_demo(a)  # 꺼져 있으면 기존과 같은 호출
-    launch = {'server_name': SERVER_NAME, 'server_port': cfg.port, 'auth': cfg.auth, 'share': False}
-    demo.launch(**launch, **feedback_ui.launch_options(fb))  # 127.0.0.1:<LAWBOT_PORT>, 로그인 필수, 공유 링크 없음
+    demo.launch(
+        server_name=SERVER_NAME, server_port=cfg.port, auth=cfg.auth, share=False, **feedback_ui.launch_options(fb)
+    )  # 127.0.0.1:<LAWBOT_PORT>, 로그인 필수, 공유 링크 없음
 
 
 if __name__ == '__main__':

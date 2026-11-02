@@ -34,7 +34,8 @@ def read_json(f):
 def mlx_summary(d):
     cfg = read_json(d / 'config.json')
     q = cfg.get('quantization') or cfg.get('quantization_config') or {}
-    size = HIDDEN_SIZE.get(cfg.get('hidden_size'), f'hidden_size {cfg.get("hidden_size")}')
+    hidden = cfg.get('hidden_size')
+    size = HIDDEN_SIZE.get(hidden, f'hidden_size {hidden}') if isinstance(hidden, int) else f'hidden_size {hidden}'
     return cfg, q, f'{cfg.get("model_type")} {size} · 양자화 {q or "없음"} · {folder_gb(d):.2f}GB'
 
 

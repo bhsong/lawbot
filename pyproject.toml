@@ -26,6 +26,7 @@ dev = [
     "lawbot-tools",
     "openai>=2.0",   # 모델 서버가 OpenAI SDK로 그대로 쓰이는지 보는 계약 테스트
     "pytest>=9.1.1",
+    "pyright==1.1.408",   # 타입 검사 (설정은 아래 [tool.pyright], 평가 도구 tools/는 제외)
     "ruff==0.17.3",
 ]
 
@@ -68,3 +69,11 @@ ignore = [
 
 [tool.ruff.format]
 quote-style = "single"   # 기존 코드가 작은따옴표
+
+[tool.pyright]
+# 웹앱 런타임·모델 서버·monitor·공통 패키지만 (평가 도구 tools/는 pandas 위주라 제외, docs/plans/engineering-cleanup.md 7.4)
+include = ["packages/lawbot-common/src", "services/chatbot/src", "services/model-server/src", "services/monitor/src"]
+pythonVersion = "3.14"
+typeCheckingMode = "basic"
+venvPath = "."
+venv = ".venv"

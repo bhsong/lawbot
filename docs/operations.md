@@ -329,6 +329,7 @@ uv run pytest              # 기본 테스트 전체 (모델 불필요)
 uv run pytest -m models services/model-server   # 실제 모델 스모크 테스트 (models/ 필요, 기본 실행에서 제외)
 uv run ruff check          # 린트 (규칙은 pyproject.toml의 [tool.ruff])
 uv run ruff format         # 포맷 (작은따옴표, 120자)
+uv run pyright             # 타입 검사 (웹앱 런타임·모델 서버·monitor·공통 패키지, 평가 도구 제외)
 ```
 
-GitHub Actions(`.github/workflows/ci.yml`)가 `main` 푸시와 모든 pull request에서 macOS(Apple Silicon) 러너로 `uv sync --locked`, 문법 검사(`compileall`), 린트·포맷 검사(`ruff check`·`ruff format --check`), `uv run pytest`를 실행합니다. 비밀정보는 쓰지 않으며, `-m models` 테스트와 평가 스크립트는 CI에서 실행하지 않습니다. 결과는 PR의 체크와 Actions 로그, `pytest-report` 아티팩트에서 볼 수 있습니다.
+GitHub Actions(`.github/workflows/ci.yml`)가 `main` 푸시와 모든 pull request에서 macOS(Apple Silicon) 러너로 `uv sync --locked`, 문법 검사(`compileall`), 린트·포맷 검사(`ruff check`·`ruff format --check`), 타입 검사(`pyright`), `uv run pytest`를 실행합니다. 비밀정보는 쓰지 않으며, `-m models` 테스트와 평가 스크립트는 CI에서 실행하지 않습니다. 결과는 PR의 체크와 Actions 로그, `pytest-report` 아티팩트에서 볼 수 있습니다.

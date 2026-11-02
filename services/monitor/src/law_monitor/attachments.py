@@ -20,7 +20,8 @@ class Change:
 
 
 def key(unit: dict) -> tuple[str, str, str]:
-    return tuple(str(unit.get(k, '') or '') for k in KEY)
+    a, b, c = (str(unit.get(k, '') or '') for k in KEY)
+    return a, b, c
 
 
 def item_id(unit: dict) -> str:

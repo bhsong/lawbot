@@ -4,6 +4,8 @@
 #   → articles_file이 그 CSV 이름인 매니페스트를 고른다 (manifest.json 먼저, 그다음 manifest_*.json 이름순)
 # 검사하는 곳: 웹앱 load_app(불일치면 실행 거부), check_deploy(PASS/FAIL). 조문 데이터는 웹앱에만 있다
 # 검색 인덱스는 파일이 아니라 웹앱이 시작할 때 모델 서버의 임베딩으로 만든다: 대신 임베딩·4B LoRA가 학습한 dataset_version을 기록한다
+# pyright: reportAttributeAccessIssue=false, reportCallIssue=false, reportArgumentType=false, reportOptionalMemberAccess=false
+# ↑ pandas 필터 결과를 ndarray로 잘못 추론 (pandas 타입 선언 한계). 이 파일의 다른 검사는 그대로
 import hashlib
 import json
 

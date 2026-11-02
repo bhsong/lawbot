@@ -225,7 +225,9 @@ class _Builder:
             new = new if new and self.m.categories(new) else None  # 대상에서 빠지면 제거로 본다
             if old is None and new is None:
                 continue
-            pair = groups.setdefault(self.m.item_id(new or old), [None, None])
+            ref = new or old
+            assert ref is not None  # 둘 다 None이면 위에서 건너뜀
+            pair = groups.setdefault(self.m.item_id(ref), [None, None])
             pair[0] = pair[0] or old  # 같은 커밋에서 삭제 + 추가(같은 ID) → 한 변경으로
             pair[1] = new or pair[1]
         if groups:
@@ -255,8 +257,9 @@ class _Builder:
                 return
 
         ref = new or old
+        assert ref is not None  # 둘 다 None이면 위에서 끝남 (new가 없으면 ref는 old)
         cats = self.m.categories(ref)
-        version_key = new.blob if new else f'removed:{old.blob}'
+        version_key = new.blob if new else f'removed:{ref.blob}'
         event_id = make_event_id(self.collector.name, key, version_key)
         old_body, new_body = (old.body if old else ''), (new.body if new else '')
         diff_text = '\n'.join(

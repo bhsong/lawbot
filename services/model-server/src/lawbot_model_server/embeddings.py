@@ -1,6 +1,8 @@
 # lawbot_model_server/embeddings.py  →  sentence-transformers 임베딩 (MPS, fp16)
 # 챗봇의 이전 retriever.Retriever와 같은 encode 호출: 목록 하나 = encode 한 번 (길이 정렬·batch·패딩이 같아 fp16 값이 같음)
 #   document: batch 4 · prompt 없음 / query: batch 16 · prompt_name='query'. 둘 다 정규화, float32
+from typing import Any
+
 import numpy as np
 import torch
 from sentence_transformers import SentenceTransformer
@@ -20,7 +22,7 @@ class Embedder:
             raise ValueError(f"input_type은 'query' 또는 'document': {input_type!r}")
         self.m.max_seq_length = max_seq_length or self.default_max_seq
         try:
-            kw = {'prompt_name': 'query'} if input_type == 'query' else {}
+            kw: dict[str, Any] = {'prompt_name': 'query'} if input_type == 'query' else {}
             v = self.m.encode(
                 list(texts), normalize_embeddings=True, batch_size=BATCH[input_type], convert_to_numpy=True, **kw
             )

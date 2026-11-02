@@ -4,6 +4,8 @@
 # 평가 도구(lawbot_tools)의 refusal.is_refusal(【결론】에 '확인할 수 없')은 키워드 채점과 v1 기록 재현 테스트가 쓴다
 import re
 
+from lawbot.hits import Hit
+
 SUB_LAWS = ('시행령', '시행규칙')  # 법령명 뒤에 붙으면 법령명의 일부 ('근로기준법 시행령')
 
 
@@ -61,11 +63,11 @@ def key(law, no):
     return f'{law} {no}'
 
 
-def hit_law(h):
+def hit_law(h: Hit) -> str:
     return h['law']
 
 
-def hit_key(h):
+def hit_key(h: Hit) -> str:
     """검색 결과 dict → '근로기준법 제26조' (eval_v4 정답 조문과 같은 형식)"""
     return key(hit_law(h), h['article_id'])
 
@@ -116,7 +118,7 @@ def citations(answer):
 OK, OUTSIDE, WRONG_LAW, NONEXISTENT, AMBIGUOUS = 'ok', 'outside', 'wrong_law', 'nonexistent', 'ambiguous'
 
 
-def check(cites, hits, articles=None):
+def check(cites, hits: list[Hit], articles=None):
     """인용마다 (법령, 제N조, 판정, 맞는 검색 결과 dict 또는 None)
     판정 (위에서부터 먼저 맞는 것):
       ok         : 검색 결과(답변에 준 조문)에 있음. 법령명이 없으면 그 번호의 검색 결과가 하나뿐일 때
