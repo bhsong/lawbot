@@ -1,4 +1,4 @@
-"""Legalize KR 원문과 기준일로 조문 CSV 두 개를 만든다 (계획: docs/plans/article-generator.md)
+"""Legalize KR 원문과 기준일로 조문 CSV 두 개를 만든다 (계획: docs/archives/article-generator.md)
 
     git clone --filter=blob:none --no-checkout https://github.com/legalize-kr/legalize-kr ../legalize-kr
     uv run lawbot-build-articles --repo ../legalize-kr --asof 2026-10-20 --out-dir data/v4 [--check]
