@@ -1,6 +1,6 @@
 # 조문 데이터 자동 갱신 확인 (2026-11-02)
 
-계획: [plans/articles-auto-update.md](../archives/articles-auto-update.md). 원문: Legalize KR `8c8917412e48`. 개발 worktree에서 운영 모델 서버로 (운영 웹앱·데이터는 건드리지 않음).
+계획: [archives/articles-auto-update.md](../archives/articles-auto-update.md). 원문: Legalize KR `8c8917412e48`. 개발 worktree에서 운영 모델 서버로 (운영 웹앱·데이터는 건드리지 않음).
 
 | 항목 | 기대 | 실제 |
 | --- | --- | --- |
