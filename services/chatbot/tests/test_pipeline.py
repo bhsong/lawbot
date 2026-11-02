@@ -377,8 +377,10 @@ def test_chat_streams_answer_with_sources(app):
 
 
 def test_chat_generation_failure_is_not_hidden(app):
-    # 생성 실패를 빈 답변이나 부분 답변으로 끝내지 않고 예외로 올린다 (Gradio가 오류로 표시)
+    # 생성 실패를 빈 답변이나 부분 답변으로 끝내지 않고 안내 문구(gr.Error)로 올린다. 원래 예외는 __cause__
+    # (원래 예외를 그대로 올리면 화면에 안내 없이 'Error' 표시만 남음: 2026-11-02 e2e_stub에서 확인)
     FakeLLM.chunks = ['【결론】', RuntimeError('generation failed')]
     chat = app.make_chat(service.load_app())
-    with pytest.raises(RuntimeError, match='generation failed'):
+    with pytest.raises(app.gr.Error, match='답변을 생성하지 못했습니다') as ei:
         list(chat('질문', [], 'fast', 'full'))
+    assert 'generation failed' in str(ei.value.__cause__)

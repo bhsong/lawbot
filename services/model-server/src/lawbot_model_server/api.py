@@ -315,11 +315,13 @@ def set_registry(app, registry):
     app.state.registry = registry
 
 
-def create_app(token, registry=None, max_body=MAX_BODY, max_concurrent=1, max_queued=MAX_QUEUED_DEFAULT):
-    """registry가 None이면 /health가 ready:false이고 나머지는 503 (모델을 불러오는 중). 다 불러오면 set_registry"""
+def create_app(token, registry=None, max_body=MAX_BODY, max_concurrent=1, max_queued=MAX_QUEUED_DEFAULT, commit=None):
+    """registry가 None이면 /health가 ready:false이고 나머지는 503 (모델을 불러오는 중). 다 불러오면 set_registry
+    commit: /health에 보일 서버 git 커밋 (revision.git_commit)"""
     app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
     app.state.registry, app.state.scheduler = None, None
     app.state.max_body, app.state.max_concurrent, app.state.max_queued = max_body, max_concurrent, max_queued
+    app.state.commit = commit
     if registry is not None:
         set_registry(app, registry)
 
@@ -331,7 +333,8 @@ def create_app(token, registry=None, max_body=MAX_BODY, max_concurrent=1, max_qu
 
     @app.get(contract.HEALTH_PATH)
     async def health(request: Request):
-        return contract.HealthResponse(ready=request.app.state.registry is not None).model_dump()
+        state = request.app.state
+        return contract.HealthResponse(ready=state.registry is not None, commit=state.commit).model_dump()
 
     @app.get(contract.MODELS_PATH)
     async def models(request: Request):

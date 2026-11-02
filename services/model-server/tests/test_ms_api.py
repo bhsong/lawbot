@@ -62,11 +62,11 @@ def test_post_requires_token(client):
 def test_not_ready_until_registry_set():
     app = api.create_app(TOKEN)
     with TestClient(app) as c:
-        assert c.get('/health', headers=AUTH).json() == {'ready': False}
+        assert c.get('/health', headers=AUTH).json() == {'ready': False, 'commit': None}
         r = c.post('/v1/embeddings', headers=AUTH, json={'model': 'emb', 'input': 'x'})
         assert r.status_code == 503 and r.json()['error']['type'] == 'server_not_ready'
         app.state.registry = registry()
-        assert c.get('/health', headers=AUTH).json() == {'ready': True}
+        assert c.get('/health', headers=AUTH).json() == {'ready': True, 'commit': None}
 
 
 def test_body_too_large():

@@ -28,11 +28,12 @@ dev = [
     "pytest>=9.1.1",
     "pyright==1.1.408",   # 타입 검사 (설정은 아래 [tool.pyright], 평가 도구 tools/는 제외)
     "ruff==0.17.3",
+    "playwright>=1.64.1",   # 브라우저 E2E (tests/test_e2e_*.py). 브라우저는 uv run playwright install chromium
 ]
 
 [tool.pytest.ini_options]
 testpaths = ["services/chatbot/tests", "services/model-server/tests", "services/monitor/tests", "packages/lawbot-common/tests"]
-addopts = "-ra --strict-markers -m 'not models and not network'"   # 실제 모델·외부 접속 테스트는 -m models / -m network로 따로 실행
+addopts = "-ra --strict-markers -m 'not models and not network and not e2e_live'"   # 실제 모델·외부 접속 테스트는 -m models / -m network / -m e2e_live로 따로 실행
 filterwarnings = [
     # OpenAI SDK가 TestClient(계약 테스트)에 요청마다 timeout을 넘김: 테스트 대역에서만 나는 경고
     "ignore:You should not use the 'timeout' argument with the TestClient",
@@ -41,6 +42,8 @@ markers = [
     "models: 실제 모델 파일(models/)과 Apple Silicon이 필요한 테스트",
     "integration: 실제 Gradio 서버를 별도 프로세스로 띄우는 인증 테스트 (127.0.0.1만 접속)",
     "network: 실제 외부 API·git 저장소에 접속하는 테스트 (services/monitor, 기본 실행에서 제외)",
+    "e2e_stub: 브라우저 E2E (대역): Playwright → 실제 웹앱 → 실제 모델 서버 앱 + 가짜 모델 (127.0.0.1만, 기본 실행·CI 포함)",
+    "e2e_live: 브라우저 E2E (실제 모델): 개발 웹앱 → 공유 모델 서버. 승인 후 맥 미니에서만 (기본 실행에서 제외)",
 ]
 
 [tool.ruff]

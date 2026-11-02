@@ -243,12 +243,13 @@ def test_enabled_refuses_before_loading(env, tmp_path, model_server):
 
 
 def test_reranker_failure_is_not_hidden(env, tmp_path):
-    # 리랭커 오류를 임베딩 순위로 몰래 되돌리지 않고 오류로 올린다. 답변 생성도 하지 않음
+    # 리랭커 오류를 임베딩 순위로 몰래 되돌리지 않고 안내 문구(gr.Error)로 올린다. 원래 예외는 __cause__. 답변 생성도 하지 않음
     a = v4_app(env, tmp_path, enabled=True)
     FakeReranker.fail = RuntimeError('리랭커 점수가 올바르지 않습니다')
     chat = app_mod.make_chat(a)
-    with pytest.raises(RuntimeError, match='점수가 올바르지'):
+    with pytest.raises(app_mod.gr.Error, match='조문 순위를 매기지 못했습니다') as ei:
         list(chat('질문', [], 'fast', 'full'))
+    assert '점수가 올바르지' in str(ei.value.__cause__)
     assert 'fast' not in a.models.llms  # 답변 모델을 부르지 않음
 
 

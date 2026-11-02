@@ -163,7 +163,7 @@ uv run pytest -m models services/model-server   # 실제 로딩·채점 스모�
 LAWBOT_RERANKER_ENABLED=0 uv run lawbot-app    # 한 번만 끄고 실행
 ```
 
-리랭커 오류(점수가 NaN 등)는 임베딩 순위로 몰래 되돌리지 않고 화면에 오류로 표시합니다. 모델 서버에 리랭커 모델 id가 없으면 웹앱이 시작을 거부합니다. 화면의 조문 카드에는 리랭커 점수와 원래 임베딩 순위가, 측정 줄에는 리랭킹 시간이 나오고, 터미널에는 질문마다 검색·리랭킹·첫 토큰·완료 시간이 한 줄씩 남습니다.
+리랭커 오류(점수가 NaN 등)는 임베딩 순위로 몰래 되돌리지 않고 "조문 순위를 매기지 못했습니다"로 안내합니다. 모델 서버에 리랭커 모델 id가 없으면 웹앱이 시작을 거부합니다. 화면의 조문 카드에는 리랭커 점수와 원래 임베딩 순위가, 측정 줄에는 리랭킹 시간이 나오고, 터미널에는 질문마다 검색·리랭킹·첫 토큰·완료 시간이 한 줄씩 남습니다.
 
 ## 시행령·시행규칙 첨부 (선택, v4)
 
@@ -193,8 +193,8 @@ Colab 실험(transformers fp16)과의 순위 일치는 리랭커 도입 때 val�
 | `POST /v1/chat/completions` | OpenAI | 스트림(SSE)·`stream_options.include_usage`. `temperature`가 없으면 0(탐욕적 생성, OpenAI 기본값 1과 다름). 확장: `chat_template_kwargs.enable_thinking`(기본 끔), 응답의 `timings`(프리필·생성 속도, MLX 최대 메모리) |
 | `POST /v1/embeddings` | OpenAI | `encoding_format` `float`·`base64`. 확장: `input_type`(`query`·`document`), `max_seq_length`. 목록 하나를 encode 한 번으로 처리 |
 | `POST /v1/rerank` | Cohere/Jina | `results: [{index, relevance_score}]`. 확장: `instruction`(작업 설명) |
-| `GET /v1/models` | OpenAI | 확장: `type`(chat·embedding·rerank), `loaded` |
-| `GET /health` | | `{ready}` (모델을 불러오는 중에도 응답) |
+| `GET /v1/models` | OpenAI | 확장: `type`(chat·embedding·rerank), `loaded`, `revision`(모델 폴더 지문 `sha256:<16자>`: 파일 경로·크기·앞뒤 1MB로 시작할 때 계산. 같은 id로 폴더를 바꾸면 값이 달라짐) |
+| `GET /health` | | `{ready, commit}` (모델을 불러오는 중에도 응답. `commit`은 모델 서버를 띄운 레포의 git 커밋, 변경이 있으면 `+dirty`) |
 
 ```python
 from openai import OpenAI
@@ -329,7 +329,7 @@ uv run python -m lawbot_tools.log_summary                      # 상태별 건�
 uv run python -m lawbot_tools.log_summary --caller lawbot-app  # 평가 실행 제외
 ```
 
-오류 유형은 화면 안내와 같습니다. `model_server`(서버 연결 실패·토큰 불일치·로딩 중)는 "모델 서버가 준비되지 않았습니다", `model_load`(모델 서버의 모델 폴더 없음·형식 오류, 웹앱의 system 파일 없음)는 "모델을 불러오지 못했습니다"로 안내합니다. `model_server_timeout`(질문 처리 중 응답 조각 사이가 `LAWBOT_MODEL_READ_TIMEOUT`을 넘음)은 "모델 서버 응답이 없습니다", `model_server_busy`(모델 서버 대기열이 `LAWBOT_MAX_QUEUED`개로 가득 참)는 "모델 서버가 바쁩니다"로 안내합니다. 요청 로그의 `mode`는 `api`(모델 서버에서 생성) 또는 `external`(외부 생성 API)입니다. 리랭킹·생성 오류는 임베딩 순위로 되돌리지 않고 그대로 오류로 표시합니다.
+오류 유형은 화면 안내와 같습니다. `model_server`(서버 연결 실패·토큰 불일치·로딩 중)는 "모델 서버가 준비되지 않았습니다", `model_load`(모델 서버의 모델 폴더 없음·형식 오류, 웹앱의 system 파일 없음)는 "모델을 불러오지 못했습니다"로 안내합니다. `model_server_timeout`(질문 처리 중 응답 조각 사이가 `LAWBOT_MODEL_READ_TIMEOUT`을 넘음)은 "모델 서버 응답이 없습니다", `model_server_busy`(모델 서버 대기열이 `LAWBOT_MAX_QUEUED`개로 가득 참)는 "모델 서버가 바쁩니다"로 안내합니다. 요청 로그의 `mode`는 `api`(모델 서버에서 생성) 또는 `external`(외부 생성 API)입니다. `search`·`rerank`·`generation`(검색·리랭킹·생성 중 오류)은 "조문을 검색하지 못했습니다"·"조문 순위를 매기지 못했습니다"·"답변을 생성하지 못했습니다"로 안내하고, 임베딩 순위로 되돌리지 않습니다.
 
 ## 답변 피드백 (선택, `LAWBOT_FEEDBACK=1`)
 
@@ -350,14 +350,25 @@ uv run python -m lawbot_tools.feedback_export feedback_review_<날짜>.csv --out
 
 ## 테스트 실행
 
-기본 테스트는 모델 파일, 네트워크, 실제 비밀번호 없이 돌아갑니다. `uv sync`만 하면 됩니다. 두 서비스의 테스트(`services/*/tests`)를 함께 돌리고, 실제 모델 대신 가짜 모델·가짜 모델 서버를 넣으며, 테스트 중 외부 네트워크 접속은 막습니다. 챗봇 클라이언트와 실제 모델 서버 앱(가짜 모델)이 OpenAI SDK로 통하는지 보는 계약 테스트도 들어 있습니다. `data/`·`results/`는 읽기만 합니다.
+기본 테스트는 모델 파일, 네트워크, 실제 비밀번호 없이 돌아갑니다. `uv sync`와 브라우저 E2E용 Chromium 설치(`uv run playwright install chromium`, 한 번)만 하면 됩니다. 두 서비스의 테스트(`services/*/tests`)를 함께 돌리고, 실제 모델 대신 가짜 모델·가짜 모델 서버를 넣으며, 테스트 중 외부 네트워크 접속은 막습니다. 챗봇 클라이언트와 실제 모델 서버 앱(가짜 모델)이 OpenAI SDK로 통하는지 보는 계약 테스트도 들어 있습니다. `data/`·`results/`는 읽기만 합니다.
 
 ```bash
 uv run pytest              # 기본 테스트 전체 (모델 불필요)
 uv run pytest -m models services/model-server   # 실제 모델 스모크 테스트 (models/ 필요, 기본 실행에서 제외)
+uv run pytest -m e2e_stub  # 브라우저 E2E (대역)만: Playwright → 실제 웹앱 → 실제 모델 서버 앱 + 가짜 모델 (약 30초)
 uv run ruff check          # 린트 (규칙은 pyproject.toml의 [tool.ruff])
 uv run ruff format         # 포맷 (작은따옴표, 120자)
 uv run pyright             # 타입 검사 (웹앱 런타임·모델 서버·monitor·공통 패키지, 평가 도구 제외)
 ```
 
-GitHub Actions(`.github/workflows/ci.yml`)가 `main` 푸시와 모든 pull request에서 macOS(Apple Silicon) 러너로 `uv sync --locked`, 문법 검사(`compileall`), 린트·포맷 검사(`ruff check`·`ruff format --check`), 타입 검사(`pyright`), `uv run pytest`를 실행합니다. 비밀정보는 쓰지 않으며, `-m models` 테스트와 평가 스크립트는 CI에서 실행하지 않습니다. 결과는 PR의 체크와 Actions 로그, `pytest-report` 아티팩트에서 볼 수 있습니다.
+브라우저 E2E는 두 층입니다. `e2e_stub`(기본 실행·CI 포함)는 임베딩·리랭크·답변 생성 세 호출을 모두 가짜 모델로 바꾼 것이라 **실제 모델 연결 확인이 아닙니다**. 설정은 `.env.example`(운영 구성)과 같게 띄우고, 실패한 테스트만 `results/e2e_stub/<시각>-<테스트>/`에 스크린샷·화면 HTML·프로세스 출력·요청 로그를 남깁니다(성공하면 남기지 않음, 진단 후 지움). 실제 공유 모델 서버로 하는 `e2e_live`는 승인 후 맥 미니의 개발 worktree에서만 실행합니다([계획](plans/e2e-playwright.md)).
+
+```bash
+uv run pytest -m e2e_live services/chatbot/tests/test_e2e_live.py   # 레포 .env의 모델 서버로 질문 3개 (순서대로, 재시도 없음)
+```
+
+- 실행 전에 확인합니다. 06:20–06:50(조문 자동 갱신)이 아닌지, 서버가 ready인지, 필요한 모델이 있는지, **Pro chat 모델이 이미 올라 있는지**. 하나라도 아니면 질문을 보내지 않고 실패로 끝납니다(모델 교체로 운영 응답이 느려지지 않게).
+- 웹앱은 이 worktree 코드로 빈 포트에 띄우고, 요청 로그·피드백은 임시 폴더로 보냅니다(운영 기록에 섞이지 않음).
+- 실행 구성(웹앱·모델 서버 커밋, 모델 `revision`, 조문 `dataset_version`·sha256, system sha256, temperature·max_tokens, `.env` 설정. 비밀값 제외)을 시작 전·후에 읽어 `results/e2e_live/<시각>.json`에 남깁니다. 둘이 다르면 결과는 무효입니다. 결과는 `docs/evals/`에 옮겨 적고 JSON은 지웁니다.
+
+GitHub Actions(`.github/workflows/ci.yml`)가 `main` 푸시와 모든 pull request에서 macOS(Apple Silicon) 러너로 `uv sync --locked`, 문법 검사(`compileall`), 린트·포맷 검사(`ruff check`·`ruff format --check`), 타입 검사(`pyright`), Chromium 설치, `uv run pytest`를 실행합니다. 비밀정보는 쓰지 않으며, `-m models` 테스트와 평가 스크립트는 CI에서 실행하지 않습니다. 결과는 PR의 체크와 Actions 로그, `pytest-report` 아티팩트(e2e_stub가 실패하면 `results/e2e_stub/` 포함)에서 볼 수 있습니다.

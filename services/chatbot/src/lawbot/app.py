@@ -22,6 +22,13 @@ EXAMPLES = [
 EMPTY = '답변을 생성하지 못했습니다. 다시 질문해 주세요.'
 SEARCHING = '⏳ 조문을 찾는 중…'  # '⏳'로 시작하는 문구는 첫 글자 측정에서 제외 (화면 지연 측정 기준)
 WRITING = '⏳ 답변을 쓰는 중…'
+# 검색·리랭킹·생성 단계 오류의 화면 안내 (요청 로그 error_type → 문구). 원래 예외를 그대로 올리면 Gradio가 안내 없이
+# 'Error' 표시만 남기고 말풍선은 '답변을 쓰는 중…'에 멈춘다 (2026-11-02 e2e_stub에서 확인)
+STAGE_ERRORS = {
+    'search': '조문을 검색하지 못했습니다',
+    'rerank': '조문 순위를 매기지 못했습니다',
+    'generation': '답변을 생성하지 못했습니다',
+}
 
 
 def source_title(h):
@@ -176,7 +183,12 @@ def make_chat(app, fb=None):
                     f'{spec.label} 모델을 불러오지 못했습니다: {spec.model} ({type(e).__name__}). '
                     'uv run python -m lawbot_model_server.check와 uv run python -m lawbot.check_deploy로 확인하세요.'
                 ) from e
-            raise (e or err) from None  # 리랭킹·생성 중 오류는 원래 예외 그대로 (Gradio가 오류로 표시)
+            stage_msg = STAGE_ERRORS.get(kind)
+            if (
+                stage_msg is not None
+            ):  # 검색·리랭킹·생성 중 오류: 원래 예외는 __cause__ (요청 로그·터미널 로그는 그대로)
+                raise gr.Error(f'{stage_msg} ({type(e).__name__}). 다시 질문해 주세요.') from e
+            raise (e or err) from None  # config(없는 모델 key·id): 설정 오류는 원래 예외 그대로
 
     return chat
 
@@ -261,8 +273,10 @@ def build_demo(
     p, title = app.profile, page_title(app)
     with gr.Blocks(title=title) as demo:
         gr.Markdown(f'# {title}\n{intro_text(app)}법률 자문이 아닌 참고용 답변입니다.\n\n{data_notice(app)}')
-        sources = gr.Markdown(render=False)
-        stats = gr.Markdown(render=False)
+        sources = gr.Markdown(
+            render=False, elem_id='lawbot-sources'
+        )  # elem_id: 브라우저 E2E가 찾는 자리 (화면 변화 없음)
+        stats = gr.Markdown(render=False, elem_id='lawbot-stats')
         with gr.Row():
             with gr.Column(scale=3):
                 with gr.Row():
