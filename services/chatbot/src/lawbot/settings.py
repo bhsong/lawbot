@@ -84,12 +84,12 @@ def load(env=None, web=False):
     take('request_log', lambda: service.request_log_path(env))
     take('embed_cache', lambda: embed_cache_dir(env))
     if web:
-        from lawbot import app  # gradio를 import하므로 웹 화면일 때만
+        from lawbot import view
 
         take('auth', lambda: security.auth(env))
         take('port', lambda: security.server_port(env))
         take('instance', lambda: security.instance_name(env))
-        take('chat_concurrency', lambda: app.chat_concurrency(env))
+        take('chat_concurrency', lambda: view.chat_concurrency(env))
         take('feedback', lambda: feedback.from_env(env))
     if errors:
         raise SettingsError(f'설정 오류 {len(errors)}개:\n' + '\n'.join(f'- {e}' for e in errors))
