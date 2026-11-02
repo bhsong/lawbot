@@ -95,19 +95,23 @@ def new_log_rows(stack, before):
     return e2e.request_log(stack.request_log)[before:]
 
 
+@pytest.fixture
+def fresh(stack, page, request):
+    """로그인하지 않은 화면. 실패하면 진단 산출물을 남긴다"""
+    yield page
+    e2e.keep_on_failure(request, 'e2e_stub', stack.logs(), page)
+
+
 # ---- 로그인 ----
-def test_login_required(stack, page, request):
-    try:
-        page.goto(stack.url)
-        page.locator('input[type=password]').wait_for()
-        assert e2e.textbox(page).count() == 0  # 로그인 전에는 질문 입력창이 없다
-        e2e.login(page, stack.url, pw='wrong-pw')
-        page.wait_for_timeout(1000)
-        assert e2e.textbox(page).count() == 0
-        e2e.login(page, stack.url)
-        e2e.textbox(page).wait_for()
-    finally:
-        e2e.keep_on_failure(request, 'e2e_stub', stack.logs(), page)
+def test_login_required(stack, fresh):
+    fresh.goto(stack.url)
+    fresh.locator('input[type=password]').wait_for()
+    assert e2e.textbox(fresh).count() == 0  # 로그인 전에는 질문 입력창이 없다
+    e2e.login(fresh, stack.url, pw='wrong-pw')
+    fresh.wait_for_timeout(1000)
+    assert e2e.textbox(fresh).count() == 0
+    e2e.login(fresh, stack.url)
+    e2e.textbox(fresh).wait_for()
 
 
 # ---- 정상 질문 ----
