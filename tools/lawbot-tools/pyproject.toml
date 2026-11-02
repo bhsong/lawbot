@@ -15,6 +15,7 @@ dependencies = [
 [project.scripts]
 # 레포 최상위에서 uv run lawbot-eval-v4
 lawbot-eval-v4 = "lawbot_tools.eval_v4:main"   # v4 웹앱 구성 전체 재평가 (단계 생략 시 all)
+lawbot-reindex = "lawbot_tools.reindex:main"   # 새 조문 CSV → 검사·매니페스트·임베딩 캐시
 
 [tool.uv.sources]
 lawbot = { workspace = true }

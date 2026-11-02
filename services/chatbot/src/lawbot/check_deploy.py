@@ -13,7 +13,7 @@ import pandas as pd
 from lawbot import deploy, envfile, manifest, paths, security, service
 from lawbot.deploy import get_profile
 
-EXPECTED_ARTICLES = 415  # 법률 조문 수
+EXPECTED_ARTICLES = 415  # 법률 조문 수 (매니페스트가 없을 때 기준. 있으면 매니페스트의 법률 수: lawbot-reindex로 바뀜)
 EXPECTED_DECREE = {'시행령': 273, '시행규칙': 124}  # 하위법령을 켰을 때 812조문 CSV의 하위법령 수
 DECREE_COLUMNS = {'kind', 'parent_law', 'article_no'}
 COLUMNS = {'law', 'article_id', 'title', 'deleted', 'text'}
@@ -30,12 +30,14 @@ def check_articles(p, out):
     key = ['law', 'article_id']
     dup = live[live.duplicated(key, keep=False)]
     n_law = int((live['kind'] == '법률').sum()) if 'kind' in live else len(live)  # 검색기는 kind로 법률만 법률 인덱스에
-    n_ok = n_law == EXPECTED_ARTICLES
+    m = manifest.load(p.articles)
+    expected = ((m or {}).get('articles_by_kind') or {}).get(manifest.DEFAULT_KIND, EXPECTED_ARTICLES)
+    n_ok = n_law == expected
     if 'kind' in live:  # 812조문 CSV (하위법령 첨부)
         out.append(
             (
                 'OK' if n_ok else 'FAIL',
-                f'비삭제 법률 조문 {n_law}개 (기대 {EXPECTED_ARTICLES}) · '
+                f'비삭제 법률 조문 {n_law}개 (기대 {expected}) · '
                 f'전체 {len(live)}개 · sha256 {manifest.sha256(p.articles)[:12]}',
             )
         )
@@ -43,7 +45,7 @@ def check_articles(p, out):
         out.append(
             (
                 'OK' if n_ok else 'FAIL',
-                f'비삭제 조문 {len(live)}개 (기대 {EXPECTED_ARTICLES}) · sha256 {manifest.sha256(p.articles)[:12]}',
+                f'비삭제 조문 {len(live)}개 (기대 {expected}) · sha256 {manifest.sha256(p.articles)[:12]}',
             )
         )
     if len(dup):

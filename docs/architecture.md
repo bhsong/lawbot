@@ -64,6 +64,7 @@ tools/lawbot-tools/src/lawbot_tools/
 ├── feedback_review.py # 피드백 → 검수 CSV (평가 데이터와 겹치는 질문 제외)
 ├── feedback_export.py # 검수 CSV → dev 질문·임베딩 쌍·SFT·KTO CSV
 ├── log_summary.py     # 요청 로그(logs/requests-YYYY-MM.jsonl) 요약
+├── reindex.py         # 새 조문 CSV → 검사·매니페스트·임베딩 캐시 (lawbot-reindex)
 └── versions.py        # 설치된 패키지·맥 사양
 services/model-server/src/lawbot_model_server/
 ├── api.py             # OpenAI 호환 API (FastAPI): 인증·크기 제한·로그

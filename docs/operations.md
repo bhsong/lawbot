@@ -290,7 +290,15 @@ client.chat.completions.create(
 
 - 웹앱은 시작할 때 CSV를 검사해, 조문 수나 sha256이 다르면 모델 서버에 접속하기 전에 실행을 거부합니다. 매니페스트가 없으면 경고만 합니다.
 - `uv run python -m lawbot.check_deploy`가 같은 검사를 OK/FAIL로 보여 줍니다. 시행일이 수집일보다 늦은 조문은 WARN입니다.
-- 조문 CSV를 바꾸면 매니페스트도 새 데이터 버전으로 함께 바꾸고, 웹앱을 재시작합니다.
+- 조문 CSV를 바꾸면 `lawbot-reindex`로 매니페스트를 새 데이터 버전으로 바꾸고 임베딩 캐시를 미리 만든 뒤 웹앱을 재시작합니다. 운영에 넣을 때는 운영 worktree에서 실행합니다(캐시가 그 폴더의 `cache/`에 생김).
+
+  ```zsh
+  uv run lawbot-reindex data/v4/articles_v4.csv --dataset-version v4.1 --reference-date 2026-12-08 --check   # 검사만
+  uv run lawbot-reindex data/v4/articles_v4.csv --dataset-version v4.1 --reference-date 2026-12-08           # 매니페스트 + 캐시
+  uv run python -m lawbot.check_deploy && launchctl kickstart -k gui/$(id -u)/com.lawbot.web
+  ```
+
+  검사(열·중복·조문 번호 형식·빈 본문·종류)에 실패하면 아무것도 쓰지 않습니다. 이전 매니페스트는 `<이름>.json.prev`로 남깁니다. 조문 수는 바뀌어도 되고(`check_deploy`는 매니페스트의 법률 조문 수를 기준으로 봄), 임베딩·4B가 학습한 데이터 버전(`trained_on`)과 달라지면 경고합니다. 법령 원문에서 조문 CSV를 만드는 일은 이 명령이 하지 않습니다([data-provenance.md](data-provenance.md)).
 - 한 폴더에 조문 CSV가 여럿이면 `manifest_<이름>.json`을 더 둡니다. `articles_file`이 그 CSV인 매니페스트를 고릅니다(812조문: `data/v4/manifest_decree.json`).
 
 ## 요청 로그와 오류 안내
