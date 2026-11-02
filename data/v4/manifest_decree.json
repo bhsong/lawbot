@@ -5,10 +5,10 @@
   "source": {
     "name": "Legalize KR",
     "url": "https://github.com/legalize-kr/legalize-kr",
-    "ref": null
+    "ref": "8c8917412e484297364b35d85ea23b20055a660c"
   },
   "articles_file": "law_articles_v4_decree.csv",
-  "articles_sha256": "62517fad36b669be89fea1c831aac980a6518e119a62defbd65305369c13e040",
+  "articles_sha256": "346914a6d1a980c123c6be0765f3f8f2e1460707dfe6748d262192b290a26bbc",
   "articles_total": 812,
   "articles_by_law": {
     "근로기준법": 130,

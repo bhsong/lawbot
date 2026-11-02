@@ -107,10 +107,30 @@ def test_decree_csv(tmp_path):
     d.mkdir()
     for f in (V4_DECREE_ARTICLES, V4_DECREE_ARTICLES.with_name('manifest_decree.json')):
         shutil.copy(f, d / f.name)
+    before = json.loads((d / 'manifest_decree.json').read_text(encoding='utf-8'))
     assert reindex.main([str(d / V4_DECREE_ARTICLES.name), *ARGS]) == 0
     m = manifest.check(d / V4_DECREE_ARTICLES.name)
-    assert m['articles_by_kind'] == {'법률': 415, '시행령': 273, '시행규칙': 124} and 'articles_by_law' not in m
+    assert m['articles_by_kind'] == {'법률': 415, '시행령': 273, '시행규칙': 124}
+    assert m['articles_by_law'] == before['articles_by_law']  # 종류 열이 있어도 법령별 조문 수를 쓴다 (21개 문서)
+    assert list(m) == list(before)  # 항목 순서도 기존 매니페스트와 같다
     assert (d / 'manifest_decree.json.prev').is_file()
+
+
+def test_same_data_rewrites_identical_manifest_except_source_ref(tmp_path):
+    """생성기가 같은 본문으로 CSV를 다시 만든 경우: 데이터 버전·날짜를 그대로 주면 매니페스트는 sha256과 source.ref만 바뀐다"""
+    d = tmp_path / 'v4'
+    d.mkdir()
+    for f in (V4_DECREE_ARTICLES, V4_DECREE_ARTICLES.with_name('manifest_decree.json')):
+        shutil.copy(f, d / f.name)
+    before = (d / 'manifest_decree.json').read_text(encoding='utf-8')
+    old = json.loads(before)
+    args = ['--dataset-version', old['dataset_version'], '--reference-date', old['reference_date']]
+    args += ['--collected-date', old['collected_date'], '--source-ref', 'abc123', '--no-cache']
+    assert reindex.main([str(d / V4_DECREE_ARTICLES.name), *args]) == 0
+    after = (d / 'manifest_decree.json').read_text(encoding='utf-8')
+    m = json.loads(after)
+    assert m['source'] == {**old['source'], 'ref': 'abc123'}
+    assert after == before.replace(json.dumps(old['source']['ref']), '"abc123"', 1)
 
 
 def test_check_deploy_follows_new_manifest(folder, env):
