@@ -190,7 +190,7 @@ def test_in_force_composes_articles_by_their_own_effective_date(tmp_path):
             ('2026-04-07', '200', '2026-10-08', V2, ADD2),
         ],
     )
-    arts, used = b.law_in_force(repo, PATH, '2026-10-20')
+    arts, used = b.in_force(repo, PATH, '2026-10-20')
     got = {a['no']: (a['text'], a['eff']) for a in arts}
     assert got == {
         '제1조': ('바뀐 목적 <개정 2026.4.7>', '2026-10-08'),  # 본 시행일 지남 → 새 본문
@@ -198,7 +198,7 @@ def test_in_force_composes_articles_by_their_own_effective_date(tmp_path):
         '제3조': ('처음 벌칙', '2020-01-01'),
     }  # 제4조(시행 전 신설)는 없음
     assert used[-1]['시행 전'] == 2
-    later = {a['no']: a['text'] for a in b.law_in_force(repo, PATH, '2027-01-01')[0]}
+    later = {a['no']: a['text'] for a in b.in_force(repo, PATH, '2027-01-01')[0]}
     assert later['제2조'] == '시행 전 정의 <개정 2026.4.7>' and '제4조' in later
 
 
@@ -213,7 +213,7 @@ def test_in_force_ignores_format_only_change_of_a_pending_article(tmp_path):
             ('2026-08-04', '300', '2026-10-02', v3, '부칙 <제300호,2026.8.4>\n\n이 법은 공포한 날부터 시행한다.\n\n'),
         ],
     )
-    got = {a['no']: (a['text'], a['eff']) for a in b.law_in_force(repo, PATH, '2026-10-20')[0]}
+    got = {a['no']: (a['text'], a['eff']) for a in b.in_force(repo, PATH, '2026-10-20')[0]}
     assert got['제2조'] == ('처음 정의', '2020-01-01')
     assert got['제3조'] == ('처음  벌칙', '2020-01-01')
 
@@ -229,51 +229,136 @@ def test_in_force_fails_when_a_pending_article_is_amended_again(tmp_path):
         ],
     )
     with pytest.raises(ValueError, match='조합할 수 없음'):
-        b.law_in_force(repo, PATH, '2026-10-20')
+        b.in_force(repo, PATH, '2026-10-20')
 
 
-# ── 조문 참조·보정·CSV ──────────────────────────────────────────────
+# ── 유효기간 ─────────────────────────────────────────────────────────
 
-NAMES = b.doc_names()
+
+def test_expiry_clauses_read_article_and_paragraphs():
+    add = (
+        '제1조(시행일) 생략\n\n제2조(유효기간 등) 제53조제3항 및 제6항의 개정규정은 2022년 12월 31일까지 효력을 가진다.\n\n'
+        '제3조 (유효기간) 제16조의 개정규정은 2007년 6월 30일까지 효력을 가진다.\n\n'
+        '제4조(경과조치) 종전의 최저임금은 1994년 8월 31일까지 효력을 가진다.\n'  # 개정규정이 아니고 유효기간 조도 아님
+    )
+    assert b.expiry_clauses(add) == [('제53조', [3, 6], '2022-12-31'), ('제16조', [], '2007-06-30')]
+
+
+def test_expire_marks_paragraphs_and_deletes_whole_articles():
+    text = '① 첫째 항.\n② 둘째 항.\n1. 호 하나\n2. 대상 근로자의 범위\n③ 셋째 항. <신설 2018.3.20>'
+    arts = [{'no': '제53조', 'text': text}, {'no': '제16조', 'text': '본문'}, {'no': '제9조', 'text': '① 항.'}]
+    exp = [('제53조', [2, 3], '2022-12-31'), ('제16조', [], '2007-06-30'), ('제9조', [1], '2030-01-01')]
+    b.expire(arts, exp, '2026-10-20', 'kr/시험법/법률.md')
+    assert arts[0]['text'] == (
+        '① 첫째 항.\n② 둘째 항.\n1. 호 하나\n2. 대상 근로자의 범위 [실효: 2022.12.31.까지 유효]\n'
+        '③ 셋째 항. <신설 2018.3.20> [실효: 2022.12.31.까지 유효]'
+    )
+    assert arts[1].get('expired') is True
+    assert arts[2] == {'no': '제9조', 'text': '① 항.'}  # 아직 유효
+    with pytest.raises(ValueError, match='찾지 못했습니다'):
+        b.expire([{'no': '제1조', 'text': '① 항.'}], [('제1조', [4], '2020-01-01')], '2026-10-20', 'x')
+
+
+# ── 파일 찾기 ────────────────────────────────────────────────────────
+
+
+def commit(repo, files, date, subject):
+    for rel, text in files.items():
+        (repo / rel).parent.mkdir(parents=True, exist_ok=True)
+        (repo / rel).write_text(text, encoding='utf-8')
+    stamp = f'{date}T03:00:00Z'
+    env = {
+        **os.environ,
+        'GIT_AUTHOR_NAME': 't',
+        'GIT_AUTHOR_EMAIL': 't@t',
+        'GIT_COMMITTER_NAME': 't',
+        'GIT_COMMITTER_EMAIL': 't@t',
+        'GIT_AUTHOR_DATE': stamp,
+        'GIT_COMMITTER_DATE': stamp,
+    }
+    subprocess.run(['git', '-C', str(repo), 'add', '-A'], check=True)
+    subprocess.run(['git', '-C', str(repo), 'commit', '-qm', subject], check=True, env=env)
+
+
+def test_find_files_skips_repealed_file_with_the_same_title(tmp_path, monkeypatch):
+    """근로기준법 폴더처럼 같은 제목 파일이 둘: 1997년 '(폐지)' 커밋으로 끝난 법률.md는 빼고 법률(법률).md"""
+    monkeypatch.setattr(b, 'LAWS', ['근로기준법'])
+    repo = tmp_path / 'legalize'
+    subprocess.run(['git', 'init', '-q', str(repo)], check=True)
+    head = "---\n제목: {t}\n공포일자: {d}\n공포번호: '1'\n시행일자: {d}\n상태: 시행\n---\n"
+    commit(
+        repo,
+        {'kr/근로기준법/법률.md': head.format(t='근로기준법', d='1997-03-13')},
+        '1997-03-13',
+        '법률: 근로기준법 (폐지)',
+    )
+    commit(
+        repo,
+        {
+            'kr/근로기준법/법률(법률).md': head.format(t='근로기준법', d='2007-04-11'),
+            'kr/근로기준법/시행령.md': head.format(t='근로기준법 시행령', d='2007-06-29'),
+            'kr/근로기준법/시행규칙.md': head.format(t='근로기준법 시행규칙', d='2007-07-24'),
+        },
+        '2007-07-24',
+        '법률: 근로기준법 (전부개정)',
+    )
+    paths = b.find_files(b.Repo(repo), '2026-10-20')
+    assert paths == {
+        '근로기준법': 'kr/근로기준법/법률(법률).md',
+        '근로기준법 시행령': 'kr/근로기준법/시행령.md',
+        '근로기준법 시행규칙': 'kr/근로기준법/시행규칙.md',
+    }
+
+
+# ── 조문 참조·연결·CSV ──────────────────────────────────────────────
 
 
 def test_refs_skip_articles_of_another_laws_addendum():
     """'법률 제7379호 근로자퇴직급여보장법 부칙 제2조제1항'은 이 법 제2조가 아니다 (임금채권보장법 제10조)"""
     text = '제9조에 따른 부담금. 3. 법률 제7379호 근로자퇴직급여보장법 부칙 제2조제1항에 따른 퇴직보험'
     own = '임금채권보장법'
-    assert [(d, n) for d, n, _ in b.refs(text, own, {}, NAMES) if d == own] == [(own, '제9조')]
+    assert [(d, n) for d, n, _ in b.refs(text, own, {}, b.doc_names()) if d == own] == [(own, '제9조')]
 
 
-def test_overrides_apply_and_fail_when_source_changed():
-    rows = [{'article_id': 'A 제1조', 'text': '2. 대상 근로자의 범위\n3. 끝', 'deleted': 0}]
-    b.apply_overrides(
-        rows,
-        [
-            {'article_id': 'A 제1조', 'field': 'text', 'find': '범위\n', 'replace': '범위 [실효]\n'},
-            {'article_id': 'A 제1조', 'field': 'deleted', 'set': 1},
-        ],
-    )
-    assert rows[0] == {'article_id': 'A 제1조', 'text': '2. 대상 근로자의 범위 [실효]\n3. 끝', 'deleted': 1}
-    with pytest.raises(ValueError, match='찾지 못했습니다'):
-        b.apply_overrides(rows, [{'article_id': 'A 제1조', 'field': 'text', 'find': '없는 문구', 'replace': ''}])
-    with pytest.raises(ValueError, match='대상 조문이 없습니다'):
-        b.apply_overrides(rows, [{'article_id': 'A 제9조', 'field': 'deleted', 'set': 1}])
+def row(law, kind, no, text, deleted=0):
+    doc = b.doc_name(law, kind)
+    return {'law': doc, 'article_id': f'{doc} {no}', 'kind': kind, 'parent_law': law, 'text': text, 'deleted': deleted}
 
 
-def test_override_file_has_reasons_and_known_fields():
-    for o in b.load_overrides():
-        assert o['reason'] and o['field'] in b.LAW_COLS + ['parent_ids', 'child_ids']
-        assert ('set' in o) != ('find' in o and 'replace' in o)
+def test_link_uses_one_rule_for_every_document():
+    """같은 문서 → related, 상위 문서 → parent, 그 역방향 → child. 삭제 조문으로는 잇지 않는다 (법률·하위법령 같음)"""
+    law = '근로기준법'
+    rows = [
+        row(law, '법률', '제1조', '제2조와 제3조에 따른다.'),
+        row(law, '법률', '제2조', '삭제 <2019.1.15>', deleted=1),
+        row(law, '법률', '제3조', '본문'),
+        row(law, '시행령', '제1조', '법 제1조 및 제3조에 따라 제2조를 정한다.'),
+        row(law, '시행령', '제2조', '법 제2조에 따른다.'),
+        row(law, '시행규칙', '제1조', '영 제1조와 법 제3조에 따른다.'),
+    ]
+    stats = b.link(rows)
+    got = {r['article_id']: (r['related_ids'], r['parent_ids'], r['child_ids']) for r in rows}
+    assert got == {
+        '근로기준법 제1조': ('근로기준법 제3조', None, '근로기준법 시행령 제1조'),
+        '근로기준법 제2조': (None, None, None),
+        '근로기준법 제3조': (None, None, '근로기준법 시행령 제1조|근로기준법 시행규칙 제1조'),
+        '근로기준법 시행령 제1조': (
+            '근로기준법 시행령 제2조',
+            '근로기준법 제1조|근로기준법 제3조',
+            '근로기준법 시행규칙 제1조',
+        ),
+        '근로기준법 시행령 제2조': (None, None, None),
+        '근로기준법 시행규칙 제1조': (None, '근로기준법 시행령 제1조|근로기준법 제3조', None),
+    }
+    assert stats['dangling'] == []
 
 
-def test_csv_bytes_bom_and_line_endings():
+def test_csv_bytes_bom_and_lf():
     import pandas as pd
 
-    df = pd.DataFrame({'a': ['줄1\n줄2', None], 'b': [1, 0]})
-    crlf, lf = b.to_csv_bytes(df, '\r\n'), b.to_csv_bytes(df, '\n')
-    assert crlf.startswith('﻿'.encode()) and crlf.count(b'\r\n') == 3
-    assert b'"\xec\xa4\x841\n\xec\xa4\x842"' in crlf  # 본문 안 줄바꿈은 LF 그대로
-    assert b'\r' not in lf
+    data = b.to_csv_bytes(pd.DataFrame({'a': ['줄1\n줄2', None], 'b': [1, 0]}))
+    assert data.startswith('\ufeff'.encode()) and b'\r' not in data
+    assert data.decode('utf-8-sig') == 'a,b\n"줄1\n줄2",1\n,0\n'
 
 
 def test_check_reports_first_difference():
@@ -294,3 +379,11 @@ def test_generated_csvs_are_byte_identical_to_repo():
     assert re.fullmatch(r'[0-9a-f]{40}', stats['head'])
     assert files[b.LAW_CSV] == V4_ARTICLES.read_bytes()
     assert files[b.DECREE_CSV] == V4_DECREE_ARTICLES.read_bytes()
+
+
+def test_row_order_laws_then_decrees_by_name():
+    """법률은 LAWS 순서, 하위법령은 법령 이름 가나다순 (임베딩 batch·data/decree_exp 후보 번호가 이 순서에 묶여 있음)"""
+    order = b.doc_order()
+    assert order[:7] == [(law, '법률') for law in b.LAWS]
+    assert [law for law, k in order[7:] if k == '시행령'] == sorted(b.LAWS)
+    assert order[7:9] == [('근로기준법', '시행령'), ('근로기준법', '시행규칙')]

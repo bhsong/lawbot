@@ -3,21 +3,26 @@
     git clone --filter=blob:none --no-checkout https://github.com/legalize-kr/legalize-kr ../legalize-kr
     uv run lawbot-build-articles --repo ../legalize-kr --asof 2026-10-20 --out-dir data/v4 [--check]
 
-출력
-- articles_v4.csv: 7개 법률 (행 끝 CRLF)
-- law_articles_v4_decree.csv: 법률 + 시행령·시행규칙 (행 끝 LF)
+출력 (UTF-8 BOM, 행 끝 LF)
+- articles_v4.csv: 7개 법률
+- law_articles_v4_decree.csv: 법률 + 시행령·시행규칙 (행 순서는 doc_order)
 - --check: 파일을 쓰지 않고 out-dir의 기존 파일과 바이트 단위로 비교 (다르면 종료 코드 1)
 
-판단 규칙
-- 법률: 조문별 시행일 조합. 파일 이력(커밋 날짜 = 공포일)에서 공포일 ≤ 기준일인 버전을 오래된 것부터 보며,
-  직전 버전과 달라진 조문(신설·삭제 포함)과 장 제목에 그 개정의 시행일을 붙인다. 시행일은 머리말 `시행일자`,
-  부칙 제1조 '다만'에 적힌 조문·장은 그 날짜 (조문 일부만 적혀 있어도 조문 전체). 시행일 ≤ 기준일인 변경만 반영
-- 하위법령: 공포일·머리말 시행일자 모두 기준일 이전인 가장 최근 버전 하나. 부칙은 제외. 별표·서식은 링크만 있어 넣지 않음
-- 본문: 굵게 표시·`\\.` 이스케이프·들여쓰기·빈 줄 제거
+규칙 (법률·시행령·시행규칙 21개 문서 모두 같다)
+- 파일: kr/<법령명 띄어쓰기 없이>/ 안에서 기준일 버전의 머리말 `제목`이 문서명이고 폐지 커밋이 아닌 파일
+- 조합: 파일 이력(커밋 날짜 = 공포일)에서 공포일 ≤ 기준일인 버전을 오래된 것부터 보며, 직전 버전과 달라진 조문
+  (신설·삭제 포함)과 장 제목에 그 개정의 시행일을 붙이고 시행일 ≤ 기준일인 변경만 반영한다. 시행일은 머리말
+  `시행일자`, 부칙 제1조 '다만'에 적힌 조문·장은 그 날짜 (조문 일부만 적혀 있어도 조문 전체, 규모별이면 가장 이른 날)
+- 원문 형식 변경(공백, 조문 끝 `[시행일]` 안내 삭제)은 개정으로 보지 않는다
+- effective_date: 그 조문을 마지막으로 바꾼 개정의 시행일
+- 유효기간: 부칙 '○의 개정규정은 …까지 효력을 가진다'가 기준일 전에 끝났으면 조문 전체는 deleted=1,
+  항이면 그 항 끝에 `[실효: YYYY.M.D.까지 유효]`
+- 본문: 굵게 표시·`\\.` 이스케이프·들여쓰기·빈 줄 제거. 별표·서식은 링크만 있어 넣지 않음
 - 삭제: 제목이 없고 본문이 비었거나 '삭제'로 시작하면 deleted=1
-- 연계(하위법령 parent_ids): '법 제N조'(시행규칙은 '영 제N조' 포함)와 그 뒤 접속어로만 이어지는 '제N조' 나열.
-  related_ids: 같은 문서 안의 조문 참조(자기 자신 제외). child_ids(법률·시행령 행): parent_ids의 역방향
-- 원문에 없는 수작업 가공은 article_overrides.json (적용할 곳이 원문에 없으면 실패)
+- chapter: 장(과 절) 제목, 개정 표시 제외
+- 연결: 본문의 조문 참조. 같은 문서 → related_ids(자기 자신 제외), 상위 문서('법 제N조', 시행규칙은 '영 제N조' 포함과
+  그 뒤 접속어로만 이어지는 '제N조' 나열) → parent_ids, child_ids는 그 역방향. 없는 조문·삭제 조문으로는 잇지 않는다.
+  '부칙 제N조'와 다른 법령 조문은 넣지 않는다
 """
 
 from __future__ import annotations
@@ -26,7 +31,6 @@ import argparse
 import calendar
 import datetime as dt
 import io
-import json
 import re
 import subprocess
 import sys
@@ -35,17 +39,7 @@ from pathlib import Path
 
 import pandas as pd
 
-LAW_DIRS = {  # 하위법령 행은 이 순서
-    '근로기준법': '근로기준법',
-    '근로자퇴직급여 보장법': '근로자퇴직급여보장법',
-    '기간제 및 단시간근로자 보호 등에 관한 법률': '기간제및단시간근로자보호등에관한법률',
-    '남녀고용평등과 일ㆍ가정 양립 지원에 관한 법률': '남녀고용평등과일ㆍ가정양립지원에관한법률',
-    '임금채권보장법': '임금채권보장법',
-    '최저임금법': '최저임금법',
-    '파견근로자 보호 등에 관한 법률': '파견근로자보호등에관한법률',
-}
-# 법률 CSV의 법령 순서 (하위법령은 LAW_DIRS 순서)
-LAW_ORDER = [
+LAWS = [  # 대상 법률 (CSV의 법령 순서)
     '근로기준법',
     '근로자퇴직급여 보장법',
     '최저임금법',
@@ -54,14 +48,12 @@ LAW_ORDER = [
     '파견근로자 보호 등에 관한 법률',
     '임금채권보장법',
 ]
-LAW_FILE = {'근로기준법': '법률(법률).md'}  # 근로기준법/법률.md는 1997년 폐지본
-KINDS = ['시행령', '시행규칙']
+KINDS = ['법률', '시행령', '시행규칙']
 LAW_COLS = ['law', 'article_id', 'article_no', 'title', 'chapter', 'deleted', 'text', 'effective_date', 'related_ids']
+DECREE_COLS = [*LAW_COLS, 'kind', 'parent_law', 'parent_ids', 'child_ids']
 LAW_CSV, DECREE_CSV = 'articles_v4.csv', 'law_articles_v4_decree.csv'
-OVERRIDES = Path(__file__).with_name('article_overrides.json')
 
 ART = r'제(\d+)조(?:의(\d+))?'
-TAG_DATE = re.compile(r'<(?:개정|신설)\s*([^<>]*)>|\[(?:본조신설|전문개정)\s*([\d.\s]+)\]')
 HEAD = re.compile(r'^##### 제(\d+)조(?:의(\d+))?(?:\s*\((.*)\))?\s*$')
 SECTION = re.compile(r'^(#{2,4}) (제\d+(?:장|절)(?:의\d+)?.*?)\s*(?:<(?:개정|신설)[^<>]*>)?\s*$')
 
@@ -181,24 +173,6 @@ def parse(md):
     return arts
 
 
-def eff_date(text, default):
-    dates = []
-    for m in TAG_DATE.finditer(text or ''):
-        for chunk in re.split(r'[,\s]+(?=\d{4}\.)', (m[1] or m[2] or '')):
-            d = re.match(r'(\d{4})\.\s*(\d{1,2})\.\s*(\d{1,2})', chunk.strip())
-            if d:
-                dates.append(f'{int(d[1]):04d}-{int(d[2]):02d}-{int(d[3]):02d}')
-    return max(dates) if dates else default
-
-
-def base_date(history):
-    """제정·전부개정 공포일 (개정 표시 없는 조문의 effective_date 기본값)"""
-    for _, date, subject in history:
-        if '(전부개정)' in subject or '(제정)' in subject:
-            return date
-    return None
-
-
 # ── 부칙 시행일 ──────────────────────────────────────────────────────
 
 
@@ -304,10 +278,12 @@ def read_proviso(sched: Schedule, proviso, fm, order):
         found = list(DATE_EXPR.finditer(clause))
         if '개정규정' not in clause or not found:
             continue
-        if '대통령령' in clause:
-            raise ValueError(f'부칙 시행일을 날짜로 정할 수 없습니다: {clause.strip()}')
-        date = min(date_expr(d, fm['공포일자']) for d in found)  # 사업장 규모별로 나뉘면 가장 이른 날
         arts, chapters = target_list(clause.split('개정규정', 1)[0], order)
+        if not arts and not chapters:  # 별표 등 본문 조문이 아닌 것
+            continue
+        if '대통령령' in clause:
+            raise ValueError(f'부칙 시행일을 날짜로 정할 수 없습니다: {clause.strip()[:200]}')
+        date = min(date_expr(d, fm['공포일자']) for d in found)  # 사업장 규모별로 나뉘면 가장 이른 날
         for a in arts:
             sched.articles[a] = max(sched.articles.get(a, ''), date)
         for c in chapters:
@@ -336,8 +312,8 @@ def squash(s):
     return re.sub(r'\s+', '', strip_notes(s))
 
 
-def law_in_force(repo: Repo, path, asof):
-    """기준일에 시행 중인 법률 조문 [{no, title, text, chapter, eff}]과 버전별 반영 기록
+def in_force(repo: Repo, path, asof):
+    """기준일에 시행 중인 조문 [{no, title, text, chapter, eff}]과 버전별 반영 기록
 
     eff: 그 조문(제목·본문)을 마지막으로 바꾼 개정의 시행일. 공백만 바뀐 변경(원문 형식 정리)은 개정으로 보지 않는다.
     시행 전 개정이 남은 조문에 그 뒤 시행된 개정이 내용을 바꾸면 조문 단위로 나눌 수 없어 실패한다"""
@@ -346,6 +322,7 @@ def law_in_force(repo: Repo, path, asof):
     state: dict[str, dict] = {}
     prev: dict[str, dict] = {}
     pending: set[str] = set()
+    expiries: list[tuple[str, list[int], str]] = []
     used = []
     order: list[str] = []
     for (sha, _, _), md in zip(hist, mds):
@@ -353,6 +330,7 @@ def law_in_force(repo: Repo, path, asof):
         arts = {a['no']: a for a in parse(md)}
         cur_order = list(arts)
         sched = schedule(md, fm, cur_order, asof)
+        expiries += expiry_clauses(own_addendum(md, fm['공포번호']) or '')
         applied = waiting = 0
         for no in dict.fromkeys(list(prev) + cur_order):
             old, new = prev.get(no), arts.get(no)
@@ -374,7 +352,7 @@ def law_in_force(repo: Repo, path, asof):
                     if no in pending:
                         raise ValueError(
                             f'{path} {no}: 시행 전 개정이 남은 조문을 제{fm.get("공포번호")}호가 바꿉니다 '
-                            '(조문 단위로 조합할 수 없음, 보정 목록으로 처리)'
+                            '(조문 단위로 조합할 수 없음)'
                         )
                     cur.update(title=new['title'], text=new['text'], eff=date)
                     applied += 1
@@ -398,7 +376,54 @@ def law_in_force(repo: Repo, path, asof):
             }
         )
     known = [no for no in order if no in state] + [no for no in state if no not in order]
-    return [state[no] for no in known], used
+    arts = [state[no] for no in known]
+    expire(arts, expiries, asof, path)
+    return arts, used
+
+
+EXPIRY = re.compile(r'(.*?)의\s*개정규정은\s*(\d{4})년\s*(\d{1,2})월\s*(\d{1,2})일까지\s*효력을\s*가진다')
+PARA = '①②③④⑤⑥⑦⑧⑨⑩⑪⑫⑬⑭⑮⑯⑰⑱⑲⑳'
+
+
+def expiry_clauses(addendum):
+    """부칙 '제N조(유효기간…) ○의 개정규정은 YYYY년 M월 D일까지 효력을 가진다' → [(조문, [항], 날짜)]. 항이 없으면 조문 전체"""
+    out = []
+    for m in re.finditer(r'제\d+조\s*\(유효기간[^)]*\)\s*([^\n]*)', addendum):
+        e = EXPIRY.search(m[1])
+        if not e:
+            continue
+        date = dt.date(int(e[2]), int(e[3]), int(e[4])).isoformat()
+        cur = None
+        for t in re.finditer(r'제(\d+)(조(?:의(\d+))?|항)', e[1]):
+            if t[2].startswith('조'):
+                cur = (f'제{t[1]}조' + (f'의{t[3]}' if t[3] else ''), [])
+                out.append((*cur, date))
+            elif cur is not None:
+                cur[1].append(int(t[1]))
+    return out
+
+
+def expire(arts, expiries, asof, path):
+    """유효기간이 기준일 전에 끝난 개정규정: 조문 전체면 삭제 조문으로(deleted), 항이면 그 항 끝에 '[실효: …까지 유효]'"""
+    by_no = {a['no']: a for a in arts}
+    for no, paras, date in expiries:
+        if date >= asof or no not in by_no:
+            continue
+        a = by_no[no]
+        if not paras:
+            a['expired'] = True
+            continue
+        y, m, d = (int(x) for x in date.split('-'))
+        mark = f' [실효: {y}.{m}.{d}.까지 유효]'
+        lines = a['text'].split('\n')
+        for k in paras:
+            starts = [i for i, line in enumerate(lines) if line.startswith(PARA[k - 1])]
+            if len(starts) != 1:
+                raise ValueError(f'{path} {no}: 유효기간이 끝난 제{k}항을 본문에서 찾지 못했습니다')
+            nxt = [i for i, line in enumerate(lines) if i > starts[0] and line[:1] in PARA]
+            last = (nxt[0] if nxt else len(lines)) - 1
+            lines[last] += mark
+        a['text'] = '\n'.join(lines)
 
 
 # ── 조문 참조 (사용자 스크립트 그대로) ─────────────────────────────
@@ -485,233 +510,133 @@ def join(ids):
     return '|'.join(ids) if ids else None
 
 
+def doc_name(law, kind):
+    return law if kind == '법률' else f'{law} {kind}'
+
+
 def doc_names():
-    names = {}  # 공백 제거 이름 → 문서명
-    for name in LAW_DIRS:
-        names[re.sub(r'\s+', '', name)] = name
-        for k in KINDS:
-            names[re.sub(r'\s+', '', f'{name} {k}')] = f'{name} {k}'
-    return names
+    """공백 없앤 이름 → 문서명 (「…」 참조를 문서로)"""
+    return {re.sub(r'\s+', '', doc_name(law, k)): doc_name(law, k) for law in LAWS for k in KINDS}
 
 
-# ── 보정 ─────────────────────────────────────────────────────────────
+def find_files(repo: Repo, asof):
+    """문서명 → 파일 경로. 법령 폴더에서 기준일 버전의 머리말 제목이 문서명이고, 그 버전이 폐지 커밋이 아닌 파일
+    (예: 근로기준법 폴더의 법률.md는 1997년 '(폐지)' 커밋으로 끝난 옛 법, 법률(법률).md가 현행. 머리말 상태는 둘 다 '시행')"""
+    paths = {}
+    for law in LAWS:
+        folder = f'kr/{law.replace(" ", "")}/'
+        files = [f for f in repo.git('ls-tree', '--name-only', 'HEAD', folder).splitlines() if f.endswith('.md')]
+        repo.load_history(files)
+        for kind in KINDS:
+            doc, found = doc_name(law, kind), []
+            for f in files:
+                hist = [h for h in repo.history.get(f, []) if h[1] <= asof]
+                if not hist or hist[0][2].endswith('(폐지)'):
+                    continue
+                fm = front(repo.show(hist[0][0], f))
+                if fm.get('제목', '').replace(' ', '') == doc.replace(' ', ''):
+                    found.append(f)
+            if len(found) != 1:
+                raise ValueError(f'{doc}: 시행 중인 파일이 하나가 아닙니다 ({found or "없음"}, 폴더 {folder})')
+            paths[doc] = found[0]
+    return paths
 
 
-LINK_FIELDS = ('related_ids', 'parent_ids', 'child_ids')  # 연결 열 보정은 연결을 계산한 뒤에 적용
+# ── 조문 행 ──────────────────────────────────────────────────────────
 
 
-def apply_overrides(rows, overrides):
-    """원문에 없는 수작업 가공. find가 원문에 정확히 한 번 있어야 한다 (원문이 바뀐 걸 모르고 넘어가지 않게)"""
-    by_id = {r['article_id']: r for r in rows}
-    for o in overrides:
-        r = by_id.get(o['article_id'])
-        if r is None:
-            raise ValueError(f'보정 대상 조문이 없습니다: {o["article_id"]}')
-        if 'set' in o:
-            r[o['field']] = o['set']
-            continue
-        cur = r[o['field']] if isinstance(r[o['field']], str) else ''
-        if cur.count(o['find']) != 1:
-            raise ValueError(f'보정할 곳을 찾지 못했습니다: {o["article_id"]} {o["field"]} {o["find"]!r}')
-        r[o['field']] = cur.replace(o['find'], o['replace'])
-    return rows
+def doc_order():
+    """[(법령, 종류)] 행 순서: 법률은 LAWS 순서, 그 뒤 하위법령은 법령 이름 가나다순으로 시행령 → 시행규칙.
+    순서를 바꾸지 않는 이유: 조문 임베딩(같은 batch에 든 문서에 따라 fp16 값이 달라짐)과 저장된 실험 산출물
+    (data/decree_exp, 후보 번호 = 행 순번)이 이 순서에 묶여 있다"""
+    return [(law, '법률') for law in LAWS] + [(law, k) for law in sorted(LAWS) for k in KINDS if k != '법률']
 
 
-def split_overrides(overrides):
-    """(법률 행 본문 보정, 법률 행 연결 보정, 하위법령 행 보정)"""
-    law = [o for o in overrides if o['article_id'].rsplit(' ', 1)[0] in LAW_DIRS]
-    decree = [o for o in overrides if o not in law]
-    return [o for o in law if o['field'] not in LINK_FIELDS], [o for o in law if o['field'] in LINK_FIELDS], decree
-
-
-def load_overrides(path=OVERRIDES):
-    return json.loads(Path(path).read_text(encoding='utf-8'))['overrides']
-
-
-# ── 법률 행 ──────────────────────────────────────────────────────────
-
-
-def law_path(name):
-    return f'kr/{LAW_DIRS[name]}/{LAW_FILE.get(name, "법률.md")}'
-
-
-def build_law(repo: Repo, asof, overrides):
+def build_rows(repo: Repo, paths, asof):
     rows, versions = [], []
-    for name in LAW_ORDER:
-        path = law_path(name)
-        arts, used = law_in_force(repo, path, asof)
+    for law, kind in doc_order():
+        doc = doc_name(law, kind)
+        arts, used = in_force(repo, paths[doc], asof)
         for a in arts:
             text = a['text']
-            deleted = int(a['title'] is None and (text is None or text.startswith('삭제')))
+            deleted = a.get('expired') or (a['title'] is None and (text is None or text.startswith('삭제')))
             rows.append(
                 {
-                    'law': name,
-                    'article_id': f'{name} {a["no"]}',
+                    'law': doc,
+                    'article_id': f'{doc} {a["no"]}',
                     'article_no': a['no'],
                     'title': a['title'],
                     'chapter': a['chapter'],
-                    'deleted': deleted,
+                    'deleted': int(bool(deleted)),
                     'text': text,
                     'effective_date': a['eff'],
-                    'related_ids': None,
+                    'kind': kind,
+                    'parent_law': law,
                 }
             )
-        for u in used:
-            versions.append({'doc': name, 'kind': '법률', 'path': path, **u})
-    content, links, _ = split_overrides(overrides)
-    apply_overrides(rows, content)
+        versions += [{'doc': doc, 'kind': kind, 'path': paths[doc], **u} for u in used]
+    if len({r['article_id'] for r in rows}) != len(rows):
+        raise ValueError('조문 ID가 겹칩니다')
+    return rows, versions
 
+
+def link(rows):
+    """related_ids·parent_ids·child_ids. 통계: 없는 조문 참조, 다른 법령 조문 참조(넣지 않음) 수"""
     names = doc_names()
     order: dict[str, list[str]] = {}
     for r in rows:
         order.setdefault(r['law'], []).append(r['article_id'])
     known = {r['article_id'] for r in rows}
+    alive = {r['article_id'] for r in rows if not r['deleted']}
+    dangling, cross = [], 0
     for r in rows:
-        if r['deleted']:
-            continue
-        mine = [
-            i
-            for i in expand([x for x in refs(r['text'], r['law'], {}, names) if x[0] == r['law']], order)
-            if i in known and i != r['article_id']
-        ]
-        r['related_ids'] = join(mine)
-    apply_overrides(rows, links)
-    return pd.DataFrame(rows, columns=LAW_COLS), versions
-
-
-# ── 하위법령 행 (사용자 스크립트) ──────────────────────────────────
-
-
-def pick_version(repo: Repo, path, asof):
-    """공포일·시행일 모두 기준일 이전인 가장 최근 버전."""
-    for sha, date, _ in repo.history[path]:
-        if date > asof:
-            continue
-        md = repo.show(sha, path)
-        fm = front(md)
-        if fm.get('시행일자', '0000') <= asof:
-            return sha, fm, md
-    raise ValueError(f'{path}: {asof} 기준 유효 버전 없음')
-
-
-def build_decree(repo: Repo, law: pd.DataFrame, asof):
-    names = doc_names()
-    rows, versions = [], []
-    for name, d in LAW_DIRS.items():
-        for kind in KINDS:
-            path = f'kr/{d}/{kind}.md'
-            doc = f'{name} {kind}'
-            sha, fm, md = pick_version(repo, path, asof)
-            if fm.get('제목', '').replace(' ', '') != doc.replace(' ', ''):
-                raise ValueError(f'{path}: 제목이 다릅니다 ({fm.get("제목")} ≠ {doc})')
-            versions.append(
-                {
-                    'doc': doc,
-                    'kind': kind,
-                    'path': path,
-                    'commit': sha[:10],
-                    '공포번호': fm.get('공포번호'),
-                    '시행일자': fm.get('시행일자'),
-                }
-            )
-            default = base_date(repo.history[path])
-            upper = {'법': name} if kind == '시행령' else {'법': name, '영': f'{name} 시행령'}
-            for art in parse(md):
-                text = art['text']
-                deleted = int(art['title'] is None and (text is None or text.startswith('삭제')))
-                rows.append(
-                    {
-                        'law': doc,
-                        'article_id': f'{doc} {art["no"]}',
-                        'article_no': art['no'],
-                        'title': art['title'],
-                        'chapter': None,
-                        'deleted': deleted,
-                        'text': text,
-                        'effective_date': eff_date(text, default),
-                        'kind': kind,
-                        'parent_law': name,
-                        '_refs': refs(text, doc, upper, names),
-                    }
-                )
-
-    dec = pd.DataFrame(rows)
-    if not dec['article_id'].is_unique:
-        raise ValueError('하위법령 조문 ID가 겹칩니다')
-
-    known = set(law['article_id']) | set(dec['article_id'])
-    alive = set(law.loc[law['deleted'] == 0, 'article_id']) | set(dec.loc[dec['deleted'] == 0, 'article_id'])
-    order: dict[str, list[str]] = {}
-    for doc, aid in list(zip(law['law'], law['article_id'])) + list(zip(dec['law'], dec['article_id'])):
-        order.setdefault(doc, []).append(aid)
-
-    parent, related, dangling, cross = [], [], [], 0
-    for _, r in dec.iterrows():
-        up, same_doc = [], []
-        for aid in expand([x for x in r['_refs'] if x[0] != '__external__'], order):
+        law = r['parent_law']
+        upper = {'법률': {}, '시행령': {'법': law}, '시행규칙': {'법': law, '영': f'{law} 시행령'}}[r['kind']]
+        same, up = [], []
+        for aid in expand([x for x in refs(r['text'], r['law'], upper, names) if x[0] != '__external__'], order):
             doc = aid.rsplit(' ', 1)[0]
             if aid not in known:
                 dangling.append((r['article_id'], aid))
+            elif aid not in alive:
                 continue
-            if aid not in alive:
-                continue
-            if doc == r['law']:
+            elif doc == r['law']:
                 if aid != r['article_id']:
-                    same_doc.append(aid)
-            elif doc in (r['parent_law'], f'{r["parent_law"]} 시행령'):
+                    same.append(aid)
+            elif doc in upper.values():
                 up.append(aid)
             else:
-                cross += 1  # 다른 노동법(예: 근로기준법 시행령 → 「남녀고용평등법」) 참조는 넣지 않음
-        parent.append(join(up))
-        related.append(join(same_doc))
-    dec['parent_ids'], dec['related_ids'] = parent, related
-    dec = dec.drop(columns='_refs')
-
+                cross += 1  # 다른 노동법(예: 근로기준법 시행령 → 「남녀고용평등법」)
+        r['related_ids'], r['parent_ids'] = join(same), join(up)
     child: dict[str, list[str]] = {}
-    for aid, ps, deleted in zip(dec['article_id'], dec['parent_ids'], dec['deleted']):
-        if deleted:
-            continue
-        for p_ in (ps if isinstance(ps, str) else '').split('|'):
-            if p_:
-                child.setdefault(p_, []).append(aid)
-    law = law.assign(kind='법률', parent_law=law['law'], parent_ids=None)
-    law['child_ids'] = [join(child.get(i, [])) for i in law['article_id']]
-    dec['child_ids'] = [join(child.get(i, [])) for i in dec['article_id']]  # 시행령 ← 시행규칙
-
-    out = pd.concat([law, dec[list(law.columns)]], ignore_index=True)
-    if not out['article_id'].is_unique:
-        raise ValueError('조문 ID가 겹칩니다')
-    stats = {'dangling': dangling, 'cross': cross}
-    return out, versions, stats
+    for r in rows:
+        if not r['deleted']:
+            for p in (r['parent_ids'] or '').split('|'):
+                if p:
+                    child.setdefault(p, []).append(r['article_id'])
+    for r in rows:
+        r['child_ids'] = join(child.get(r['article_id'], []))
+    return {'dangling': dangling, 'cross': cross}
 
 
 # ── 실행 ─────────────────────────────────────────────────────────────
 
 
-def to_csv_bytes(df: pd.DataFrame, lineterminator: str) -> bytes:
+def to_csv_bytes(df: pd.DataFrame) -> bytes:
     buf = io.StringIO()
-    df.to_csv(buf, index=False, lineterminator=lineterminator)
-    return ('﻿' + buf.getvalue()).encode('utf-8')
+    df.to_csv(buf, index=False, lineterminator='\n')
+    return ('\ufeff' + buf.getvalue()).encode('utf-8')
 
 
-def build(repo_path, asof, overrides=None):
+def build(repo_path, asof):
     """{파일 이름: 바이트}, 버전 목록, 통계. 쓰지 않는다"""
     repo = Repo(repo_path)
-    paths = []
-    for name, d in LAW_DIRS.items():
-        paths += [law_path(name)] + [f'kr/{d}/{k}.md' for k in KINDS]
-    repo.load_history(paths)
-    overrides = load_overrides() if overrides is None else overrides
-    law, lv = build_law(repo, asof, overrides)
-    law_bytes = to_csv_bytes(law, '\r\n')
-    # decree CSV의 법률 행은 법률 CSV를 다시 읽은 값 (빈 칸 → NaN, 숫자 열 타입)
-    law_df = pd.read_csv(io.BytesIO(law_bytes), encoding='utf-8-sig')
-    decree, dv, stats = build_decree(repo, law_df, asof)
-    decree_ov = split_overrides(overrides)[2]
-    if decree_ov:
-        decree = pd.DataFrame(apply_overrides(decree.to_dict('records'), decree_ov), columns=decree.columns)
-    files = {LAW_CSV: law_bytes, DECREE_CSV: to_csv_bytes(decree, '\n')}
-    return files, lv + dv, {**stats, 'head': repo.head(), 'law_rows': len(law), 'decree_rows': len(decree)}
+    paths = find_files(repo, asof)
+    rows, versions = build_rows(repo, paths, asof)
+    stats = link(rows)
+    df = pd.DataFrame(rows, columns=DECREE_COLS)
+    law = df[df['kind'] == '법률']
+    files = {LAW_CSV: to_csv_bytes(law[LAW_COLS]), DECREE_CSV: to_csv_bytes(df)}
+    return files, versions, {**stats, 'head': repo.head(), 'law_rows': len(law), 'decree_rows': len(df), 'paths': paths}
 
 
 def first_diff(a: bytes, b: bytes):
@@ -735,10 +660,15 @@ def main(argv=None):
     print(f'[원문] legalize-kr HEAD {stats["head"]} · 기준일 {a.asof}')
     print(f'[조문] 법률 {stats["law_rows"]}행 · 법률+하위법령 {stats["decree_rows"]}행')
     print(f'[연계] 없는 조문 참조 {len(stats["dangling"])}건 · 다른 법령 참조 {stats["cross"]}건 제외')
+    last: dict[str, dict] = {}
     for v in versions:
-        if v['kind'] != '법률' or v.get('시행 전'):
-            pending = f' · 시행 전 {v["시행 전"]}조문' if v.get('시행 전') else ''
-            print(f'[버전] {v["doc"]} {v["commit"]} 제{v["공포번호"]}호 시행 {v["시행일자"]}{pending}')
+        last[v['doc']] = v
+        if v['시행 전']:
+            print(
+                f'[시행 전] {v["doc"]} {v["commit"]} 제{v["공포번호"]}호 (시행 {v["시행일자"]}) 조문 {v["시행 전"]}개 제외'
+            )
+    for doc, v in last.items():
+        print(f'[버전] {doc} 마지막 {v["commit"]} 제{v["공포번호"]}호 · {stats["paths"][doc]}')
 
     if a.check:
         bad = 0
