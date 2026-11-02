@@ -38,6 +38,7 @@ LOGIN_FAIL_DELAY = 1.0  # 초. 비밀번호 대입을 느리게
 MAX_QUESTION = 2000  # 글자. 모델 서버에 보내는 입력 길이 상한
 WAITING = '⏳ 앞 질문을 기다리는 중…'
 CONFIG_ERROR = '웹앱 설정 오류로 답하지 못했습니다. 서버 로그를 확인하세요.'
+TICK = 'tick'  # 화면에 보낼 것이 없는 생성 단계 (보내지 않고 연결 끊김만 확인)
 NO_BUILD = '화면 파일이 없습니다. services/chatbot/frontend에서 npm ci && npm run build를 실행하세요. (API는 /api/*)'
 
 
@@ -97,7 +98,8 @@ def sources_data(hits, cited=None, refused=False):
 
 def chat_events(app, question, model_key, fmt, remember=None):
     """질문 하나 → (이벤트, 데이터)를 차례로. remember(턴 기록) → turn_id (피드백이 꺼져 있으면 None)
-    이벤트: status → sources(모두 펼침) → answer·stats… → sources(인용/검색만 구분) → stats → done, 실패하면 error"""
+    이벤트: status → sources(모두 펼침) → answer·stats… → sources(인용/검색만 구분) → stats → done, 실패하면 error
+    생성 단계에서 화면 글이 그대로면(간결형의 근거·설명 토큰) TICK을 낸다: 받는 쪽이 토큰마다 연결 끊김을 확인하게"""
     spec = app.models.specs[model_key]
     yield 'status', {'text': view.searching_stats(app, model_key)}
     sent_sources, last = False, {}
@@ -119,10 +121,9 @@ def chat_events(app, question, model_key, fmt, remember=None):
                 continue
             if stage != 'done':
                 text = render(raw, hits, fmt, done=False)
-                yield from (
-                    changed('answer', {'text': text}) if text.strip() else changed('status', {'text': view.WRITING})
-                )
-                yield from changed('stats', {'text': view.fmt_stats(spec.label, stage, st)})
+                out = changed('answer', {'text': text}) if text.strip() else changed('status', {'text': view.WRITING})
+                out += changed('stats', {'text': view.fmt_stats(spec.label, stage, st)})
+                yield from out or [(TICK, None)]
                 continue
             text = render(raw, hits, fmt, done=True) if raw.strip() else view.EMPTY
             used, _, no = answer_citations(raw, hits)
@@ -247,20 +248,24 @@ def create_app(app, auth: tuple[str, str], concurrency: int = 1, fb=None, dist=D
         question, model_key, fmt = valid_chat(app, await read_json(request))
         remember = partial(fb.remember_turn, who[1]) if fb is not None else None
         return StreamingResponse(
-            stream(chat_events(app, question, model_key, fmt, remember)),
+            stream(request, chat_events(app, question, model_key, fmt, remember)),
             media_type='text/event-stream',
             headers={'Cache-Control': 'no-cache'},
         )
 
-    async def stream(events):
+    async def stream(request, events):
         """동시 처리 수(LAWBOT_CHAT_CONCURRENCY)만큼만 생성. 자리가 없으면 기다린다 (Gradio 대기열과 같은 동작)
-        ask는 동기 생성기라 한 단계씩 스레드에서 돌린다. 연결이 끊기면 닫아서 요청 로그에 cancelled를 남긴다"""
+        ask는 동기 생성기라 한 단계씩 스레드에서 돌린다. 연결이 끊기면 닫아서 요청 로그에 cancelled를 남긴다
+        끊김은 조각마다 직접 확인한다 (보내기 실패만으로는 브라우저 중지를 놓친다: 2026-11-02 e2e_stub에서 확인)"""
         if slots.locked():
             yield sse('status', {'text': WAITING})
         async with slots:
             try:
                 while (item := await anyio.to_thread.run_sync(next, events, None)) is not None:
-                    yield sse(*item)
+                    if await request.is_disconnected():
+                        return
+                    if item[0] != TICK:
+                        yield sse(*item)
             finally:
                 with anyio.CancelScope(shield=True):
                     await anyio.to_thread.run_sync(events.close)

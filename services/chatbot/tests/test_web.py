@@ -248,6 +248,19 @@ def test_chat_config_error_is_reported_without_details(authed, env):
     assert 'secret-model-id' not in json.dumps(evs, ensure_ascii=False)
 
 
+def test_hidden_tokens_still_yield_ticks(lawbot, env):
+    """간결형은 결론 뒤 토큰(근거·설명)이 화면 글을 바꾸지 않는다: 그래도 토큰마다 TICK을 내야 연결 끊김을 확인할 수 있다"""
+    env.setattr(
+        FakeLLM,
+        'chunks',
+        ['【결론】\n예고해야 합니다.', '\n【근거 조문】\n', '근로기준법 제26조', '\n【설명】\n', '- 설명'],
+    )
+    evs = list(web.chat_events(lawbot, QUESTION, 'fast', 'concise'))
+    generate = [e for e, _ in evs if e in ('answer', 'status', 'stats', web.TICK)]
+    assert generate.count(web.TICK) >= 3
+    assert evs[-1][0] == 'done'
+
+
 def test_event_format_keeps_korean_and_newlines():
     line = web.sse('answer', {'text': '한글\n\n줄'})
     assert line == 'event: answer\ndata: {"text": "한글\\n\\n줄"}\n\n'
@@ -329,8 +342,10 @@ def test_spa_files_and_fallback(lawbot, tmp_path):
         assert '[project]' not in c.get('/%2e%2e/pyproject.toml').text
 
 
-def test_without_build_only_api(client):
-    r = client.get('/')
+def test_without_build_only_api(lawbot, tmp_path):
+    with make_client(lawbot, dist=tmp_path / 'missing') as c:
+        r = c.get('/')
+        assert c.get('/api/me').status_code == 401
     assert r.status_code == 404 and 'npm run build' in r.text
 
 

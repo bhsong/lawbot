@@ -1,7 +1,6 @@
 # tests/test_e2e_stub.py  →  브라우저 E2E (대역): Playwright → 실제 웹앱 프로세스 → 실제 모델 서버 앱 + 가짜 모델
 # 세 추론 호출(임베딩·리랭크·chat) 모두 가짜. 이 결과를 "실제 모델 E2E 통과"로 보고하지 않는다 (docs/archives/e2e-playwright.md)
 # 웹앱 설정은 .env.example(운영 구성: Pro, 리랭커, 시행령·시행규칙 첨부)과 같다. 접속은 127.0.0.1만
-import sys
 import threading
 import time
 
@@ -9,7 +8,6 @@ import httpx
 import pytest
 
 import e2e_support as e2e
-from conftest import TEST_TOKEN, free_port
 from lawbot.app import EXAMPLES
 
 pytestmark = pytest.mark.e2e_stub
@@ -19,64 +17,9 @@ FAKE_ANSWER = '가짜 모델 답변입니다.'  # e2e_model_server.answer_chunks
 READ_TIMEOUT_S = 2  # 웹앱 LAWBOT_MODEL_READ_TIMEOUT (slow 모드의 토큰 간격 5초보다 짧게)
 
 
-class Stack:
-    """웹앱 1개 + 가짜 모델 서버 1개. 모델 서버는 같은 포트에서 모드만 바꿔 다시 띄운다 (웹앱은 그대로)"""
-
-    def __init__(self, tmp):
-        self.tmp, self.ms, self.mode, self.n = tmp, None, None, 0
-        self.token = TEST_TOKEN  # 모델 서버에는 환경 변수로 넘김 (e2e_model_server를 이 프로세스에서 import하지 않음)
-        self.ms_port, self.web_port = free_port(), free_port()
-        self.url = f'http://127.0.0.1:{self.web_port}'
-        self.ms_url = f'http://127.0.0.1:{self.ms_port}'
-        self.request_log = tmp / 'requests.jsonl'
-        self.serve = {k: v for k, v in e2e.example_env().items() if k.startswith('LAWBOT_SERVE_')}
-        self.ensure('normal')
-        web_env = {k: v for k, v in e2e.example_env().items() if not k.startswith('LAWBOT_SERVE_')}
-        web_env.update(
-            LAWBOT_MODEL_SERVER=self.ms_url,
-            LAWBOT_MODEL_TOKEN=self.token,
-            LAWBOT_EMBED_CACHE='0',
-            LAWBOT_REQUEST_LOG=str(self.request_log),
-            LAWBOT_FEEDBACK='0',
-            LAWBOT_MODEL_READ_TIMEOUT=str(READ_TIMEOUT_S),
-            LAWBOT_MODEL_SERVER_WAIT='30',
-        )
-        self.web = e2e.start_webapp(tmp, self.web_port, **web_env)
-
-    def ensure(self, mode):
-        """모델 서버가 mode로 떠 있게 한다 (이미 그 모드로 살아 있으면 그대로)"""
-        if self.ms is not None and self.ms.alive() and self.mode == mode:
-            return
-        self.stop_model_server()
-        self.n += 1
-        self.ms = e2e.Proc(
-            f'model-server-{self.n}-{mode}',
-            [sys.executable, str(e2e.TESTS / 'e2e_model_server.py'), str(self.ms_port), mode],
-            e2e.clean_env(LAWBOT_MODEL_TOKEN=self.token, **self.serve),
-            self.tmp,
-        )
-        self.mode = mode
-        self.ms.wait_http(
-            self.ms_url + '/health',
-            lambda r: r.status_code == 200 and r.json().get('ready'),
-            headers={'Authorization': f'Bearer {self.token}'},  # /health도 토큰 필요
-        )
-
-    def stop_model_server(self):
-        if self.ms is not None:
-            self.ms.stop()
-
-    def logs(self):
-        return [self.web.log, self.request_log, *sorted(self.tmp.glob('model-server-*.log'))]
-
-    def stop(self):
-        self.web.stop()
-        self.stop_model_server()
-
-
 @pytest.fixture(scope='module')
 def stack(tmp_path_factory):
-    s = Stack(tmp_path_factory.mktemp('e2e_stub'))
+    s = e2e.Stack(tmp_path_factory.mktemp('e2e_stub'), read_timeout=READ_TIMEOUT_S)
     yield s
     s.stop()
 

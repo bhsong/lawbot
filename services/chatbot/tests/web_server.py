@@ -15,15 +15,18 @@ port, call_log, delay = sys.argv[1], Path(sys.argv[2]), float(sys.argv[3])
 class SlowLLM(FakeLLM):
     """토큰 사이에 delay초 쉬고, 생성 시작·끝 시각을 한 줄씩 기록 (동시 생성 여부를 테스트 프로세스가 본다)"""
 
-    chunks = ['【결론】\n예고해야', ' 합니다.', '\n\n【근거 조문】\n근로기준법 제26조', '\n\n【설명】\n- 설명']
+    # 결론 뒤 토큰이 여러 개: 간결형에서 화면 글이 바뀌지 않는 구간에도 연결 끊김을 알아채는지 본다
+    chunks = ['【결론】\n예고해야', ' 합니다.', '\n\n【근거 조문】\n근로기준법 제26조', '\n\n【설명】\n'] + [
+        '- 설명\n'
+    ] * 6
 
-    def stream(self, question, hits, **kw):
+    def stream(self, question, hits, system=None):
         with call_log.open('a', encoding='utf-8') as f:
             f.write(f'start {time.monotonic()}\n')
         try:
-            for c in super().stream(question, hits, **kw):
+            for c in self.chunks:
                 time.sleep(delay)
-                yield c
+                yield types.SimpleNamespace(text=c)
         finally:
             with call_log.open('a', encoding='utf-8') as f:
                 f.write(f'end {time.monotonic()}\n')
