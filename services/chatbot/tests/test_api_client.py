@@ -431,6 +431,29 @@ def test_end_to_end_through_real_server_app(env, real_server, tmp_path):
     assert text.startswith('예고해야 합니다.') and '25.0 tok/s' in stats
 
 
+def test_request_id_reaches_model_server_log(env, real_server, capsys):
+    # 질문 하나의 임베딩·리랭크·생성 요청이 같은 X-Request-Id를 보내고, 모델 서버 접근 로그 줄에 남는다 (질문 내용은 없음)
+
+    env.setenv('LAWBOT_RERANKER_ENABLED', '1')
+    a = service.load_app()
+    capsys.readouterr()
+    steps = list(service.ask(a, '수습 기간에도 해고 예고를 해야 하나요?', 'fast'))
+    rid = steps[-1][3]['request_id']
+    server = [line for line in capsys.readouterr().out.splitlines() if line.startswith('[model-server]')]
+    paths = [line.split()[2] for line in server if ' POST ' in line and line.endswith(f'rid={rid}')]
+    assert paths == ['/v1/embeddings', '/v1/rerank', '/v1/chat/completions']
+    assert not any('수습' in line for line in server)  # 질문 내용은 모델 서버 로그에 없음
+    assert all(line.endswith(f'rid={rid}') for line in server if ' /v1/' in line)  # 모델 목록 확인(GET)도 같은 id
+
+
+def test_model_server_ignores_bad_request_id(env, real_server, capsys):
+    c = TestClient(server_api.create_app(TEST_TOKEN, real_server))
+    for rid in ('a b', 'x' * 33, '<script>', ''):
+        c.get('/v1/models', headers={'Authorization': f'Bearer {TEST_TOKEN}', 'X-Request-Id': rid})
+    lines = [line for line in capsys.readouterr().out.splitlines() if line.startswith('[model-server] GET /v1/models')]
+    assert len(lines) == 4 and all(line.endswith('rid=-') for line in lines)
+
+
 def test_reranker_through_real_server_app(env, real_server):
     from lawbot.reranker import TASK, Reranker
 

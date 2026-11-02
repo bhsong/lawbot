@@ -67,8 +67,35 @@ def test_default_fmt_and_disabled(env, log, tmp_path):
 
 
 def test_default_path_is_gitignored():
-    assert service.REQUEST_LOG == service.ROOT / 'logs' / 'requests.jsonl'
+    assert service.REQUEST_LOG_DIR == service.ROOT / 'logs'
     assert 'logs/' in (service.ROOT / '.gitignore').read_text(encoding='utf-8').splitlines()
+
+
+def test_default_log_is_monthly(env, tmp_path):
+    # 기본(LAWBOT_REQUEST_LOG 없음): logs/requests-YYYY-MM.jsonl. 달이 바뀌면 새 파일
+    env.delenv('LAWBOT_REQUEST_LOG')
+    env.setattr(service, 'REQUEST_LOG_DIR', tmp_path)
+    assert service.request_log_path() == tmp_path
+    a = local_app(env)
+    env.setattr(service, 'month', lambda: '2026-11')
+    list(service.ask(a, QUESTION, 'fast'))
+    env.setattr(service, 'month', lambda: '2026-12')
+    list(service.ask(a, QUESTION, 'fast'))
+    assert sorted(p.name for p in tmp_path.iterdir()) == ['requests-2026-11.jsonl', 'requests-2026-12.jsonl']
+    assert len(lines(tmp_path / 'requests-2026-11.jsonl')) == 1
+
+
+def test_log_summary_reads_monthly_and_legacy(env, tmp_path, capsys):
+    from lawbot_tools import log_summary
+
+    env.delenv('LAWBOT_REQUEST_LOG')
+    env.setattr(service, 'REQUEST_LOG_DIR', tmp_path)
+    row = {'status': 'ok', 'mode': 'api', 'model': 'fast', 'caller': 'lawbot-app', 'ts': '2026-11-02T00:00:00+0900'}
+    row |= {f'{k}_ms': 1000 for k in service.MS_FIELDS} | {'peak_gb': 1.0, 'finish': 'stop'}
+    for name in ('requests.jsonl', 'requests-2026-11.jsonl', 'requests-2026-12.jsonl'):  # 옛 파일 + 월별
+        (tmp_path / name).write_text(json.dumps(row) + '\n', encoding='utf-8')
+    log_summary.main([])
+    assert '요청 3건' in capsys.readouterr().out
 
 
 def test_generation_error(env, log):

@@ -6,8 +6,11 @@ import time
 
 import uvicorn
 
+from lawbot_common.logs import logger
 from lawbot_model_server import api, config, envfile
 from lawbot_model_server.registry import Registry
+
+log = logger('lawbot_model_server', 'model-server')
 
 
 def build_server(app, port):
@@ -25,11 +28,10 @@ def load_models(app, cfg, registry_cls=Registry):
     reg.preload(cfg.preload)
     app.state.max_concurrent, app.state.max_queued = cfg.max_concurrent, cfg.max_queued
     api.set_registry(app, reg)
-    print(
-        f'[model-server] ready · 불러오기 {time.perf_counter() - t0:.1f}초 · 동시 생성 최대 {cfg.max_concurrent} · '
+    log.info(
+        f'ready · 불러오기 {time.perf_counter() - t0:.1f}초 · 동시 생성 최대 {cfg.max_concurrent} · '
         f'대기 최대 {cfg.max_queued} · '
-        + ', '.join(f'{m["id"]}({m["type"]}{", 상주" if m["loaded"] else ""})' for m in reg.listing()),
-        flush=True,
+        + ', '.join(f'{m["id"]}({m["type"]}{", 상주" if m["loaded"] else ""})' for m in reg.listing())
     )
 
 
@@ -44,14 +46,12 @@ def main():
         try:
             load_models(app, cfg)
         except Exception as e:
-            print(f'[model-server] 모델 불러오기 실패: {type(e).__name__}: {e}', flush=True)
+            log.warning(f'모델 불러오기 실패: {type(e).__name__}: {e}')
             failed.append(e)
             server.should_exit = True
 
     threading.Thread(target=loader, daemon=True).start()
-    print(
-        f'[model-server] http://{config.HOST}:{cfg.port} 대기 중 (모델 불러오는 동안 /health ready:false)', flush=True
-    )
+    log.info(f'http://{config.HOST}:{cfg.port} 대기 중 (모델 불러오는 동안 /health ready:false)')
     server.run()
     if failed:
         raise SystemExit(1)

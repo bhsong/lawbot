@@ -8,6 +8,7 @@
 import base64
 import hmac
 import json
+import re
 import time
 import uuid
 
@@ -17,10 +18,14 @@ from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import ValidationError
 
 from lawbot_common import api as contract
+from lawbot_common.logs import logger
 from lawbot_model_server.registry import UnknownModel
 from lawbot_model_server.scheduler import MAX_QUEUED_DEFAULT, ModelLoadError, QueueFull, Scheduler
 
+log = logger('lawbot_model_server', 'model-server')
+
 MAX_BODY = 8 * 1024 * 1024  # 요청 본문 최대 (조문 415개 인코딩, 질문 2,075개 rank가 들어감)
+REQUEST_ID = re.compile(r'[A-Za-z0-9-]{1,32}')  # X-Request-Id 헤더 (웹앱 service.ask의 request_id)
 DEFAULT_MAX_TOKENS = 1024  # max_tokens가 없을 때 (챗봇은 항상 1024를 보냄)
 # 요청·응답 형식과 오류 type은 웹앱과 같이 쓰는 계약 (lawbot_common.api)
 ChatRequest, EmbeddingRequest, RerankRequest = contract.ChatRequest, contract.EmbeddingRequest, contract.RerankRequest
@@ -200,7 +205,7 @@ async def chat_completions(request: Request):
                 k, v = await job.next()
             if k == 'error':  # 생성 중 오류: OpenAI SDK는 error 이벤트를 예외로 올림
                 yield sse(exception_body(v)[1])
-                print(f'[model-server] 생성 중 오류 {req.model}: {type(v).__name__}', flush=True)
+                log.warning(f'생성 중 오류 {req.model}: {type(v).__name__}')
                 return
             yield sse(chunk({'role': 'assistant'} if first else {}, finish_reason(last), timings=timings_of(last)))
             if include_usage:
@@ -294,10 +299,13 @@ class Guard:
         finally:
             if scope['path'] != '/health':
                 model = scope['state'].get('model') or '-'
-                print(
-                    f'[model-server] {scope["method"]} {scope["path"]} {model} {status[0] or 499} '
-                    f'{time.perf_counter() - t0:.2f}s',
-                    flush=True,
+                rid = headers.get(b'x-request-id', b'').decode('ascii', 'replace')
+                rid = (
+                    rid if REQUEST_ID.fullmatch(rid) else '-'
+                )  # 웹앱 요청 id (영숫자·-만 32자까지, 아니면 남기지 않음)
+                log.info(
+                    f'{scope["method"]} {scope["path"]} {model} {status[0] or 499} '
+                    f'{time.perf_counter() - t0:.2f}s rid={rid}'
                 )
 
 

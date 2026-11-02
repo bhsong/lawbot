@@ -18,6 +18,7 @@ from openai import OpenAI
 from lawbot import decree as decree_filter
 from lawbot import deploy, manifest
 from lawbot.api_client import (
+    REQUEST_ID,
     Embedder,
     ModelLoadError,
     ModelServerClient,
@@ -31,6 +32,9 @@ from lawbot.llm import LLM
 from lawbot.paths import ROOT
 from lawbot.reranker import Reranker
 from lawbot.retriever import Retriever
+from lawbot_common.logs import logger
+
+log = logger('lawbot', 'lawbot')
 
 TOP_K = 3  # 답변 근거로 넘기는 조문 수 (Fast·Pro 공통)
 # 테스트는 Retriever·Reranker·LLM·ModelServerClient·OpenAI를 이 모듈의 속성으로 바꿔 끼운다 (load_app이 호출 때 읽음)
@@ -150,7 +154,7 @@ def load_app(settings=None):
     url, llm_url, llm_key, external = cfg.model_server, cfg.llm_url, cfg.llm_key, cfg.llm_external
     client = ModelServerClient(url, cfg.model_token)
     wait, limit = cfg.server_wait, request_timeout(cfg.read_timeout)
-    print(f'[lawbot] 모델 서버 {url} 준비 대기 (최대 {wait:g}초)', flush=True)
+    log.info(f'모델 서버 {url} 준비 대기 (최대 {wait:g}초)')
     wait_ready(client, wait)
     missing = missing_models(client.models(), p, rr, external)
     if missing:
@@ -166,8 +170,8 @@ def load_app(settings=None):
         max_seq_length=p.max_seq,
         **({'decree_max_seq': dc.max_seq} if dc else {}),
     )
-    print(
-        f'[lawbot] 조문 인덱스 {time.perf_counter() - t0:.1f}초 · 법률 {getattr(retriever, "n_law", len(retriever.ids))}개'
+    log.info(
+        f'조문 인덱스 {time.perf_counter() - t0:.1f}초 · 법률 {getattr(retriever, "n_law", len(retriever.ids))}개'
         + (f' + 하위법령 {len(retriever.ids) - retriever.n_law}개 (max_seq {dc.max_seq})' if dc else '')
     )
     reranker = Reranker(client, rr.model, rr.candidates, timeout=limit) if rr else None
@@ -188,11 +192,10 @@ def load_app(settings=None):
         return {m['id'] for m in client.models() if m.get('loaded')}
 
     models = ChatModels(p.models, factory, None if external else loaded)
-    print(
-        f'[lawbot] 프로필 {p.name} · 조문 {len(retriever.ids)}개 · 리랭커 {rr.model if rr else "꺼짐"} · '
+    log.info(
+        f'프로필 {p.name} · 조문 {len(retriever.ids)}개 · 리랭커 {rr.model if rr else "꺼짐"} · '
         f'하위법령 {decree_text(dc)} · 생성 {"외부 " + llm_url if external else "모델 서버"} '
-        f'({", ".join(s.model for s in p.models)})',
-        flush=True,
+        f'({", ".join(s.model for s in p.models)})'
     )
     full = p.system_file.read_text(encoding='utf-8').strip()
     return LawbotApp(p, retriever, models, reranker, full, dc, 'external' if external else 'api', cfg)
@@ -268,13 +271,24 @@ def log_timing(st):
         )
         if st.get(key) is not None
     ]
-    print(f'[lawbot] {st["model"]} · ' + ' · '.join(parts))
+    log.info(f'{st["model"]} · ' + ' · '.join(parts))
 
 
 # ---- 요청 로그 (JSONL) ----
 # 질문마다 한 줄: 단계별 시간·토큰·상태·오류 유형. 질문 원문과 답변은 남기지 않는다 (콘솔 로그·모델 서버 로그와 같은 정책)
-# 기본 logs/requests.jsonl (gitignore). LAWBOT_REQUEST_LOG로 경로를 바꾸고, 빈 값이면 기록하지 않음
-REQUEST_LOG = ROOT / 'logs' / 'requests.jsonl'
+# 기본 logs/requests-YYYY-MM.jsonl (월별, gitignore). LAWBOT_REQUEST_LOG로 파일 하나를 정하고, 빈 값이면 기록하지 않음
+REQUEST_LOG_DIR = ROOT / 'logs'  # 기본: 이 폴더의 requests-YYYY-MM.jsonl (월별)
+
+
+def month():
+    return time.strftime('%Y-%m')
+
+
+def log_file(path):
+    """설정 경로 → 이번에 쓸 파일 (기본 폴더면 이번 달 파일)"""
+    return path / f'requests-{month()}.jsonl' if path == REQUEST_LOG_DIR else path
+
+
 MS_FIELDS = ('search', 'rerank', 'decree_search', 'decree_rerank', 'load', 'ttft', 'first_text', 'total')
 
 
@@ -282,7 +296,7 @@ def request_log_path(env=None):
     env = os.environ if env is None else env
     value = env.get('LAWBOT_REQUEST_LOG')
     if value is None:
-        return REQUEST_LOG
+        return REQUEST_LOG_DIR
     return Path(value).expanduser() if value.strip() else None
 
 
@@ -353,12 +367,13 @@ def log_request(app, st, fmt, status, error=None):
     path = cfg.request_log if cfg is not None else request_log_path()
     if path is None:
         return
+    path = log_file(path)
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
         with LOG_LOCK, path.open('a', encoding='utf-8') as f:
             f.write(json.dumps(request_record(app, st, fmt, status, error), ensure_ascii=False, default=str) + '\n')
     except OSError as e:
-        print(f'[lawbot] 경고: 요청 로그를 쓰지 못했습니다 ({path}: {type(e).__name__})')
+        log.warning(f'경고: 요청 로그를 쓰지 못했습니다 ({path}: {type(e).__name__})')
 
 
 def ask(app, question, model_key, k=TOP_K, fmt=None):
@@ -374,6 +389,8 @@ def ask(app, question, model_key, k=TOP_K, fmt=None):
     st: Timing = {'model': model_key, 'load': None, 'request_id': uuid.uuid4().hex[:12]}
     stage, logged = 'search', False
     try:
+        # 요청 id를 모델 서버 요청 헤더로 (단계마다 다시 넣음: Gradio는 생성기의 next()를 매번 다른 스레드 문맥에서 부름)
+        REQUEST_ID.set(st['request_id'])
         law_hits, decree_hits = retrieve(app, question, k, st, model_key)
         hits = law_hits + decree_hits
         stage = 'load'
@@ -383,6 +400,7 @@ def ask(app, question, model_key, k=TOP_K, fmt=None):
         stage = 'generation'
         system = format_system(app, model_key, fmt)
         raw, last, t_gen = '', None, time.perf_counter()
+        REQUEST_ID.set(st['request_id'])
         for r in llm.stream(question, hits, **({'system': system} if system else {})):
             if last is None:
                 st['ttft'] = time.perf_counter() - t_gen

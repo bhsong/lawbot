@@ -7,7 +7,7 @@ import types
 import httpx
 import openai
 
-from lawbot.api_client import ModelServerError, ModelServerTimeout, error_from_body
+from lawbot.api_client import ModelServerError, ModelServerTimeout, error_from_body, request_headers
 from lawbot.hits import Hit
 
 
@@ -106,6 +106,7 @@ class LLM:
                 temperature=TEMPERATURE,
                 stream=True,
                 stream_options={'include_usage': True},
+                **({'extra_headers': h} if (h := request_headers()) else {}),
             )
         except openai.OpenAIError as e:
             raise convert_error(e) from e

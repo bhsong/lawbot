@@ -9,6 +9,9 @@ from lawbot.answer_format import answer_citations, render
 from lawbot.decree import is_decree
 from lawbot.security import SERVER_NAME, instance_name
 from lawbot.service import AskError, ask, load_app, uses_decrees
+from lawbot_common.logs import logger
+
+log = logger('lawbot', 'lawbot')
 
 # v4 Fast로 검색·답변을 확인한 질문 (근로기준법 제26조, 최저임금법 제6조, 남녀고용평등법 제19조)
 EXAMPLES = [
@@ -153,7 +156,7 @@ def make_chat(app, fb=None):
                                 feedback.turn_record(app, message, hits, raw, text, model_key, fmt, st),
                             )
                         except Exception as e:  # 피드백 기록 실패는 답변을 막지 않는다
-                            print(f'[lawbot] 경고: 피드백용 턴 기록 실패 ({type(e).__name__})')
+                            log.warning(f'경고: 피드백용 턴 기록 실패 ({type(e).__name__})')
                 elif not text.strip():  # 표시 기호를 쓰는 중 (간결형)
                     text = WRITING
                 yield text, src, fmt_stats(spec.label, stage, st)

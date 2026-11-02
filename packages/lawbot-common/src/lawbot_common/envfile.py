@@ -43,10 +43,10 @@ def read(path, allowed):
     return parse(path.read_text(encoding='utf-8'), path.name, allowed)
 
 
-def load(default, root, secrets, tag):
+def load(default, root, secrets, log):
     """레포 최상위 .env를 읽어 셸에 없는 변수만 os.environ에 넣는다 (웹앱·모델 서버의 main이 맨 먼저 호출). 읽은 경로 또는 None
     파일: LAWBOT_ENV_FILE이 가리키는 파일(상대 경로는 root 기준), 없으면 default. LAWBOT_ENV_FILE=''이면 읽지 않음
-    secrets: 값이 있는데 파일을 다른 사용자도 읽을 수 있으면 경고할 변수. tag: 출력 머리 ('[lawbot]')"""
+    secrets: 값이 있는데 파일을 다른 사용자도 읽을 수 있으면 경고할 변수. log: 서비스 로거 (lawbot_common.logs)"""
     env = os.environ.get('LAWBOT_ENV_FILE')
     if env == '':
         return None
@@ -60,11 +60,10 @@ def load(default, root, secrets, tag):
     values = read(path, lawbot_keys) or {}  # 위에서 파일이 있는 것을 확인함
     found = [k for k in secrets if values.get(k)]
     if found and path.stat().st_mode & (stat.S_IRWXG | stat.S_IRWXO):  # 값은 출력하지 않고 변수 이름만
-        print(
-            f'{tag} 경고: {path.name}에 비밀 값({", ".join(found)})이 있는데 다른 사용자도 읽을 수 있습니다. '
-            f'chmod 600 {path}'
+        log.warning(
+            f'경고: {path.name}에 비밀 값({", ".join(found)})이 있는데 다른 사용자도 읽을 수 있습니다. chmod 600 {path}'
         )
     for k, v in values.items():
         os.environ.setdefault(k, v)
-    print(f'{tag} 설정 파일 {path} ({len(values)}개, 셸에 있는 변수 우선)')
+    log.info(f'설정 파일 {path} ({len(values)}개, 셸에 있는 변수 우선)')
     return path

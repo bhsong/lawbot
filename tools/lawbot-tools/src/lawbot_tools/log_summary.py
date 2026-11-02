@@ -1,4 +1,4 @@
-# src/lawbot_tools/log_summary.py  →  uv run python -m lawbot_tools.log_summary [logs/requests.jsonl] [--caller lawbot-app] [--since 2026-11-01]
+# src/lawbot_tools/log_summary.py  →  uv run python -m lawbot_tools.log_summary [로그 파일] [--caller lawbot-app] [--since 2026-11-01]
 # 웹앱 요청 로그(JSONL, service.log_request)를 요약한다: 상태별 건수, 단계별 시간 중앙값·p95(성공 요청), 오류 유형별 건수
 # 로그에는 질문 원문·답변이 없다. 모델을 올리지 않는다
 import argparse
@@ -7,13 +7,20 @@ from pathlib import Path
 
 import pandas as pd
 
-from lawbot.service import MS_FIELDS, REQUEST_LOG, request_log_path
+from lawbot.service import MS_FIELDS, REQUEST_LOG_DIR, request_log_path
+
+
+def log_files(path):
+    """요약할 파일 목록: 기본 폴더면 월별 파일과 옛 requests.jsonl 모두, 아니면 그 파일 하나"""
+    if path.is_dir():
+        return sorted(path.glob('requests*.jsonl'))
+    return [path] if path.is_file() else []
 
 
 def load(path):
-    """JSONL → DataFrame. 깨진 줄(쓰는 중에 멈춘 마지막 줄 등)은 건너뛰고 개수를 함께 돌려준다"""
+    """JSONL(파일 또는 기본 폴더) → DataFrame. 깨진 줄(쓰는 중에 멈춘 마지막 줄 등)은 건너뛰고 개수를 함께 돌려준다"""
     rows, bad = [], 0
-    for line in path.read_text(encoding='utf-8').splitlines():
+    for line in (x for f in log_files(path) for x in f.read_text(encoding='utf-8').splitlines()):
         if not line.strip():
             continue
         try:
@@ -52,12 +59,17 @@ def summarize(d):
 
 def main(argv=None):
     ap = argparse.ArgumentParser(description='웹앱 요청 로그(JSONL) 요약')
-    ap.add_argument('path', nargs='?', default=None, help=f'로그 파일 (기본: LAWBOT_REQUEST_LOG 또는 {REQUEST_LOG})')
+    ap.add_argument(
+        'path',
+        nargs='?',
+        default=None,
+        help=f'로그 파일 (기본: LAWBOT_REQUEST_LOG 또는 {REQUEST_LOG_DIR}/requests-*.jsonl)',
+    )
     ap.add_argument('--caller', default=None, help='실행한 명령으로 거름 (예: lawbot-app, 평가 실행 제외)')
     ap.add_argument('--since', default=None, help='이 날짜(YYYY-MM-DD) 이후 요청만')
     a = ap.parse_args(argv)
     path = request_log_path() if a.path is None else Path(a.path)
-    if path is None or not path.is_file():
+    if path is None or not log_files(path):
         raise SystemExit(f'요청 로그가 없습니다: {path}')
     d, bad = load(path)
     if a.caller and len(d):

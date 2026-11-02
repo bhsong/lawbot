@@ -3,6 +3,7 @@
 # 프록시 환경 변수를 쓰지 않는다 (trust_env=False): 질문이 맥 밖(프록시)으로 나가지 않게 127.0.0.1에 직접 접속
 import base64
 import time
+from contextvars import ContextVar
 from typing import Any, Literal
 
 import httpx
@@ -12,6 +13,15 @@ from pydantic import ValidationError
 from lawbot_common import api
 
 CONNECT_TIMEOUT = 5.0
+# 지금 처리 중인 질문의 요청 id (service.ask가 넣음). 모델 서버로 가는 요청마다 X-Request-Id 헤더로 보낸다
+REQUEST_ID: ContextVar[str | None] = ContextVar('lawbot_request_id', default=None)
+
+
+def request_headers():
+    rid = REQUEST_ID.get()
+    return {'X-Request-Id': rid} if rid else {}
+
+
 TIMEOUT = httpx.Timeout(
     None, connect=CONNECT_TIMEOUT
 )  # 기본: 연결만 5초. 시작할 때 조문 인덱스 인코딩은 오래 걸려 읽기 제한 없음
@@ -66,7 +76,7 @@ class ModelServerClient:
     def _call(self, method, path, body=None, timeout=None):
         timeout = timeout or TIMEOUT
         try:
-            r = self.http.request(method, path, json=body, timeout=timeout)
+            r = self.http.request(method, path, json=body, timeout=timeout, headers=request_headers())
         except httpx.ConnectTimeout:
             raise ConnectionError(
                 f'모델 서버에 연결할 수 없습니다: {self.url} (uv run lawbot-model-server 실행 여부 확인, ConnectTimeout)'

@@ -50,6 +50,9 @@ def env(request, monkeypatch):
     (integration 테스트는 127.0.0.1의 테스트 서버 접속만 허용)"""
     for k in ENV_KEYS:
         monkeypatch.delenv(k, raising=False)
+    from lawbot.api_client import REQUEST_ID
+
+    REQUEST_ID.set(None)  # 앞 테스트의 질문 요청 id가 남지 않게
     monkeypatch.setenv('LAWBOT_ENV_FILE', '')  # 개발자의 .env를 읽지 않음 (envfile 테스트는 직접 지정)
     monkeypatch.setenv(
         'LAWBOT_REQUEST_LOG', ''

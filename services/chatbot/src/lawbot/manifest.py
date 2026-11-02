@@ -9,6 +9,10 @@
 import hashlib
 import json
 
+from lawbot_common.logs import logger
+
+log = logger('lawbot', 'lawbot')
+
 NAME = 'manifest.json'
 DEFAULT_KIND = '법률'  # kind 열이 없는 조문 CSV는 모두 법률
 
@@ -127,8 +131,8 @@ def check(articles):
     """웹앱 load_app용: 불일치면 RuntimeError, 매니페스트가 없으면 경고만 출력. 매니페스트 dict 또는 None"""
     m = load(articles)
     if m is None:
-        print(
-            f'[lawbot] 경고: 조문 CSV {articles.name}의 매니페스트({path_for(articles)})가 없어 데이터 버전을 확인하지 않습니다'
+        log.warning(
+            f'경고: 조문 CSV {articles.name}의 매니페스트({path_for(articles)})가 없어 데이터 버전을 확인하지 않습니다'
         )
         return None
     out = verify(articles, m)
@@ -142,5 +146,5 @@ def check(articles):
         )
     for level, msg in out:
         if level == 'WARN':
-            print(f'[lawbot] 경고: {msg}')
+            log.warning(f'경고: {msg}')
     return m
