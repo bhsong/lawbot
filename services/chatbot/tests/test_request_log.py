@@ -7,8 +7,8 @@ import pytest
 import lawbot.app as app_mod
 import lawbot.service as service
 from fakes import FakeLLM, FakeRetriever
-from lawbot import log_summary
 from lawbot.api_client import ModelLoadError, ModelServerError, ModelServerTimeout
+from lawbot_tools import log_summary
 
 QUESTION = '해고 예고 없이 해고되면 어떻게 하나요 고유문구XYZ'  # 로그에 남으면 안 되는 질문 원문
 
@@ -59,14 +59,43 @@ def test_default_fmt_and_disabled(env, log, tmp_path):
     a = local_app(env)
     list(service.ask(a, QUESTION, 'pro'))  # 평가 스크립트처럼 fmt 없이: 모델 기본 형식
     assert lines(log)[0]['fmt'] == 'concise'
-    env.setenv('LAWBOT_REQUEST_LOG', '')  # 빈 값이면 기록하지 않음
+    env.setenv('LAWBOT_REQUEST_LOG', '')  # 빈 값이면 기록하지 않음 (경로는 시작할 때 읽음: 새 앱부터)
     list(service.ask(a, QUESTION, 'fast'))
-    assert len(lines(log)) == 1
+    assert len(lines(log)) == 2
+    list(service.ask(local_app(env), QUESTION, 'fast'))
+    assert len(lines(log)) == 2
 
 
 def test_default_path_is_gitignored():
-    assert service.REQUEST_LOG == service.ROOT / 'logs' / 'requests.jsonl'
+    assert service.REQUEST_LOG_DIR == service.ROOT / 'logs'
     assert 'logs/' in (service.ROOT / '.gitignore').read_text(encoding='utf-8').splitlines()
+
+
+def test_default_log_is_monthly(env, tmp_path):
+    # 기본(LAWBOT_REQUEST_LOG 없음): logs/requests-YYYY-MM.jsonl. 달이 바뀌면 새 파일
+    env.delenv('LAWBOT_REQUEST_LOG')
+    env.setattr(service, 'REQUEST_LOG_DIR', tmp_path)
+    assert service.request_log_path() == tmp_path
+    a = local_app(env)
+    env.setattr(service, 'month', lambda: '2026-11')
+    list(service.ask(a, QUESTION, 'fast'))
+    env.setattr(service, 'month', lambda: '2026-12')
+    list(service.ask(a, QUESTION, 'fast'))
+    assert sorted(p.name for p in tmp_path.iterdir()) == ['requests-2026-11.jsonl', 'requests-2026-12.jsonl']
+    assert len(lines(tmp_path / 'requests-2026-11.jsonl')) == 1
+
+
+def test_log_summary_reads_monthly_and_legacy(env, tmp_path, capsys):
+    from lawbot_tools import log_summary
+
+    env.delenv('LAWBOT_REQUEST_LOG')
+    env.setattr(service, 'REQUEST_LOG_DIR', tmp_path)
+    row = {'status': 'ok', 'mode': 'api', 'model': 'fast', 'caller': 'lawbot-app', 'ts': '2026-11-02T00:00:00+0900'}
+    row |= {f'{k}_ms': 1000 for k in service.MS_FIELDS} | {'peak_gb': 1.0, 'finish': 'stop'}
+    for name in ('requests.jsonl', 'requests-2026-11.jsonl', 'requests-2026-12.jsonl'):  # 옛 파일 + 월별
+        (tmp_path / name).write_text(json.dumps(row) + '\n', encoding='utf-8')
+    log_summary.main([])
+    assert '요청 3건' in capsys.readouterr().out
 
 
 def test_generation_error(env, log):

@@ -12,8 +12,9 @@ import pytest
 import lawbot.app as app_mod
 import lawbot.service as service
 from fakes import FakeLLM, FakeRetriever
-from lawbot import feedback, feedback_export, feedback_review, feedback_ui
+from lawbot import feedback, feedback_ui
 from lawbot.paths import ROOT
+from lawbot_tools import feedback_export, feedback_review
 
 QUESTION = '해고 예고 없이 해고되면 어떻게 하나요 고유문구XYZ'
 CHUNKS = ['【결론】\n예고해야', ' 합니다.\n\n【근거 조문】\n근로기준법 제26조\n\n【설명】\n- 설명']
@@ -162,7 +163,7 @@ def test_launch_passes_touch_css_js(env, tmp_path):
     local_app(env)
     launched = []
     env.setattr(app_mod.gr.Blocks, 'launch', lambda demo, **kw: launched.append(kw))
-    env.setattr(app_mod, 'load_app', lambda: local_app(env))
+    env.setattr(app_mod, 'load_app', lambda *a: local_app(env))
     app_mod.main()
     assert 'css' not in launched[-1] and 'js' not in launched[-1]  # 기본: 꺼짐
     env.setenv('LAWBOT_FEEDBACK', '1')
@@ -248,7 +249,7 @@ def test_file_mode_600(env, tmp_path):
 
 def test_feedback_module_has_no_model_imports():
     code = (
-        'import sys, lawbot.feedback, lawbot.feedback_review\n'
+        'import sys, lawbot.feedback, lawbot_tools.feedback_review\n'
         "print(','.join(m for m in ('mlx', 'mlx_lm', 'torch', 'sentence_transformers', 'gradio', 'lawbot.llm') "
         'if m in sys.modules))'
     )
@@ -365,7 +366,7 @@ def test_review_excludes_val_and_decree_sets():
     count = lambda s: sum(src == s for src, _, _ in evals)
     assert (count('v4_val'), count('decree_val'), count('decree_test')) == (1110, 444, 1880)
     ov = feedback_review.Overlap(evals)
-    from lawbot.eval_v4 import load_test
+    from lawbot_tools.eval_v4 import load_test
 
     v = load_test('val').iloc[0]
     assert ov.match(v.question) == (f'v4_val:{v.id}', 'exact')

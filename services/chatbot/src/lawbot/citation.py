@@ -1,12 +1,29 @@
 # src/lawbot/citation.py  →  조문 키·인용 파싱·인용 검증·거절 판정 (웹앱 화면과 eval_v4 채점이 같이 쓴다)
 # gradio를 import하지 않는다 (평가에서도 씀, tests/test_citation.py가 검사)
 # 검색 결과 dict 형식은 그대로 쓴다: 조문 키는 웹앱 쪽에서 law + ' ' + article_id로 만든다 (retriever·서버 API 변경 없음)
-# refusal.is_refusal(【결론】에 '확인할 수 없')은 키워드 채점(score_answers)과 v1 기록 재현 테스트가 쓴다
+# 평가 도구(lawbot_tools)의 refusal.is_refusal(【결론】에 '확인할 수 없')은 키워드 채점과 v1 기록 재현 테스트가 쓴다
 import re
 
-from lawbot.score_answers import conclusion_part, norm
+from lawbot.hits import Hit
 
 SUB_LAWS = ('시행령', '시행규칙')  # 법령명 뒤에 붙으면 법령명의 일부 ('근로기준법 시행령')
+
+
+def norm(s: str) -> str:
+    """비교용 정규화: 가운뎃점 통일, 숫자 사이 천 단위 쉼표·공백 제거 (키워드 채점 score_answers와 같은 규칙)"""
+    s = str(s)
+    s = s.replace('ㆍ', '·').replace('・', '·')
+    s = re.sub(r'(?<=\d),(?=\d{3})', '', s)
+    s = re.sub(r'\s+', '', s)
+    return s
+
+
+def conclusion_part(answer: str) -> str:
+    """【결론】 부분. 표시가 없으면 답변 앞 150자"""
+    a = str(answer)
+    m = re.search(r'【결론】(.*?)(?=【|$)', a, re.S)
+    return m.group(1) if m else a[:150]
+
 
 # 줄임말로 인용해도 인정할 법령 이름 (공백·가운뎃점은 norm으로 맞춤)
 LAW_ALIASES = {
@@ -46,11 +63,11 @@ def key(law, no):
     return f'{law} {no}'
 
 
-def hit_law(h):
+def hit_law(h: Hit) -> str:
     return h['law']
 
 
-def hit_key(h):
+def hit_key(h: Hit) -> str:
     """검색 결과 dict → '근로기준법 제26조' (eval_v4 정답 조문과 같은 형식)"""
     return key(hit_law(h), h['article_id'])
 
@@ -101,7 +118,7 @@ def citations(answer):
 OK, OUTSIDE, WRONG_LAW, NONEXISTENT, AMBIGUOUS = 'ok', 'outside', 'wrong_law', 'nonexistent', 'ambiguous'
 
 
-def check(cites, hits, articles=None):
+def check(cites, hits: list[Hit], articles=None):
     """인용마다 (법령, 제N조, 판정, 맞는 검색 결과 dict 또는 None)
     판정 (위에서부터 먼저 맞는 것):
       ok         : 검색 결과(답변에 준 조문)에 있음. 법령명이 없으면 그 번호의 검색 결과가 하나뿐일 때

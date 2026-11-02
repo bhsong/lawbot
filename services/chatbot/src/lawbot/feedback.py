@@ -16,6 +16,9 @@ from pathlib import Path
 
 from lawbot import manifest, security
 from lawbot.paths import ROOT
+from lawbot_common.logs import logger
+
+log = logger('lawbot', 'lawbot')
 
 DEFAULT_DIR = ROOT / 'feedback'  # .gitignore
 REASONS = {'검색 오류': 'retrieval', '답변 오류': 'answer', '불필요한 거절': 'false_refusal', '기타': 'other'}
@@ -49,17 +52,19 @@ TIMING_FIELDS = (
 )
 
 
-def enabled():
+def enabled(env=None):
     """LAWBOT_FEEDBACK: '0'(기본)·'1'만"""
-    value = (os.environ.get('LAWBOT_FEEDBACK') or '0').strip()
+    env = os.environ if env is None else env
+    value = (env.get('LAWBOT_FEEDBACK') or '0').strip()
     if value not in ('0', '1'):
         raise ValueError(f'LAWBOT_FEEDBACK은 0 또는 1: {value!r}')
     return value == '1'
 
 
-def feedback_dir():
+def feedback_dir(env=None):
     """LAWBOT_FEEDBACK_DIR (상대 경로는 레포 최상위 기준), 없으면 feedback/"""
-    value = (os.environ.get('LAWBOT_FEEDBACK_DIR') or '').strip()
+    env = os.environ if env is None else env
+    value = (env.get('LAWBOT_FEEDBACK_DIR') or '').strip()
     if not value:
         return DEFAULT_DIR
     p = Path(value).expanduser()
@@ -107,11 +112,11 @@ def commit():
     return _commit or None
 
 
-def from_env():
+def from_env(env=None):
     """LAWBOT_FEEDBACK=1이면 Feedback (저장 폴더를 모델 로딩 전에 확인), 아니면 None"""
-    if not enabled():
+    if not enabled(env):
         return None
-    d = feedback_dir()
+    d = feedback_dir(env)
     check_private(d)
     return Feedback(d)
 
@@ -260,16 +265,16 @@ class Feedback:
         now = time.monotonic() if now is None else now
         lab = self.label(liked)
         if lab is None:
-            print(f'[lawbot] 피드백: 알 수 없는 선택 {liked!r} → 저장 안 함')
+            log.info(f'피드백: 알 수 없는 선택 {liked!r} → 저장 안 함')
             return None
         n = assistant_index(history or [], index)
         found = None if n is None else self.lookup(session, n)
         if found is None:  # 앱 재시작·대화가 바뀜: 화면 글만으로는 저장하지 않는다 (참고 조문이 없음)
-            print(f'[lawbot] 피드백: 기록이 없는 답변 (turn {"?" if n is None else n}) → 저장 안 함')
+            log.info(f'피드백: 기록이 없는 답변 (turn {"?" if n is None else n}) → 저장 안 함')
             return None
         tid, record = found
         if text_of(value).strip() != record['answer_shown'].strip():  # 엉뚱한 답에 라벨이 붙지 않게
-            print(f'[lawbot] 피드백: 화면 글이 기록과 다름 (turn_id {tid}) → 저장 안 함')
+            log.info(f'피드백: 화면 글이 기록과 다름 (turn_id {tid}) → 저장 안 함')
             return None
         if self.duplicate(tid, liked, now):
             return None
@@ -300,4 +305,4 @@ class Feedback:
             finally:
                 os.close(fd)  # 닫으면 잠금도 풀린다
         except OSError as e:
-            print(f'[lawbot] 경고: 피드백을 쓰지 못했습니다 ({path}: {type(e).__name__})')
+            log.warning(f'경고: 피드백을 쓰지 못했습니다 ({path}: {type(e).__name__})')

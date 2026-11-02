@@ -3,6 +3,8 @@
 #   1. 하위법령 후보(임베딩 상위 10개)를 리랭커 점수 내림차순으로. 동점은 임베딩 순위가 앞선 것 먼저 (reranker.rank_order)
 #   2. parent_law가 법률 리랭커 1위 조문의 법과 같으면 통과, 다른 법이면 점수 ≥ τ일 때만 통과
 #   3. 통과한 것 중 앞에서 k개. 하나도 없으면 첨부하지 않는다 (프롬프트는 법률 3개만일 때와 글자 단위로 같음)
+from lawbot.hits import Hit
+
 LAW_KIND = '법률'
 
 
@@ -11,13 +13,14 @@ def rank_order(scores):
     return sorted(range(len(scores)), key=lambda i: (-scores[i], i))
 
 
-def is_decree(h):
+def is_decree(h: Hit) -> bool:
     """검색 결과 dict가 하위법령인지 (법률 hit에는 kind가 없다: 하위법령을 끈 웹앱과 같은 dict)"""
     return h.get('kind', LAW_KIND) != LAW_KIND
 
 
-def attach(candidates, top1_law, tau, k):
+def attach(candidates: list[Hit], top1_law: str, tau: float, k: int) -> list[Hit]:
     """리랭킹된 하위법령 후보 dict(rerank_score·emb_rank·parent_law) → 첨부할 dict 목록 (최대 k개, 점수순)
     top1_law: 법률 리랭커 1위 조문의 법령명 (법률 hit의 law)"""
-    order = sorted(candidates, key=lambda c: (-c['rerank_score'], c['emb_rank']))
-    return [c for c in order if c['parent_law'] == top1_law or c['rerank_score'] >= tau][:k]
+    # 후보는 리랭킹을 거친 하위법령 hit: rerank_score·emb_rank·parent_law가 있다 (없으면 KeyError로 드러남)
+    order = sorted(candidates, key=lambda c: (-c['rerank_score'], c['emb_rank']))  # pyright: ignore[reportTypedDictNotRequiredAccess]
+    return [c for c in order if c['parent_law'] == top1_law or c['rerank_score'] >= tau][:k]  # pyright: ignore[reportTypedDictNotRequiredAccess]

@@ -4,11 +4,14 @@ import os
 
 import gradio as gr
 
-from lawbot import envfile, feedback, feedback_ui, manifest
+from lawbot import envfile, feedback, feedback_ui, manifest, settings
 from lawbot.answer_format import answer_citations, render
 from lawbot.decree import is_decree
-from lawbot.security import get_local_launch_config, instance_name
-from lawbot.service import ask, load_app, uses_decrees
+from lawbot.security import SERVER_NAME, instance_name
+from lawbot.service import AskError, ask, load_app, uses_decrees
+from lawbot_common.logs import logger
+
+log = logger('lawbot', 'lawbot')
 
 # v4 Fast로 검색·답변을 확인한 질문 (근로기준법 제26조, 최저임금법 제6조, 남녀고용평등법 제19조)
 EXAMPLES = [
@@ -122,7 +125,7 @@ def make_chat(app, fb=None):
     # 이름이 chat인 함수를 넘겨야 Gradio API 이름(/gradio_api/call/chat)이 유지됨
     # API 입력은 [질문, 모델 key, 형식] 세 개 (Gradio 6.30은 빠진 입력을 기본값으로 채우지 않음)
     # request(gr.Request)는 Gradio가 넣는 특수 인자: API 입력 수는 그대로. fb(feedback.Feedback)가 있으면 끝난 턴을 기억한다
-    def chat(message, history, model_key, fmt, request: gr.Request = None):  # 단일 턴: history는 순번에만 씀
+    def chat(message, history, model_key, fmt, request: gr.Request | None = None):  # 단일 턴: history는 순번에만 씀
         if not (message or '').strip():
             yield '질문을 입력해 주세요.', '', ''
             return
@@ -153,12 +156,12 @@ def make_chat(app, fb=None):
                                 feedback.turn_record(app, message, hits, raw, text, model_key, fmt, st),
                             )
                         except Exception as e:  # 피드백 기록 실패는 답변을 막지 않는다
-                            print(f'[lawbot] 경고: 피드백용 턴 기록 실패 ({type(e).__name__})')
+                            log.warning(f'경고: 피드백용 턴 기록 실패 ({type(e).__name__})')
                 elif not text.strip():  # 표시 기호를 쓰는 중 (간결형)
                     text = WRITING
                 yield text, src, fmt_stats(spec.label, stage, st)
-        except Exception as e:  # 유형은 service.ask가 붙임 (요청 로그의 error_type과 같음)
-            kind = getattr(e, 'lawbot_error', None)
+        except AskError as err:  # 유형(kind)은 요청 로그의 error_type과 같음. 원래 예외는 __cause__
+            kind, e = err.kind, err.__cause__
             if kind == 'model_server_timeout':
                 raise gr.Error(f'모델 서버 응답이 없습니다 ({e}). 잠시 뒤 다시 질문하세요.') from e
             if kind == 'model_server_busy':
@@ -173,7 +176,7 @@ def make_chat(app, fb=None):
                     f'{spec.label} 모델을 불러오지 못했습니다: {spec.model} ({type(e).__name__}). '
                     'uv run python -m lawbot_model_server.check와 uv run python -m lawbot.check_deploy로 확인하세요.'
                 ) from e
-            raise  # 리랭킹·생성 중 오류는 그대로 올림 (Gradio가 오류로 표시)
+            raise (e or err) from None  # 리랭킹·생성 중 오류는 원래 예외 그대로 (Gradio가 오류로 표시)
 
     return chat
 
@@ -202,7 +205,8 @@ def default_fmt(app):
 
 def page_title(app):
     """화면·탭 제목. LAWBOT_INSTANCE가 있으면 붙인다 (예: '노동법 챗봇 · 개발', 운영/개발 구분)"""
-    name = instance_name()
+    cfg = getattr(app, 'settings', None)
+    name = cfg.instance if cfg is not None and cfg.chat_concurrency is not None else instance_name()
     return f'{app.profile.title} · {name}' if name else app.profile.title
 
 
@@ -235,13 +239,20 @@ def make_on_feedback(fb):
 CHAT_CONCURRENCY_LIMIT = 16
 
 
-def chat_concurrency():
+def chat_concurrency(env=None):
     """LAWBOT_CHAT_CONCURRENCY: 웹앱이 동시에 처리하는 질문 수 (기본 1). 모델 서버의 LAWBOT_MAX_CONCURRENT와 따로 둔다
     (서버를 다른 앱과 같이 쓰므로). 서버 상한보다 크면 넘는 질문은 서버에서 기다린다"""
-    raw = (os.environ.get('LAWBOT_CHAT_CONCURRENCY') or '1').strip()
+    env = os.environ if env is None else env
+    raw = (env.get('LAWBOT_CHAT_CONCURRENCY') or '1').strip()
     if not raw.isdigit() or not 1 <= int(raw) <= CHAT_CONCURRENCY_LIMIT:
         raise ValueError(f'LAWBOT_CHAT_CONCURRENCY는 1–{CHAT_CONCURRENCY_LIMIT} 정수: {raw!r}')
     return int(raw)
+
+
+def web_settings(app):
+    """app.main이 읽은 웹 설정이 있으면 True (load_app만 한 테스트·평가 앱은 지금 환경 변수로)"""
+    cfg = getattr(app, 'settings', None)
+    return cfg is not None and cfg.chat_concurrency is not None
 
 
 def build_demo(
@@ -284,7 +295,7 @@ def build_demo(
                     additional_inputs=[model, fmt],
                     additional_outputs=[sources, stats],
                     examples=[[q, None, None] for q in EXAMPLES],  # None: 예시를 눌러도 현재 모델·형식 선택 유지
-                    concurrency_limit=chat_concurrency(),
+                    concurrency_limit=(app.settings.chat_concurrency if web_settings(app) else chat_concurrency()),
                 )  # 동시에 처리하는 질문 수 (기본 1). 모델 교체·동시 생성 순서는 모델 서버가 정한다
                 stats.render()
             with gr.Column(scale=2):
@@ -294,13 +305,16 @@ def build_demo(
 
 
 def main():
-    envfile.load()  # .env (셸에 있는 변수 우선). 인증·모델 설정을 읽기 전에
-    config = get_local_launch_config()  # 인증 정보가 없으면 모델 로딩 전에 실행 거부
-    chat_concurrency()  # 잘못된 값이면 모델 서버에 접속하기 전에 거부
-    fb = feedback.from_env()  # LAWBOT_FEEDBACK=1: 저장 폴더가 gitignore 밖이면 모델 로딩 전에 거부
-    a = load_app()
+    envfile.load()  # .env (셸에 있는 변수 우선). 설정을 읽기 전에
+    cfg = settings.load(
+        web=True
+    )  # 인증·포트·모델·피드백 폴더를 모두 검사: 틀리면 모델 서버에 접속하기 전에 한꺼번에 거부
+    a = load_app(cfg)
+    fb = cfg.feedback  # LAWBOT_FEEDBACK=1이면 저장 폴더를 확인한 Feedback
     demo = build_demo(a, fb) if fb is not None else build_demo(a)  # 꺼져 있으면 기존과 같은 호출
-    demo.launch(**config, **feedback_ui.launch_options(fb))  # 127.0.0.1:<LAWBOT_PORT>, 로그인 필수, 공유 링크 없음
+    demo.launch(
+        server_name=SERVER_NAME, server_port=cfg.port, auth=cfg.auth, share=False, **feedback_ui.launch_options(fb)
+    )  # 127.0.0.1:<LAWBOT_PORT>, 로그인 필수, 공유 링크 없음
 
 
 if __name__ == '__main__':

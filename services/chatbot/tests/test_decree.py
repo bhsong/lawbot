@@ -10,9 +10,9 @@ import pandas as pd
 import pytest
 
 import lawbot.app as app_mod
-import lawbot.eval_v4 as ev
 import lawbot.retriever as retriever_mod
 import lawbot.service as service
+import lawbot_tools.eval_v4 as ev
 from lawbot import answer_format, citation, decree, deploy, manifest
 from lawbot.llm import build_prompt
 from lawbot.paths import DATA, V4_ARTICLES, V4_DECREE_ARTICLES
@@ -355,9 +355,9 @@ def test_decree_rerank_error_not_hidden(rr, tmp_path):
     log = tmp_path / 'req.jsonl'
     rr.setenv('LAWBOT_REQUEST_LOG', str(log))
     rr.setattr(RR, 'ERROR', RuntimeError('리랭커 고장'))
-    with pytest.raises(RuntimeError, match='리랭커 고장') as e:
+    with pytest.raises(service.AskError, match='리랭커 고장') as e:
         ask(make(), '해고', 'pro')
-    assert e.value.lawbot_error == 'rerank'
+    assert (e.value.kind, e.value.stage) == ('rerank', 'rerank') and isinstance(e.value.__cause__, RuntimeError)
     assert json.loads(log.read_text())['error_type'] == 'rerank'
 
 
@@ -587,7 +587,7 @@ def test_score_dq():
 
 def test_log_summary_old_and_new_lines():
     """하위법령 필드가 없는 이전 로그와 새 로그를 함께 요약"""
-    from lawbot import log_summary
+    from lawbot_tools import log_summary
 
     base = {
         'status': 'ok',

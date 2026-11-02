@@ -138,7 +138,7 @@ class Monitor:
         with _file_log(self.paths, now):
             if events_dir is not None:
                 folder = self.paths.home / events_dir if not events_dir.is_absolute() else events_dir
-                items = [
+                items: list[tuple[str, str | None]] = [
                     (p.stem, self.paths.rel(p) if p.is_relative_to(self.paths.home) else str(p))
                     for p in sorted(folder.glob('*.json'))
                 ]

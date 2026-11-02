@@ -140,7 +140,7 @@ def build_prompt(g: Group, home: Path) -> str:
     lawgo = ctx.get('lawgo') or {}
     lines = [
         f'이름: {t.get("law_name")}',
-        f'변경: {CHANGE_NAMES.get(head.get("change_type"), head.get("change_type"))}'
+        f'변경: {CHANGE_NAMES.get(str(head.get("change_type")), head.get("change_type"))}'
         + (' (삭제·폐지)' if head.get('removed') else ''),
         f'공포일: {d.get("promulgation")} / 시행일: {d.get("effective")}',
     ]
@@ -168,7 +168,7 @@ def build_prompt(g: Group, home: Path) -> str:
         kd = k.get('dates') or {}
         header = (
             f'\n#### {label(k)} {_title(k)} '
-            f'({CHANGE_NAMES.get(k.get("change_type"), k.get("change_type"))}, 시행 {kd.get("effective")})\n'
+            f'({CHANGE_NAMES.get(str(k.get("change_type")), k.get("change_type"))}, 시행 {kd.get("effective")})\n'
         )
         part = header + _cut(_changed_lines(_diff_file(k, home)), FORM_LIMIT)
         if len(body) + len(part) > MAX_INPUT - TITLE_RESERVE:
@@ -191,7 +191,7 @@ def _section(g: Group) -> int:
 def _render(g: Group, text: str | None, paths: dict[str, str], truncated: bool = False) -> str:
     head = g.head
     t, d = head.get('target') or {}, head.get('dates') or {}
-    kind = CHANGE_NAMES.get(head.get('change_type'), head.get('change_type'))
+    kind = CHANGE_NAMES.get(str(head.get('change_type')), head.get('change_type'))
     out = f'### {t.get("law_name")} ({kind}, 공포 {d.get("promulgation")}, 시행 {d.get("effective")})\n\n'
     out += (text or '(요약 없음)') + '\n'
     if truncated:

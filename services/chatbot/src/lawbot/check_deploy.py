@@ -2,6 +2,8 @@
 # 웹앱이 쓸 조문 CSV·매니페스트·system·검색 설정과 웹앱 포트를 검사하고, 모델 서버에 접속해 필요한 모델 id가 있는지 본다
 # 모델 폴더(양자화·어댑터·토크나이저) 검사는 모델 서버 쪽: uv run python -m lawbot_model_server.check
 # 실패 항목이 있으면 종료 코드 1
+# pyright: reportAttributeAccessIssue=false, reportCallIssue=false, reportArgumentType=false, reportOptionalMemberAccess=false
+# ↑ 배포 점검: pandas 필터 결과를 ndarray로 잘못 추론 (pandas 타입 선언 한계). 이 파일의 다른 검사는 그대로
 import hashlib
 import os
 import sys
@@ -11,7 +13,7 @@ import pandas as pd
 from lawbot import deploy, envfile, manifest, paths, security, service
 from lawbot.deploy import get_profile
 
-EXPECTED_ARTICLES = 415  # 법률 조문 수
+EXPECTED_ARTICLES = 415  # 법률 조문 수 (매니페스트가 없을 때 기준. 있으면 매니페스트의 법률 수: lawbot-reindex로 바뀜)
 EXPECTED_DECREE = {'시행령': 273, '시행규칙': 124}  # 하위법령을 켰을 때 812조문 CSV의 하위법령 수
 DECREE_COLUMNS = {'kind', 'parent_law', 'article_no'}
 COLUMNS = {'law', 'article_id', 'title', 'deleted', 'text'}
@@ -28,12 +30,14 @@ def check_articles(p, out):
     key = ['law', 'article_id']
     dup = live[live.duplicated(key, keep=False)]
     n_law = int((live['kind'] == '법률').sum()) if 'kind' in live else len(live)  # 검색기는 kind로 법률만 법률 인덱스에
-    n_ok = n_law == EXPECTED_ARTICLES
+    m = manifest.load(p.articles)
+    expected = ((m or {}).get('articles_by_kind') or {}).get(manifest.DEFAULT_KIND, EXPECTED_ARTICLES)
+    n_ok = n_law == expected
     if 'kind' in live:  # 812조문 CSV (하위법령 첨부)
         out.append(
             (
                 'OK' if n_ok else 'FAIL',
-                f'비삭제 법률 조문 {n_law}개 (기대 {EXPECTED_ARTICLES}) · '
+                f'비삭제 법률 조문 {n_law}개 (기대 {expected}) · '
                 f'전체 {len(live)}개 · sha256 {manifest.sha256(p.articles)[:12]}',
             )
         )
@@ -41,7 +45,7 @@ def check_articles(p, out):
         out.append(
             (
                 'OK' if n_ok else 'FAIL',
-                f'비삭제 조문 {len(live)}개 (기대 {EXPECTED_ARTICLES}) · sha256 {manifest.sha256(p.articles)[:12]}',
+                f'비삭제 조문 {len(live)}개 (기대 {expected}) · sha256 {manifest.sha256(p.articles)[:12]}',
             )
         )
     if len(dup):

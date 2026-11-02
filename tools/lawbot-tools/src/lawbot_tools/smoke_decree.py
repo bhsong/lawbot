@@ -1,4 +1,4 @@
-# src/lawbot/smoke_decree.py  →  uv run python -m lawbot.smoke_decree [--out results/v4/smoke_decree_<모드>.json]
+# src/lawbot_tools/smoke_decree.py  →  uv run python -m lawbot_tools.smoke_decree [--out results/v4/smoke_decree_<모드>.json]
 # 하위법령 첨부 웹앱 경로 스모크 (맥 전용, 실제 모델): 웹앱과 같은 load_app·service.ask로 예시 질문 3개를 Pro에 묻는다
 #   켜짐(.env/셸 설정 그대로)과, 같은 모델로 첨부만 끈 구성(decree=None)을 나란히 돌려
 #   법률 3개(순위·점수)가 같은지, 하위법령 첨부·인용, 단계별 시간, MLX 최대 메모리를 출력한다

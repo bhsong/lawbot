@@ -4,6 +4,7 @@
 #   → 마지막 위치의 no·yes 로짓을 float32 softmax → P(yes). 노트북처럼 batch 1 (패딩 없음)
 # instruction(작업 설명)은 요청이 정한다 (챗봇은 법령 검색용 문구를 보냄). 없으면 Qwen3-Reranker 기본 문구
 from pathlib import Path
+from typing import Any
 
 import mlx.core as mx
 from mlx_lm import load
@@ -23,7 +24,7 @@ def pair_text(instruction, query, doc):
 
 def yes_probability(no_yes):
     """노트북과 같이 float32 softmax([no, yes])[1]. 차이가 크면 1.0으로 포화해 동점이 생길 수 있다"""
-    return mx.softmax(no_yes.astype(mx.float32))[1].item()
+    return float(mx.softmax(no_yes.astype(mx.float32))[1].item())  # pyright: ignore[reportArgumentType] (mlx .item() 반환 타입 선언이 넓음)
 
 
 class Reranker:
@@ -32,7 +33,7 @@ class Reranker:
         if not path.is_dir():  # mlx_lm.load는 없는 경로를 Hugging Face 저장소 이름으로 보고 내려받으려 함
             raise FileNotFoundError(f'리랭커 모델 폴더 없음: {path}')
         self.path, self.max_length = path, max_length
-        self.model, self.tok = load(str(path))
+        self.model, self.tok = load(str(path))[:2]  # (모델, 토크나이저). return_config를 쓰지 않음
         if getattr(self.model, 'model_type', None) != 'qwen3':
             raise ValueError(f'Qwen3 모델이 아닙니다: {path} ({getattr(self.model, "model_type", None)})')
         self.prefix = self.tok.encode(PREFIX, add_special_tokens=False)
@@ -51,7 +52,7 @@ class Reranker:
     def _no_yes_logits(self, ids):
         """마지막 위치의 [no, yes] 로짓. Model.__call__은 모든 위치에 lm_head를 곱하므로(2560 × 15만 어휘)
         같은 계산을 마지막 위치에만 한다 (mlx_lm qwen3.Model.__call__과 같은 분기)"""
-        m = self.model
+        m: Any = self.model  # mlx_lm qwen3.Model (속성 타입이 선언되어 있지 않음)
         h = m.model(mx.array([ids]))[:, -1:, :]
         logits = m.model.embed_tokens.as_linear(h) if m.args.tie_word_embeddings else m.lm_head(h)
         return logits[0, -1][self.no_yes]

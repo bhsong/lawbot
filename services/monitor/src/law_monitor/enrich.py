@@ -57,7 +57,9 @@ class LawGoEnricher:
         if not (mst_old or mst_new):
             return []
         body_new = self.client.law_body(mst_new) if mst_new else None
-        ref = root(body_new or self.client.law_body(mst_old))
+        if body_new is None:
+            assert mst_old  # 둘 다 없으면 위에서 끝남
+        ref = root(body_new or self.client.law_body(mst_old or ''))
         info = ref.get('기본정보') or {}
         ctx = event['context']
         ctx['amendment_text'] = joined((ref.get('개정문') or {}).get('개정문내용'))
@@ -86,7 +88,9 @@ class LawGoEnricher:
         if not (serial_old or serial_new):
             return []
         detail_new = self.client.admrule_detail(serial_new) if serial_new else None
-        ref = root(detail_new or self.client.admrule_detail(serial_old))
+        if detail_new is None:
+            assert serial_old  # 둘 다 없으면 위에서 끝남
+        ref = root(detail_new or self.client.admrule_detail(serial_old or ''))
         ctx = event['context']
         ctx['amendment_text'] = joined((ref.get('개정문') or {}).get('개정문내용'))
         ctx['amendment_reason'] = joined((ref.get('제개정이유') or {}).get('제개정이유내용'))
@@ -110,7 +114,9 @@ class LawGoEnricher:
         old_side = self._side(old_text, None, files)
         new_side = self._side(new_text, change.new, files)
         item = attachments.item_id(unit)
-        version = new_side['version_key'] if new_side else f'removed:{old_side["version_key"]}'
+        side = new_side or old_side
+        assert side is not None  # 신·구판 중 하나는 있음 (attachments.compare)
+        version = side['version_key'] if new_side else f'removed:{side["version_key"]}'
         dates = effective.get(attachments.label(unit)) or []
         diff = '\n'.join(
             difflib.unified_diff(

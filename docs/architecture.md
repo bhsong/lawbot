@@ -24,38 +24,48 @@
 
 ## 레포 구성
 
-uv workspace 모노레포입니다. 레포 최상위에서 `uv sync`·`uv run …`을 실행하면 모든 서비스가 함께 설치됩니다. 데이터(`data/`), 모델(`models/`), 평가 결과(`results/`)는 레포 최상위에 그대로 둡니다. 서비스는 서로 import하지 않고 HTTP(OpenAI 호환 API)로만 통합니다. 세 서비스가 같은 규칙을 써야 하는 것(`.env` 파서, 포트 검증)만 `packages/lawbot-common`에 두고 함께 씁니다.
+uv workspace 모노레포입니다. 레포 최상위에서 `uv sync`·`uv run …`을 실행하면 모든 서비스가 함께 설치됩니다. 데이터(`data/`), 모델(`models/`), 평가 결과(`results/`)는 레포 최상위에 그대로 둡니다. 서비스는 서로 import하지 않고 HTTP(OpenAI 호환 API)로만 통합니다. 세 서비스가 같은 규칙을 써야 하는 것(`.env` 파서, 포트 검증, 웹앱 ↔ 모델 서버 요청·응답 형식과 오류 type)만 `packages/lawbot-common`에 두고 함께 씁니다.
 
 ```
 pyproject.toml         # workspace 루트: 멤버 목록, pytest·ruff 설정
-services/chatbot/      # 웹앱·평가 (패키지 lawbot, 모델 라이브러리 없음), 테스트는 services/chatbot/tests/
+services/chatbot/      # 웹앱 런타임 (패키지 lawbot, 모델 라이브러리 없음), 테스트는 services/chatbot/tests/ (평가 도구 테스트 포함)
 services/model-server/ # OpenAI 호환 모델 서버 (패키지 lawbot_model_server, MLX·torch), 테스트는 services/model-server/tests/
 services/monitor/      # 법령 변경 수집기 (패키지 law_monitor, git만 사용). 사용법은 ../services/monitor/README.md
-packages/lawbot-common/ # 서비스 공통 규칙 (패키지 lawbot_common: .env 파서·포트 검증, 의존성 없음)
+packages/lawbot-common/ # 서비스 공통 규칙 (패키지 lawbot_common: .env 파서·포트 검증·웹앱 ↔ 모델 서버 API 계약 api.py)
+tools/lawbot-tools/    # 평가·분석 도구 (패키지 lawbot_tools, uv run lawbot-eval-v4). lawbot을 import하고, lawbot은 이것을 import하지 않음
 ```
 
 ```
 services/chatbot/src/lawbot/
 ├── paths.py           # 데이터 경로
 ├── retriever.py       # 조문 인덱스·코사인 검색 (벡터는 모델 서버 임베딩, 법률·하위법령 인덱스 따로)
+├── embed_cache.py     # 조문 임베딩 캐시 (cache/embeddings/, 확인용 벡터로 모델 변경 감지)
 ├── reranker.py        # 리랭커 클라이언트: 모델 서버 점수 → 정렬 (동점은 임베딩 순위)
 ├── decree.py          # 시행령·시행규칙 첨부 필터 (same1+other0.9, 웹앱·평가 공통)
 ├── llm.py             # 프롬프트 구성, openai SDK로 생성 스트림
 ├── api_client.py      # 모델 서버 클라이언트 (임베딩·리랭크·모델 목록, 프록시 무시)
 ├── service.py         # UI와 무관한 질의응답 흐름 (모델 서버 접속, 검색 → 답변 스트리밍)
 ├── app.py             # Gradio 웹앱
+├── hits.py            # 검색 결과·측정값 dict의 모양 (TypedDict: 타입 검사용)
+├── settings.py        # 실행 설정 객체: 시작할 때 한 번 읽어 모두 검증 (틀린 값은 한꺼번에)
 ├── security.py        # 로컬 전용 실행 설정 (127.0.0.1, 로그인 필수, 공유 링크 없음, 포트·모델 서버·생성 API 주소 검증)
-├── citation.py        # 인용 파싱·형식 검증·거절 판정 (웹앱 화면과 eval_v4 채점이 같이 씀)
+├── citation.py        # 인용 파싱·형식 검증·거절 판정·비교용 정규화 (웹앱 화면과 eval_v4 채점이 같이 씀)
+├── check_deploy.py    # 배포 점검 (조문 CSV·system·설정·모델 서버 접속, uv run python -m lawbot.check_deploy)
+├── answer_format.py   # 간결형 화면 후처리 (결론 + 근거 줄)
 ├── manifest.py        # 법령 데이터 매니페스트 검사 (조문 수·sha256·기준일)
-├── log_summary.py     # 요청 로그(logs/requests.jsonl) 요약
 ├── feedback.py        # 답변 피드백 저장 (LAWBOT_FEEDBACK, feedback/*.jsonl)
-├── feedback_ui.py     # 피드백 깃발의 터치 기기 보정 CSS·JS
+└── feedback_ui.py     # 피드백 깃발의 터치 기기 보정 CSS·JS
+tools/lawbot-tools/src/lawbot_tools/
+├── eval_v4.py         # v4 웹앱 구성 평가 (lawbot-eval-v4)
+├── score_answers.py   # 키워드 기반 채점기
+├── refusal.py         # 거절 판정 (【결론】에 '확인할 수 없'), 범위 밖 답변 판정 (거절·안내·억지적용·미인용)
+├── diff_answers.py    # 두 평가 결과의 답변 원문 글자 단위 비교
+├── smoke_decree.py    # 하위법령 첨부 웹앱 경로 스모크 (실제 모델)
 ├── feedback_review.py # 피드백 → 검수 CSV (평가 데이터와 겹치는 질문 제외)
 ├── feedback_export.py # 검수 CSV → dev 질문·임베딩 쌍·SFT·KTO CSV
-├── eval_v4.py         # v4 웹앱 구성 평가 (lawbot-eval-v4)
-├── diff_answers.py    # 두 평가 결과의 답변 원문 글자 단위 비교
-├── score_answers.py   # 키워드 기반 채점기
-└── refusal.py         # 거절 판정 (【결론】에 '확인할 수 없'), 범위 밖 답변 판정 (거절·안내·억지적용·미인용)
+├── log_summary.py     # 요청 로그(logs/requests-YYYY-MM.jsonl) 요약
+├── reindex.py         # 새 조문 CSV → 검사·매니페스트·임베딩 캐시 (lawbot-reindex)
+└── versions.py        # 설치된 패키지·맥 사양
 services/model-server/src/lawbot_model_server/
 ├── api.py             # OpenAI 호환 API (FastAPI): 인증·크기 제한·로그
 ├── scheduler.py       # GPU 스레드 하나: chat 동시 생성 상한·대기열·끊김, 생성 스텝 사이에 embeddings·rerank

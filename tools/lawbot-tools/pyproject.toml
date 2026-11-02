@@ -1,0 +1,25 @@
+[project]
+name = "lawbot-tools"
+version = "0.1.0"
+description = "웹앱 평가·분석 도구 (eval_v4·채점·피드백 검수/내보내기·요청 로그 요약). 웹앱 런타임(lawbot)을 import하고, 런타임은 이 패키지를 import하지 않는다"
+authors = [
+    { name = "bhsong", email = "sbh3003@gmail.com" }
+]
+requires-python = ">=3.14"
+dependencies = [
+    "lawbot",
+    "numpy>=2.0",
+    "pandas>=3.0.6",
+]
+
+[project.scripts]
+# 레포 최상위에서 uv run lawbot-eval-v4
+lawbot-eval-v4 = "lawbot_tools.eval_v4:main"   # v4 웹앱 구성 전체 재평가 (단계 생략 시 all)
+lawbot-reindex = "lawbot_tools.reindex:main"   # 새 조문 CSV → 검사·매니페스트·임베딩 캐시
+
+[tool.uv.sources]
+lawbot = { workspace = true }
+
+[build-system]
+requires = ["uv_build>=0.12.19,<0.13.0"]
+build-backend = "uv_build"

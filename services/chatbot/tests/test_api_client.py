@@ -140,6 +140,51 @@ def test_rerank_maps_scores_to_input_order():
         mock_client(partial).rerank('rr', 'q', ['a', 'b'])
 
 
+def test_request_bodies_pass_server_validation():
+    # 웹앱이 만드는 요청 본문을 모델 서버가 쓰는 계약 모델(lawbot_common.api)이 그대로 받는다
+    from lawbot_common import api as contract
+
+    bodies = []
+
+    def handler(req):
+        bodies.append((req.url.path, req.read()))
+        if req.url.path == contract.RERANK_PATH:
+            return httpx.Response(200, json={'results': [{'index': 0, 'relevance_score': 0.5}]})
+        vec = base64.b64encode(np.zeros(2, '<f4').tobytes()).decode()
+        return httpx.Response(200, json={'data': [{'index': 0, 'embedding': vec}]})
+
+    c = mock_client(handler)
+    c.embed('emb', ['가'], 'query', 2304)
+    c.embed('emb', ['가'])
+    c.rerank('rr', 'q', ['a'], 'TASK')
+    c.rerank('rr', 'q', ['a'])
+    models = {contract.EMBEDDINGS_PATH: contract.EmbeddingRequest, contract.RERANK_PATH: contract.RerankRequest}
+    for path, body in bodies:
+        models[path].model_validate_json(body)  # 모르는 필드·타입 오류면 ValidationError
+
+
+@pytest.mark.parametrize(
+    'path,body',
+    [
+        ('/v1/models', {'object': 'list'}),  # data 없음
+        ('/v1/models', {'data': [{'id': 'x', 'type': 'llm', 'loaded': True}]}),  # 모르는 type
+        ('/v1/embeddings', {'data': [{'embedding': 'AAAA'}]}),  # index 없음
+        ('/v1/rerank', {'results': [{'index': 0}]}),  # 점수 없음
+        ('/health', {}),
+    ],
+)
+def test_malformed_server_response_is_model_server_error(path, body):
+    c = mock_client(lambda req: httpx.Response(200, json=body))
+    call = {
+        '/v1/models': c.models,
+        '/v1/embeddings': lambda: c.embed('emb', ['가']),
+        '/v1/rerank': lambda: c.rerank('rr', 'q', ['a']),
+        '/health': c.ready,
+    }[path]
+    with pytest.raises(ac.ModelServerError, match='응답 형식'):
+        call()
+
+
 @pytest.mark.parametrize(
     'status,body,exc,match',
     [
@@ -384,6 +429,29 @@ def test_end_to_end_through_real_server_app(env, real_server, tmp_path):
     assert a.models.is_loaded('fast')
     text, src, stats = list(app_mod.make_chat(a)('해고 예고?', [], 'fast', 'concise'))[-1]
     assert text.startswith('예고해야 합니다.') and '25.0 tok/s' in stats
+
+
+def test_request_id_reaches_model_server_log(env, real_server, capsys):
+    # 질문 하나의 임베딩·리랭크·생성 요청이 같은 X-Request-Id를 보내고, 모델 서버 접근 로그 줄에 남는다 (질문 내용은 없음)
+
+    env.setenv('LAWBOT_RERANKER_ENABLED', '1')
+    a = service.load_app()
+    capsys.readouterr()
+    steps = list(service.ask(a, '수습 기간에도 해고 예고를 해야 하나요?', 'fast'))
+    rid = steps[-1][3]['request_id']
+    server = [line for line in capsys.readouterr().out.splitlines() if line.startswith('[model-server]')]
+    paths = [line.split()[2] for line in server if ' POST ' in line and line.endswith(f'rid={rid}')]
+    assert paths == ['/v1/embeddings', '/v1/rerank', '/v1/chat/completions']
+    assert not any('수습' in line for line in server)  # 질문 내용은 모델 서버 로그에 없음
+    assert all(line.endswith(f'rid={rid}') for line in server if ' /v1/' in line)  # 모델 목록 확인(GET)도 같은 id
+
+
+def test_model_server_ignores_bad_request_id(env, real_server, capsys):
+    c = TestClient(server_api.create_app(TEST_TOKEN, real_server))
+    for rid in ('a b', 'x' * 33, '<script>', ''):
+        c.get('/v1/models', headers={'Authorization': f'Bearer {TEST_TOKEN}', 'X-Request-Id': rid})
+    lines = [line for line in capsys.readouterr().out.splitlines() if line.startswith('[model-server] GET /v1/models')]
+    assert len(lines) == 4 and all(line.endswith('rid=-') for line in lines)
 
 
 def test_reranker_through_real_server_app(env, real_server):

@@ -1,5 +1,5 @@
-# src/lawbot/feedback_export.py  →  uv run python -m lawbot.feedback_export <검수 CSV> --out data/feedback/
-# 사람이 채운 검수 CSV(lawbot.feedback_review) + 같은 이름의 .jsonl(전체 기록) → 학습·개발용 CSV (B6 세 번째 단계)
+# src/lawbot_tools/feedback_export.py  →  uv run python -m lawbot_tools.feedback_export <검수 CSV> --out data/feedback/
+# 사람이 채운 검수 CSV(lawbot_tools.feedback_review) + 같은 이름의 .jsonl(전체 기록) → 학습·개발용 CSV (B6 세 번째 단계)
 #   fb_questions.csv : 검수한 모든 질문 (h_ok 또는 h_gold가 있는 행). 새 dev 세트의 질문
 #   fb_emb_pairs.csv : h_gold가 있는 행의 (질문, 정답 조문) positive. reason=retrieval이면 그때 검색 1위 조문을 hard negative로
 #   fb_sft.csv       : h_ok=맞음 + label=like (system, 프롬프트, 답변 원문)
@@ -15,8 +15,8 @@ import pandas as pd
 
 from lawbot import citation
 from lawbot.feedback import check_private
-from lawbot.feedback_review import E, companion, private_write
 from lawbot.paths import V4_ARTICLES, V4_DECREE_ARTICLES
+from lawbot_tools.feedback_review import E, companion, private_write
 
 SEED = 42
 ARTICLES = (V4_ARTICLES, V4_DECREE_ARTICLES)  # 법률 415 + 하위법령 첨부용 812조문 (하위법령 hit 대조·h_gold)

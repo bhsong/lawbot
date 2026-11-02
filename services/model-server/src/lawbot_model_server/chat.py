@@ -75,7 +75,7 @@ class ChatModel:
         if not path.is_dir():  # mlx_lm.load는 없는 경로를 Hugging Face 저장소 이름으로 보고 내려받으려 함
             raise FileNotFoundError(f'모델 폴더 없음: {path}')
         self.path = path
-        self.model, self.tok = load(str(path))
+        self.model, self.tok = load(str(path))[:2]  # (모델, 토크나이저). return_config를 쓰지 않음
         self.think = think_markers(self.tok)
 
     def prompt(self, messages, enable_thinking=False):
@@ -164,6 +164,7 @@ class BatchEngine:
     def step(self):
         if not self.items:
             return []
+        assert self.gen is not None  # items가 있으면 _generator()로 만든 뒤
         try:
             _, responses = self.gen.next()
         except Exception as e:
@@ -203,6 +204,7 @@ class BatchEngine:
         for uid, r in list(self.items.items()):
             if r.ticket == ticket:
                 del self.items[uid]
+                assert self.gen is not None
                 self.gen.remove([uid])
 
     def _drop_generator(self):

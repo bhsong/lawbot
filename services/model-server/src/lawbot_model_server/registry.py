@@ -6,6 +6,10 @@ import threading
 import time
 from collections import OrderedDict
 
+from lawbot_common.logs import logger
+
+log = logger('lawbot_model_server', 'model-server')
+
 
 class UnknownModel(LookupError):
     """없는 모델 id이거나 다른 종류의 모델 (404)"""
@@ -68,18 +72,18 @@ class Registry:
             if e.kind != 'chat':
                 t0 = time.perf_counter()
                 self.fixed[e.id] = self.loaders[e.kind](e.path)
-                print(f'[model-server] {e.kind} {e.id} 불러오기 {time.perf_counter() - t0:.1f}초', flush=True)
+                log.info(f'{e.kind} {e.id} 불러오기 {time.perf_counter() - t0:.1f}초')
 
     def preload(self, ids):
         """첫 번째 실패는 그대로 올리고(시작 중단), 나머지는 경고만"""
         for n, i in enumerate(ids):
             try:
                 _, s = self.get(i, 'chat')
-                print(f'[model-server] chat {i} 불러오기 {s:.1f}초', flush=True)
+                log.info(f'chat {i} 불러오기 {s:.1f}초')
             except Exception as e:
                 if n == 0:
                     raise
-                print(f'[model-server] chat {i} 미리 불러오기 실패: {type(e).__name__}: {e}', flush=True)
+                log.warning(f'chat {i} 미리 불러오기 실패: {type(e).__name__}: {e}')
 
     def get(self, model_id, kind):
         """(모델, 이번에 불러온 초 또는 None)"""

@@ -1,9 +1,14 @@
 # lawbot/retriever.py  →  조문 인덱스와 코사인 검색 (numpy). 벡터는 모델 서버의 임베딩 모델이 만든다 (api_client.Embedder)
 # 인코딩 호출은 모델 서버로 옮기기 전과 같다: 법률·하위법령 문서 목록을 각각 한 번에, 질문은 query 프롬프트로
+# pyright: reportAttributeAccessIssue=false, reportCallIssue=false, reportArgumentType=false, reportOptionalMemberAccess=false
+# ↑ pandas 필터 결과를 ndarray로 잘못 추론 (pandas 타입 선언 한계). 이 파일의 다른 검사는 그대로
+from typing import cast
+
 import numpy as np
 import pandas as pd
 
 from lawbot.decree import LAW_KIND
+from lawbot.hits import Hit
 
 
 def doc_text(law):
@@ -20,7 +25,7 @@ class Retriever:
     decree_max_seq: 하위법령 인코딩 최대 토큰 (deploy.DECREE_MAX_SEQ). None이면 하위법령 행을 읽지 않음
     encoder: encode(texts, input_type, max_seq_length) → float32 배열 (api_client.Embedder, 테스트는 가짜)"""
 
-    def __init__(self, encoder, law_csv, max_seq_length, decree_max_seq=None):
+    def __init__(self, encoder, law_csv, max_seq_length, decree_max_seq=None, cache=None):
         law = pd.read_csv(law_csv, encoding='utf-8-sig')
         law = law[law['deleted'] == 0].reset_index(drop=True)  # 415개 조문 (+ 하위법령 397개)
         if 'article_no' in law:  # article_id에 법령명이 들어 있으면('근로기준법 제26조') 번호만 쓴다
@@ -44,10 +49,14 @@ class Retriever:
         self.docs = law_docs + dec_docs
         self.starter = set(law.loc[law['starter'] == 1, 'article_id']) if 'starter' in law else set()
         self.encoder, self.max_seq_length = encoder, max_seq_length
-        self.D = np.asarray(encoder.encode(law_docs, 'document', max_seq_length), dtype=np.float32)
-        self.D_dec = None
-        if dec_docs:
-            self.D_dec = np.asarray(encoder.encode(dec_docs, 'document', decree_max_seq), dtype=np.float32)
+        self.D = self._encode_docs(law_docs, max_seq_length, cache)
+        self.D_dec = self._encode_docs(dec_docs, decree_max_seq, cache) if dec_docs else None
+
+    def _encode_docs(self, docs, max_seq, cache):
+        """조문 문서 목록 하나 = 서버 encode 한 번. cache(embed_cache.EmbedCache)가 있으면 맞는 캐시를 쓴다"""
+        if cache is not None:
+            return cache.encode(self.encoder, docs, max_seq)
+        return np.asarray(self.encoder.encode(docs, 'document', max_seq), dtype=np.float32)
 
     def _encode_queries(self, queries):
         """질문 목록 하나 = 서버 encode 한 번 (batch 16, query 프롬프트, 법률과 같은 max_seq)"""
@@ -57,22 +66,24 @@ class Retriever:
         """법률 조문 순위 (순번 0~n_law-1 = ids 앞부분)"""
         return np.argsort(-(self._encode_queries(queries) @ self.D.T), axis=1)
 
-    def _hit(self, i, score):
-        h = {'article_id': self.ids[i], 'title': self.titles[i], 'doc': self.docs[i], 'score': score}
-        return h | {'law': self.laws[i]}
+    def _hit(self, i, score) -> Hit:
+        return Hit(article_id=self.ids[i], title=self.titles[i], doc=self.docs[i], score=score, law=self.laws[i])
 
-    def search(self, query, k=3):
+    def search(self, query, k=3) -> list[Hit]:
         """법률 조문 상위 k개 (하위법령을 켜도 같음)"""
         s = self.D @ self._encode_queries([query])[0]
         return [self._hit(i, float(s[i])) for i in np.argsort(-s)[:k]]
 
-    def search_decrees(self, query, k=10):
+    def search_decrees(self, query, k=10) -> list[Hit]:
         """하위법령 조문 상위 k개. 법률 hit 형식 + kind('시행령'·'시행규칙')·parent_law('근로기준법')"""
         if self.D_dec is None:
             raise ValueError('하위법령 검색 인덱스가 없습니다 (LAWBOT_DECREE_ENABLED=1로 시작해야 함)')
         s = self.D_dec @ self._encode_queries([query])[0]
         return [
-            self._hit(self.n_law + i, float(s[i]))
-            | {'kind': self.kinds[self.n_law + i], 'parent_law': self.parent_laws[self.n_law + i]}
+            cast(
+                Hit,
+                self._hit(self.n_law + i, float(s[i]))
+                | {'kind': self.kinds[self.n_law + i], 'parent_law': self.parent_laws[self.n_law + i]},
+            )
             for i in np.argsort(-s)[:k]
         ]

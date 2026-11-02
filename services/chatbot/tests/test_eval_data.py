@@ -4,7 +4,7 @@ import pandas as pd
 import pytest
 
 from lawbot.paths import DATA, EVAL, RESULTS
-from lawbot.refusal import is_refusal, oos_verdict
+from lawbot_tools.refusal import is_refusal, oos_verdict
 
 E = dict(encoding='utf-8-sig')
 LSA_ARTICLES = (

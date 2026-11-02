@@ -3,6 +3,7 @@
 from pathlib import Path
 
 from lawbot_common import envfile as common
+from lawbot_common.logs import logger
 
 ROOT = Path(__file__).resolve().parents[4]  # services/model-server/src/lawbot_model_server/envfile.py → 레포 최상위
 DEFAULT = ROOT / '.env'
@@ -14,4 +15,4 @@ def parse(text, name='.env'):
 
 
 def load():
-    return common.load(DEFAULT, ROOT, SECRETS, '[model-server]')
+    return common.load(DEFAULT, ROOT, SECRETS, logger('lawbot_model_server', 'model-server'))

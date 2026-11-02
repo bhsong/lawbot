@@ -10,13 +10,15 @@ import time
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
+from typing import cast
 
 import httpx
 from openai import OpenAI
 
 from lawbot import decree as decree_filter
-from lawbot import deploy, manifest, security
+from lawbot import deploy, manifest
 from lawbot.api_client import (
+    REQUEST_ID,
     Embedder,
     ModelLoadError,
     ModelServerClient,
@@ -25,13 +27,26 @@ from lawbot.api_client import (
     request_timeout,
     wait_ready,
 )
+from lawbot.embed_cache import EmbedCache
+from lawbot.hits import Hit, Timing
 from lawbot.llm import LLM
 from lawbot.paths import ROOT
 from lawbot.reranker import Reranker
 from lawbot.retriever import Retriever
+from lawbot_common.logs import logger
+
+log = logger('lawbot', 'lawbot')
 
 TOP_K = 3  # 답변 근거로 넘기는 조문 수 (Fast·Pro 공통)
 # 테스트는 Retriever·Reranker·LLM·ModelServerClient·OpenAI를 이 모듈의 속성으로 바꿔 끼운다 (load_app이 호출 때 읽음)
+
+
+class AskError(Exception):
+    """ask 중 오류: kind(요청 로그 error_type·화면 안내 기준), stage(실패한 단계). 원래 예외는 __cause__"""
+
+    def __init__(self, kind, stage, cause):
+        super().__init__(f'{type(cause).__name__}: {cause}')
+        self.kind, self.stage = kind, stage
 
 
 class ChatModels:
@@ -65,9 +80,10 @@ class LawbotApp:
     retriever: object
     models: ChatModels
     reranker: object = None  # None: 임베딩 상위 TOP_K개 그대로 (LAWBOT_RERANKER_ENABLED=0, 기본)
-    full_system: str = None  # '전체(4항목)' system: 프로필 system 파일
+    full_system: str | None = None  # '전체(4항목)' system: 프로필 시스템 파일
     decree: object = None  # deploy.DecreeConfig: 시행령·시행규칙 첨부 (None: 법률 3개만, LAWBOT_DECREE_ENABLED=0 기본)
     llm_mode: str = 'api'  # 생성 위치: 'api'(모델 서버) / 'external'(LAWBOT_LLM_BASE_URL의 외부 API)
+    settings: object = None  # lawbot.settings.Settings (load_app이 넣음. 테스트·평가의 가짜 앱은 None)
 
 
 def uses_decrees(app, model_key):
@@ -93,20 +109,22 @@ def check_profile_files(p):
     manifest.check(p.articles)
 
 
-def server_wait():
+def server_wait(env=None):
+    env = os.environ if env is None else env
     try:
-        return float(os.environ.get('LAWBOT_MODEL_SERVER_WAIT') or 300)
+        return float(env.get('LAWBOT_MODEL_SERVER_WAIT') or 300)
     except ValueError:
-        raise ValueError(f'LAWBOT_MODEL_SERVER_WAIT는 초(숫자): {os.environ["LAWBOT_MODEL_SERVER_WAIT"]!r}') from None
+        raise ValueError(f'LAWBOT_MODEL_SERVER_WAIT는 초(숫자): {env["LAWBOT_MODEL_SERVER_WAIT"]!r}') from None
 
 
 READ_TIMEOUT = 300.0  # 질문 처리 중 응답 조각 사이 최대 대기 (27B 교체 로딩·monitor 요약 뒤 대기를 넘는 값)
 
 
-def read_timeout():
+def read_timeout(env=None):
     """LAWBOT_MODEL_READ_TIMEOUT (초, 기본 300): 질문 임베딩·리랭크·생성에서 응답 조각 사이가 이 시간을 넘으면 오류
     (동시 처리 수 1이라 멈춘 요청 하나가 뒤 질문을 모두 막지 않게). 시작할 때 조문 인덱스 인코딩에는 걸지 않음"""
-    raw = (os.environ.get('LAWBOT_MODEL_READ_TIMEOUT') or str(READ_TIMEOUT)).strip()
+    env = os.environ if env is None else env
+    raw = (env.get('LAWBOT_MODEL_READ_TIMEOUT') or str(READ_TIMEOUT)).strip()
     try:
         value = float(raw)
     except ValueError:
@@ -125,26 +143,19 @@ def missing_models(available, p, rr, external):
     return [(kind, mid) for mid, kind in need if (mid, kind) not in have]
 
 
-def load_app(profile=None):
+def load_app(settings=None):
     """웹앱·평가용 LawbotApp: 조문 인덱스(임베딩은 모델 서버) + 켜져 있으면 리랭커 + 답변 모델(Fast/Pro) 레지스트리
-    모델 서버 주소(LAWBOT_MODEL_SERVER)와 토큰(LAWBOT_MODEL_TOKEN)이 필요하다. 서버가 준비될 때까지 기다린 뒤,
-    필요한 모델 id가 서버 /v1/models에 있는지 확인하고 없으면 시작을 거부한다"""
-    p = profile or deploy.get_profile()
+    settings: lawbot.settings.Settings (없으면 지금 환경 변수로 settings.load()). 설정이 틀리면 모델 서버에 접속하기 전에
+    SettingsError로 모두 알린다. 서버가 준비될 때까지 기다린 뒤, 필요한 모델 id가 서버 /v1/models에 없으면 시작을 거부한다"""
+    from lawbot import settings as settings_mod
+
+    cfg = settings or settings_mod.load()
+    p, rr, dc = cfg.profile, cfg.reranker, cfg.decree
     check_profile_files(p)
-    rr = deploy.reranker(p)  # 꺼져 있으면 None
-    if rr and rr.candidates < TOP_K:
-        raise ValueError(f'LAWBOT_RERANKER_CANDIDATES는 {TOP_K} 이상: {rr.candidates}')
-    dc = deploy.decree(p)  # 꺼져 있으면 None. 켰는데 리랭커가 꺼져 있으면 ValueError
-    url = security.model_server_url()
-    if url is None:
-        raise RuntimeError(
-            '모델 서버 주소가 없습니다: .env에 LAWBOT_MODEL_SERVER=http://127.0.0.1:<모델 서버 포트>와 '
-            'LAWBOT_MODEL_TOKEN을 적고, uv run lawbot-model-server로 모델 서버를 띄우세요.'
-        )
-    llm_url, llm_key, external = security.llm_endpoint(url)
-    client = ModelServerClient(url, security.model_token())
-    wait, limit = server_wait(), request_timeout(read_timeout())
-    print(f'[lawbot] 모델 서버 {url} 준비 대기 (최대 {wait:g}초)', flush=True)
+    url, llm_url, llm_key, external = cfg.model_server, cfg.llm_url, cfg.llm_key, cfg.llm_external
+    client = ModelServerClient(url, cfg.model_token)
+    wait, limit = cfg.server_wait, request_timeout(cfg.read_timeout)
+    log.info(f'모델 서버 {url} 준비 대기 (최대 {wait:g}초)')
     wait_ready(client, wait)
     missing = missing_models(client.models(), p, rr, external)
     if missing:
@@ -159,15 +170,21 @@ def load_app(profile=None):
         p.articles,
         max_seq_length=p.max_seq,
         **({'decree_max_seq': dc.max_seq} if dc else {}),
+        **({'cache': EmbedCache(cfg.embed_cache)} if cfg.embed_cache else {}),
     )
-    print(
-        f'[lawbot] 조문 인덱스 {time.perf_counter() - t0:.1f}초 · 법률 {getattr(retriever, "n_law", len(retriever.ids))}개'
+    log.info(
+        f'조문 인덱스 {time.perf_counter() - t0:.1f}초 · 법률 {getattr(retriever, "n_law", len(retriever.ids))}개'
         + (f' + 하위법령 {len(retriever.ids) - retriever.n_law}개 (max_seq {dc.max_seq})' if dc else '')
     )
     reranker = Reranker(client, rr.model, rr.candidates, timeout=limit) if rr else None
     # 외부 API는 셸의 프록시 설정을 따른다. 모델 서버(127.0.0.1)는 프록시를 거치지 않음
+    # openai 3.x는 타입 선언이 httpx2 기준이지만 httpx.Client·httpx.Timeout을 그대로 받아 쓴다 (2026-11-02 확인: 읽기 상한·trust_env 적용)
     oa = OpenAI(
-        base_url=llm_url, api_key=llm_key, max_retries=0, timeout=limit, http_client=httpx.Client(trust_env=external)
+        base_url=llm_url,
+        api_key=llm_key,
+        max_retries=0,
+        timeout=limit,  # pyright: ignore[reportArgumentType]
+        http_client=httpx.Client(trust_env=external),  # pyright: ignore[reportArgumentType]
     )
 
     def factory(spec):  # system 파일이 없으면 FileNotFoundError (화면에서 오류 안내)
@@ -177,14 +194,13 @@ def load_app(profile=None):
         return {m['id'] for m in client.models() if m.get('loaded')}
 
     models = ChatModels(p.models, factory, None if external else loaded)
-    print(
-        f'[lawbot] 프로필 {p.name} · 조문 {len(retriever.ids)}개 · 리랭커 {rr.model if rr else "꺼짐"} · '
+    log.info(
+        f'프로필 {p.name} · 조문 {len(retriever.ids)}개 · 리랭커 {rr.model if rr else "꺼짐"} · '
         f'하위법령 {decree_text(dc)} · 생성 {"외부 " + llm_url if external else "모델 서버"} '
-        f'({", ".join(s.model for s in p.models)})',
-        flush=True,
+        f'({", ".join(s.model for s in p.models)})'
     )
     full = p.system_file.read_text(encoding='utf-8').strip()
-    return LawbotApp(p, retriever, models, reranker, full, dc, 'external' if external else 'api')
+    return LawbotApp(p, retriever, models, reranker, full, dc, 'external' if external else 'api', cfg)
 
 
 def decree_text(dc):
@@ -200,7 +216,7 @@ def format_system(app, model_key, fmt):
     return None
 
 
-def retrieve(app, question, k, st, model_key=None):
+def retrieve(app, question, k, st: Timing, model_key=None) -> tuple[list[Hit], list[Hit]]:
     """(법률 근거 조문 k개, 첨부할 하위법령 목록). 리랭커가 없으면 기존과 같은 임베딩 상위 k개,
     있으면 임베딩 상위 reranker.candidates개를 리랭킹해 점수순 k개. 측정값 search·rerank(초)를 st에 적는다
     model_key가 하위법령 첨부 모델이면(uses_decrees) 하위법령 후보 decree.candidates개를 같은 리랭커로 채점하고
@@ -225,7 +241,7 @@ def retrieve(app, question, k, st, model_key=None):
     return hits, retrieve_decrees(app, question, hits[0]['law'], st)
 
 
-def retrieve_decrees(app, question, top1_law, st):
+def retrieve_decrees(app, question, top1_law, st: Timing) -> list[Hit]:
     """하위법령 후보 검색 → 리랭킹(후보 전부 점수) → 필터. 첨부 목록 (평가는 st['decree_candidates']도 씀)"""
     dc = app.decree
     st['_stage'] = 'search'
@@ -257,20 +273,32 @@ def log_timing(st):
         )
         if st.get(key) is not None
     ]
-    print(f'[lawbot] {st["model"]} · ' + ' · '.join(parts))
+    log.info(f'{st["model"]} · ' + ' · '.join(parts))
 
 
 # ---- 요청 로그 (JSONL) ----
 # 질문마다 한 줄: 단계별 시간·토큰·상태·오류 유형. 질문 원문과 답변은 남기지 않는다 (콘솔 로그·모델 서버 로그와 같은 정책)
-# 기본 logs/requests.jsonl (gitignore). LAWBOT_REQUEST_LOG로 경로를 바꾸고, 빈 값이면 기록하지 않음
-REQUEST_LOG = ROOT / 'logs' / 'requests.jsonl'
+# 기본 logs/requests-YYYY-MM.jsonl (월별, gitignore). LAWBOT_REQUEST_LOG로 파일 하나를 정하고, 빈 값이면 기록하지 않음
+REQUEST_LOG_DIR = ROOT / 'logs'  # 기본: 이 폴더의 requests-YYYY-MM.jsonl (월별)
+
+
+def month():
+    return time.strftime('%Y-%m')
+
+
+def log_file(path):
+    """설정 경로 → 이번에 쓸 파일 (기본 폴더면 이번 달 파일)"""
+    return path / f'requests-{month()}.jsonl' if path == REQUEST_LOG_DIR else path
+
+
 MS_FIELDS = ('search', 'rerank', 'decree_search', 'decree_rerank', 'load', 'ttft', 'first_text', 'total')
 
 
-def request_log_path():
-    value = os.environ.get('LAWBOT_REQUEST_LOG')
+def request_log_path(env=None):
+    env = os.environ if env is None else env
+    value = env.get('LAWBOT_REQUEST_LOG')
     if value is None:
-        return REQUEST_LOG
+        return REQUEST_LOG_DIR
     return Path(value).expanduser() if value.strip() else None
 
 
@@ -336,16 +364,18 @@ LOG_LOCK = threading.Lock()  # 동시 질문(LAWBOT_CHAT_CONCURRENCY·평가 --c
 
 
 def log_request(app, st, fmt, status, error=None):
-    """JSONL 한 줄. 기록 실패는 답변을 막지 않고 콘솔에 경고만"""
-    path = request_log_path()
+    """JSONL 한 줄. 기록 실패는 답변을 막지 않고 콘솔에 경고만. 경로는 앱의 설정 (가짜 앱이면 지금 환경 변수)"""
+    cfg = getattr(app, 'settings', None)
+    path = cfg.request_log if cfg is not None else request_log_path()
     if path is None:
         return
+    path = log_file(path)
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
         with LOG_LOCK, path.open('a', encoding='utf-8') as f:
             f.write(json.dumps(request_record(app, st, fmt, status, error), ensure_ascii=False, default=str) + '\n')
     except OSError as e:
-        print(f'[lawbot] 경고: 요청 로그를 쓰지 못했습니다 ({path}: {type(e).__name__})')
+        log.warning(f'경고: 요청 로그를 쓰지 못했습니다 ({path}: {type(e).__name__})')
 
 
 def ask(app, question, model_key, k=TOP_K, fmt=None):
@@ -355,12 +385,14 @@ def ask(app, question, model_key, k=TOP_K, fmt=None):
     hits: 법률 k개 + 첨부한 하위법령 (하위법령 첨부 모델일 때만, 없으면 법률 k개만 = 지금과 같은 리스트)
     측정값(초): search, rerank(리랭커가 켜져 있을 때만), decree_search·decree_rerank(하위법령 첨부 모델일 때만), load(이번에 로딩했을 때만), ttft(생성 호출→첫 토큰, 프리필),
     first_text(질문 수신→첫 글자), total / tps, prompt_tokens, prompt_tps(프리필 속도), gen_tokens, peak_gb, finish
-    질문마다 요청 로그 한 줄 (log_request): 성공 ok / 오류 error(유형은 예외의 lawbot_error에도 붙여 화면 안내에 씀) /
+    질문마다 요청 로그 한 줄 (log_request): 성공 ok / 오류 error(AskError로 감싸 올림: kind는 요청 로그 error_type과 같고 화면 안내에 씀) /
     중간에 멈춤 cancelled (정지 버튼 등으로 생성기를 닫음)"""
     t0 = time.perf_counter()
-    st = {'model': model_key, 'load': None, 'request_id': uuid.uuid4().hex[:12]}
+    st: Timing = {'model': model_key, 'load': None, 'request_id': uuid.uuid4().hex[:12]}
     stage, logged = 'search', False
     try:
+        # 요청 id를 모델 서버 요청 헤더로 (단계마다 다시 넣음: Gradio는 생성기의 next()를 매번 다른 스레드 문맥에서 부름)
+        REQUEST_ID.set(st['request_id'])
         law_hits, decree_hits = retrieve(app, question, k, st, model_key)
         hits = law_hits + decree_hits
         stage = 'load'
@@ -370,6 +402,7 @@ def ask(app, question, model_key, k=TOP_K, fmt=None):
         stage = 'generation'
         system = format_system(app, model_key, fmt)
         raw, last, t_gen = '', None, time.perf_counter()
+        REQUEST_ID.set(st['request_id'])
         for r in llm.stream(question, hits, **({'system': system} if system else {})):
             if last is None:
                 st['ttft'] = time.perf_counter() - t_gen
@@ -388,7 +421,7 @@ def ask(app, question, model_key, k=TOP_K, fmt=None):
             ('finish', 'finish_reason'),
         ):
             st[name] = getattr(last, attr, None)
-        st |= answer_check(app, raw, hits)
+        st |= cast(Timing, answer_check(app, raw, hits))
         log_timing(st)
         log_request(app, st, fmt, 'ok')
         logged = True
@@ -402,8 +435,8 @@ def ask(app, question, model_key, k=TOP_K, fmt=None):
     except Exception as e:
         if stage == 'search':
             stage = st.get('_stage', 'search')  # 법률·하위법령 검색('search') 또는 리랭킹('rerank')에서 실패
-        e.lawbot_error = error_type(e, stage)
+        kind = error_type(e, stage)
         if not logged:
             st['total'] = time.perf_counter() - t0
-            log_request(app, st, fmt, 'error', e.lawbot_error)
-        raise
+            log_request(app, st, fmt, 'error', kind)
+        raise AskError(kind, stage, e) from e
