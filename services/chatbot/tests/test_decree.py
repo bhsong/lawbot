@@ -491,6 +491,41 @@ def test_check_deploy_decree(env):
     assert '법률 조문이 articles_v4.csv와 같음' in msgs and '비삭제 법률 조문 415개' in msgs and 'v4-decree' in msgs
 
 
+def test_check_deploy_decree_follows_configured_files(env, tmp_path):
+    """data/live처럼 다른 폴더의 CSV를 쓰면: 법률 행은 LAWBOT_V4_ARTICLES와 비교, 하위법령 수는 매니페스트에서
+    (조문 자동 갱신으로 조문 수가 바뀌어도 FAIL이 아님, docs/plans/articles-auto-update.md)"""
+    import json
+    import shutil
+
+    from lawbot import check_deploy
+
+    live = tmp_path / 'live'
+    live.mkdir()
+    for f in ('articles_v4.csv', 'manifest.json', 'law_articles_v4_decree.csv', 'manifest_decree.json'):
+        shutil.copy(V4_ARTICLES.parent / f, live / f)
+    d = pd.read_csv(live / 'law_articles_v4_decree.csv', **E)
+    d = d[d['article_id'] != '근로기준법 시행규칙 제2조']  # 하위법령 1개 줄임 (조문 수가 바뀐 새 데이터 흉내)
+    d.to_csv(live / 'law_articles_v4_decree.csv', index=False, encoding='utf-8-sig')
+    m = json.loads((live / 'manifest_decree.json').read_text(encoding='utf-8'))
+    m['articles_by_kind']['시행규칙'] -= 1
+    (live / 'manifest_decree.json').write_text(json.dumps(m, ensure_ascii=False), encoding='utf-8')
+    env.setenv('LAWBOT_DECREE_ENABLED', '1')
+    env.setenv('LAWBOT_RERANKER_ENABLED', '1')
+    env.setenv('LAWBOT_V4_DECREE_ARTICLES', str(live / 'law_articles_v4_decree.csv'))
+    env.setenv('LAWBOT_V4_ARTICLES', str(live / 'articles_v4.csv'))
+    out = []
+    check_deploy.check_decree(deploy.get_profile(), out)
+    assert ('OK', "하위법령 조문 {'시행령': 273, '시행규칙': 123} (기대 {'시행령': 273, '시행규칙': 123})") in out
+    law = pd.read_csv(live / 'articles_v4.csv', **E)
+    law.loc[0, 'text'] += ' (개정)'
+    law.to_csv(live / 'articles_v4.csv', index=False, encoding='utf-8-sig')
+    out = []
+    check_deploy.check_decree(deploy.get_profile(), out)
+    assert any(
+        lv == 'FAIL' and 'articles_v4.csv와 다름' in msg for lv, msg in out
+    )  # data/v4가 아니라 설정한 파일과 비교
+
+
 # ---- 8. 평가 ----
 def test_eval_answers_and_refusal_with_decree(rr, tmp_path):
     rr.setattr(ev, 'OUT', tmp_path)
