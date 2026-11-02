@@ -112,7 +112,7 @@ v4 조문 데이터(`data/v4/articles_v4.csv` 법률 415조문, `data/v4/law_art
 
 ## 6. 개정 목록을 갱신하는 방법
 
-2026-11-02부터 **자동**이다 ([계획](plans/articles-auto-update.md)). 운영 웹앱은 git 밖 `data/live/`의 조문 CSV를 읽고, `law-monitor daily`(매일 06:30)가 legalize-kr 클론을 갱신한 뒤 `lawbot-articles-update`를 부른다.
+2026-11-02부터 **자동**이다 ([계획](archives/articles-auto-update.md)). 운영 웹앱은 git 밖 `data/live/`의 조문 CSV를 읽고, `law-monitor daily`(매일 06:30)가 legalize-kr 클론을 갱신한 뒤 `lawbot-articles-update`를 부른다.
 
 1. 그날 시행 중인 법으로 조문을 만들어 `data/live`와 비교한다. 같으면 아무것도 안 한다
 2. 다르면 새 CSV·매니페스트(`live-<기준일>`, `source.ref`)를 만들고, 임베딩 캐시를 만들고, 바뀐 조문이 검색되는지 확인한다

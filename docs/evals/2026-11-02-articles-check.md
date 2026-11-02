@@ -1,6 +1,6 @@
 # 조문 데이터 점검 확인 (2026-11-02)
 
-계획: [archives/monitor-article-check.md](../archives/monitor-article-check.md) (2.1 점검 명령. monitor 연결은 [자동 갱신 계획](../plans/articles-auto-update.md)으로 이어서). 원문: Legalize KR `8c8917412e48`.
+계획: [archives/monitor-article-check.md](../archives/monitor-article-check.md) (2.1 점검 명령. monitor 연결은 [자동 갱신 계획](../archives/articles-auto-update.md)으로 이어서). 원문: Legalize KR `8c8917412e48`.
 
 | 항목 | 기대 | 실제 |
 | --- | --- | --- |

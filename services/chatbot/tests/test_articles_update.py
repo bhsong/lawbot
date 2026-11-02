@@ -1,4 +1,4 @@
-# tests/test_articles_update.py  →  조문 데이터 자동 갱신 (lawbot_tools.articles_update, 계획 docs/plans/articles-auto-update.md)
+# tests/test_articles_update.py  →  조문 데이터 자동 갱신 (lawbot_tools.articles_update, 계획 docs/archives/articles-auto-update.md)
 # 점검 → 생성 → 검사·매니페스트 → 임베딩 → 확인 → 아카이브·전환 → 재시작. 생성기·검색기·재시작·포트 확인은 가짜
 import json
 import shutil

@@ -1,4 +1,4 @@
-"""조문 데이터 자동 갱신 (계획: docs/plans/articles-auto-update.md)
+"""조문 데이터 자동 갱신 (계획: docs/archives/articles-auto-update.md)
 
     uv run lawbot-articles-update --init                                  # 처음 한 번: data/v4 → data/live
     uv run lawbot-articles-update --repo <legalize-kr 클론> [--asof 오늘] [--report-dir DIR] [--restart]
