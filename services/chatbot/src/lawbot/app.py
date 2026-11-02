@@ -261,8 +261,10 @@ def build_demo(
     p, title = app.profile, page_title(app)
     with gr.Blocks(title=title) as demo:
         gr.Markdown(f'# {title}\n{intro_text(app)}법률 자문이 아닌 참고용 답변입니다.\n\n{data_notice(app)}')
-        sources = gr.Markdown(render=False)
-        stats = gr.Markdown(render=False)
+        sources = gr.Markdown(
+            render=False, elem_id='lawbot-sources'
+        )  # elem_id: 브라우저 E2E가 찾는 자리 (화면 변화 없음)
+        stats = gr.Markdown(render=False, elem_id='lawbot-stats')
         with gr.Row():
             with gr.Column(scale=3):
                 with gr.Row():

@@ -44,10 +44,21 @@ ENV_KEYS = (
 )
 
 
+LOCAL_MARKERS = ('integration', 'e2e_stub', 'e2e_live')  # 127.0.0.1의 테스트 서버에 접속하는 테스트
+
+
+@pytest.hookimpl(wrapper=True, tryfirst=True)
+def pytest_runtest_makereport(item, call):
+    """item.rep_setup·rep_call·rep_teardown: e2e 픽스처가 실패한 테스트만 진단 산출물을 남기는 데 씀"""
+    rep = yield
+    setattr(item, f'rep_{rep.when}', rep)
+    return rep
+
+
 @pytest.fixture(autouse=True)
 def env(request, monkeypatch):
     """개발자 셸의 인증·Gradio 환경 변수를 지우고, 외부 네트워크 접속을 막는다
-    (integration 테스트는 127.0.0.1의 테스트 서버 접속만 허용)"""
+    (integration·e2e 테스트는 127.0.0.1의 테스트 서버 접속만 허용)"""
     for k in ENV_KEYS:
         monkeypatch.delenv(k, raising=False)
     from lawbot.api_client import REQUEST_ID
@@ -59,7 +70,7 @@ def env(request, monkeypatch):
         'LAWBOT_REQUEST_LOG', ''
     )  # 레포의 logs/requests.jsonl에 쓰지 않음 (요청 로그 테스트는 직접 지정)
     if request.node.get_closest_marker('models') is None:
-        local_ok = request.node.get_closest_marker('integration') is not None
+        local_ok = any(request.node.get_closest_marker(m) for m in LOCAL_MARKERS)
         connect, create_connection = socket.socket.connect, socket.create_connection
 
         def check(address):
@@ -107,3 +118,24 @@ def model_server(env):
     env.setattr(service, 'ModelServerClient', FakeServerClient)
     env.setattr(service, 'OpenAI', FakeOpenAI)
     return FakeServerClient
+
+
+# ---- 브라우저 E2E (e2e_stub·e2e_live) ----
+# pytest-playwright 플러그인은 세션 내내 이벤트 루프를 열어 두어 뒤 테스트의 asyncio.run()을 깨뜨린다 (2026-11-02 확인)
+# 그래서 브라우저는 모듈 범위로 직접 열고, 그 모듈이 끝나면 닫는다
+@pytest.fixture(scope='module')
+def browser():
+    from playwright.sync_api import sync_playwright
+
+    with sync_playwright() as pw:
+        b = pw.chromium.launch()
+        yield b
+        b.close()
+
+
+@pytest.fixture
+def page(browser):
+    """테스트마다 쿠키가 비어 있는 새 브라우저 컨텍스트"""
+    ctx = browser.new_context(locale='en-US')  # Gradio 기본 문구(Login·Select example)를 영어로 고정
+    yield ctx.new_page()
+    ctx.close()
