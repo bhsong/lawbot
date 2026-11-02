@@ -42,7 +42,16 @@ jobs:
         env:
           PYRIGHT_PYTHON_IGNORE_WARNINGS: '1'
 
-      - name: 테스트
+      - name: 브라우저 캐시 (브라우저 E2E e2e_stub용 Chromium)
+        uses: actions/cache@v6
+        with:
+          path: ~/Library/Caches/ms-playwright
+          key: playwright-${{ runner.os }}-${{ hashFiles('uv.lock') }}
+
+      - name: Chromium 설치 (playwright 버전은 uv.lock 그대로)
+        run: uv run playwright install chromium
+
+      - name: 테스트 (브라우저 E2E 대역 e2e_stub 포함, 실제 모델 e2e_live 제외)
         run: uv run pytest --junitxml=pytest-report.xml
 
       - name: 테스트 결과 업로드
@@ -50,4 +59,7 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: pytest-report
-          path: pytest-report.xml
+          path: |
+            pytest-report.xml
+            results/e2e_stub/
+          if-no-files-found: ignore   # results/e2e_stub/는 e2e_stub가 실패했을 때만 생김 (스크린샷·화면 HTML·프로세스 출력·요청 로그)

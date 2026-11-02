@@ -1,6 +1,6 @@
 # tests/e2e_model_server.py  →  e2e_stub용 가짜 모델 서버 (test_e2e_stub.py가 별도 프로세스로 실행)
 # 실제 모델 서버 앱(lawbot_model_server.api)에 가짜 임베딩·리랭커·chat 모델을 붙인다: HTTP·SSE·토큰 인증·오류 본문은 실제 코드
-# 모델 id는 .env.example(v4 운영 구성)과 같다
+# 모델 id는 환경 변수 LAWBOT_SERVE_*에서 (test_e2e_stub.py가 .env.example 값을 넘김: v4 운영 구성과 같음)
 # 사용법: LAWBOT_MODEL_TOKEN=<테스트 토큰> python tests/e2e_model_server.py <포트> <모드>
 # 테스트 프로세스에서 import하지 않는다 (ms_fakes가 다른 이름으로 한 번 더 로드되어 모델 서버 테스트의 가짜 상태가 갈라짐)
 #   normal     바로 답한다. 답은 프롬프트의 첫 번째 조문을 근거로 든다 (어떤 조문이 검색돼도 인용·검색만 구분이 보임)
@@ -17,10 +17,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2] / 'model-server' / 't
 
 import ms_fakes
 from lawbot_model_server import api, server
-from lawbot_model_server.config import ModelEntry
+from lawbot_model_server.config import parse_models
 from lawbot_model_server.registry import Registry
 
-CHAT, EMB, RERANK = 'qwen3.8-27b-4bit', 'lawbot-emb-v4', 'qwen3-reranker-4b'
 STREAM_S, SLOW_S, BUSY_S = 0.4, 5.0, 0.5
 FIRST = re.compile(r'^\[1\] (.+?)\(', re.M)  # build_prompt의 첫 조문 '[1] 근로기준법 제26조(해고의 예고)'
 
@@ -49,15 +48,16 @@ def main():
     ms_fakes.reset_fakes()
     E2EChat.mode = mode
     ms_fakes.FakeChat.delay = {'stream': STREAM_S, 'slow': SLOW_S, 'busy': BUSY_S}.get(mode, 0.0)
-    entries = (
-        ModelEntry(CHAT, 'chat', Path('/fake/chat')),
-        ModelEntry(EMB, 'embedding', Path('/fake/emb')),
-        ModelEntry(RERANK, 'rerank', Path('/fake/rerank')),
-    )
+    # 모델 id는 실제 서버와 같은 변수(LAWBOT_SERVE_*, 테스트가 .env.example 값을 넘김)에서. 폴더는 쓰지 않음 (가짜 모델)
+    entries = [
+        e
+        for kind, var in (('chat', 'CHAT'), ('embedding', 'EMBEDDING'), ('rerank', 'RERANK'))
+        for e in parse_models(kind, os.environ.get(f'LAWBOT_SERVE_{var}'))
+    ]
     loaders = {'chat': E2EChat, 'embedding': ms_fakes.FakeEmbedder, 'rerank': ms_fakes.FakeReranker}
     reg = Registry(entries, loaders, 1)
     reg.load_fixed()
-    reg.preload([CHAT])
+    reg.preload([next(e.id for e in entries if e.kind == 'chat')])
     max_queued = 1 if mode == 'busy' else 32
     app = api.create_app(os.environ['LAWBOT_MODEL_TOKEN'], max_concurrent=1, max_queued=max_queued)
     api.set_registry(app, reg)
