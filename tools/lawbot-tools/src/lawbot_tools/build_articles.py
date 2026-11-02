@@ -186,7 +186,7 @@ def months_later(start: dt.date, months: int) -> dt.date:
 
 
 DATE_EXPR = re.compile(
-    r'공포한\s*날|공포\s*후\s*(\d+)\s*(개월|년)이\s*경과한\s*날|(\d{4})년\s*(\d{1,2})월\s*(\d{1,2})일'
+    r'공포\s*한\s*날|공포\s*후\s*(\d+)\s*(개월|년)이\s*경과한\s*날|(\d{4})년\s*(\d{1,2})월\s*(\d{1,2})일'
 )
 
 
@@ -231,63 +231,112 @@ class Schedule:
 
 
 AFTER_ADDENDUM = re.compile(r'부칙\s*$')
+UNKNOWN = '9999-12-31'  # 부칙에 날짜가 없는 시행일 ('동법의 시행일', '대통령령으로 정하는 날')
+# '…의 개정규정 중 "…"에 관한 부분', '… 중 제59조제2항의 개정규정과 관련한 부분': 대상 조문을 한정하는 말이라 대상이 아님
+QUALIFIER = re.compile(r'\s*중\s+.*?(?:에\s*관한|[과와]\s*관련한|[과와]\s*관련된)\s*부분')
+QUOTED = re.compile(r'"[^"]*"|“[^”]*”')
+# 시행일 조항을 나누는 곳: 단서, 연결 어미, 문장 끝, 항
+BOUNDARY = re.compile(
+    r'(?=다만\s*,)|(?<=시행하고,)|(?<=시행하며,)|(?<=시행하되,)|(?<=시행한다\.)|(?<=같다\.)|(?=[②-⑳])'
+)
 
 
 def target_list(text, order):
-    """'제13조, 제11장의 제목, 제103조부터 제105조까지, 제110조제1호 및 …' → (조문 목록, 장 목록)"""
+    """'제13조, 제11장의 제목, 제103조부터 제105조까지(내지), 제110조제1호 및 …' → ([(조문, 일부만인지)], 장 목록).
+    일부: 조문 뒤에 항·호·목이 붙은 것 ('제110조제1호', '제116조제2항제1호ㆍ제4호')"""
     arts, chapters = [], []
-    for m in re.finditer(rf'{ART}(?:제\d+항|제\d+호|제\d+목|[ㆍ·]제?\d+(?:항|호))*(\s*부터\s*{ART}\s*까지)?', text):
+    rng = rf'(\s*(?:부터|내지)\s*{ART}(?:\s*까지)?)?'
+    for m in re.finditer(rf'{ART}((?:제\d+항|제\d+호|제\d+목|[ㆍ·]제?\d+(?:항|호))*){rng}', text):
         if AFTER_ADDENDUM.search(text[: m.start()]):  # '부칙 제16조제21항': 부칙의 조문이라 본문 조문이 아님
             continue
         a = f'제{m[1]}조' + (f'의{m[2]}' if m[2] else '')
-        if m[3]:
-            b = f'제{m[4]}조' + (f'의{m[5]}' if m[5] else '')
+        if m[4]:
+            b = f'제{m[5]}조' + (f'의{m[6]}' if m[6] else '')
             if a not in order or b not in order:
                 raise ValueError(f'부칙 범위의 조문이 본문에 없습니다: {a}~{b}')
-            arts.extend(order[order.index(a) : order.index(b) + 1])
+            arts.extend((x, False) for x in order[order.index(a) : order.index(b) + 1])
         else:
-            arts.append(a)
+            arts.append((a, bool(m[3])))
     for m in re.finditer(r'(?<![\d조])(제\d+장(?:의\d+)?)', text):
         chapters.append(m[1])
     return arts, chapters
 
 
+def effective_clause(addendum):
+    """부칙에서 시행일 조항만: '제1조(시행일)'이 있으면 그 조 전체(항 포함), 없으면 '①(시행일)' 항, 둘 다 없으면
+    제2조·② 앞까지.
+    적용례·경과조치(②(적용례) …, 제2조 …)의 '개정규정'은 시행일이 아니라 넣지 않는다"""
+    m = re.search(r'제1조\s*\(시행일[^)]*\)\s*(.*?)(?=\n\s*\n\s*제2조|\Z)', addendum, re.S)
+    if not m:
+        m = re.search(r'①\s*\(시행일[^)]*\)\s*(.*?)(?=[②-⑳]|\Z)', addendum, re.S)
+    if not m:  # 제목 없는 한 문단짜리 부칙: 제2조·②(다른 법령의 개정 등) 앞까지
+        m = re.match(r'\s*(.*?)(?=\n\s*\n\s*(?:제2조|[②-⑳])|\Z)', addendum, re.S)
+    text = m[1] if m else ''
+    return re.sub(r'\s+', ' ', text).strip()
+
+
+def clauses(first):
+    """시행일 조항 → [[문장, 딸린 번호 목록]]. 번호 목록(1. … 2. …)은 앞에서 '다음 각 호'라고 한 문장의 것"""
+    out: list[list[str]] = []
+    owner = None
+    for part in (x.strip() for x in BOUNDARY.split(first)):
+        if not part:
+            continue
+        if re.match(r'\d+\.\s', part) and owner is not None:
+            owner[1] += ' ' + part
+            continue
+        out.append([part, ''])
+        if re.search(r'다음\s*각\s*호', part):
+            owner = out[-1]
+    return out
+
+
+def place(sched: Schedule, placed: set, sentence, items, fm, order):
+    """'○의 개정규정은 ○부터 시행' 한 문장(과 딸린 번호 목록): 날짜 앞에서 대상 조문·장, 뒤에서 날짜(여럿이면 가장 이른 날)"""
+    if '개정규정' not in sentence:
+        return
+    d = DATE_EXPR.search(sentence)
+    cut = min(i for i in (d.start() if d else -1, sentence.find('다음'), len(sentence)) if i >= 0)
+    arts, chapters = target_list(QUOTED.sub('', QUALIFIER.sub('', sentence[:cut])), order)
+    if not arts and not chapters:  # 별표 등 본문 조문이 아닌 것
+        return
+    dates = [date_expr(x, fm['공포일자']) for x in DATE_EXPR.finditer(sentence[cut:] + ' ' + items)]
+    date = min(dates) if dates else UNKNOWN
+    placed.update(dates)
+    for a, part in arts:  # 조문 일부만이면 나머지는 본 시행일: 조문 전체가 시행되는 날
+        sched.articles[a] = max(sched.articles.get(a, ''), max(date, sched.main) if part else date)
+    for c in chapters:
+        sched.chapters[c] = max(sched.chapters.get(c, ''), date)
+
+
 def schedule(md, fm, order, asof=None) -> Schedule:
-    """이 버전(개정)의 시행일. 부칙 제1조 '다만, ○의 개정규정은 ○부터 시행하고, …'를 읽는다
-    asof: 주면 부칙 제1조에 기준일보다 늦은 날짜가 있는데 어느 조문의 것인지 못 읽었을 때 실패 ('②'로 나눈 형식 등)"""
+    """이 버전(개정)의 시행일: 머리말 `시행일자` + 부칙 시행일 조항에서 '○의 개정규정은 ○부터 시행'한다는 조문·장별 날짜.
+    사업장 규모별(다음 각 호)이면 가장 이른 날. 조문 일부(항·호)만 적혔으면 그 날과 본 시행일 중 늦은 날,
+    한 조문에 날짜가 여럿이면 가장 늦은 날 (조문 전체가 시행되는 날).
+    asof: 주면 시행일 조항에 기준일 뒤 날짜가 있는데 어느 조문의 것인지 못 읽었을 때 실패"""
     sched = Schedule(main=fm['시행일자'])
     text = own_addendum(md, fm['공포번호'])
     if not text:
         return sched
-    m = re.search(r'제1조\s*\(시행일\)\s*(.*?)(?:\n\s*\n\s*제2조|\Z)', text, re.S)
-    first = (m[1] if m else text).replace('\n', ' ')
-    if '다만' in first:
-        read_proviso(sched, first.split('다만', 1)[1], fm, order)
+    first = effective_clause(text)
+    placed: set[str] = set()  # 대상 조문을 읽은 문장의 날짜
+    for sentence, items in clauses(first):
+        if '개정규정' not in sentence:
+            if '개정규정' not in items:
+                continue
+            # '다음 각 호의 부분은 각 호에서 정한 날부터': 호마다 '○의 개정규정 …: 날짜'
+            for item in re.split(r'(?:^|\s)(?=\d+\.\s)', items.strip()):
+                place(sched, placed, re.sub(r'^\d+\.\s*', '', item), '', fm, order)
+            continue
+        place(sched, placed, sentence, items, fm, order)
     if asof:
-        known = {sched.main, *sched.articles.values(), *sched.chapters.values()}
+        known = {sched.main, *placed}
         late = {date_expr(d, fm['공포일자']) for d in DATE_EXPR.finditer(first)} - known
         if any(d > asof for d in late):
             raise ValueError(
-                f'제{fm["공포번호"]}호 부칙 제1조의 시행일 {sorted(late)}이 어느 조문의 것인지 읽지 못했습니다: {first[:200]}'
+                f'제{fm["공포번호"]}호 부칙 시행일 {sorted(late)}이 어느 조문의 것인지 읽지 못했습니다: {first[:200]}'
             )
     return sched
-
-
-def read_proviso(sched: Schedule, proviso, fm, order):
-    for clause in re.split(r'시행하고,|시행하며,', proviso):
-        found = list(DATE_EXPR.finditer(clause))
-        if '개정규정' not in clause or not found:
-            continue
-        arts, chapters = target_list(clause.split('개정규정', 1)[0], order)
-        if not arts and not chapters:  # 별표 등 본문 조문이 아닌 것
-            continue
-        if '대통령령' in clause:
-            raise ValueError(f'부칙 시행일을 날짜로 정할 수 없습니다: {clause.strip()[:200]}')
-        date = min(date_expr(d, fm['공포일자']) for d in found)  # 사업장 규모별로 나뉘면 가장 이른 날
-        for a in arts:
-            sched.articles[a] = max(sched.articles.get(a, ''), date)
-        for c in chapters:
-            sched.chapters[c] = max(sched.chapters.get(c, ''), date)
 
 
 NOTE_ITEM = re.compile(r'^(?:\d+\.|[가-하]\.)\s')
@@ -348,7 +397,11 @@ def in_force(repo: Repo, path, asof):
                 if not real:  # 형식만 바뀜: 시행 전 개정이 없을 때만 따라감
                     if no not in pending:
                         cur.update(title=new['title'], text=new['text'])
+                elif date == UNKNOWN:  # 부칙에 날짜가 없음: 뒤 개정이 다시 바꾸지 않으면 끝에서 실패
+                    cur.update(title=new['title'], text=new['text'], eff=sched.main, unknown=fm.get('공포번호'))
+                    applied += 1
                 elif date <= asof:
+                    cur.pop('unknown', None)
                     if no in pending:
                         raise ValueError(
                             f'{path} {no}: 시행 전 개정이 남은 조문을 제{fm.get("공포번호")}호가 바꿉니다 '
@@ -375,6 +428,9 @@ def in_force(repo: Repo, path, asof):
                 '시행 전': waiting,
             }
         )
+    unknown = {no: a['unknown'] for no, a in state.items() if a.get('unknown')}
+    if unknown:
+        raise ValueError(f'{path}: 시행일을 부칙에서 날짜로 읽을 수 없는 개정이 지금 본문입니다 {unknown}')
     known = [no for no in order if no in state] + [no for no in state if no not in order]
     arts = [state[no] for no in known]
     expire(arts, expiries, asof, path)
