@@ -17,7 +17,7 @@ dependencies = [
 lawbot-eval-v4 = "lawbot_tools.eval_v4:main"   # v4 웹앱 구성 전체 재평가 (단계 생략 시 all)
 lawbot-reindex = "lawbot_tools.reindex:main"   # 새 조문 CSV → 검사·매니페스트·임베딩 캐시
 lawbot-build-articles = "lawbot_tools.build_articles:main"   # Legalize KR + 기준일 → 조문 CSV 두 개
-lawbot-articles-check = "lawbot_tools.articles_check:main"   # 오늘 시행 중인 법과 지금 조문 데이터 비교 (law-monitor daily가 부름)
+lawbot-articles-check = "lawbot_tools.articles_check:main"   # 오늘 시행 중인 법과 지금 조문 데이터 비교 (보고서만, 파일은 안 바꿈)
 
 [tool.uv.sources]
 lawbot = { workspace = true }

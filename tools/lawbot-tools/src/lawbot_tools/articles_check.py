@@ -6,7 +6,7 @@
   파일은 쓰지 않는다 (보고서만). CSV 교체·재인덱싱·재시작은 사람이 한다 (본문이 바뀌면 임베딩·4B를 val로 다시 봐야 함)
 - 보고서: 답변 근거가 다른 조문(추가·없어짐·본문·제목·삭제 여부), 그 밖 열 변화 개수, 시행 예정 개정,
   데이터를 만든 뒤(매니페스트 source.ref 이후) 들어온 개정, 다르면 다시 만드는 명령
-- 마지막 줄: `articles same=yes|no changed=N pending=N next=날짜 new=N [→ 보고서]` (law-monitor daily가 요약에 붙임)
+- 마지막 줄: `articles same=yes|no changed=N pending=N next=날짜 new=N [→ 보고서]` (차후 law-monitor가 이 줄을 요약에 붙일 예정)
 - 종료 코드: 0 같음, 1 답변 근거가 다른 조문 있음, 2 실행 실패
 """
 
@@ -114,7 +114,9 @@ class Result:
 def check(repo, asof, data_dir=V4_DECREE_ARTICLES.parent) -> dict:
     """비교 결과 (Result의 필드). 파일을 쓰지 않는다"""
     if not (Path(repo) / 'HEAD').exists() and not (Path(repo) / '.git').exists():
-        raise FileNotFoundError(f'legalize-kr 클론이 없습니다: {repo} (law-monitor bootstrap·collect가 만든다)')
+        raise FileNotFoundError(
+            f'legalize-kr 클론이 없습니다: {repo} (git clone --filter=blob:none --no-checkout https://github.com/legalize-kr/legalize-kr)'
+        )
     csv = Path(data_dir) / ba.DECREE_CSV
     m = manifest.load(csv) or {}
     files, versions, stats = ba.build(repo, asof)
@@ -216,7 +218,7 @@ def render(r: Result) -> str:
 
 def main(argv=None):
     p = argparse.ArgumentParser(description='조문 데이터 점검: 오늘 시행 중인 법과 지금 데이터 비교')
-    p.add_argument('--repo', required=True, help='legalize-kr 클론 (monitor: services/monitor/data/repos/legalize-kr)')
+    p.add_argument('--repo', required=True, help='legalize-kr 클론 (git clone --filter=blob:none, bare도 됨)')
     p.add_argument('--asof', help='기준일 YYYY-MM-DD (기본 오늘, 한국 시간)')
     p.add_argument('--data-dir', type=Path, default=V4_DECREE_ARTICLES.parent, help='지금 데이터 폴더 (기본 data/v4)')
     p.add_argument('--report-dir', type=Path, help='보고서 <기준일>.md를 쓸 폴더')

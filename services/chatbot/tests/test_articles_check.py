@@ -191,7 +191,7 @@ def test_missing_clone_exit_2(data_dir, tmp_path, capsys):
     assert ac.main(['--repo', str(missing), '--asof', '2026-11-02', '--data-dir', str(data_dir)]) == 2
     assert (
         capsys.readouterr().out.strip()
-        == f'articles error=legalize-kr 클론이 없습니다: {missing} (law-monitor bootstrap·collect가 만든다)'
+        == f'articles error=legalize-kr 클론이 없습니다: {missing} (git clone --filter=blob:none --no-checkout https://github.com/legalize-kr/legalize-kr)'
     )
 
 

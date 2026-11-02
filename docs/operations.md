@@ -298,11 +298,18 @@ client.chat.completions.create(
   uv run lawbot-build-articles --repo ../legalize-kr --asof 2026-12-08 --out-dir data/v4.1         # 새 기준일로 만들기
   ```
 
+- 점검: `lawbot-articles-check`가 그날 시행 중인 법과 지금 조문 데이터를 비교합니다(파일은 안 바꿈). `same=no`이면 보고서의 '다음 할 일'대로 새 폴더에 만들고 아래 `lawbot-reindex`로 넘깁니다. 매일 자동 실행(monitor 연결)은 나중에 합니다([계획](plans/monitor-article-check.md)).
+
+  ```zsh
+  uv run lawbot-articles-check --repo ../legalize-kr                    # 오늘 기준 (종료 코드 0 같음 · 1 다름 · 2 실패)
+  uv run lawbot-articles-check --repo ../legalize-kr --asof 2026-12-08 --report-dir /tmp/articles   # 그날 기준 + 보고서
+  ```
+
 - 조문 CSV를 바꾸면 `lawbot-reindex`로 매니페스트를 새 데이터 버전으로 바꾸고 임베딩 캐시를 미리 만든 뒤 웹앱을 재시작합니다. 운영에 넣을 때는 운영 worktree에서 실행합니다(캐시가 그 폴더의 `cache/`에 생김).
 
   ```zsh
   uv run lawbot-reindex data/v4/articles_v4.csv --dataset-version v4.1 --reference-date 2026-12-08 --check   # 검사만
-  uv run lawbot-reindex data/v4/articles_v4.csv --dataset-version v4.1 --reference-date 2026-12-08           # 매니페스트 + 캐시
+  uv run lawbot-reindex data/v4/articles_v4.csv --dataset-version v4.1 --reference-date 2026-12-08 --source-ref <legalize-kr HEAD>   # 매니페스트 + 캐시
   uv run python -m lawbot.check_deploy && launchctl kickstart -k gui/$(id -u)/com.lawbot.web
   ```
 
