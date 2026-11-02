@@ -361,7 +361,7 @@ uv run ruff format         # 포맷 (작은따옴표, 120자)
 uv run pyright             # 타입 검사 (웹앱 런타임·모델 서버·monitor·공통 패키지, 평가 도구 제외)
 ```
 
-브라우저 E2E는 두 층입니다. `e2e_stub`(기본 실행·CI 포함)는 임베딩·리랭크·답변 생성 세 호출을 모두 가짜 모델로 바꾼 것이라 **실제 모델 연결 확인이 아닙니다**. 설정은 `.env.example`(운영 구성)과 같게 띄우고, 실패한 테스트만 `results/e2e_stub/<시각>-<테스트>/`에 스크린샷·화면 HTML·프로세스 출력·요청 로그를 남깁니다(성공하면 남기지 않음, 진단 후 지움). 실제 공유 모델 서버로 하는 `e2e_live`는 승인 후 맥 미니의 개발 worktree에서만 실행합니다([계획](plans/e2e-playwright.md)).
+브라우저 E2E는 두 층입니다. `e2e_stub`(기본 실행·CI 포함)는 임베딩·리랭크·답변 생성 세 호출을 모두 가짜 모델로 바꾼 것이라 **실제 모델 연결 확인이 아닙니다**. 설정은 `.env.example`(운영 구성)과 같게 띄우고, 실패한 테스트만 `results/e2e_stub/<시각>-<테스트>/`에 스크린샷·화면 HTML·프로세스 출력·요청 로그를 남깁니다(성공하면 남기지 않음, 진단 후 지움). 실제 공유 모델 서버로 하는 `e2e_live`는 승인 후 맥 미니의 개발 worktree에서만 실행합니다([계획](archives/e2e-playwright.md)).
 
 ```bash
 uv run pytest -m e2e_live services/chatbot/tests/test_e2e_live.py   # 레포 .env의 모델 서버로 질문 3개 (순서대로, 재시도 없음)
@@ -369,6 +369,6 @@ uv run pytest -m e2e_live services/chatbot/tests/test_e2e_live.py   # 레포 .en
 
 - 실행 전에 확인합니다. 06:20–06:50(조문 자동 갱신)이 아닌지, 서버가 ready인지, 필요한 모델이 있는지, **Pro chat 모델이 이미 올라 있는지**. 하나라도 아니면 질문을 보내지 않고 실패로 끝납니다(모델 교체로 운영 응답이 느려지지 않게).
 - 웹앱은 이 worktree 코드로 빈 포트에 띄우고, 요청 로그·피드백은 임시 폴더로 보냅니다(운영 기록에 섞이지 않음).
-- 실행 구성(웹앱·모델 서버 커밋, 모델 `revision`, 조문 `dataset_version`·sha256, system sha256, temperature·max_tokens, `.env` 설정. 비밀값 제외)을 시작 전·후에 읽어 `results/e2e_live/<시각>.json`에 남깁니다. 둘이 다르면 결과는 무효입니다. 결과는 `docs/evals/`에 옮겨 적고 JSON은 지웁니다.
+- 실행 구성(웹앱·모델 서버 커밋, 모델 `revision`, 조문 `dataset_version`·sha256, system sha256, temperature·max_tokens, `.env` 설정. 비밀값·모델 서버 주소·포트 제외)을 시작 전·후에 읽어 `results/e2e_live/<시각>.json`에 남깁니다. 둘이 다르면 결과는 무효입니다. 결과는 `docs/evals/`에 옮겨 적고 JSON은 지웁니다.
 
 GitHub Actions(`.github/workflows/ci.yml`)가 `main` 푸시와 모든 pull request에서 macOS(Apple Silicon) 러너로 `uv sync --locked`, 문법 검사(`compileall`), 린트·포맷 검사(`ruff check`·`ruff format --check`), 타입 검사(`pyright`), Chromium 설치, `uv run pytest`를 실행합니다. 비밀정보는 쓰지 않으며, `-m models` 테스트와 평가 스크립트는 CI에서 실행하지 않습니다. 결과는 PR의 체크와 Actions 로그, `pytest-report` 아티팩트(e2e_stub가 실패하면 `results/e2e_stub/` 포함)에서 볼 수 있습니다.

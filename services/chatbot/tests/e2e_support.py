@@ -1,5 +1,5 @@
 # tests/e2e_support.py  →  브라우저 E2E(e2e_stub·e2e_live) 공통: 프로세스 띄우기·정리, 로그인·질문, 실패 진단 산출물
-# 계획: docs/plans/e2e-playwright.md. 산출물은 tmp에 두고, 실패한 테스트만 results/<층>/<시각>-<테스트>/로 옮긴다
+# 계획: docs/archives/e2e-playwright.md. 산출물은 tmp에 두고, 실패한 테스트만 results/<층>/<시각>-<테스트>/로 옮긴다
 import datetime
 import json
 import os
@@ -96,7 +96,7 @@ def request_log(path):
     return [json.loads(line) for line in p.read_text(encoding='utf-8').splitlines()] if p.exists() else []
 
 
-# ---- 화면 조작 (Gradio 6.30: 0단계 확인 결과, docs/plans/e2e-playwright.md 5절) ----
+# ---- 화면 조작 (Gradio 6.30: 0단계 확인 결과, docs/archives/e2e-playwright.md 5절) ----
 def textbox(page):
     """질문 입력창. 로그인 화면의 사용자명 칸도 data-testid=textbox(input)라서 textarea로 좁힌다"""
     return page.locator('textarea[data-testid=textbox]')

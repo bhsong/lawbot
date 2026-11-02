@@ -1,5 +1,5 @@
 # tests/test_e2e_stub.py  →  브라우저 E2E (대역): Playwright → 실제 웹앱 프로세스 → 실제 모델 서버 앱 + 가짜 모델
-# 세 추론 호출(임베딩·리랭크·chat) 모두 가짜. 이 결과를 "실제 모델 E2E 통과"로 보고하지 않는다 (docs/plans/e2e-playwright.md)
+# 세 추론 호출(임베딩·리랭크·chat) 모두 가짜. 이 결과를 "실제 모델 E2E 통과"로 보고하지 않는다 (docs/archives/e2e-playwright.md)
 # 웹앱 설정은 .env.example(운영 구성: Pro, 리랭커, 시행령·시행규칙 첨부)과 같다. 접속은 127.0.0.1만
 import sys
 import threading

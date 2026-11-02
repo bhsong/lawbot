@@ -1,7 +1,7 @@
 # lawbot_model_server/revision.py  →  모델 폴더 지문(/v1/models의 revision)과 서버 git 커밋(/health의 commit)
 # 지문: 폴더 안 모든 파일(숨김 제외)의 상대 경로·크기·앞뒤 EDGE바이트를 경로 순서로 sha256
 #   가중치 전체(27B 약 15GB)를 해시하지 않는다: 시작이 수십 초 늘어나기 때문. 폴더 교체·가중치 변경은 이것으로 잡힌다
-#   (docs/plans/e2e-playwright.md 5-1절)
+#   (docs/archives/e2e-playwright.md 5-1절)
 import hashlib
 import subprocess
 from pathlib import Path
