@@ -1,18 +1,25 @@
-"""Legalize KR 원문과 기준일로 조문 CSV 두 개를 만든다 (계획: docs/archives/article-generator.md)
+"""Legalize KR 원문과 기준일로 조문 CSV 두 개를 만든다 (계획: docs/archives/article-generator.md, docs/plans/v5-tax-scope.md)
 
-    git clone --filter=blob:none --no-checkout https://github.com/legalize-kr/legalize-kr ../legalize-kr
-    uv run lawbot-build-articles --repo ../legalize-kr --asof 2026-10-20 --out-dir data/v4 [--check]
+    git clone --bare https://github.com/legalize-kr/legalize-kr ../legalize-kr   # 옛 버전을 모두 읽으므로 전체 클론
+    uv run lawbot-build-articles --repo ../legalize-kr --asof 2026-10-20 --out-dir data/v4 [--check] [--scope 목록.csv]
 
 출력 (UTF-8 BOM, 행 끝 LF)
-- articles_v4.csv: 7개 법률
-- law_articles_v4_decree.csv: 법률 + 시행령·시행규칙 (행 순서는 doc_order)
+- articles_v4.csv: 7개 법률 (+ --scope 문서의 법률)
+- law_articles_v4_decree.csv: 법률 + 시행령·시행규칙 (행 순서는 docs())
 - --check: 파일을 쓰지 않고 out-dir의 기존 파일과 바이트 단위로 비교 (다르면 종료 코드 1)
+- --scope: 범위 목록(law·kind·article_no)의 문서는 목록 조문과 그 조문을 대신하는 부칙 특례 조문만, 노동 문서 뒤에
 
-규칙 (법률·시행령·시행규칙 21개 문서 모두 같다)
+규칙 (모든 문서에 같다)
 - 파일: kr/<법령명 띄어쓰기 없이>/ 안에서 기준일 버전의 머리말 `제목`이 문서명이고 폐지 커밋이 아닌 파일
 - 조합: 파일 이력(커밋 날짜 = 공포일)에서 공포일 ≤ 기준일인 버전을 오래된 것부터 보며, 직전 버전과 달라진 조문
   (신설·삭제 포함)과 장 제목에 그 개정의 시행일을 붙이고 시행일 ≤ 기준일인 변경만 반영한다. 시행일은 머리말
   `시행일자`, 부칙 제1조 '다만'에 적힌 조문·장은 그 날짜 (조문 일부만 적혀 있어도 조문 전체, 규모별이면 가장 이른 날)
+- 시작: 기준일에 시행 중인 마지막 전부개정(제정) 버전부터. 그 앞 버전은 본문이 이어지지 않는다
+- 타법개정 부칙('부칙(정부조직법) <…>')의 조문은 그 법의 조문이라 머리말 시행일자만 쓴다
+- 시행 전 개정이 남은 조문을 그 뒤 개정이 다시 바꾸면 조문 단위로 나눌 수 없다: 최신 본문 끝에
+  `[주의: YYYY.M.D. 시행 예정인 개정 내용이 함께 들어 있음]`
+- 부칙 특례(범위 목록 문서만): 부칙 조문이 '제N조…에도 불구하고'로 범위 안 본칙을 대신하고, 기한('…까지')이
+  기준일 이후이며, 그 부칙이 시행 중이면 `부칙<제N호>제M조` 행으로 넣는다 (chapter = 부칙 머리)
 - 원문 형식 변경(공백, 조문 끝 `[시행일]` 안내 삭제)은 개정으로 보지 않는다
 - effective_date: 그 조문을 마지막으로 바꾼 개정의 시행일
 - 유효기간: 부칙 '○의 개정규정은 …까지 효력을 가진다'가 기준일 전에 끝났으면 조문 전체는 deleted=1,
@@ -186,32 +193,35 @@ def months_later(start: dt.date, months: int) -> dt.date:
 
 
 DATE_EXPR = re.compile(
-    r'공포\s*한\s*날|공포\s*후\s*(\d+)\s*(개월|년)이\s*경과한\s*날|(\d{4})년\s*(\d{1,2})월\s*(\d{1,2})일'
+    r'공포\s*한\s*날|공포\s*후\s*(?=\d)(?:(\d+)\s*년\s*)?(?:(\d+)\s*개월)?이\s*경과한\s*날'
+    r'|(\d{4})년\s*(\d{1,2})월\s*(\d{1,2})일'
 )
 
 
 def date_expr(m: re.Match, promulgated: str) -> str:
-    """부칙의 날짜 표현 → YYYY-MM-DD. '공포 후 N개월이 경과한 날': 공포 다음 날부터 세어(초일 불산입) N개월 뒤
+    """부칙의 날짜 표현 → YYYY-MM-DD. '공포 후 N년 M개월이 경과한 날': 공포 다음 날부터 세어(초일 불산입) 그만큼 뒤
     (2026-04-07 + 8개월 → 2026-12-08, 2019-04-30 + 6개월 → 2019-11-01)"""
     p = dt.date.fromisoformat(promulgated)
-    if m[1]:
-        months = int(m[1]) * (12 if m[2] == '년' else 1)
+    if m[1] or m[2]:
+        months = int(m[1] or 0) * 12 + int(m[2] or 0)
         return months_later(p + dt.timedelta(days=1), months).isoformat()
     if m[3]:
         return dt.date(int(m[3]), int(m[4]), int(m[5])).isoformat()
     return p.isoformat()
 
 
-def own_addendum(md, number):
-    """이 버전의 부칙 본문 (`부칙… <제{공포번호}호,…>` 머리 아래). 없으면 None (부칙 없는 타법개정 등)"""
+def own_addendum(md, number, with_owner=False):
+    """이 버전의 부칙 본문 (`부칙… <제{공포번호}호,…>` 머리 아래). 없으면 None (부칙 없는 타법개정 등).
+    with_owner: (본문, 머리의 법령 이름). '부칙(정부조직법) <…>'처럼 타법개정이면 그 법 이름, 이 법의 개정이면 None"""
     _, addenda = split_addenda(md)
     number = str(int(number))
-    heads = list(re.finditer(r'^부칙[^\n<]*<제(\d+)호,[^>]*>', addenda, re.M))
+    heads = list(re.finditer(r'^부칙\s*(?:\(([^)]*)\))?[^\n<]*<제(\d+)호,[^>]*>', addenda, re.M))
     for i, h in enumerate(heads):
-        if str(int(h[1])) == number:
+        if str(int(h[2])) == number:
             end = heads[i + 1].start() if i + 1 < len(heads) else len(addenda)
-            return addenda[h.end() : end]
-    return None
+            text = addenda[h.end() : end]
+            return (text, h[1]) if with_owner else text
+    return (None, None) if with_owner else None
 
 
 @dataclass
@@ -231,6 +241,9 @@ class Schedule:
 
 
 AFTER_ADDENDUM = re.compile(r'부칙\s*$')
+# '법률 제9911호 국세기본법 일부개정법률 제21조': 다른 개정법률(·개정령)의 조문이라 본문 조문이 아님
+OTHER_AMENDMENT = re.compile(r'제\d+호\s+[^,]*?(?:개정|폐지)(?:법률|령)\s*$')
+ANNEX = re.compile(r'별표|서식')
 UNKNOWN = '9999-12-31'  # 부칙에 날짜가 없는 시행일 ('동법의 시행일', '대통령령으로 정하는 날')
 # '…의 개정규정 중 "…"에 관한 부분', '… 중 제59조제2항의 개정규정과 관련한 부분': 대상 조문을 한정하는 말이라 대상이 아님
 QUALIFIER = re.compile(r'\s*중\s+.*?(?:에\s*관한|[과와]\s*관련한|[과와]\s*관련된)\s*부분')
@@ -247,7 +260,8 @@ def target_list(text, order):
     arts, chapters = [], []
     rng = rf'(\s*(?:부터|내지)\s*{ART}(?:\s*까지)?)?'
     for m in re.finditer(rf'{ART}((?:제\d+항|제\d+호|제\d+목|[ㆍ·]제?\d+(?:항|호))*){rng}', text):
-        if AFTER_ADDENDUM.search(text[: m.start()]):  # '부칙 제16조제21항': 부칙의 조문이라 본문 조문이 아님
+        before = text[: m.start()]
+        if AFTER_ADDENDUM.search(before) or OTHER_AMENDMENT.search(before):  # '부칙 제16조제21항' 등: 본문 조문이 아님
             continue
         a = f'제{m[1]}조' + (f'의{m[2]}' if m[2] else '')
         if m[4]:
@@ -291,16 +305,29 @@ def clauses(first):
     return out
 
 
-def place(sched: Schedule, placed: set, sentence, items, fm, order):
-    """'○의 개정규정은 ○부터 시행' 한 문장(과 딸린 번호 목록): 날짜 앞에서 대상 조문·장, 뒤에서 날짜(여럿이면 가장 이른 날)"""
-    if '개정규정' not in sentence:
+def each_item(items):
+    """'1. … 2. …' → 번호를 뗀 호 목록"""
+    return [re.sub(r'^\d+\.\s*', '', x) for x in re.split(r'(?:^|\s)(?=\d+\.\s)', items.strip()) if x.strip()]
+
+
+def place(sched: Schedule, placed: set, sentence, items, fm, order, named=False):
+    """'○의 개정규정은 ○부터 시행' 한 문장(과 딸린 번호 목록): 날짜 앞에서 대상 조문·장, 뒤에서 날짜(여럿이면 가장 이른 날).
+    named: '다음 각 호의 개정규정은 해당 호에서 정하는 날부터'의 호라 '개정규정'이라는 말이 없어도 읽는다"""
+    if not named and '개정규정' not in sentence:
         return
     d = DATE_EXPR.search(sentence)
     cut = min(i for i in (d.start() if d else -1, sentence.find('다음'), len(sentence)) if i >= 0)
-    arts, chapters = target_list(QUOTED.sub('', QUALIFIER.sub('', sentence[:cut])), order)
-    if not arts and not chapters:  # 별표 등 본문 조문이 아닌 것
-        return
+    targets = QUOTED.sub('', QUALIFIER.sub('', sentence[:cut]))
+    arts, chapters = target_list(targets, order)
     dates = [date_expr(x, fm['공포일자']) for x in DATE_EXPR.finditer(sentence[cut:] + ' ' + items)]
+    if not arts and not chapters:
+        # '다만, 다음 각 호의 개정규정은 해당 호에서 정하는 날부터': 호마다 대상과 날짜
+        if items and re.search(r'다음\s*각\s*호', sentence):
+            for item in each_item(items):
+                place(sched, placed, item, '', fm, order, named='개정규정' in sentence)
+        elif ANNEX.search(targets):  # 별표·서식만: 데이터에 없으므로 그 날짜는 읽은 것으로 친다
+            placed.update(dates)
+        return
     date = min(dates) if dates else UNKNOWN
     placed.update(dates)
     for a, part in arts:  # 조문 일부만이면 나머지는 본 시행일: 조문 전체가 시행되는 날
@@ -315,8 +342,8 @@ def schedule(md, fm, order, asof=None) -> Schedule:
     한 조문에 날짜가 여럿이면 가장 늦은 날 (조문 전체가 시행되는 날).
     asof: 주면 시행일 조항에 기준일 뒤 날짜가 있는데 어느 조문의 것인지 못 읽었을 때 실패"""
     sched = Schedule(main=fm['시행일자'])
-    text = own_addendum(md, fm['공포번호'])
-    if not text:
+    text, owner = own_addendum(md, fm['공포번호'], with_owner=True)
+    if not text or owner:  # 타법개정 부칙의 조문은 그 법의 조문: 이 법에는 머리말 시행일자
         return sched
     first = effective_clause(text)
     placed: set[str] = set()  # 대상 조문을 읽은 문장의 날짜
@@ -325,8 +352,8 @@ def schedule(md, fm, order, asof=None) -> Schedule:
             if '개정규정' not in items:
                 continue
             # '다음 각 호의 부분은 각 호에서 정한 날부터': 호마다 '○의 개정규정 …: 날짜'
-            for item in re.split(r'(?:^|\s)(?=\d+\.\s)', items.strip()):
-                place(sched, placed, re.sub(r'^\d+\.\s*', '', item), '', fm, order)
+            for item in each_item(items):
+                place(sched, placed, item, '', fm, order)
             continue
         place(sched, placed, sentence, items, fm, order)
     if asof:
@@ -361,16 +388,30 @@ def squash(s):
     return re.sub(r'\s+', '', strip_notes(s))
 
 
+FULL_REVISION = re.compile(r'\((?:전부개정|제정|폐지제정)\)$')
+
+
+def last_full_revision(hist, mds, asof):
+    """조합을 시작할 버전: 기준일에 시행 중인 마지막 전부개정(제정). 전부개정은 본문 전체를 새로 써서 앞 버전과 이어지지 않는다"""
+    for i in range(len(hist) - 1, -1, -1):
+        if FULL_REVISION.search(hist[i][2]) and front(mds[i])['시행일자'] <= asof:
+            return i
+    return 0
+
+
 def in_force(repo: Repo, path, asof):
     """기준일에 시행 중인 조문 [{no, title, text, chapter, eff}]과 버전별 반영 기록
 
     eff: 그 조문(제목·본문)을 마지막으로 바꾼 개정의 시행일. 공백만 바뀐 변경(원문 형식 정리)은 개정으로 보지 않는다.
-    시행 전 개정이 남은 조문에 그 뒤 시행된 개정이 내용을 바꾸면 조문 단위로 나눌 수 없어 실패한다"""
+    시행 전 개정이 남은 조문에 그 뒤 시행된 개정이 내용을 바꾸면 조문 단위로 나눌 수 없다: 최신 본문을 쓰고 끝에
+    시행 전 내용이 섞였다고 적는다(mixed, 2026-11-03 사용자 결정)"""
     hist = [h for h in reversed(repo.history[path]) if h[1] <= asof]  # 오래된 것부터
     mds = repo.show_many([(sha, path) for sha, _, _ in hist])
+    start = last_full_revision(hist, mds, asof)
+    hist, mds = hist[start:], mds[start:]
     state: dict[str, dict] = {}
     prev: dict[str, dict] = {}
-    pending: set[str] = set()
+    pending: dict[str, list[str]] = {}  # 시행 전 개정이 남은 조문 → 그 시행일들
     expiries: list[tuple[str, list[int], str]] = []
     used = []
     order: list[str] = []
@@ -382,6 +423,7 @@ def in_force(repo: Repo, path, asof):
         expiries += expiry_clauses(own_addendum(md, fm['공포번호']) or '')
         applied = 0
         waiting: list[tuple[str, str]] = []  # 시행 전이라 반영하지 않은 (조문, 시행일)
+        mixed: list[tuple[str, list[str]]] = []  # 시행 전 개정이 남은 채로 다시 바뀐 (조문, 시행 전 날짜)
         for no in dict.fromkeys(list(prev) + cur_order):
             old, new = prev.get(no), arts.get(no)
             if old == new:
@@ -404,14 +446,12 @@ def in_force(repo: Repo, path, asof):
                 elif date <= asof:
                     cur.pop('unknown', None)
                     if no in pending:
-                        raise ValueError(
-                            f'{path} {no}: 시행 전 개정이 남은 조문을 제{fm.get("공포번호")}호가 바꿉니다 '
-                            '(조문 단위로 조합할 수 없음)'
-                        )
+                        cur['mixed'] = sorted(set(pending[no]))
+                        mixed.append((no, cur['mixed']))
                     cur.update(title=new['title'], text=new['text'], eff=date)
                     applied += 1
                 else:
-                    pending.add(no)
+                    pending.setdefault(no, []).append(date)
                     waiting.append((no, date))
             if old is None or old['chapter'] != new['chapter']:
                 if sched.chapter(new['chapter']) <= asof:
@@ -428,6 +468,7 @@ def in_force(repo: Repo, path, asof):
                 '반영': applied,
                 '시행 전': len(waiting),
                 'pending': waiting,
+                'mixed': mixed,
             }
         )
     unknown = {no: a['unknown'] for no, a in state.items() if a.get('unknown')}
@@ -436,7 +477,70 @@ def in_force(repo: Repo, path, asof):
     known = [no for no in order if no in state] + [no for no in state if no not in order]
     arts = [state[no] for no in known]
     expire(arts, expiries, asof, path)
+    for a in arts:
+        if a.get('mixed'):
+            dates = ', '.join(dotted(d) for d in a['mixed'])
+            a['text'] = f'{a["text"]}\n[주의: {dates} 시행 예정인 개정 내용이 함께 들어 있음]'
     return arts, used
+
+
+ADDENDUM_HEAD = re.compile(r'^부칙\s*(?:\(([^)]*)\))?[^\n<]*<제(\d+)호,[^>]*>', re.M)
+ADDENDUM_ART = re.compile(r'^제(\d+)조(?:의(\d+))?\s*\(([^)]*)\)', re.M)
+OVERRIDE = re.compile(
+    rf'((?:{ART}(?:제\d+항|제\d+호|제\d+목|[ㆍ·]제?\d+(?:항|호))*\s*(?:,|및|ㆍ|또는)?\s*)+)(?:의\s*개정규정)?\s*에도\s*불구하고'
+)
+# '「다른 법」 제3조', '법 제3조', '부칙 제2조': 이 문서 본칙이 아님
+OTHER_DOC = re.compile(r'(?:」|법|영|규칙|부칙)\s*$')
+UNTIL = re.compile(r'(\d{4})년(?:\s*(\d{1,2})월\s*(\d{1,2})일)?(?:분)?까지')
+
+
+def addendum_overrides(md, used, asof, main_nos):
+    """부칙 특례 조문 [{no, title, text, chapter, eff, targets}]: 부칙 조문이 '제N조…(의 개정규정)에도 불구하고'로 이 문서 본칙
+    (main_nos 안)을 대신하고, 본문의 기한('…년까지', '…년 …월 …일까지') 중 가장 늦은 날이 기준일 이후이며, 그 부칙의
+    개정이 기준일에 시행 중인 것. used: in_force의 버전 기록(조합한 버전의 부칙만 본다). 타법개정 부칙('부칙(정부조직법)')은
+    그 법의 조문이라 넣지 않는다"""
+    _, addenda = split_addenda(md)
+    in_force_numbers = {str(int(u['공포번호'])) for u in used if u['시행일자'] <= asof}
+    heads = list(ADDENDUM_HEAD.finditer(addenda))
+    out = []
+    for i, h in enumerate(heads):
+        number = str(int(h[2]))
+        if h[1] or number not in in_force_numbers:
+            continue
+        block = addenda[h.end() : heads[i + 1].start() if i + 1 < len(heads) else len(addenda)]
+        arts = list(ADDENDUM_ART.finditer(block))
+        for j, a in enumerate(arts):
+            raw = block[a.end() : arts[j + 1].start() if j + 1 < len(arts) else len(block)]
+            text = clean(raw.split('\n'))
+            targets = [
+                f'제{t[0]}조' + (f'의{t[1]}' if t[1] else '')
+                for m in OVERRIDE.finditer(text)
+                if not OTHER_DOC.search(text[: m.start()])
+                for t in re.findall(ART, m[1])
+            ]
+            targets = [t for t in dict.fromkeys(targets) if t in main_nos]
+            ends = [dt.date(int(y), int(mo or 12), int(d or 31)).isoformat() for y, mo, d in UNTIL.findall(text)]
+            if not targets or not ends or max(ends) < asof:
+                continue
+            no = f'제{a[1]}조' + (f'의{a[2]}' if a[2] else '')
+            eff = next(u['시행일자'] for u in used if str(int(u['공포번호'])) == number)
+            out.append(
+                {
+                    'no': f'부칙<제{number}호>{no}',
+                    'title': a[3].strip(),
+                    'text': text,
+                    'chapter': h[0].strip(),
+                    'eff': eff,
+                    'targets': targets,
+                }
+            )
+    return out
+
+
+def dotted(date):
+    """'2027-01-01' → '2027.1.1.' (원문 날짜 표기)"""
+    y, m, d = (int(x) for x in date.split('-'))
+    return f'{y}.{m}.{d}.'
 
 
 EXPIRY = re.compile(r'(.*?)의\s*개정규정은\s*(\d{4})년\s*(\d{1,2})월\s*(\d{1,2})일까지\s*효력을\s*가진다')
@@ -471,8 +575,7 @@ def expire(arts, expiries, asof, path):
         if not paras:
             a['expired'] = True
             continue
-        y, m, d = (int(x) for x in date.split('-'))
-        mark = f' [실효: {y}.{m}.{d}.까지 유효]'
+        mark = f' [실효: {dotted(date)}까지 유효]'
         lines = a['text'].split('\n')
         for k in paras:
             starts = [i for i, line in enumerate(lines) if line.startswith(PARA[k - 1])]
@@ -605,20 +708,24 @@ def doc_name(law, kind):
     return law if kind == '법률' else f'{law} {kind}'
 
 
-def doc_names():
+def doc_names(doc_list=None):
     """공백 없앤 이름 → 문서명 (「…」 참조를 문서로)"""
-    return {re.sub(r'\s+', '', doc_name(law, k)): doc_name(law, k) for law in LAWS for k in KINDS}
+    pairs = [(law, kind) for law, kind, _ in doc_list] if doc_list else [(law, k) for law in LAWS for k in KINDS]
+    return {re.sub(r'\s+', '', doc_name(law, k)): doc_name(law, k) for law, k in pairs}
 
 
-def find_files(repo: Repo, asof):
+def find_files(repo: Repo, asof, doc_list=None):
     """문서명 → 파일 경로. 법령 폴더에서 기준일 버전의 머리말 제목이 문서명이고, 그 버전이 폐지 커밋이 아닌 파일
     (예: 근로기준법 폴더의 법률.md는 1997년 '(폐지)' 커밋으로 끝난 옛 법, 법률(법률).md가 현행. 머리말 상태는 둘 다 '시행')"""
+    kinds_of: dict[str, list[str]] = {}
+    for law, kind, _ in doc_list or docs(None):
+        kinds_of.setdefault(law, []).append(kind)
     paths = {}
-    for law in LAWS:
+    for law, kinds in kinds_of.items():
         folder = f'kr/{law.replace(" ", "")}/'
         files = [f for f in repo.git('ls-tree', '--name-only', 'HEAD', folder).splitlines() if f.endswith('.md')]
         repo.load_history(files)
-        for kind in KINDS:
+        for kind in kinds:
             doc, found = doc_name(law, kind), []
             for f in files:
                 hist = [h for h in repo.history.get(f, []) if h[1] <= asof]
@@ -643,11 +750,38 @@ def doc_order():
     return [(law, '법률') for law in LAWS] + [(law, k) for law in sorted(LAWS) for k in KINDS if k != '법률']
 
 
-def build_rows(repo: Repo, paths, asof):
+def load_scope(path):
+    """범위 목록 CSV(law·kind·article_no 열) → {(법령, 종류): {조문번호}}. 조문 일부만 넣는 문서"""
+    df = pd.read_csv(path, encoding='utf-8-sig', dtype=str, keep_default_na=False)
+    scope: dict[tuple[str, str], set[str]] = {}
+    for law, kind, no in df[['law', 'kind', 'article_no']].itertuples(index=False):
+        scope.setdefault((law, kind), set()).add(no)
+    return scope
+
+
+def docs(scope):
+    """[(법령, 종류, 범위)] 만들 문서와 행 순서. 노동 7개 법률 문서는 전체(범위 None)로 doc_order() 그대로, 범위 목록 문서는
+    그 뒤에 같은 규칙(법률은 목록에 나온 순서, 하위법령은 법령 이름순으로 시행령 → 시행규칙)"""
+    out = [(law, kind, None) for law, kind in doc_order()]
+    if not scope:
+        return out
+    laws = list(dict.fromkeys(law for law, _ in scope))
+    order = [(law, '법률') for law in laws] + [(law, k) for law in sorted(laws) for k in KINDS if k != '법률']
+    return out + [(law, kind, scope[(law, kind)]) for law, kind in order if (law, kind) in scope]
+
+
+def build_rows(repo: Repo, paths, asof, doc_list=None):
+    """조문 행과 버전 기록. 범위가 있는 문서는 범위 안 조문과 그 조문을 대신하는 부칙 특례 조문(addendum_overrides)만"""
     rows, versions = [], []
-    for law, kind in doc_order():
+    for law, kind, scope in doc_list or docs(None):
         doc = doc_name(law, kind)
         arts, used = in_force(repo, paths[doc], asof)
+        if scope is not None:
+            missing = scope - {a['no'] for a in arts}
+            if missing:
+                raise ValueError(f'{doc}: 범위 목록의 조문이 없습니다 {sorted(missing)}')
+            last = repo.show(next(h[0] for h in repo.history[paths[doc]] if h[1] <= asof), paths[doc])
+            arts = [a for a in arts if a['no'] in scope] + addendum_overrides(last, used, asof, scope)
         for a in arts:
             text = a['text']
             deleted = a.get('expired') or (a['title'] is None and (text is None or text.startswith('삭제')))
@@ -671,9 +805,9 @@ def build_rows(repo: Repo, paths, asof):
     return rows, versions
 
 
-def link(rows):
+def link(rows, names=None):
     """related_ids·parent_ids·child_ids. 통계: 없는 조문 참조, 다른 법령 조문 참조(넣지 않음) 수"""
-    names = doc_names()
+    names = names or doc_names()
     order: dict[str, list[str]] = {}
     for r in rows:
         order.setdefault(r['law'], []).append(r['article_id'])
@@ -718,12 +852,13 @@ def to_csv_bytes(df: pd.DataFrame) -> bytes:
     return ('\ufeff' + buf.getvalue()).encode('utf-8')
 
 
-def build(repo_path, asof):
-    """{파일 이름: 바이트}, 버전 목록, 통계. 쓰지 않는다"""
+def build(repo_path, asof, scope=None):
+    """{파일 이름: 바이트}, 버전 목록, 통계. 쓰지 않는다. scope: load_scope() 결과 (조문 일부만 넣는 문서)"""
     repo = Repo(repo_path)
-    paths = find_files(repo, asof)
-    rows, versions = build_rows(repo, paths, asof)
-    stats = link(rows)
+    doc_list = docs(scope)
+    paths = find_files(repo, asof, doc_list)
+    rows, versions = build_rows(repo, paths, asof, doc_list)
+    stats = link(rows, doc_names(doc_list))
     df = pd.DataFrame(rows, columns=DECREE_COLS)
     law = df[df['kind'] == '법률']
     files = {LAW_CSV: to_csv_bytes(law[LAW_COLS]), DECREE_CSV: to_csv_bytes(df)}
@@ -740,14 +875,17 @@ def first_diff(a: bytes, b: bytes):
 
 def main(argv=None):
     p = argparse.ArgumentParser(description='Legalize KR → 조문 CSV (법률, 법률+하위법령)')
-    p.add_argument('--repo', required=True, help='legalize-kr 저장소 (git clone --filter=blob:none)')
+    p.add_argument('--repo', required=True, help='legalize-kr 저장소 (전체 클론: 옛 버전을 모두 읽음)')
     p.add_argument('--asof', required=True, help='기준일 YYYY-MM-DD: 이 날 시행 중인 조문')
     p.add_argument('--out-dir', required=True, type=Path)
     p.add_argument('--check', action='store_true', help='쓰지 않고 out-dir의 기존 파일과 바이트 비교')
+    p.add_argument(
+        '--scope', type=Path, help='범위 목록 CSV (law·kind·article_no): 이 문서들은 목록 조문만 노동 문서 뒤에'
+    )
     a = p.parse_args(argv)
     dt.date.fromisoformat(a.asof)
 
-    files, versions, stats = build(a.repo, a.asof)
+    files, versions, stats = build(a.repo, a.asof, load_scope(a.scope) if a.scope else None)
     print(f'[원문] legalize-kr HEAD {stats["head"]} · 기준일 {a.asof}')
     print(f'[조문] 법률 {stats["law_rows"]}행 · 법률+하위법령 {stats["decree_rows"]}행')
     print(f'[연계] 없는 조문 참조 {len(stats["dangling"])}건 · 다른 법령 참조 {stats["cross"]}건 제외')
@@ -757,6 +895,10 @@ def main(argv=None):
         if v['시행 전']:
             print(
                 f'[시행 전] {v["doc"]} {v["commit"]} 제{v["공포번호"]}호 (시행 {v["시행일자"]}) 조문 {v["시행 전"]}개 제외'
+            )
+        for no, dates in v['mixed']:
+            print(
+                f'[시행 전 포함] {v["doc"]} {no}: 제{v["공포번호"]}호가 시행 전({", ".join(dates)}) 개정이 남은 본문을 다시 바꿈'
             )
     for doc, v in last.items():
         print(f'[버전] {doc} 마지막 {v["commit"]} 제{v["공포번호"]}호 · {stats["paths"][doc]}')
