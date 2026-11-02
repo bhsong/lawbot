@@ -106,7 +106,7 @@ v4 조문 데이터(`data/v4/articles_v4.csv` 법률 415조문, `data/v4/law_art
 - 연결(`related_ids`·`parent_ids`·`child_ids`): 같은 문서·상위 문서의 조문 참조. 삭제 조문, '부칙 제N조', 다른 법령 조문은 넣지 않는다
 - 행 순서: 법률은 7개 법률 순서, 하위법령은 법령 이름순. 조문 임베딩과 `data/decree_exp` 실험 산출물이 이 순서에 묶여 있어 바꾸지 않는다
 
-생성기를 처음 만들 때(2026-11-02) 이전 CSV와 바이트 단위로 같게 나오는 것을 먼저 확인했다 (커밋 `d2d32b7`). 그 뒤 규칙을 하나로 맞추면서 본문·제목·삭제 여부는 그대로 두고 `effective_date` 300칸, `chapter` 66칸, `related_ids` 2칸이 바뀌었다 (계획 문서 "진행").
+생성기를 처음 만들 때(2026-11-02) 이전 CSV와 바이트 단위로 같게 나오는 것을 먼저 확인했다 (커밋 `d2d32b7`). 그 뒤 규칙을 하나로 맞추면서 본문·제목·삭제 여부는 그대로 두고 `effective_date` 300칸, `chapter` 66칸, `related_ids` 2칸이 바뀌었다 ([archives/article-generator.md](archives/article-generator.md) "진행").
 
 ## 6. 개정 목록을 갱신하는 방법
 
