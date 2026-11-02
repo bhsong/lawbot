@@ -1,5 +1,5 @@
 # services/model-server/tests/test_ms_revision.py  →  모델 폴더 지문(revision)·서버 git 커밋 (모델 파일 불필요)
-# 설계: docs/plans/e2e-playwright.md 5-1절
+# 설계: docs/archives/e2e-playwright.md 5-1절
 import subprocess
 from pathlib import Path
 

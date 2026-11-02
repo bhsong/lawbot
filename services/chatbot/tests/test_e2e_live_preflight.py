@@ -10,6 +10,7 @@ from test_e2e_live import Live, comparable
 ENV = {
     'LAWBOT_MODEL_SERVER': 'http://127.0.0.1:65535',
     'LAWBOT_MODEL_TOKEN': 'test-only-model-token-0123',
+    'LAWBOT_MODEL_SERVER_PORT': '65535',
     'LAWBOT_EMB_MODEL': 'emb',
     'LAWBOT_RERANK_MODEL': 'rr',
     'LAWBOT_PRO_MODEL': 'chat',
@@ -77,6 +78,7 @@ def test_config_hides_secrets(live):
     cfg = live().config()
     text = repr(cfg)
     assert ENV['LAWBOT_MODEL_TOKEN'] not in text and 'LAWBOT_MODEL_TOKEN' not in cfg['settings']
+    assert '65535' not in text  # 포트·주소도 남기지 않음 (포트는 각 .env에만)
     assert cfg['model_server_commit'] == 'abc' and [m['revision'] for m in cfg['models']] == [
         'sha256:a',
         'sha256:b',

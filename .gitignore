@@ -38,6 +38,6 @@ cache/
 # 운영 조문 데이터 (lawbot-articles-update가 관리, git 밖: docs/plans/articles-auto-update.md)
 data/live/
 
-# E2E 실패 진단 산출물 (성공하면 테스트가 지움, docs/plans/e2e-playwright.md)
+# E2E 실패 진단 산출물 (성공하면 테스트가 지움, docs/archives/e2e-playwright.md)
 results/e2e_stub/
 results/e2e_live/
