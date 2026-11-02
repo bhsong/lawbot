@@ -113,6 +113,11 @@ class Result:
 
 def check(repo, asof, data_dir=V4_DECREE_ARTICLES.parent) -> dict:
     """비교 결과 (Result의 필드). 파일을 쓰지 않는다"""
+    return check_with_files(repo, asof, data_dir)[0]
+
+
+def check_with_files(repo, asof, data_dir=V4_DECREE_ARTICLES.parent) -> tuple[dict, dict[str, bytes]]:
+    """(비교 결과, 생성한 파일 {이름: 바이트}). lawbot-articles-update가 같은 생성 결과로 갱신한다"""
     if not (Path(repo) / 'HEAD').exists() and not (Path(repo) / '.git').exists():
         raise FileNotFoundError(
             f'legalize-kr 클론이 없습니다: {repo} (git clone --filter=blob:none --no-checkout https://github.com/legalize-kr/legalize-kr)'
@@ -123,7 +128,7 @@ def check(repo, asof, data_dir=V4_DECREE_ARTICLES.parent) -> dict:
     new_df = pd.read_csv(io.BytesIO(files[ba.DECREE_CSV]), encoding='utf-8-sig', dtype=str, keep_default_na=False)
     old_df = pd.read_csv(csv, encoding='utf-8-sig', dtype=str, keep_default_na=False)
     ref = (m.get('source') or {}).get('ref')
-    return {
+    result = {
         'repo': str(repo),
         'asof': asof,
         'head': stats['head'],
@@ -137,6 +142,7 @@ def check(repo, asof, data_dir=V4_DECREE_ARTICLES.parent) -> dict:
         'pending': pending(versions),
         'new': commits_since(ba.Repo(repo), ref, stats['paths']),
     }
+    return result, files
 
 
 def summary_line(r: Result) -> str:
@@ -159,7 +165,8 @@ def _short_diff(old: str, new: str) -> list[str]:
     return lines[:DIFF_LINES] + ([f'… ({len(lines) - DIFF_LINES}줄 더)'] if len(lines) > DIFF_LINES else [])
 
 
-def render(r: Result) -> str:
+def render(r: Result, next_steps: bool = True) -> str:
+    """보고서 md. next_steps: 다르면 손으로 다시 만드는 명령 (자동 갱신 보고서에서는 뺌)"""
     d = r.data
     data = (
         f'`{d["path"]}` (데이터 {d["dataset_version"]} · 기준일 {d["reference_date"]} · 원문 {(d["ref"] or "?")[:8]})'
@@ -200,7 +207,7 @@ def render(r: Result) -> str:
             f'| {c["date"]} | {c["doc"]} | 제{c["공포번호"]}호 | {c["시행일자"]} | {c["sha"][:8]} {c["subject"]} |'
             for c in r.new
         ]
-    if not r.same:
+    if not r.same and next_steps:
         md += [
             '',
             '## 다음 할 일',

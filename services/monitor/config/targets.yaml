@@ -47,5 +47,5 @@ prelegislation:  # 4번: 입법예고·행정예고·국회 법안 제목 키워
 
 checks:  # daily가 collect 다음에 부르는 점검 명령 (law_monitor.checks). 종료 코드 0 이상 없음 · 1 확인 필요 · 그 밖 실패
   # 자리표시: {bin}(law-monitor와 같은 venv의 bin), {home}, {data}, {repos}. 결과 줄(마지막 출력 줄)이 요약 md '점검' 절에 들어감
-  - name: 챗봇 조문 데이터   # 오늘 시행 중인 법과 data/v4 조문 CSV 비교 (tools/lawbot-tools, docs/plans/monitor-article-check.md)
-    command: ['{bin}/lawbot-articles-check', '--repo', '{repos}/legalize-kr', '--report-dir', '{data}/articles']
+  - name: 챗봇 조문 데이터   # 오늘 시행 중인 법과 data/live 비교 → 다르면 새 CSV·임베딩·확인·전환·웹앱 재시작 (docs/plans/articles-auto-update.md)
+    command: ['{bin}/lawbot-articles-update', '--repo', '{repos}/legalize-kr', '--report-dir', '{data}/articles', '--restart']

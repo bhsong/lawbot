@@ -1,0 +1,267 @@
+# tests/test_articles_update.py  →  조문 데이터 자동 갱신 (lawbot_tools.articles_update, 계획 docs/plans/articles-auto-update.md)
+# 점검 → 생성 → 검사·매니페스트 → 임베딩 → 확인 → 아카이브·전환 → 재시작. 생성기·검색기·재시작·포트 확인은 가짜
+import json
+import shutil
+
+import pandas as pd
+import pytest
+
+from lawbot import manifest
+from lawbot.paths import V4_ARTICLES
+from lawbot_tools import articles_update as au
+from lawbot_tools import build_articles as ba
+
+COLS = ba.DECREE_COLS
+HEAD = 'd' * 40
+
+
+def frame(texts: dict[str, str]):
+    """{'근로기준법 제1조': 본문, '근로기준법 시행령 제1조': 본문} → 생성기와 같은 열"""
+    out = []
+    for aid, text in texts.items():
+        law, no = aid.rsplit(' ', 1)
+        kind = '시행령' if law.endswith('시행령') else '법률'
+        parent = law.removesuffix(' 시행령')
+        out.append(
+            {
+                'law': law,
+                'article_id': aid,
+                'article_no': no,
+                'title': '제목',
+                'chapter': None,
+                'deleted': 0,
+                'text': text,
+                'effective_date': '2020-01-01',
+                'related_ids': None,
+                'kind': kind,
+                'parent_law': parent,
+                'parent_ids': None,
+                'child_ids': None,
+            }
+        )
+    return pd.DataFrame(out, columns=COLS)
+
+
+OLD = frame({'근로기준법 제1조': '처음 목적', '근로기준법 제2조': '처음 정의', '근로기준법 시행령 제1조': '영 목적'})
+NEW = frame({'근로기준법 제1조': '바뀐 목적', '근로기준법 제2조': '처음 정의', '근로기준법 시행령 제1조': '영 목적'})
+
+
+def files_of(df):
+    law = df[df['kind'] == '법률'][ba.LAW_COLS]
+    return {ba.LAW_CSV: ba.to_csv_bytes(law), ba.DECREE_CSV: ba.to_csv_bytes(df)}
+
+
+def write_set(folder, df, ref_date='2026-10-20'):
+    folder.mkdir(parents=True, exist_ok=True)
+    for name, data in files_of(df).items():
+        (folder / name).write_bytes(data)
+    for csv, man in au.MANIFESTS.items():
+        m = {
+            'dataset_version': 'v4',
+            'reference_date': ref_date,
+            'collected_date': ref_date,
+            'source': {'name': 'Legalize KR', 'url': 'u', 'ref': 'c' * 40},
+            'articles_file': csv,
+            'articles_sha256': manifest.sha256(folder / csv),
+            'trained_on': {'embedding': 'v4'},
+        }
+        (folder / man).write_text(json.dumps(m, ensure_ascii=False), encoding='utf-8')
+
+
+class World:
+    """가짜 생성기·웹앱 설정·검색기·재시작. calls에 순서를 남긴다"""
+
+    def __init__(self, monkeypatch, live, new_df, *, found=True, ready=True):
+        self.calls, self.found, self.ready = [], found, ready
+        (live.parent / 'HEAD').write_text('ref: refs/heads/main\n')  # 가짜 클론 (--repo = tmp_path)
+        monkeypatch.setattr(au.ac.ba, 'build', self.build)
+        monkeypatch.setattr(au.ac, 'commits_since', lambda repo, ref, paths: [])
+        monkeypatch.setattr(au, 'web_csv', lambda: live / ba.DECREE_CSV)
+        monkeypatch.setattr(au, 'web_port', lambda: 12345)
+        monkeypatch.setattr(au, 'make_retriever', self.retriever)
+        monkeypatch.setattr(au, 'restart_web', self.restart)
+        monkeypatch.setattr(au, 'wait_web', self.wait)
+        self.new_df = new_df
+
+    def build(self, repo, asof):
+        self.calls.append('build')
+        return files_of(self.new_df), [], {'head': HEAD, 'paths': {}}
+
+    def retriever(self, csv):
+        self.calls.append(f'embed {csv.parent.name}/{csv.name}')
+        df = pd.read_csv(csv, encoding='utf-8-sig')
+        hits = [{'law': r.law, 'article_id': r.article_no} for r in df.itertuples()] if self.found else []
+
+        class R:
+            def search(self, q, k=3):
+                return [h for h in hits if not h['law'].endswith('시행령')][:k]
+
+            def search_decrees(self, q, k=10):
+                return [h for h in hits if h['law'].endswith('시행령')][:k]
+
+        return R()
+
+    def restart(self):
+        self.calls.append('restart')
+        return True, 'kickstart com.lawbot.web'
+
+    def wait(self, port, timeout=au.READY_TIMEOUT):
+        self.calls.append(f'wait {port}')
+        return self.ready
+
+
+@pytest.fixture
+def live(tmp_path):
+    d = tmp_path / 'live'
+    write_set(d, OLD)
+    return d
+
+
+def run(live, tmp_path, *extra):
+    return au.main(
+        [
+            '--repo',
+            str(tmp_path),
+            '--asof',
+            '2026-11-27',
+            '--live-dir',
+            str(live),
+            '--report-dir',
+            str(tmp_path / 'reports'),
+            *extra,
+        ]
+    )
+
+
+def last_line(capsys):
+    return capsys.readouterr().out.strip().splitlines()[-1]
+
+
+def test_init_copies_v4_and_refuses_twice(tmp_path, capsys):
+    live = tmp_path / 'live'
+    assert au.main(['--init', '--live-dir', str(live)]) == 0
+    for name in (*au.MANIFESTS, *au.MANIFESTS.values()):
+        assert (live / name).read_bytes() == (V4_ARTICLES.parent / name).read_bytes()
+    assert au.main(['--init', '--live-dir', str(live)]) == 2
+    assert '이미' in last_line(capsys)
+
+
+def test_same_data_exit_0_and_nothing_written(live, tmp_path, monkeypatch, capsys):
+    w = World(monkeypatch, live, OLD)
+    before = {p.name: p.read_bytes() for p in live.iterdir()}
+    assert run(live, tmp_path, '--restart') == 0
+    assert last_line(capsys).startswith('articles updated=no same=yes')
+    assert {p.name: p.read_bytes() for p in live.iterdir()} == before
+    assert w.calls == ['build']
+
+
+def test_update_archives_switches_embeds_and_restarts(live, tmp_path, monkeypatch, capsys):
+    w = World(monkeypatch, live, NEW)
+    old = {name: (live / name).read_bytes() for name in au.MANIFESTS}
+    assert run(live, tmp_path, '--restart') == 1
+    line = last_line(capsys)
+    assert line.startswith('articles updated=yes asof=2026-11-27 changed=1 archive=2026-10-20 restart=ok')
+    assert line.endswith(str(tmp_path / 'reports' / '2026-11-27.md'))
+    assert w.calls == ['build', f'embed .staging/{ba.DECREE_CSV}', 'restart', 'wait 12345']
+    arch = live / 'archive'
+    assert sorted(p.name for p in arch.iterdir()) == [
+        'articles_v4_2026-10-20.csv',
+        'law_articles_v4_decree_2026-10-20.csv',
+        'manifest_2026-10-20.json',
+        'manifest_decree_2026-10-20.json',
+    ]
+    assert (arch / 'law_articles_v4_decree_2026-10-20.csv').read_bytes() == old[ba.DECREE_CSV]
+    assert (live / ba.DECREE_CSV).read_bytes() == files_of(NEW)[ba.DECREE_CSV]
+    m = manifest.check(live / ba.DECREE_CSV)  # 웹앱과 같은 검사 통과
+    assert (m['dataset_version'], m['reference_date'], m['source']['ref']) == ('live-2026-11-27', '2026-11-27', HEAD)
+    assert m['trained_on'] == {'embedding': 'v4'}  # 모델이 학습한 데이터는 그대로
+    assert not (live / '.staging').exists()
+    md = (tmp_path / 'reports' / '2026-11-27.md').read_text(encoding='utf-8')
+    assert '## 갱신' in md and 'law_articles_v4_decree_2026-10-20.csv' in md and '재시작: ok' in md
+
+
+def test_second_update_same_reference_date_gets_unique_archive_name(live, tmp_path, monkeypatch, capsys):
+    World(monkeypatch, live, NEW)
+    assert run(live, tmp_path) == 1
+    write_set(live, OLD)  # 같은 기준일 파일을 다시 두고 갱신
+    assert run(live, tmp_path) == 1
+    names = sorted(p.name for p in (live / 'archive').iterdir())
+    assert 'law_articles_v4_decree_2026-10-20_2.csv' in names and 'manifest_decree_2026-10-20_2.json' in names
+
+
+def test_gate_failure_keeps_current_data(live, tmp_path, monkeypatch, capsys):
+    w = World(monkeypatch, live, NEW, found=False)
+    before = (live / ba.DECREE_CSV).read_bytes()
+    assert run(live, tmp_path, '--restart') == 2
+    line = last_line(capsys)
+    assert '검색되지 않음' in line and '근로기준법 제1조' in line
+    assert (live / ba.DECREE_CSV).read_bytes() == before and not (live / 'archive').exists()
+    assert 'restart' not in w.calls and not (live / '.staging').exists()
+
+
+def test_web_not_ready_rolls_back_and_restarts_again(live, tmp_path, monkeypatch, capsys):
+    w = World(monkeypatch, live, NEW, ready=False)
+    before = {name: (live / name).read_bytes() for name in (*au.MANIFESTS, *au.MANIFESTS.values())}
+    assert run(live, tmp_path, '--restart') == 2
+    assert '되돌림' in last_line(capsys)
+    assert {name: (live / name).read_bytes() for name in before} == before
+    assert w.calls.count('restart') == 2
+
+
+def test_web_must_read_live_dir(live, tmp_path, monkeypatch, capsys):
+    World(monkeypatch, live, NEW)
+    monkeypatch.setattr(au, 'web_csv', lambda: tmp_path / 'v4' / ba.DECREE_CSV)
+    assert run(live, tmp_path) == 2
+    assert 'LAWBOT_V4_DECREE_ARTICLES' in last_line(capsys)
+
+
+def test_empty_live_dir_asks_for_init(tmp_path, monkeypatch, capsys):
+    live = tmp_path / 'live'
+    World(monkeypatch, live, NEW)
+    assert run(live, tmp_path) == 2
+    assert '--init' in last_line(capsys)
+
+
+def test_rollback_restores_previous_set(live, tmp_path, monkeypatch, capsys):
+    w = World(monkeypatch, live, NEW)
+    before = {name: (live / name).read_bytes() for name in (*au.MANIFESTS, *au.MANIFESTS.values())}
+    assert run(live, tmp_path) == 1
+    assert au.main(['--rollback', '--live-dir', str(live), '--restart']) == 0
+    assert {name: (live / name).read_bytes() for name in before} == before
+    assert 'restart' in w.calls
+    assert '2026-11-27' in last_line(capsys)  # 되돌리며 보관한 새 데이터 이름
+
+
+def test_launchd_workdir_guard():
+    text = '\tstate = running\n\tprogram = /opt/homebrew/bin/uv\n\tworking directory = /Users/x/Work/lawbot-prod\n'
+    assert au.launchd_workdir(text) == '/Users/x/Work/lawbot-prod'
+    assert au.launchd_workdir('state = running\n') is None
+
+
+def test_restart_skips_other_worktree(monkeypatch, tmp_path):
+    monkeypatch.setattr(au, 'ROOT', tmp_path / 'lawbot')
+    calls = []
+
+    def fake(cmd, **kw):
+        calls.append(cmd)
+
+        class P:
+            returncode, stdout, stderr = 0, '\tworking directory = /Users/x/Work/lawbot-prod\n', ''
+
+        return P()
+
+    monkeypatch.setattr(au.subprocess, 'run', fake)
+    ok, why = au.restart_web()
+    assert not ok and 'lawbot-prod' in why and all('kickstart' not in c for c in calls)
+    monkeypatch.setattr(au, 'ROOT', au.Path('/Users/x/Work/lawbot-prod'))
+    calls.clear()
+    ok, why = au.restart_web()
+    assert ok and any('kickstart' in c for c in calls)
+
+
+def test_staging_is_removed_after_validation_error(live, tmp_path, monkeypatch, capsys):
+    bad = NEW.assign(text=['', '처음 정의', '영 목적'])  # 빈 본문
+    World(monkeypatch, live, bad)
+    assert run(live, tmp_path) == 2
+    assert '본문이 빈' in last_line(capsys) and not (live / '.staging').exists()
+    shutil.rmtree(live)
