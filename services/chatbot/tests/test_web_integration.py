@@ -22,7 +22,7 @@ pytestmark = pytest.mark.integration
 USER, PW = 'tester', 'test-only-pw'  # 테스트 전용 가짜 값
 SERVER = Path(__file__).with_name('web_server.py')
 START_TIMEOUT = 60
-DELAY = 0.3  # 가짜 모델 토큰 간격 (초): 조각 4개 → 생성 약 1.2초
+DELAY = 0.2  # 가짜 모델 토큰 간격 (초): 조각 10개 → 생성 약 2초
 WAIT_LIMIT = 15  # 기다리는 반복문의 상한 (초)
 
 
@@ -83,9 +83,9 @@ def client(server):
         yield c
 
 
-def stream_events(c, question=view.EXAMPLES[0]):
+def stream_events(c, question=view.EXAMPLES[0], fmt='full'):
     """채팅 스트림을 읽으며 (도착 시각, 이벤트, 데이터)를 차례로"""
-    body = {'question': question, 'model': 'fast', 'format': 'full'}
+    body = {'question': question, 'model': 'fast', 'format': fmt}
     with c.stream('POST', '/api/chat', json=body) as r:
         assert r.status_code == 200
         event = None
@@ -107,8 +107,6 @@ def test_login_required_over_http(server):
         r = c.post('/api/chat', json={'question': 'x', 'model': 'fast', 'format': 'full'})
         assert r.status_code == 401
         assert c.post('/api/login', json={'user': USER, 'password': 'wrong'}).status_code == 401
-        page = c.get('/')
-        assert page.status_code == 404 and 'npm run build' in page.text  # PR 1: 화면 빌드 없음
     assert not server.calls.exists() or 'start' not in server.calls.read_text()
 
 
@@ -144,12 +142,14 @@ def test_second_question_waits_for_first(server):
     assert kinds == ['start', 'end'] * (len(kinds) // 2) and times == sorted(times)  # 생성이 겹치지 않음
 
 
-def test_disconnect_marks_request_cancelled(server):
+@pytest.mark.parametrize('fmt', ['full', 'concise'])
+def test_disconnect_marks_request_cancelled(server, fmt):
+    """간결형은 결론 뒤 토큰이 화면 글을 바꾸지 않아 보낼 조각이 없다: 그 사이에도 끊김을 알아채야 한다"""
     before = len(log_rows(server))
     with client(server) as c:
-        for _, event, _ in stream_events(c):
-            if event == 'answer':
-                break  # 첫 조각을 받자마자 연결을 끊는다 (화면의 중지 버튼)
+        for _, event, data in stream_events(c, fmt=fmt):
+            if event == 'answer' and '합니다' in data['text']:
+                break  # 결론이 다 보인 뒤 끊는다 (화면의 중지 버튼). 간결형은 남은 토큰이 화면 글을 바꾸지 않음
     deadline = time.monotonic() + WAIT_LIMIT
     while len(log_rows(server)) == before:
         assert time.monotonic() < deadline, f'요청 로그가 남지 않음\n{server_log(server.out)}'

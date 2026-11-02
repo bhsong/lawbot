@@ -49,7 +49,7 @@ Gradio가 하던 일을 옮긴다. `service.ask`와 `app.py`의 문구·조립 �
 | `error` | `{kind, message}` | `AskError` 종류별 지금 문구 그대로. 설정 오류(`config`)는 자세한 값 없이 안내 + 서버 로그 |
 
 - 동시 처리: `LAWBOT_CHAT_CONCURRENCY` 크기의 세마포어. 자리가 없으면 `status`로 "앞 질문을 기다리는 중" 후 대기 (Gradio 대기열과 같은 동작). `service.ask`(동기 생성기)는 스레드에서 돈다.
-- 브라우저가 연결을 끊으면(중지 버튼) 생성기를 닫는다. 모델 서버의 생성이 즉시 멈춘다고 가정하지 않는다 (지침).
+- 브라우저가 연결을 끊으면(중지 버튼) 생성기를 닫는다. 끊김은 토큰마다 확인한다: 간결형은 결론 뒤 토큰(근거·설명)이 화면 글을 바꾸지 않아 보낼 조각이 없으므로, 그 단계에도 보내지 않는 `tick`을 내고 확인한다 (PR 2 대역 E2E에서 발견). 모델 서버의 생성이 즉시 멈춘다고 가정하지 않는다 (지침).
 - 입력 검사: 질문은 비어 있지 않고 2,000자 이하, 모델은 쓰는 모델, 형식은 `concise`·`full`. 틀리면 400 (모델 서버를 부르지 않음).
 - 피드백: 지금 `Feedback`의 저장 형식(JSONL 줄)은 그대로. 서버가 세션별 순번을 매겨 `turn_id`로 찾는 메서드(`remember_turn`·`save`)를 더하고, Gradio 전용(`history`, `LikeData`, 'Like' 문자열, 화면 글 비교)은 PR 3에서 지운다.
 
@@ -69,7 +69,7 @@ Gradio가 하던 일을 옮긴다. `service.ask`와 `app.py`의 문구·조립 �
 | --- | --- | --- |
 | **PR 1** | 이 계획서. `view.py`로 화면 문구 함수 이동(동작 같음), `web.py`(로그인·config·chat SSE·feedback·정적 파일), 명령 `lawbot-web`(개발용, `dist`가 없으면 API만), 테스트 | 그대로 운영 화면 |
 | **PR 2** | `frontend/` SPA. **가짜 데이터로 화면을 먼저 만들어 스크린샷(데스크톱·휴대폰·다크·생성 중·오류)을 사용자에게 보이고 승인 뒤 연결**. CI에 Node(설치·`tsc`·Vitest·빌드) 추가. SPA 대역 E2E | 그대로 |
-| **PR 3** | `lawbot-app`이 FastAPI+SPA를 띄움(launchd plist 그대로), Gradio·`feedback_ui.py`·Gradio 테스트 제거, `gradio` 의존성 제거, `docs/operations.md` 운영 반영 절차에 빌드 추가, `e2e_live`를 새 화면으로 (실행은 승인 후) | 제거 |
+| **PR 3** | `lawbot-app`이 FastAPI+SPA를 띄움(launchd plist 그대로), Gradio·`feedback_ui.py`·Gradio 테스트 제거, `gradio` 의존성 제거, `docs/operations.md` 운영 반영 절차에 빌드 추가, `e2e_live`를 새 화면으로 (실행은 승인 후). 휴대폰 접속 경로(Tailscale) 확인 후 https일 때 쿠키 `Secure` | 제거 |
 
 ## 5. 테스트 (구현보다 먼저)
 

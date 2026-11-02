@@ -71,7 +71,7 @@ uv run lawbot-app            # 터미널 2: 모델 서버가 준비될 때까지
 - `.env`는 `.gitignore`에 들어 있어 Git에 올라가지 않습니다. `.env.example`에는 비밀번호를 적지 마세요.
 - 셸에서 `export`한 변수가 있으면 그 값이 `.env`보다 우선합니다. 한 번만 다르게 실행할 때는 `LAWBOT_RERANKER_ENABLED=0 uv run lawbot-app`처럼 앞에 붙입니다.
 - 다른 파일을 쓰려면 `LAWBOT_ENV_FILE=.env.small uv run lawbot-app`(예: 소형 맥의 Fast 4B 설정), 파일을 읽지 않으려면 `LAWBOT_ENV_FILE=`.
-- 새 화면(개발 중, [계획](plans/web-spa.md)): `uv run lawbot-web --port <다른 포트>`로 같은 설정의 새 화면 API를 Gradio 화면과 나란히 띄웁니다. 시작할 때 `lawbot-app`처럼 모델 서버로 조문 인덱스를 만듭니다(임베딩 캐시가 있으면 호출 없음). 화면 파일(`services/chatbot/frontend/dist`)은 다음 단계에서 생기며, 그전에는 `/api/*`만 동작합니다. 운영은 계속 `lawbot-app`입니다.
+- 새 화면(개발 중, [계획](plans/web-spa.md)): 화면 파일을 먼저 빌드하고(`cd services/chatbot/frontend && npm ci && npm run build`, Node는 `.nvmrc`), `uv run lawbot-web --port <다른 포트>`로 같은 설정의 새 화면을 Gradio 화면과 나란히 띄웁니다. 시작할 때 `lawbot-app`처럼 모델 서버로 조문 인덱스를 만듭니다(임베딩 캐시가 있으면 호출 없음). 화면을 고치는 중에는 `LAWBOT_WEB_URL=http://127.0.0.1:<lawbot-web 포트> npm run dev`로 Vite 개발 서버를 띄우면 `/api`가 `lawbot-web`으로 넘어갑니다. 운영은 계속 `lawbot-app`입니다.
 - `.env`에는 `LAWBOT_*`만 적을 수 있습니다. 서버 주소는 바꿀 수 없고, 웹앱 포트는 `LAWBOT_PORT`로 정합니다(아래 참고).
 - 값에 공백이나 ` #`이 들어가면 작은따옴표로 감쌉니다: `LAWBOT_PW='a b#c'`.
 
