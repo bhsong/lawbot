@@ -98,6 +98,7 @@ def test_pending_groups_by_document_amendment_and_date():
 
 @pytest.fixture
 def data_dir(tmp_path):
+    (tmp_path / 'HEAD').write_text('ref: refs/heads/main\n')  # 가짜 클론 (bare 저장소처럼 HEAD 파일만)
     d = tmp_path / 'v4'
     d.mkdir()
     (d / ba.DECREE_CSV).write_bytes(ba.to_csv_bytes(OLD))
@@ -183,6 +184,15 @@ def test_check_failure_exit_2(data_dir, tmp_path, monkeypatch, capsys):
     monkeypatch.setattr(ac.ba, 'build', broken)
     assert ac.main(['--repo', str(tmp_path), '--asof', '2026-11-02', '--data-dir', str(data_dir)]) == 2
     assert capsys.readouterr().out.strip().splitlines()[-1] == 'articles error=부칙 시행일을 읽지 못했습니다'
+
+
+def test_missing_clone_exit_2(data_dir, tmp_path, capsys):
+    missing = tmp_path / 'repos' / 'legalize-kr'
+    assert ac.main(['--repo', str(missing), '--asof', '2026-11-02', '--data-dir', str(data_dir)]) == 2
+    assert (
+        capsys.readouterr().out.strip()
+        == f'articles error=legalize-kr 클론이 없습니다: {missing} (law-monitor bootstrap·collect가 만든다)'
+    )
 
 
 def test_default_asof_is_today_in_korea():

@@ -113,6 +113,8 @@ class Result:
 
 def check(repo, asof, data_dir=V4_DECREE_ARTICLES.parent) -> dict:
     """비교 결과 (Result의 필드). 파일을 쓰지 않는다"""
+    if not (Path(repo) / 'HEAD').exists() and not (Path(repo) / '.git').exists():
+        raise FileNotFoundError(f'legalize-kr 클론이 없습니다: {repo} (law-monitor bootstrap·collect가 만든다)')
     csv = Path(data_dir) / ba.DECREE_CSV
     m = manifest.load(csv) or {}
     files, versions, stats = ba.build(repo, asof)
