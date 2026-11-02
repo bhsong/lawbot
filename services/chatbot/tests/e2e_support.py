@@ -82,7 +82,9 @@ def start_webapp(log_dir, port, **env):
     web = Proc(
         'webapp',
         [sys.executable, '-c', 'from lawbot.app import main; main()'],
-        clean_env(LAWBOT_USER=USER, LAWBOT_PW=PW, LAWBOT_PORT=str(port), **env),
+        clean_env(
+            **(env | {'LAWBOT_USER': USER, 'LAWBOT_PW': PW, 'LAWBOT_PORT': str(port)})
+        ),  # 테스트 로그인·포트가 .env 값보다 우선
         log_dir,
     )
     web.wait_http(f'http://127.0.0.1:{port}/', lambda r: r.status_code == 200)
