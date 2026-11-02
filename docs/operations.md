@@ -193,8 +193,8 @@ Colab 실험(transformers fp16)과의 순위 일치는 리랭커 도입 때 val�
 | `POST /v1/chat/completions` | OpenAI | 스트림(SSE)·`stream_options.include_usage`. `temperature`가 없으면 0(탐욕적 생성, OpenAI 기본값 1과 다름). 확장: `chat_template_kwargs.enable_thinking`(기본 끔), 응답의 `timings`(프리필·생성 속도, MLX 최대 메모리) |
 | `POST /v1/embeddings` | OpenAI | `encoding_format` `float`·`base64`. 확장: `input_type`(`query`·`document`), `max_seq_length`. 목록 하나를 encode 한 번으로 처리 |
 | `POST /v1/rerank` | Cohere/Jina | `results: [{index, relevance_score}]`. 확장: `instruction`(작업 설명) |
-| `GET /v1/models` | OpenAI | 확장: `type`(chat·embedding·rerank), `loaded` |
-| `GET /health` | | `{ready}` (모델을 불러오는 중에도 응답) |
+| `GET /v1/models` | OpenAI | 확장: `type`(chat·embedding·rerank), `loaded`, `revision`(모델 폴더 지문 `sha256:<16자>`: 파일 경로·크기·앞뒤 1MB로 시작할 때 계산. 같은 id로 폴더를 바꾸면 값이 달라짐) |
+| `GET /health` | | `{ready, commit}` (모델을 불러오는 중에도 응답. `commit`은 모델 서버를 띄운 레포의 git 커밋, 변경이 있으면 `+dirty`) |
 
 ```python
 from openai import OpenAI

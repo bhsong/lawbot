@@ -131,6 +131,7 @@ class ModelCard(Response):
     owned_by: str = 'lawbot'
     type: Literal['chat', 'embedding', 'rerank']  # 확장
     loaded: bool  # 확장: 지금 올라 있는지
+    revision: str | None = None  # 확장: 모델 폴더 지문 'sha256:<16자>' (폴더 없음·옛 서버는 None)
 
 
 class ModelsResponse(Response):
@@ -140,6 +141,7 @@ class ModelsResponse(Response):
 
 class HealthResponse(Response):
     ready: bool
+    commit: str | None = None  # 모델 서버를 띄운 레포의 git 커밋 (변경 있으면 '+dirty', 모르면 None)
 
 
 class ErrorDetail(Response):

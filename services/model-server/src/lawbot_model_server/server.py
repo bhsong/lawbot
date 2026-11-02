@@ -7,7 +7,7 @@ import time
 import uvicorn
 
 from lawbot_common.logs import logger
-from lawbot_model_server import api, config, envfile
+from lawbot_model_server import api, config, envfile, revision
 from lawbot_model_server.registry import Registry
 
 log = logger('lawbot_model_server', 'model-server')
@@ -38,7 +38,12 @@ def load_models(app, cfg, registry_cls=Registry):
 def main():
     envfile.load()
     cfg = config.load()  # 포트·토큰·모델 목록이 없으면 모델을 올리기 전에 실행 거부
-    app = api.create_app(cfg.token, max_concurrent=cfg.max_concurrent, max_queued=cfg.max_queued)
+    app = api.create_app(
+        cfg.token,
+        max_concurrent=cfg.max_concurrent,
+        max_queued=cfg.max_queued,
+        commit=revision.git_commit(envfile.ROOT),
+    )
     server = build_server(app, cfg.port)
     failed = []
 

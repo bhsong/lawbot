@@ -257,7 +257,7 @@ def test_disconnect_stops_generation_and_frees_slot(ms_env):
 def test_real_server_requires_token(ms_env):
     with running(api.create_app(TOKEN, registry())) as url, httpx.Client(trust_env=False) as c:
         assert c.get(f'{url}/health').status_code == 401
-        assert c.get(f'{url}/health', headers=AUTH).json() == {'ready': True}
+        assert c.get(f'{url}/health', headers=AUTH).json() == {'ready': True, 'commit': None}
 
 
 def test_entry_kinds_unique_ids():

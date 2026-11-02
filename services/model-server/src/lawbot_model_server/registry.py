@@ -7,6 +7,7 @@ import time
 from collections import OrderedDict
 
 from lawbot_common.logs import logger
+from lawbot_model_server import revision
 
 log = logger('lawbot_model_server', 'model-server')
 
@@ -52,6 +53,7 @@ class Registry:
         self.entries = {e.id: e for e in entries}
         self.loaders = loaders or default_loaders()
         self.max_resident = max_resident
+        self.revisions = {e.id: revision.fingerprint(e.path) for e in entries}  # 시작할 때 한 번 (/v1/models)
         self.fixed = {}  # embedding·rerank id → 모델
         self.chat = OrderedDict()  # chat id → 모델 (오래 안 쓴 순)
         self.lock = threading.Lock()
@@ -103,7 +105,7 @@ class Registry:
             return m, time.perf_counter() - t0
 
     def listing(self):
-        """/v1/models의 data (OpenAI 형식 + 확장 필드 type·loaded)"""
+        """/v1/models의 data (OpenAI 형식 + 확장 필드 type·loaded·revision)"""
         return [
             {
                 'id': i,
@@ -112,6 +114,7 @@ class Registry:
                 'owned_by': 'lawbot',
                 'type': e.kind,
                 'loaded': self.is_loaded(i),
+                'revision': self.revisions[i],
             }
             for i, e in self.entries.items()
         ]

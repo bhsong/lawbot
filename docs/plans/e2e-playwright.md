@@ -114,6 +114,22 @@ pytest (Playwright) ──▶ 127.0.0.1:<빈 포트 A>  웹앱 프로세스 (law
 - Gradio 6.30 화면을 기존 `integration_server.py`(가짜 모델)로 띄워 확인: 로그인은 `input[type=password]`·`Login` 버튼, 질문 입력창은 `data-testid=textbox`(Enter로 전송), 답변은 `data-testid=bot`, 예시 질문은 버튼 `aria-label="Select example N: …"`. 측정 줄·조문 카드는 Markdown이라 `elem_id`를 붙여 찾는다
 - `ms_fakes.Registry(entries, loaders)`에 v4 id(`lawbot-emb-v4`, `qwen3-reranker-4b`, `qwen3.8-27b-4bit`)로 `ModelEntry`를 넣으면 가짜 모델로 등록 가능
 
+## 5-1. 3단계 설계: 모델 revision 노출 (사용자 승인 2026-11-02)
+
+지금은 `/v1/models`가 별칭 id만 주고(`created: 0`) chat 응답의 `system_fingerprint`는 `None`이라, 같은 id로 폴더를 바꿔 끼우면 웹앱·E2E가 알 수 없다.
+
+| 항목 | 설계 | 이유 |
+| --- | --- | --- |
+| revision 값 | 모델 폴더의 모든 파일(숨김 파일 제외)의 상대 경로·크기·앞뒤 1MB 내용을 경로 순서로 sha256 → `sha256:<앞 16자>`. 폴더가 없으면 `None` | 27B 가중치(약 15GB)를 다 해시하면 시작이 수십 초 늘어남. 폴더 교체·가중치 변경은 이것으로 충분히 잡히고 1초 안에 끝남 |
+| 계산 시점 | Registry를 만들 때 모든 항목 한 번 (실행 중 폴더가 바뀌는 경우는 다루지 않음. 바꾸면 서버를 다시 띄우는 것이 운영 규칙) | 시작 시 한 번이면 요청마다 비용 없음 |
+| `/v1/models` | 항목마다 `revision` 확장 필드 (`ModelCard.revision: str \| None = None`) | OpenAI 호환 클라이언트는 모르는 필드를 무시. 기존 `type`·`loaded`와 같은 방식 |
+| `/health` | `commit`: 모델 서버를 띄운 레포의 git 커밋(40자, 작업 트리에 변경이 있으면 끝에 `+dirty`). git이 없으면 `None` | 실행 구성 기록의 "모델 서버 git 커밋". `/health`도 토큰이 있어야 보임 |
+
+테스트 (`services/model-server/tests/test_ms_revision.py`, `test_ms_api.py`):
+- 같은 폴더는 같은 값, 파일 내용(앞·중간·뒤 중 앞뒤)·크기·이름이 바뀌면 다른 값, 없는 폴더는 `None`, 숨김 파일(`.DS_Store`)은 무시
+- `/v1/models` 항목에 `revision`, `/health`에 `commit`. OpenAI SDK `models.list()`는 그대로 동작
+- git 커밋: 깨끗한 저장소 → 40자, 변경 있음 → `+dirty`, git 저장소 아님 → `None`
+
 ## 6. 위험
 
 | 위험 | 대응 |
