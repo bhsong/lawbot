@@ -184,6 +184,12 @@ def sources(page):
     return page.get_by_test_id('lawbot-sources').first
 
 
+def law_cards(page):
+    """조문 패널의 법률 조문 카드 글 (하위법령 카드는 〔시행령〕·〔시행규칙〕 표시가 있어 뺀다)"""
+    cards = [c.inner_text() for c in sources(page).get_by_test_id('source-card').all()]
+    return [c for c in cards if '〔' not in c]
+
+
 def wait_done(page, timeout=ANSWER_TIMEOUT):
     """측정 줄에 '완료'가 나오면 질문 하나가 끝난 것 (fmt_stats의 done 단계)"""
     stats(page).get_by_text('완료').wait_for(timeout=timeout)

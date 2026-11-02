@@ -175,8 +175,7 @@ def run_scenario(live, page, name):
     row.update({k: log.get(k) for k in ('status', 'error_type', 'total_ms', 'ttft_ms', 'n_decree', 'refused')})
     assert text.strip() and not text.startswith('⏳'), text  # 스트리밍이 끝나고 비어 있지 않은 답
     assert (log['mode'], log['status'], log['error_type']) == ('api', 'ok', None), log
-    law_cards = [line for line in src.splitlines() if '유사도' in line and '〔' not in line]
-    assert len(law_cards) == 3, src  # 법률 조문 카드 3개
+    assert len(e2e.law_cards(page)) == 3, src  # 법률 조문 카드 3개
     for part in ('검색', '리랭킹', '첫 토큰', '완료'):
         assert part in st, (part, st)
     if name != 'out_of_scope':

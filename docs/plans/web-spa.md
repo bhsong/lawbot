@@ -74,7 +74,7 @@ Gradio가 하던 일을 옮긴다. `service.ask`와 `app.py`의 문구·조립 �
 ## 진행 (2026-11-03)
 
 - PR 1 (#51), PR 2 (#52) 병합.
-- PR 3: `lawbot-app` = `lawbot.web:main`. Gradio·`feedback_ui.py`·Gradio 테스트 제거, `gradio` 의존성 제거. 화면 빌드 지문(`dist/build.json`)이 소스와 다르면 시작 거부. https(`X-Forwarded-Proto`, uvicorn이 127.0.0.1에서 온 것만 믿음)일 때 쿠키 `Secure`. Gradio chat 함수를 쓰던 테스트는 `chat_support.run`(`web.chat_events`)으로 같은 기대값을 검사. 남은 것: `e2e_live` 3문항(승인 후), 운영 반영 뒤 휴대폰 확인(Tailscale `X-Forwarded-Proto` 포함).
+- PR 3: `lawbot-app` = `lawbot.web:main`. Gradio·`feedback_ui.py`·Gradio 테스트 제거, `gradio` 의존성 제거. 화면 빌드 지문(`dist/build.json`)이 소스와 다르면 시작 거부. https(`X-Forwarded-Proto`, uvicorn이 127.0.0.1에서 온 것만 믿음)일 때 쿠키 `Secure`. Gradio chat 함수를 쓰던 테스트는 `chat_support.run`(`web.chat_events`)으로 같은 기대값을 검사. `e2e_live` 1차(2026-11-03)는 조문 카드를 Gradio 기준으로 세는 테스트 오류로 3개 모두 실패(모델 서버 경로는 성공, [기록](../evals/2026-11-03-e2e-live-spa.md)). 그래서 카드를 `source-card` test id로 세는 `e2e_support.law_cards`를 추가해 대역 E2E와 같이 씀. 남은 것: `e2e_live` 3문항 재실행(승인 후), 운영 반영 뒤 휴대폰 확인(Tailscale `X-Forwarded-Proto` 포함).
 
 ## 5. 테스트 (구현보다 먼저)
 

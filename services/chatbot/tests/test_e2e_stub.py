@@ -87,8 +87,9 @@ def test_sources_and_stats_shown(stack, ui):
     assert src.get_by_text('✅ 답변에서 인용한 조문').count() == 1  # 가짜 답은 첫 번째 조문을 인용
     assert src.get_by_text('검색만 된 조문').count() == 1
     cards = [c.inner_text() for c in src.get_by_test_id('source-card').all()]
-    law_cards = [c for c in cards if '〔' not in c]
+    law_cards = e2e.law_cards(ui)
     assert len(law_cards) == 3, cards  # 법률 조문 3개 (하위법령 카드는 〔시행령〕·〔시행규칙〕 표시)
+    assert len(cards) > 3, cards  # 하위법령 카드도 있는 상태에서 법률 카드만 셈 (e2e_live와 같은 헬퍼)
     assert all('리랭커' in c for c in law_cards)
 
 
