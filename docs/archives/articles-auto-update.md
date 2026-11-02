@@ -84,4 +84,5 @@ uv run lawbot-articles-update --rollback [--restart]   # 바로 전 파일로 �
 
 - 구현 (PR #46에 이어서, 2026-11-02): monitor 점검 연결(되돌렸던 커밋 다시), `check_deploy`(법률 행 기준 = `LAWBOT_V4_ARTICLES`, 하위법령 수 = 매니페스트), `.gitignore` `data/live/`, `lawbot-articles-update`, `targets.yaml` 점검 명령 `--restart`. 확인 기록: [docs/evals/2026-11-02-articles-auto-update.md](../evals/2026-11-02-articles-auto-update.md).
 - 설계와 다르게 한 것: 하위법령 조문 수 기대값도 `check_deploy`에 고정(273·124)돼 있어 매니페스트에서 읽게 함 (조문 수가 바뀌는 개정 대비).
-- **남은 것: 운영 반영** (사용자 승인 후) — 운영 worktree 갱신 → `uv run lawbot-articles-update --init` → 운영 `.env`에 `LAWBOT_V4_ARTICLES`·`LAWBOT_V4_DECREE_ARTICLES`(data/live) → `check_deploy` → 웹앱 재시작 → `law-monitor check`로 한 번 확인. 끝나면 이 문서를 archives로.
+- **운영 반영 (2026-11-02, PR #46 병합 `9556e73`)**: 운영 worktree `81bf4ed` → `9556e73`, `uv sync --frozen`(점검·갱신 명령 설치), `lawbot-articles-update --init`, 운영 `.env`의 `LAWBOT_V4_ARTICLES`·`LAWBOT_V4_DECREE_ARTICLES`를 `data/live`로, `check_deploy` FAIL 없음, 웹앱 재시작(PID 63369 → 6259, 3초, 임베딩 캐시 그대로), `law-monitor check` → `이상 없음` (재시작 안 함). 첫 점검은 운영 부분 클론이 과거 버전 본문을 처음 받느라 5분 (다음부터 약 1분). 모델 서버 코드는 바뀌지 않아 재시작 안 함.
+- 첫 실제 자동 갱신 예상: 2026-11-27 06:30 (남녀고용평등법 제21700호 시행).

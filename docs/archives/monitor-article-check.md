@@ -3,7 +3,7 @@
 - 작성일: 2026-11-02
 - 목표: 매일 아침 monitor가 돌 때 "챗봇 조문 데이터가 **오늘 시행 중인 법**과 같은지"를 확인하고, 다르면 무엇이 언제부터 다른지와 다시 만드는 명령을 요약 md에 남긴다. CSV를 바꾸거나 웹앱을 재시작하는 일은 자동으로 하지 않는다 (본문이 바뀌면 임베딩·4B 평가를 다시 봐야 하므로 사람이 판단).
 - 앞 작업: 조문 CSV 생성기 `lawbot-build-articles` (PR #45, [archives/article-generator.md](../archives/article-generator.md)).
-- **상태 (2026-11-02)**: 2.1 점검 명령 `lawbot-articles-check`를 구현했다. 2.2 monitor 연결은 한때 미뤘다가(사용자가 앞 답변을 오해) 같은 날 [자동 갱신 계획](../plans/articles-auto-update.md)에서 이 설계 그대로 연결했다. 이 문서는 그 계획으로 이어져 끝났다.
+- **상태 (2026-11-02)**: 2.1 점검 명령 `lawbot-articles-check`를 구현했다. 2.2 monitor 연결은 한때 미뤘다가(사용자가 앞 답변을 오해) 같은 날 [자동 갱신 계획](../archives/articles-auto-update.md)에서 이 설계 그대로 연결했다. 이 문서는 그 계획으로 이어져 끝났다.
 
 ## 1. 미리 확인한 사실
 

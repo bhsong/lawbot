@@ -493,7 +493,7 @@ def test_check_deploy_decree(env):
 
 def test_check_deploy_decree_follows_configured_files(env, tmp_path):
     """data/live처럼 다른 폴더의 CSV를 쓰면: 법률 행은 LAWBOT_V4_ARTICLES와 비교, 하위법령 수는 매니페스트에서
-    (조문 자동 갱신으로 조문 수가 바뀌어도 FAIL이 아님, docs/plans/articles-auto-update.md)"""
+    (조문 자동 갱신으로 조문 수가 바뀌어도 FAIL이 아님, docs/archives/articles-auto-update.md)"""
     import json
     import shutil
 
