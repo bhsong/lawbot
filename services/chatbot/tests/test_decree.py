@@ -13,7 +13,7 @@ import lawbot.app as app_mod
 import lawbot.retriever as retriever_mod
 import lawbot.service as service
 import lawbot_tools.eval_v4 as ev
-from lawbot import answer_format, citation, decree, deploy, manifest
+from lawbot import answer_format, citation, decree, deploy, manifest, view
 from lawbot.llm import build_prompt
 from lawbot.paths import DATA, V4_ARTICLES, V4_DECREE_ARTICLES
 
@@ -459,10 +459,10 @@ def test_screen_texts(env):
     assert '시행령·시행규칙' in app_mod.searching_stats(on, 'pro') and '시행령' not in app_mod.searching_stats(
         on, 'fast'
     )
-    assert app_mod.sources_heading(on) == '### 검색된 조문 (법률 3개 + 시행령·시행규칙 최대 2개)'
-    assert app_mod.sources_heading(off) == '### 검색된 조문 (상위 3개)'
-    assert 'Lawbot Pro는 관련 시행령·시행규칙을 최대 2개' in app_mod.intro_text(on)
-    assert app_mod.intro_text(off) == '질문과 관련된 조문 3개를 찾아 그 조문을 근거로 답합니다. '
+    assert view.sources_title(on) == '검색된 조문 (법률 3개 + 시행령·시행규칙 최대 2개)'
+    assert view.sources_title(off) == '검색된 조문 (상위 3개)'
+    assert 'Lawbot Pro는 관련 시행령·시행규칙을 최대 2개' in view.intro_text(on)
+    assert view.intro_text(off) == '질문과 관련된 조문 3개를 찾아 그 조문을 근거로 답합니다. '
     st = {'search': 0.1, 'rerank': 1.9, 'decree_search': 0.05, 'decree_rerank': 2.0, 'n_decree': 2, 'load': None}
     assert '시행령·시행규칙 2.05초 (2개 첨부)' in app_mod.fmt_stats('Pro', 'generate', st)
     env.setenv('LAWBOT_RERANKER_ENABLED', '1')

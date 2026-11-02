@@ -221,6 +221,7 @@ class Feedback:
         self.folder = Path(folder)
         self.turns = OrderedDict()  # session → OrderedDict(assistant 순번 → (turn_id, 기록))
         self.recent = {}  # (turn_id, liked) → 마지막으로 받은 시각
+        self.counts = OrderedDict()  # session → 다음 순번 (새 화면 web.py: 화면 history 대신 서버가 순번을 매김)
         self.lock = threading.Lock()
 
     def remember(self, session, n, record):
@@ -276,7 +277,11 @@ class Feedback:
         if text_of(value).strip() != record['answer_shown'].strip():  # 엉뚱한 답에 라벨이 붙지 않게
             log.info(f'피드백: 화면 글이 기록과 다름 (turn_id {tid}) → 저장 안 함')
             return None
-        if self.duplicate(tid, liked, now):
+        return self.save_row(tid, record, lab, liked, now)
+
+    def save_row(self, tid, record, lab, key, now):
+        """(label, reason) 한 줄 저장. 같은 key가 DEDUP_S 안에 다시 오면 저장하지 않고 None"""
+        if self.duplicate(tid, key, now):
             return None
         row = {
             'feedback_id': uuid.uuid4().hex,
@@ -287,6 +292,28 @@ class Feedback:
         } | record
         self.write(row)
         return row
+
+    def remember_turn(self, session, record):
+        """새 화면(web.py): 세션의 다음 순번에 끝난 턴을 두고 turn_id를 돌려준다"""
+        with self.lock:
+            n = self.counts.pop(session, 0)
+            self.counts[session] = n + 1
+            while len(self.counts) > MAX_SESSIONS:
+                self.counts.popitem(last=False)
+        self.remember(session, n, record)
+        return turn_id(session, n, record['request_id'])
+
+    def save(self, session, tid, label, reason=None, now=None):
+        """새 화면의 버튼 하나. label: like·flag·cleared, flag면 reason은 REASONS의 값(retrieval 등)
+        저장한 줄 (같은 버튼이 DEDUP_S 안에 다시 오면 None). 모르는 label·reason은 ValueError, 이 세션에 없는 turn_id는 LookupError"""
+        if label not in ('like', 'flag', 'cleared') or (reason not in REASONS.values() if label == 'flag' else reason):
+            raise ValueError(f'알 수 없는 피드백: {label!r}, {reason!r}')
+        with self.lock:
+            found = next((t for t in self.turns.get(session, {}).values() if t[0] == tid), None)
+        if found is None:  # 앱 재시작·다른 세션의 답: 화면 글만으로는 저장하지 않는다 (참고 조문이 없음)
+            raise LookupError('기록이 없는 답변')
+        now = time.monotonic() if now is None else now
+        return self.save_row(tid, found[1], (label, reason), f'{label}:{reason}', now)
 
     def path(self):
         return self.folder / f'feedback_{time.strftime("%Y-%m")}.jsonl'

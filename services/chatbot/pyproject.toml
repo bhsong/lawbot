@@ -7,17 +7,20 @@ authors = [
 ]
 requires-python = ">=3.14"
 dependencies = [   # 모델 라이브러리(mlx·torch)는 쓰지 않음: 모델은 모두 모델 서버(services/model-server)에
+    "fastapi>=0.143.3",
     "gradio>=6.30.0",
     "httpx>=0.28.1",
     "lawbot-common",
     "numpy>=2.0",
     "openai>=2.0",
     "pandas>=3.0.6",
+    "uvicorn>=0.54.0",
 ]
 
 [project.scripts]
 # 레포 최상위에서 uv run lawbot-app 으로 실행 (평가 명령 lawbot-eval-v4는 tools/lawbot-tools)
 lawbot-app = "lawbot.app:main"
+lawbot-web = "lawbot.web:main"  # 새 화면 API (PR 1·2 동안 개발 확인용, docs/plans/web-spa.md)
 
 [tool.uv.sources]
 lawbot-common = { workspace = true }
