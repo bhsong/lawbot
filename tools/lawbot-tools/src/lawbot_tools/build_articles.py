@@ -4,8 +4,8 @@
     uv run lawbot-build-articles --repo ../legalize-kr --asof 2026-10-20 --out-dir data/v4 [--check] [--scope 목록.csv]
 
 출력 (UTF-8 BOM, 행 끝 LF)
-- articles_v4.csv: 7개 법률 (+ --scope 문서의 법률)
-- law_articles_v4_decree.csv: 법률 + 시행령·시행규칙 (행 순서는 docs())
+- articles_<버전>.csv: 7개 법률 (+ --scope 문서의 법률). 버전은 --version (기본 v4)
+- law_articles_<버전>_decree.csv: 법률 + 시행령·시행규칙 (행 순서는 docs())
 - --check: 파일을 쓰지 않고 out-dir의 기존 파일과 바이트 단위로 비교 (다르면 종료 코드 1)
 - --scope: 범위 목록(law·kind·article_no)의 문서는 목록 조문과 그 조문을 대신하는 부칙 특례 조문만, 노동 문서 뒤에
 
@@ -58,7 +58,14 @@ LAWS = [  # 대상 법률 (CSV의 법령 순서)
 KINDS = ['법률', '시행령', '시행규칙']
 LAW_COLS = ['law', 'article_id', 'article_no', 'title', 'chapter', 'deleted', 'text', 'effective_date', 'related_ids']
 DECREE_COLS = [*LAW_COLS, 'kind', 'parent_law', 'parent_ids', 'child_ids']
-LAW_CSV, DECREE_CSV = 'articles_v4.csv', 'law_articles_v4_decree.csv'
+
+
+def csv_names(version):
+    """(법률 CSV, 법률+하위법령 CSV) 파일 이름"""
+    return f'articles_{version}.csv', f'law_articles_{version}_decree.csv'
+
+
+LAW_CSV, DECREE_CSV = csv_names('v4')  # 자동 갱신(data/live)과 v4가 쓰는 이름
 
 ART = r'제(\d+)조(?:의(\d+))?'
 HEAD = re.compile(r'^##### 제(\d+)조(?:의(\d+))?(?:\s*\((.*)\))?\s*$')
@@ -854,8 +861,8 @@ def to_csv_bytes(df: pd.DataFrame) -> bytes:
     return ('\ufeff' + buf.getvalue()).encode('utf-8')
 
 
-def build(repo_path, asof, scope=None):
-    """{파일 이름: 바이트}, 버전 목록, 통계. 쓰지 않는다. scope: load_scope() 결과 (조문 일부만 넣는 문서)"""
+def build(repo_path, asof, scope=None, version='v4'):
+    """{파일 이름: 바이트}, 버전 목록, 통계. 쓰지 않는다. scope: load_scope() 결과 (조문 일부만 넣는 문서). version: 파일 이름"""
     repo = Repo(repo_path)
     doc_list = docs(scope)
     paths = find_files(repo, asof, doc_list)
@@ -863,7 +870,8 @@ def build(repo_path, asof, scope=None):
     stats = link(rows, doc_names(doc_list))
     df = pd.DataFrame(rows, columns=DECREE_COLS)
     law = df[df['kind'] == '법률']
-    files = {LAW_CSV: to_csv_bytes(law[LAW_COLS]), DECREE_CSV: to_csv_bytes(df)}
+    law_csv, decree_csv = csv_names(version)
+    files = {law_csv: to_csv_bytes(law[LAW_COLS]), decree_csv: to_csv_bytes(df)}
     return files, versions, {**stats, 'head': repo.head(), 'law_rows': len(law), 'decree_rows': len(df), 'paths': paths}
 
 
@@ -884,10 +892,11 @@ def main(argv=None):
     p.add_argument(
         '--scope', type=Path, help='범위 목록 CSV (law·kind·article_no): 이 문서들은 목록 조문만 노동 문서 뒤에'
     )
+    p.add_argument('--version', default='v4', help='데이터 버전: 파일 이름 articles_<버전>.csv (기본 v4)')
     a = p.parse_args(argv)
     dt.date.fromisoformat(a.asof)
 
-    files, versions, stats = build(a.repo, a.asof, load_scope(a.scope) if a.scope else None)
+    files, versions, stats = build(a.repo, a.asof, load_scope(a.scope) if a.scope else None, a.version)
     print(f'[원문] legalize-kr HEAD {stats["head"]} · 기준일 {a.asof}')
     print(f'[조문] 법률 {stats["law_rows"]}행 · 법률+하위법령 {stats["decree_rows"]}행')
     print(f'[연계] 없는 조문 참조 {len(stats["dangling"])}건 · 다른 법령 참조 {stats["cross"]}건 제외')

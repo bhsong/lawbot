@@ -15,13 +15,12 @@ import pandas as pd
 
 from lawbot import deploy, manifest, settings
 from lawbot.api_client import Embedder, ModelServerClient, wait_ready
-from lawbot.check_deploy import COLUMNS, DECREE_COLUMNS
+from lawbot.check_deploy import ARTICLE_NO, COLUMNS, DECREE_COLUMNS
 from lawbot.embed_cache import EmbedCache
 from lawbot.retriever import Retriever
 
 E = dict(encoding='utf-8-sig')
 KINDS = ('법률', '시행령', '시행규칙')
-NUMBER = r'제\d+조(?:의\d+)?'
 DEFAULT_SOURCE = {'name': 'Legalize KR', 'url': 'https://github.com/legalize-kr/legalize-kr', 'ref': None}
 
 
@@ -41,7 +40,7 @@ def validate(csv):
     key = live['law'].astype(str) + ' ' + nums + (' ' + live['kind'].astype(str) if 'kind' in live else '')
     if key.duplicated().any():
         errors.append(f'중복 조문 {int(key.duplicated(keep=False).sum())}행: {key[key.duplicated()].head().tolist()}')
-    bad = nums[~nums.str.fullmatch(NUMBER)]
+    bad = nums[~nums.str.fullmatch(ARTICLE_NO)]
     if len(bad):
         errors.append(f"조문 번호가 '제N조' 형식이 아님 {len(bad)}행: {bad.head().tolist()}")
     empty = live[live['text'].fillna('').astype(str).str.strip() == '']
