@@ -254,8 +254,9 @@ class Schedule:
 
 
 AFTER_ADDENDUM = re.compile(r'부칙\s*$')
-# '법률 제9911호 국세기본법 일부개정법률 제21조': 다른 개정법률(·개정령)의 조문이라 본문 조문이 아님
-OTHER_AMENDMENT = re.compile(r'제\d+호\s+[^,]*?(?:개정|폐지)(?:법률|령)\s*$')
+# '대통령령 제32516호 소득세법 시행령 일부개정령(… 포함한다) 제216조의4': 그 개정법률(·개정령)이 정한 조문.
+# 이름이 이 문서면 이 문서 조문(앞 개정이 고친 조문을 이번 개정이 다시 고침), 다른 문서면 본문 조문이 아님
+EARLIER_AMENDMENT = re.compile(r'제\d+호\s+([^,()]*?)\s*(?:일부|전부)?(?:개정|폐지)(?:법률|령)\s*(?:\([^()]*\))?\s*$')
 ANNEX = re.compile(r'별표|서식')
 UNKNOWN = '9999-12-31'  # 부칙에 날짜가 없는 시행일 ('동법의 시행일', '대통령령으로 정하는 날')
 # '…의 개정규정 중 "…"에 관한 부분', '… 중 제59조제2항의 개정규정과 관련한 부분': 대상 조문을 한정하는 말이라 대상이 아님
@@ -267,15 +268,20 @@ BOUNDARY = re.compile(
 )
 
 
-def target_list(text, order):
-    """'제13조, 제11장의 제목, 제103조부터 제105조까지(내지), 제110조제1호 및 …' → ([(조문, 일부만인지)], 장 목록).
-    일부: 조문 뒤에 항·호·목이 붙은 것 ('제110조제1호', '제116조제2항제1호ㆍ제4호')"""
-    arts, chapters = [], []
+def target_list(text, order, own=None):
+    """'제13조, 제11장의 제목, 제103조부터 제105조까지(내지), 제110조제1호 및 …' → ([(조문, 일부만인지)], 장 목록, 앞 개정의 조문인지).
+    일부: 조문 뒤에 항·호·목이 붙은 것 ('제110조제1호', '제116조제2항제1호ㆍ제4호'). own: 이 문서 이름(머리말 제목)"""
+    arts, chapters, earlier = [], [], False
     rng = rf'(\s*(?:부터|내지)\s*{ART}(?:\s*까지)?)?'
     for m in re.finditer(rf'{ART}((?:제\d+항|제\d+호|제\d+목|[ㆍ·]제?\d+(?:항|호))*){rng}', text):
         before = text[: m.start()]
-        if AFTER_ADDENDUM.search(before) or OTHER_AMENDMENT.search(before):  # '부칙 제16조제21항' 등: 본문 조문이 아님
+        if AFTER_ADDENDUM.search(before):  # '부칙 제16조제21항': 부칙의 조문이라 본문 조문이 아님
             continue
+        e = EARLIER_AMENDMENT.search(before)
+        if e:
+            if squash(e[1]) != squash(own or ''):
+                continue
+            earlier = True
         a = f'제{m[1]}조' + (f'의{m[2]}' if m[2] else '')
         if m[4]:
             b = f'제{m[5]}조' + (f'의{m[6]}' if m[6] else '')
@@ -286,7 +292,7 @@ def target_list(text, order):
             arts.append((a, bool(m[3])))
     for m in re.finditer(r'(?<![\d조])(제\d+장(?:의\d+)?)', text):
         chapters.append(m[1])
-    return arts, chapters
+    return arts, chapters, earlier
 
 
 AMEND_NOTE = re.compile(r'\s*<(?:개정|신설)[^<>]*>')
@@ -335,8 +341,12 @@ def place(sched: Schedule, placed: set, sentence, items, fm, order, named=False)
     d = DATE_EXPR.search(sentence)
     cut = min(i for i in (d.start() if d else -1, sentence.find('다음'), len(sentence)) if i >= 0)
     targets = QUOTED.sub('', QUALIFIER.sub('', sentence[:cut]))
-    arts, chapters = target_list(targets, order)
+    arts, chapters, earlier = target_list(targets, order, fm.get('제목'))
     dates = [date_expr(x, fm['공포일자']) for x in DATE_EXPR.finditer(sentence[cut:] + ' ' + items)]
+    if (
+        earlier and not dates
+    ):  # 앞 개정의 조문인데 날짜가 없음('○○법 폐지법률의 시행일'): 그 앞 개정 버전이 시행 전으로 둔다
+        return
     if not arts and not chapters:
         # '다만, 다음 각 호의 개정규정은 해당 호에서 정하는 날부터': 호마다 대상과 날짜
         if items and re.search(r'다음\s*각\s*호', sentence):
@@ -406,6 +416,10 @@ def squash(s):
     return re.sub(r'\s+', '', strip_notes(s))
 
 
+# 타법개정 부칙: '…시행일이 도래하지 아니한 법률을 개정한 부분은 각각 해당 법률의 시행일부터 시행한다' (공백 뺀 본문에서 찾음)
+FOLLOWS_PENDING = re.compile(
+    r'시행일이도래하지(?:아니한|않은)(?:법률|법령|대통령령|부령)[^.]*?개정한부분은각각해당(?:법률|법령|대통령령|부령)의시행일부터'
+)
 FULL_REVISION = re.compile(r'\((?:전부개정|제정|폐지제정)\)$')
 
 
@@ -423,7 +437,8 @@ def in_force(repo: Repo, path, asof):
 
     eff: 그 조문(제목·본문)을 마지막으로 바꾼 개정의 시행일. 공백만 바뀐 변경(원문 형식 정리)은 개정으로 보지 않는다.
     시행 전 개정이 남은 조문에 그 뒤 시행된 개정이 내용을 바꾸면 조문 단위로 나눌 수 없다: 최신 본문을 쓰고 끝에
-    시행 전 내용이 섞였다고 적는다(mixed, 2026-11-03 사용자 결정)"""
+    시행 전 내용이 섞였다고 적는다(mixed, 2026-11-03 사용자 결정). 다만 지금 삭제된 조문을 시행 전 개정이 다시 만들고 있고
+    그것을 '시행일이 도래하지 아니한 법률을 개정한 부분은 해당 법률의 시행일부터'인 타법개정이 고치면 함께 시행 전으로 둔다"""
     hist = [h for h in reversed(repo.history[path]) if h[1] <= asof]  # 오래된 것부터
     hist = hist[last_full_revision(repo, path, hist, asof) :]
     mds = repo.show_many([(sha, path) for sha, _, _ in hist])
@@ -438,7 +453,9 @@ def in_force(repo: Repo, path, asof):
         arts = {a['no']: a for a in parse(md)}
         cur_order = list(arts)
         sched = schedule(md, fm, cur_order, asof, latest=mds[-1])
-        expiries += expiry_clauses(addendum_of(md, fm['공포번호'], mds[-1])[0] or '')
+        addendum, owner = addendum_of(md, fm['공포번호'], mds[-1])
+        expiries += expiry_clauses(addendum or '')
+        follows = bool(owner and FOLLOWS_PENDING.search(re.sub(r'\s+', '', addendum or '')))
         applied = 0
         waiting: list[tuple[str, str]] = []  # 시행 전이라 반영하지 않은 (조문, 시행일)
         mixed: list[tuple[str, list[str]]] = []  # 시행 전 개정이 남은 채로 다시 바뀐 (조문, 시행 전 날짜)
@@ -463,6 +480,13 @@ def in_force(repo: Repo, path, asof):
                     applied += 1
                 elif date <= asof:
                     cur.pop('unknown', None)
+                    deleted_now = cur['title'] is None and (cur['text'] or '').startswith('삭제')
+                    if (
+                        no in pending and follows and deleted_now
+                    ):  # 시행 전 개정이 다시 만드는 조문을 고친 타법개정: 함께 시행
+                        pending[no].append(max(pending[no]))
+                        waiting.append((no, max(pending[no])))
+                        continue
                     if no in pending:
                         cur['mixed'] = sorted(set(pending[no]))
                         mixed.append((no, cur['mixed']))

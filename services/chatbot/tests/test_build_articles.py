@@ -205,6 +205,19 @@ def test_schedule_of_another_laws_addendum_uses_the_front_matter_date():
     assert (s.main, s.articles) == ('2025-10-01', {})
 
 
+def test_schedule_reads_dates_given_to_an_earlier_amendment_of_the_same_document():
+    """'대통령령 제32516호 소득세법 시행령 일부개정령 제216조의4의 개정규정: 2027년 1월 1일' (제35349호 부칙): 같은 문서의 앞 개정이
+    정한 조문을 이번 개정이 다시 고치며 시행일을 정한 것이라 이 문서 조문의 날짜다. 다른 문서의 개정법률이나 날짜가 없는 것은 건너뛴다"""
+    add = (
+        '부칙 <제300호,2025.2.28>\n\n제1조(시행일) 이 영은 공포한 날부터 시행한다. 다만, 다음 각 호의 개정규정은 해당 호에서 정하는 날부터 '
+        '시행한다.\n\n1. 대통령령 제200호 시험법 일부개정령 제53조의 개정규정: 2027년 1월 1일\n\n'
+        '2. 대통령령 제200호 시험법 일부개정령(대통령령 제250호 시험법 일부개정령에 따라 개정된 내용을 포함한다) 제59조의 개정규정: '
+        '2027년 1월 1일\n\n3. 법률 제77호 다른법 일부개정법률 제110조의 개정규정: 2027년 1월 1일\n\n\n제2조(경과조치) 생략\n'
+    )
+    s = sched(add, promulgated='2025-02-28', effective='2025-02-28', asof='2026-11-03')
+    assert s.articles == {'제53조': '2027-01-01', '제59조': '2027-01-01'}
+
+
 def test_schedule_reads_each_item_when_the_proviso_names_no_article():
     """'다만, 다음 각 호의 개정규정은 해당 호에서 정하는 날부터': 호마다 대상과 날짜. 별표·서식만 적힌 호의 날짜는 그 별표의 것
     (국민건강보험법 시행령 제36675호, 소득세법 시행규칙 제22호)"""
@@ -465,6 +478,39 @@ def test_in_force_reads_addenda_as_later_amended(tmp_path):
     assert '제4조' not in {a['no'] for a in b.in_force(repo, PATH, '2026-11-03')[0]}  # 2027년 시행으로 미뤄짐
     later = {a['no']: (a['text'], a['eff']) for a in b.in_force(repo, PATH, '2027-01-01')[0]}
     assert later['제4조'] == ('시행이 미뤄진 신설 <신설 2020.12.29>', '2027-01-01')
+
+
+def test_in_force_other_law_change_to_a_pending_article_waits_with_it(tmp_path):
+    """타법개정 부칙의 '시행일이 도래하지 아니한 법률을 개정한 부분은 각각 해당 법률의 시행일부터': 지금 삭제된 조문을 시행 전 개정이
+    다시 만들고 있으면, 그 조문을 고친 것은 시행 전 내용을 고친 것이라 그 개정과 함께 시행 전 (소득세법 시행령 제216조의4,
+    정부조직법 제35947호). 지금 시행 중인 본문이 있는 조문은 어느 부분을 고쳤는지 나눌 수 없어 지금처럼 주의 표시"""
+    v1 = V1.replace(article('제2조', '정의', '처음 정의'), article('제2조', None, '삭제 <2019.1.1>'))
+    v2 = V2.replace(article('제3조', '벌칙', '처음 벌칙'), article('제3조', '벌칙', '시행 전 벌칙 <개정 2026.4.7>'))
+    add2 = ADD2.replace('제2조 및 제4조의 개정규정', '제2조, 제3조 및 제4조의 개정규정')
+    v3 = v2.replace('시행 전 정의', '부처 이름만 바뀐 시행 전 정의').replace('시행 전 벌칙', '부처 이름만 바뀐 벌칙')
+    other = (
+        '부칙(정부조직법) <제300호,2026.8.4>\n\n제1조(시행일) 이 법은 공포한 날부터 시행한다. 다만, 부칙 제2조에 따라 개정되는 법률 중 '
+        '이 법 시행 전에 공포되었으나 시행일이 도래하지 아니한 법률을 개정한 부분은 각각 해당 법률의 시행일부터 시행한다.\n\n'
+        '제2조(다른 법률의 개정) 생략\n\n'
+    )
+    repo = make_repo(
+        tmp_path,
+        [
+            ('2020-01-01', '100', '2020-01-01', v1, ''),
+            ('2026-04-07', '200', '2026-10-08', v2, add2),
+            ('2026-08-04', '300', '2026-08-04', v3, other, '타법개정'),
+        ],
+    )
+    arts, used = b.in_force(repo, PATH, '2026-10-20')
+    got = {a['no']: a['text'] for a in arts}
+    assert got['제2조'] == '삭제 <2019.1.1>'  # 시행 전 개정과 함께 기다림
+    assert got['제3조'].startswith('부처 이름만 바뀐 벌칙') and '[주의:' in got['제3조']  # 시행 중 본문이 있음
+    assert ('제2조', '2027-01-01') in used[-1]['pending'] and [no for no, _ in used[-1]['mixed']] == ['제3조']
+    later = {a['no']: a['text'] for a in b.in_force(repo, PATH, '2027-01-01')[0]}
+    assert later['제2조'] == '부처 이름만 바뀐 시행 전 정의 <개정 2026.4.7>'
+    # 시행령 형식 (제35947호 '부칙(재정경제부 직제)'): '도래하지 않은 대통령령을 개정한 부분은 각각 해당 대통령령의 시행일부터'
+    decree = '…이 영 시행 전에 공포되었으나 시행일이 도래하지 않은 대통령령을 개정한 부분은 각각 해당 대통령령의 시행일부터 시행한다.'
+    assert b.FOLLOWS_PENDING.search(re.sub(r'\s+', '', decree))
 
 
 UNKNOWN_ADD = (
