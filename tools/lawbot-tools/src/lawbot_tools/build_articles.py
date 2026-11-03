@@ -231,6 +231,12 @@ def own_addendum(md, number, with_owner=False):
     return (None, None) if with_owner else None
 
 
+def addendum_of(md, number, latest=None):
+    """(부칙 본문, 타법개정이면 그 법 이름): 기준일 버전 파일(latest)에 있으면 그것(나중 개정 반영본), 없으면 그 버전의 것"""
+    found = own_addendum(latest, number, with_owner=True) if latest else (None, None)
+    return found if found[0] is not None else own_addendum(md, number, with_owner=True)
+
+
 @dataclass
 class Schedule:
     """한 개정의 시행일: main(머리말 시행일자) + 부칙 '다만'에 적힌 조문·장별 날짜"""
@@ -283,16 +289,20 @@ def target_list(text, order):
     return arts, chapters
 
 
+AMEND_NOTE = re.compile(r'\s*<(?:개정|신설)[^<>]*>')
+
+
 def effective_clause(addendum):
     """부칙에서 시행일 조항만: '제1조(시행일)'이 있으면 그 조 전체(항 포함), 없으면 '①(시행일)' 항, 둘 다 없으면
     제2조·② 앞까지.
-    적용례·경과조치(②(적용례) …, 제2조 …)의 '개정규정'은 시행일이 아니라 넣지 않는다"""
+    적용례·경과조치(②(적용례) …, 제2조 …)의 '개정규정'은 시행일이 아니라 넣지 않는다.
+    나중 법률이 부칙을 고친 표시('<개정 2021.12.8, …>')는 문장이 아니라 뺀다"""
     m = re.search(r'제1조\s*\(시행일[^)]*\)\s*(.*?)(?=\n\s*\n\s*제2조|\Z)', addendum, re.S)
     if not m:
         m = re.search(r'①\s*\(시행일[^)]*\)\s*(.*?)(?=[②-⑳]|\Z)', addendum, re.S)
     if not m:  # 제목 없는 한 문단짜리 부칙: 제2조·②(다른 법령의 개정 등) 앞까지
         m = re.match(r'\s*(.*?)(?=\n\s*\n\s*(?:제2조|[②-⑳])|\Z)', addendum, re.S)
-    text = m[1] if m else ''
+    text = AMEND_NOTE.sub('', m[1] if m else '')
     return re.sub(r'\s+', ' ', text).strip()
 
 
@@ -343,13 +353,14 @@ def place(sched: Schedule, placed: set, sentence, items, fm, order, named=False)
         sched.chapters[c] = max(sched.chapters.get(c, ''), date)
 
 
-def schedule(md, fm, order, asof=None) -> Schedule:
+def schedule(md, fm, order, asof=None, latest=None) -> Schedule:
     """이 버전(개정)의 시행일: 머리말 `시행일자` + 부칙 시행일 조항에서 '○의 개정규정은 ○부터 시행'한다는 조문·장별 날짜.
     사업장 규모별(다음 각 호)이면 가장 이른 날. 조문 일부(항·호)만 적혔으면 그 날과 본 시행일 중 늦은 날,
     한 조문에 날짜가 여럿이면 가장 늦은 날 (조문 전체가 시행되는 날).
-    asof: 주면 시행일 조항에 기준일 뒤 날짜가 있는데 어느 조문의 것인지 못 읽었을 때 실패"""
+    asof: 주면 시행일 조항에 기준일 뒤 날짜가 있는데 어느 조문의 것인지 못 읽었을 때 실패.
+    latest: 기준일 버전 파일. 나중 법률이 옛 부칙의 시행일을 고치므로(소득세법 제17757호) 부칙은 여기서 읽는다"""
     sched = Schedule(main=fm['시행일자'])
-    text, owner = own_addendum(md, fm['공포번호'], with_owner=True)
+    text, owner = addendum_of(md, fm['공포번호'], latest)
     if not text or owner:  # 타법개정 부칙의 조문은 그 법의 조문: 이 법에는 머리말 시행일자
         return sched
     first = effective_clause(text)
@@ -426,8 +437,8 @@ def in_force(repo: Repo, path, asof):
         fm = front(md)
         arts = {a['no']: a for a in parse(md)}
         cur_order = list(arts)
-        sched = schedule(md, fm, cur_order, asof)
-        expiries += expiry_clauses(own_addendum(md, fm['공포번호']) or '')
+        sched = schedule(md, fm, cur_order, asof, latest=mds[-1])
+        expiries += expiry_clauses(addendum_of(md, fm['공포번호'], mds[-1])[0] or '')
         applied = 0
         waiting: list[tuple[str, str]] = []  # 시행 전이라 반영하지 않은 (조문, 시행일)
         mixed: list[tuple[str, list[str]]] = []  # 시행 전 개정이 남은 채로 다시 바뀐 (조문, 시행 전 날짜)

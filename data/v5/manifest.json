@@ -8,10 +8,10 @@
     "ref": "bcb7aea7782e81c21fbeb08382c442f7c2041690"
   },
   "articles_file": "articles_v5.csv",
-  "articles_sha256": "d16083cd6523ee725af2e36672e685bdcd675b0f4d02001100e2416b69a7920c",
-  "articles_total": 706,
+  "articles_sha256": "5250e6be5ced607fc432f83b669071091230b3876b0ada6eefc8875830fe138e",
+  "articles_total": 705,
   "articles_by_law": {
-    "소득세법": 153,
+    "소득세법": 152,
     "근로기준법": 130,
     "남녀고용평등과 일ㆍ가정 양립 지원에 관한 법률": 72,
     "근로자퇴직급여 보장법": 69,
@@ -30,7 +30,7 @@
     "고용보험법": 2
   },
   "articles_by_kind": {
-    "법률": 706
+    "법률": 705
   },
   "trained_on": {}
 }
