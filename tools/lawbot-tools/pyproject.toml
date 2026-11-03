@@ -20,6 +20,7 @@ lawbot-reindex = "lawbot_tools.reindex:main"   # 새 조문 CSV → 검사·매�
 lawbot-build-articles = "lawbot_tools.build_articles:main"   # Legalize KR + 기준일 → 조문 CSV 두 개
 lawbot-articles-check = "lawbot_tools.articles_check:main"   # 오늘 시행 중인 법과 지금 조문 데이터 비교 (보고서만, 파일은 안 바꿈)
 lawbot-articles-update = "lawbot_tools.articles_update:main"   # 조문 데이터 자동 갱신 (data/live, law-monitor daily가 부름)
+lawbot-max-seq = "lawbot_tools.max_seq:main"   # 조문 CSV → 임베딩 최대 토큰 (.env LAWBOT_MAX_SEQ·LAWBOT_DECREE_MAX_SEQ)
 lawbot-qa-split = "lawbot_tools.qa_split:main"   # 질문 배치 → 합친 질문·정답 키·train/val/test 분할 (v4 노트북 규칙)
 
 [tool.uv.sources]

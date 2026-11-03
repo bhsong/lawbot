@@ -348,7 +348,7 @@ def mount_spa(api, dist):
 
 
 def main(argv=None):
-    parser = argparse.ArgumentParser(description='노동법 챗봇 웹앱 (127.0.0.1, 로그인 필수)')
+    parser = argparse.ArgumentParser(description='Lawbot 웹앱 (127.0.0.1, 로그인 필수)')
     parser.add_argument('--port', help='포트 (기본: .env의 LAWBOT_PORT). 테스트에서 빈 포트로 띄울 때')
     args = parser.parse_args(argv)
     envfile.load()  # .env (셸에 있는 변수 우선). 설정을 읽기 전에

@@ -24,7 +24,7 @@ export function Login({ onDone }: { onDone: () => void }) {
           }
         }}
       >
-        <h1>노동법 챗봇</h1>
+        <h1>Lawbot</h1>
         <label>
           사용자명
           <input autoComplete="username" value={user} onChange={(e) => setUser(e.target.value)} required />

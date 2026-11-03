@@ -6,6 +6,8 @@ from pathlib import Path
 
 from lawbot import paths
 
+MAX_SEQ = 2304  # 법률 조문 인코딩 최대 토큰 (v4 최장 2,088토큰을 256 단위로 올림, v4 노트북 규칙)
+
 
 @dataclass(frozen=True)
 class ModelSpec:
@@ -31,6 +33,14 @@ class Profile:
 
 def _model(name, default, env):
     return (env.get(name) or '').strip() or default
+
+
+def _positive_int(name, default, env):
+    """양의 정수 설정 (없으면 default)"""
+    raw = (env.get(name) or '').strip() or str(default)
+    if not raw.isdigit() or int(raw) < 1:
+        raise ValueError(f'{name}는 1 이상의 정수: {raw!r}')
+    return int(raw)
 
 
 def _path(name, default, env):
@@ -69,10 +79,10 @@ def _v4(env):
     )
     return Profile(
         'v4',
-        '노동법 챗봇',
+        'Lawbot',
         articles,
         _model('LAWBOT_EMB_MODEL', 'lawbot-emb-v4', env),
-        2304,
+        _positive_int('LAWBOT_MAX_SEQ', MAX_SEQ, env),
         _path('LAWBOT_V4_SYSTEM', paths.V4_SYSTEM, env),
         (
             ModelSpec(
@@ -119,6 +129,7 @@ def reranker(profile, env=None):
 # 필터(val로 고른 same1+other0.9): 법률 1위와 같은 법의 하위법령은 그대로, 다른 법은 리랭커 점수 ≥ τ일 때만 (lawbot.decree)
 DECREE_CANDIDATES = 10  # 하위법령 임베딩 후보 수 (실험과 같음)
 DECREE_MAX_SEQ = 3072  # 하위법령 인코딩 최대 토큰 (최장 3,017토큰 · 실험과 같음). 법률은 프로필 max_seq 그대로
+# 다른 조문 CSV는 LAWBOT_MAX_SEQ·LAWBOT_DECREE_MAX_SEQ (lawbot-max-seq가 같은 규칙으로 계산, v5: 4,352 · 5,120)
 DECREE_TAU, DECREE_K, DECREE_MODELS = 0.9, 2, ('pro',)
 
 
@@ -166,4 +177,4 @@ def decree(profile, env=None):
     bad = [k for k in keys if k not in known]
     if bad or len(set(keys)) != len(keys):
         raise ValueError(f'LAWBOT_DECREE_MODELS는 {", ".join(known)} 중에서 쉼표로: {value!r}')
-    return DecreeConfig(tau, int(raw), keys)
+    return DecreeConfig(tau, int(raw), keys, max_seq=_positive_int('LAWBOT_DECREE_MAX_SEQ', DECREE_MAX_SEQ, env))

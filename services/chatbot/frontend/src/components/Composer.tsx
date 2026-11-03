@@ -35,7 +35,7 @@ export function Composer({ busy, onSend, onStop, hint }: { busy: boolean; onSend
           ref={ref}
           rows={1}
           aria-label="질문"
-          placeholder="노동법에 관해 질문하세요"
+          placeholder="인사·근태·급여 관련 법을 질문하세요"
           maxLength={MAX}
           value={text}
           onChange={(e) => setText(e.target.value)}
