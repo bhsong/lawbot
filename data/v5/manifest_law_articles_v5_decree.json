@@ -8,11 +8,11 @@
     "ref": "bcb7aea7782e81c21fbeb08382c442f7c2041690"
   },
   "articles_file": "law_articles_v5_decree.csv",
-  "articles_sha256": "42d75916e4411a4e4d52525bf5f30f77818fda35eb542c3688c94295baf7171f",
-  "articles_total": 1499,
+  "articles_sha256": "5d4956d539cbe04fb33fa8a31cec033271ad03dd974f7f513c2a186ecc25b701",
+  "articles_total": 1498,
   "articles_by_law": {
     "소득세법 시행령": 193,
-    "소득세법": 153,
+    "소득세법": 152,
     "근로기준법": 130,
     "근로자퇴직급여 보장법 시행령": 79,
     "근로기준법 시행령": 75,
@@ -59,7 +59,7 @@
     "노인장기요양보험법 시행령": 2
   },
   "articles_by_kind": {
-    "법률": 706,
+    "법률": 705,
     "시행령": 571,
     "시행규칙": 222
   },

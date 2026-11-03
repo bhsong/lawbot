@@ -34,6 +34,12 @@ def test_law_csv_is_the_law_rows_of_the_decree_csv(v5):
     assert law.equals(v5[v5['kind'] == '법률'][list(law.columns)].reset_index(drop=True))
 
 
+def test_amended_addendum_keeps_postponed_article_out(v5, scope):
+    """소득세법 제164조의4(가상자산 거래내역 제출)는 제17757호 부칙이 나중에 2027-01-01 시행으로 고쳐져 아직 시행 전 신설 조문"""
+    assert '소득세법 제164조의4' not in set(v5['article_id'])
+    assert not ((scope['law'] == '소득세법') & (scope['article_no'] == '제164조의4')).any()
+
+
 def test_scoped_documents_have_exactly_the_scope_and_its_addendum_overrides(v5, scope):
     """세금·보험 문서: 범위 목록 조문과, 범위 안 본칙을 대신하는 부칙 특례만. 삭제 조문 없음.
     범위는 번호로만 정한다 (사용자 목록의 제목은 시행 전 개정의 제목인 것이 있음: 보험료징수법 제16조의10)"""
@@ -67,11 +73,20 @@ def test_labor_documents_equal_v4_except_the_known_rule_changes(v5, scope):
 
 
 def test_mixed_articles_are_marked(v5):
-    """시행 전 개정이 남은 채 다시 바뀐 조문 (사용자 결정: 최신 본문 + 주의)"""
+    """시행 전 개정이 남은 채 다시 바뀐 조문 (사용자 결정: 최신 본문 + 주의). 소득세법 8개·지방세법 1개는 나중 법률이 고친
+    부칙(가상자산 과세 2027 유예 등)을 읽은 뒤 드러났다 (2026-11-03)"""
     marked = v5[v5['text'].str.contains('[주의:', regex=False)]
     assert list(marked['article_id']) == [
+        '소득세법 제14조',
         '소득세법 제21조',
+        '소득세법 제37조',
+        '소득세법 제70조',
+        '소득세법 제81조의11',
+        '소득세법 제84조',
         '소득세법 제119조',
+        '소득세법 제127조',
+        '소득세법 제156조',
+        '지방세법 제93조',
         '소득세법 시행령 제179조',
         '소득세법 시행령 제207조',
         '소득세법 시행령 제216조의2',

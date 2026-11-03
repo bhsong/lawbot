@@ -295,7 +295,9 @@ def make_repo(tmp_path, versions):
     subprocess.run(['git', 'init', '-q', str(repo)], check=True)
     addenda = ''
     for i, (date, number, effective, body, add, *kind) in enumerate(versions):
-        addenda += add
+        addenda = (
+            add(addenda) if callable(add) else addenda + add
+        )  # 함수면 쌓인 부칙을 고친다 (나중 법률이 옛 부칙을 개정)
         kind = kind[0] if kind else '제정' if i == 0 else '일부개정'
         (repo / PATH).write_text(md(number, date, effective, body, addenda), encoding='utf-8')
         stamp = f'{date}T03:00:00Z'
@@ -434,6 +436,35 @@ def test_in_force_starts_from_the_last_full_revision(tmp_path):
     }
     before = {a['no']: a['text'] for a in b.in_force(repo, PATH, '2026-08-31')[0]}  # 전부개정 시행 전: 앞 버전부터
     assert before['제2조'].startswith('다시 바뀐 정의')
+
+
+def test_in_force_reads_addenda_as_later_amended(tmp_path):
+    """나중 법률이 옛 부칙의 시행일을 고친다 (소득세법 제17757호 부칙: 가상자산 과세 2022 → 2027).
+    부칙은 기준일 버전 파일에 실린 것(나중 개정 반영본)을 읽고, 부칙 안의 '<개정 …>' 표시는 문장 나누기에서 뺀다"""
+    v2 = V1 + article('제4조', '신설', '시행이 미뤄진 신설 <신설 2020.12.29>')
+    add2 = (
+        '부칙 <제200호,2020.12.29>\n\n제1조(시행일) 이 법은 2021년 1월 1일부터 시행한다. 다만, 다음 각 호의 개정규정은 '
+        '각 호의 구분에 따른 날부터 시행한다.\n\n1. 제4조의 개정규정: 2022년 1월 1일\n\n\n제2조(경과조치) 생략\n\n'
+    )
+
+    def postpone(addenda):
+        later = addenda.replace(
+            '시행한다.\n\n1. 제4조의 개정규정: 2022년 1월 1일',
+            '시행한다. <개정 2021.12.8>\n\n1. 제4조의 개정규정: 2027년 1월 1일',
+        )
+        return later + '부칙 <제300호,2021.12.8>\n\n이 법은 공포한 날부터 시행한다.\n\n'
+
+    repo = make_repo(
+        tmp_path,
+        [
+            ('2020-01-01', '100', '2020-01-01', V1, ''),
+            ('2020-12-29', '200', '2021-01-01', v2, add2),
+            ('2021-12-08', '300', '2021-12-08', v2, postpone),
+        ],
+    )
+    assert '제4조' not in {a['no'] for a in b.in_force(repo, PATH, '2026-11-03')[0]}  # 2027년 시행으로 미뤄짐
+    later = {a['no']: (a['text'], a['eff']) for a in b.in_force(repo, PATH, '2027-01-01')[0]}
+    assert later['제4조'] == ('시행이 미뤄진 신설 <신설 2020.12.29>', '2027-01-01')
 
 
 UNKNOWN_ADD = (
