@@ -1,5 +1,6 @@
 # tests/test_build_articles.py  →  조문 CSV 생성기 (lawbot_tools.build_articles, 계획 docs/archives/article-generator.md)
-# 단위 테스트는 작은 git 저장소를 임시로 만들어 쓴다. 실제 legalize-kr로 레포 CSV와 바이트 비교는 -m network (LEGALIZE_KR)
+# 단위 테스트는 작은 git 저장소를 임시로 만들어 쓴다. 실제 legalize-kr로 레포 CSV와 비교는 -m network (LEGALIZE_KR)
+import io
 import os
 import re
 import subprocess
@@ -603,15 +604,26 @@ def test_check_reports_first_difference():
 
 
 @pytest.mark.network
-def test_generated_csvs_are_byte_identical_to_repo():
-    """LEGALIZE_KR=<legalize-kr 클론> uv run pytest -m network -k byte_identical"""
+def test_generated_csvs_match_repo_except_known_rule_changes():
+    """LEGALIZE_KR=<legalize-kr 클론> uv run pytest -m network -k known_rule_changes
+    data/v4는 2026-11-03 규칙 변경 전 생성기 결과다. 바뀐 것은 전부개정 시작(근로자퇴직급여 보장법 제1조 effective_date)과
+    부칙 특례 1행뿐이고 나머지는 칸 단위로 같다 (docs/evals/2026-11-03-v5-generator.md)"""
+    import pandas as pd
+
     src = os.environ.get('LEGALIZE_KR')
-    if not src or not Path(src, '.git').exists():
+    if not src or not (Path(src, '.git').exists() or Path(src, 'HEAD').exists()):  # 일반·bare 클론
         pytest.skip('LEGALIZE_KR에 legalize-kr 클론 경로를 넣으세요')
     files, _, stats = b.build(src, '2026-10-20')
     assert re.fullmatch(r'[0-9a-f]{40}', stats['head'])
-    assert files[b.LAW_CSV] == V4_ARTICLES.read_bytes()
-    assert files[b.DECREE_CSV] == V4_DECREE_ARTICLES.read_bytes()
+    for name, repo_csv in ((b.LAW_CSV, V4_ARTICLES), (b.DECREE_CSV, V4_DECREE_ARTICLES)):
+        new = pd.read_csv(io.BytesIO(files[name]), encoding='utf-8-sig', dtype=str, keep_default_na=False)
+        old = pd.read_csv(repo_csv, encoding='utf-8-sig', dtype=str, keep_default_na=False)
+        added = new[new['article_no'].str.startswith('부칙<')]
+        assert list(added['article_id']) == ['근로자퇴직급여 보장법 부칙<제21475호>제2조']
+        new = new.drop(added.index).reset_index(drop=True)
+        changed = new != old
+        cells = [(new.at[i, 'article_id'], new.columns[j]) for i, j in zip(*changed.to_numpy().nonzero())]
+        assert cells == [('근로자퇴직급여 보장법 제1조', 'effective_date')]
 
 
 def test_row_order_laws_then_decrees_by_name():
@@ -708,3 +720,12 @@ def test_build_rows_keeps_only_scoped_articles_and_their_addendum_overrides(tmp_
     assert rows[-1]['title'] == '벌칙 특례' and rows[-1]['deleted'] == 0
     with pytest.raises(ValueError, match='범위 목록의 조문이 없습니다'):
         b.build_rows(repo, {'시험법': PATH}, '2026-10-20', [('시험법', '법률', {'제1조', '제9조'})])
+    # 전체 문서(범위 None)도 같은 규칙: 모든 본칙이 대상 (2026-11-03 사용자: 노동 문서에도 켬)
+    full, _ = b.build_rows(repo, {'시험법': PATH}, '2026-10-20', [('시험법', '법률', None)])
+    assert [r['article_id'] for r in full] == [
+        '시험법 제1조',
+        '시험법 제2조',
+        '시험법 제3조',
+        '시험법 부칙<제200호>제2조',
+        '시험법 부칙<제200호>제3조',
+    ]

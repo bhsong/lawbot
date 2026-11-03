@@ -18,7 +18,7 @@
 - 타법개정 부칙('부칙(정부조직법) <…>')의 조문은 그 법의 조문이라 머리말 시행일자만 쓴다
 - 시행 전 개정이 남은 조문을 그 뒤 개정이 다시 바꾸면 조문 단위로 나눌 수 없다: 최신 본문 끝에
   `[주의: YYYY.M.D. 시행 예정인 개정 내용이 함께 들어 있음]`
-- 부칙 특례(범위 목록 문서만): 부칙 조문이 '제N조…에도 불구하고'로 범위 안 본칙을 대신하고, 기한('…까지')이
+- 부칙 특례: 부칙 조문이 '제N조…에도 불구하고'로 본칙(범위 목록 문서는 범위 안)을 대신하고, 기한('…까지')이
   기준일 이후이며, 그 부칙이 시행 중이면 `부칙<제N호>제M조` 행으로 넣는다 (chapter = 부칙 머리)
 - 원문 형식 변경(공백, 조문 끝 `[시행일]` 안내 삭제)은 개정으로 보지 않는다
 - effective_date: 그 조문을 마지막으로 바꾼 개정의 시행일
@@ -771,7 +771,8 @@ def docs(scope):
 
 
 def build_rows(repo: Repo, paths, asof, doc_list=None):
-    """조문 행과 버전 기록. 범위가 있는 문서는 범위 안 조문과 그 조문을 대신하는 부칙 특례 조문(addendum_overrides)만"""
+    """조문 행과 버전 기록. 문서마다 본칙 조문 뒤에 그 조문을 대신하는 부칙 특례 조문(addendum_overrides).
+    범위가 있는 문서는 범위 안 조문과 그 조문의 부칙 특례만"""
     rows, versions = [], []
     for law, kind, scope in doc_list or docs(None):
         doc = doc_name(law, kind)
@@ -780,8 +781,9 @@ def build_rows(repo: Repo, paths, asof, doc_list=None):
             missing = scope - {a['no'] for a in arts}
             if missing:
                 raise ValueError(f'{doc}: 범위 목록의 조문이 없습니다 {sorted(missing)}')
-            last = repo.show(next(h[0] for h in repo.history[paths[doc]] if h[1] <= asof), paths[doc])
-            arts = [a for a in arts if a['no'] in scope] + addendum_overrides(last, used, asof, scope)
+            arts = [a for a in arts if a['no'] in scope]
+        last = repo.show(next(h[0] for h in repo.history[paths[doc]] if h[1] <= asof), paths[doc])
+        arts += addendum_overrides(last, used, asof, {a['no'] for a in arts})
         for a in arts:
             text = a['text']
             deleted = a.get('expired') or (a['title'] is None and (text is None or text.startswith('삭제')))
