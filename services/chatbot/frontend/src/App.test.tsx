@@ -4,7 +4,7 @@ import App from './App'
 import type { Config } from './types'
 
 const config: Config = {
-  title: '노동법 챗봇 · 테스트',
+  title: 'Lawbot · 테스트',
   intro: '안내',
   notice: '법령 기준일 2026-10-20',
   models: [
@@ -130,4 +130,15 @@ test('example question is sent on click', async () => {
   await userEvent.click(await screen.findByRole('button', { name: '예시 질문' }))
   expect(await screen.findByText('예시 답')).toBeInTheDocument()
   expect(s.chats).toEqual([{ question: '예시 질문', model: 'pro', format: 'concise' }])
+})
+
+test('scope wording: Lawbot on login, HR·attendance·payroll law on the empty chat', async () => {
+  server({ loggedIn: false })
+  render(<App />)
+  expect(await screen.findByRole('heading', { name: 'Lawbot' })).toBeInTheDocument()
+  vi.unstubAllGlobals()
+  server()
+  render(<App />)
+  expect(await screen.findByRole('heading', { name: '인사·근태·급여 관련 법, 조문을 근거로 답해 드려요' })).toBeInTheDocument()
+  expect(screen.getAllByPlaceholderText('인사·근태·급여 관련 법을 질문하세요').length).toBeGreaterThan(0)
 })

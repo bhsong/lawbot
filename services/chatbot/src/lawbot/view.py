@@ -133,7 +133,7 @@ def error_message(kind, cause, spec):
 
 
 def page_title(app):
-    """화면·탭 제목. LAWBOT_INSTANCE가 있으면 붙인다 (예: '노동법 챗봇 · 개발', 운영/개발 구분)"""
+    """화면·탭 제목. LAWBOT_INSTANCE가 있으면 붙인다 (예: 'Lawbot · 개발', 운영/개발 구분)"""
     cfg = getattr(app, 'settings', None)
     name = cfg.instance if cfg is not None and cfg.chat_concurrency is not None else instance_name()
     return f'{app.profile.title} · {name}' if name else app.profile.title

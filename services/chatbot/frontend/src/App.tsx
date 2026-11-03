@@ -115,7 +115,7 @@ function Chat({ config, onSignedOut }: { config: Config; onSignedOut: () => void
         <div className="scroll" ref={scroller}>
           {chat.turns.length === 0 ? (
             <section className="welcome">
-              <h2>노동법, 조문을 근거로 답해 드려요</h2>
+              <h2>인사·근태·급여 관련 법, 조문을 근거로 답해 드려요</h2>
               <p>{config.intro}</p>
               <div className="examples">
                 {config.examples.map((q) => (

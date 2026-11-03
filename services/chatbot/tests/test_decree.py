@@ -388,6 +388,24 @@ def test_decree_config(env):
     assert deploy.decree(deploy.get_profile()) == deploy.DecreeConfig(0.8, 3, ('fast', 'pro'))
 
 
+def test_max_seq_settings_for_longer_articles(env):
+    """v5 세금 조문은 v4보다 길다 (법률 최장 4,246 · 하위법령 5,079토큰). 최대 토큰을 .env로 (기본은 v4 값)"""
+    env.setenv('LAWBOT_DECREE_ENABLED', '1')
+    env.setenv('LAWBOT_RERANKER_ENABLED', '1')
+    env.setenv('LAWBOT_MAX_SEQ', '4352')
+    env.setenv('LAWBOT_DECREE_MAX_SEQ', '5120')
+    p = deploy.get_profile()
+    assert p.max_seq == 4352 and deploy.decree(p).max_seq == 5120
+    for var in ('LAWBOT_MAX_SEQ', 'LAWBOT_DECREE_MAX_SEQ'):
+        for bad in ('0', 'x', '4352.0'):
+            env.setenv(var, bad)
+            with pytest.raises(ValueError, match=var):
+                deploy.decree(deploy.get_profile())
+        env.delenv(var)
+    p = deploy.get_profile()
+    assert p.max_seq == 2304 and deploy.decree(p).max_seq == 3072
+
+
 def test_load_app_with_decree(env, tmp_path):
     env.setenv('LAWBOT_DECREE_ENABLED', '1')
     made = []

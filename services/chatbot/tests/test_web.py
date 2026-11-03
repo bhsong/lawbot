@@ -142,7 +142,7 @@ def test_session_cookie_from_other_app_is_rejected(lawbot):
 # ---- 설정 ----
 def test_config(authed, lawbot):
     cfg = authed.get('/api/config').json()
-    assert cfg['title'] == '노동법 챗봇'
+    assert cfg['title'] == 'Lawbot'
     assert cfg['intro'].endswith(view.DISCLAIMER) and cfg['notice'] == view.data_notice(lawbot)
     assert [m['key'] for m in cfg['models']] == list(lawbot.models.specs)
     first = lawbot.profile.models[0]

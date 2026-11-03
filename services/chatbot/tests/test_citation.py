@@ -195,3 +195,23 @@ def test_chatbot_never_imports_model_libraries():
 )
 def test_refused_caveat_sentence(answer, expected):
     assert ci.refused(answer) is expected
+
+
+def test_parse_tax_and_insurance_laws_and_their_short_names():
+    """v5 세금·보험 법령 (docs/plans/v5-tax-scope.md 3-2). 줄임말은 정식 이름으로"""
+    text = '소득세법 제59조의2, 같은 법 시행령 제118조의4는 아니고 조특법 제95조의2와 보험료징수법 제13조, 건강보험법 제69조'
+    assert ci.parse(text)[:1] == [('소득세법', '제59조의2')]
+    assert ('조세특례제한법', '제95조의2') in ci.parse(text)
+    assert ('고용보험 및 산업재해보상보험의 보험료징수 등에 관한 법률', '제13조') in ci.parse(text)
+    assert ('국민건강보험법', '제69조') in ci.parse(text)
+    assert ci.parse('소득세법 시행령 제202조') == [('소득세법 시행령', '제202조')]
+
+
+def test_parse_addendum_articles():
+    """부칙 특례 행의 번호 '부칙<제20903호>제4조'. 괄호 표기도 같은 번호로. 공포번호 없는 '부칙 제4조'는 본칙 제4조가 아님"""
+    assert ci.parse('국민연금법 부칙<제20903호>제4조') == [('국민연금법', '부칙<제20903호>제4조')]
+    assert ci.parse('국민연금법 부칙(제20903호) 제4조, 제88조') == [
+        ('국민연금법', '부칙<제20903호>제4조'),
+        ('국민연금법', '제88조'),
+    ]
+    assert ci.parse('국민연금법 부칙 제4조') == [('국민연금법', '부칙제4조')]

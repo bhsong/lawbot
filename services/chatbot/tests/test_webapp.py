@@ -43,7 +43,7 @@ def test_profiles_define_fast_and_pro(env):
 
 def test_default_profile_is_v4(env):
     p = deploy.get_profile()
-    assert p.name == 'v4' and p.title == '노동법 챗봇'
+    assert p.name == 'v4' and p.title == 'Lawbot'
 
 
 @pytest.mark.parametrize('value', ['', 'v4', ' v4 '])
@@ -160,9 +160,9 @@ def test_chat_concurrency_setting(env):
 def test_instance_name_in_title(env):
     # LAWBOT_INSTANCE: 운영/개발 화면을 탭 제목과 맨 위 제목으로 구분
     a = make_app(env)
-    assert web.config_data(a, None)['title'] == '노동법 챗봇'
+    assert web.config_data(a, None)['title'] == 'Lawbot'
     env.setenv('LAWBOT_INSTANCE', '개발')
-    assert web.config_data(a, None)['title'] == '노동법 챗봇 · 개발'
+    assert web.config_data(a, None)['title'] == 'Lawbot · 개발'
 
 
 # ---- 모델 선택 ----

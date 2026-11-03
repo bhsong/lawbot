@@ -83,7 +83,10 @@ def test_oos_reclassification():
     inside = oos[oos['source'].isin(ev.OOS_IN_SCOPE)]
     assert len(inside) == 27 and len(oos) - len(inside) == 75
     assert set(ev.OOS_IN_SCOPE.values()) <= set(ev.LAW_ALIASES)
-    assert set(ev.LAW_ALIASES) == set(pd.read_csv(deploy.get_profile().articles, **E)['law'])
+    # 인용 판정은 조문 데이터의 모든 법령을 안다 (v4 7개 법률 + v5 세금·보험 11개 법령의 법률 이름)
+    laws = set(pd.read_csv(deploy.get_profile().articles, **E)['law'])
+    laws |= set(pd.read_csv(DATA / 'v5' / 'articles_v5.csv', **E)['law'])
+    assert set(ev.LAW_ALIASES) == laws
 
 
 # ---- 단계 실행 (가짜 모델) ----
