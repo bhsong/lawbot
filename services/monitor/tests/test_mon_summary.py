@@ -336,14 +336,18 @@ def test_cli_daily_runs_checks_before_summary(tmp_path, legalize, monkeypatch, c
     assert cli.main([*base, 'bootstrap', '--only', 'legalize_law']) == 0
     assert cli.main([*base, 'daily', '--only', 'legalize_law']) == 0
     assert '챗봇 조문 데이터 — 확인 필요: articles same=no changed=6' in capsys.readouterr().out
-    md = next((tmp_path / 'h' / 'data' / 'summaries').glob('*.md')).read_text(encoding='utf-8')
+    summaries = tmp_path / 'h' / 'data' / 'summaries'
+    first = set(summaries.glob('*.md'))
+    md = next(iter(first)).read_text(encoding='utf-8')
     assert '## 점검' in md and '- 챗봇 조문 데이터 — 확인 필요: `articles same=no changed=6`' in md
 
     broken = repr([sys.executable, '-c', 'import sys; sys.exit(3)'])
     cfg.write_text(cfg.read_text(encoding='utf-8').replace(differ, broken), encoding='utf-8')
     assert cli.main([*base, 'daily', '--only', 'legalize_law']) == 1  # 점검 실패는 daily 실패
-    second = [p for p in (tmp_path / 'h' / 'data' / 'summaries').glob('*.md') if p.stem != '2026-11-02']
-    md = second[0].read_text(encoding='utf-8')  # 같은 날 두 번째: 2026-11-02-HHMMSS.md
+    # 같은 날 두 번째 실행은 <날짜>-HHMMSS.md. 실제 시계를 쓰므로 날짜를 적지 않고 새로 생긴 파일을 고른다
+    second = set(summaries.glob('*.md')) - first
+    assert len(second) == 1, second
+    md = second.pop().read_text(encoding='utf-8')
     assert '- 챗봇 조문 데이터 — 점검 실패: `(출력 없음, 종료 코드 3)`' in md
 
 
