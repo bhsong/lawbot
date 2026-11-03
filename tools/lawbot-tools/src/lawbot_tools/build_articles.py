@@ -391,10 +391,11 @@ def squash(s):
 FULL_REVISION = re.compile(r'\((?:전부개정|제정|폐지제정)\)$')
 
 
-def last_full_revision(hist, mds, asof):
-    """조합을 시작할 버전: 기준일에 시행 중인 마지막 전부개정(제정). 전부개정은 본문 전체를 새로 써서 앞 버전과 이어지지 않는다"""
+def last_full_revision(repo: Repo, path, hist, asof):
+    """조합을 시작할 버전: 기준일에 시행 중인 마지막 전부개정(제정). 전부개정은 본문 전체를 새로 써서 앞 버전과 이어지지 않는다.
+    그 앞 버전은 읽지 않는다 (부분 클론에서 옛 원문을 받지 않음)"""
     for i in range(len(hist) - 1, -1, -1):
-        if FULL_REVISION.search(hist[i][2]) and front(mds[i])['시행일자'] <= asof:
+        if FULL_REVISION.search(hist[i][2]) and front(repo.show(hist[i][0], path))['시행일자'] <= asof:
             return i
     return 0
 
@@ -406,9 +407,8 @@ def in_force(repo: Repo, path, asof):
     시행 전 개정이 남은 조문에 그 뒤 시행된 개정이 내용을 바꾸면 조문 단위로 나눌 수 없다: 최신 본문을 쓰고 끝에
     시행 전 내용이 섞였다고 적는다(mixed, 2026-11-03 사용자 결정)"""
     hist = [h for h in reversed(repo.history[path]) if h[1] <= asof]  # 오래된 것부터
+    hist = hist[last_full_revision(repo, path, hist, asof) :]
     mds = repo.show_many([(sha, path) for sha, _, _ in hist])
-    start = last_full_revision(hist, mds, asof)
-    hist, mds = hist[start:], mds[start:]
     state: dict[str, dict] = {}
     prev: dict[str, dict] = {}
     pending: dict[str, list[str]] = {}  # 시행 전 개정이 남은 조문 → 그 시행일들
