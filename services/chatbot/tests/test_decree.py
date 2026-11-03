@@ -568,7 +568,7 @@ def test_eval_answers_and_refusal_with_decree(rr, tmp_path):
             for i, (l, a, _) in enumerate(LAWS)
         ]
     )
-    rr.setattr(ev, 'keywords', lambda: pd.DataFrame(columns=['must_include']))
+    rr.setattr(ev, 'keywords', lambda *a: pd.DataFrame(columns=['must_include']))
     ev.run_answers(on, 'pro', 'concise', t, tmp_path / 'answers_dec.csv')
     a = pd.read_csv(tmp_path / 'answers_dec.csv', keep_default_na=False, **E)
     assert a['top3'].str.count(r'\|').eq(2).all() and a['decrees'].str.len().gt(0).all()

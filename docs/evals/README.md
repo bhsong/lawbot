@@ -31,6 +31,7 @@ uv run lawbot-eval-v4 summary --tag pro_concise_rr   # 결과 파일로 지표 �
 uv run lawbot-eval-v4 --split val            # 하위법령 첨부 구성이면 retrieval·answers·refusal + decree (tag 끝 _dec_val)
 uv run lawbot-eval-v4 decree --split val     # 하위법령 정답 val 444 첨부 포함률 + 표본 200 답변 (val만)
 uv run lawbot-eval-v4 answers --split val --concurrency 4 --tag <tag>  # 문항을 4개씩 동시에 (처리량 측정, 모델 서버 LAWBOT_MAX_CONCURRENT와 함께)
+uv run lawbot-eval-v4 --split val --dataset v5      # v5: 노동 문항 + 세금·보험(D_tax). 결과는 results/v5, 표본은 v4 200 + D_tax --n-tax(기본 100)
 ```
 
 - `--concurrency N`(기본 1)은 문항을 N개씩 동시에 보내고 결과 파일에는 문항 순서대로 씁니다. 단계별 문항 수·시간은 `run_<tag>.json`의 `stage_times`에 남고, 끝날 때 문항/분을 출력합니다.

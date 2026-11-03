@@ -27,3 +27,23 @@ def test_settings_split_laws_and_decrees_and_skip_deleted():
         '법률': ('가법 제1조', len('가법 제1조(목적)\n짧음')),
         '하위법령': ('가법 시행령 제1조', len('가법 시행령 제1조(목적)\n조금 더 긴 본문')),
     }
+
+
+def test_counts_table_for_summaries():
+    """요약이 토크나이저 없이 정답 조문 길이 구간을 나누도록 조문별 토큰 수 (data/v5/doc_tokens_v5.csv)"""
+    df = pd.DataFrame(
+        {
+            'law': ['가법', '가법 시행령'],
+            'article_no': ['제1조', '제1조'],
+            'article_id': ['가법 제1조', '가법 시행령 제1조'],
+            'title': ['목적', '목적'],
+            'text': ['짧음', '본문'],
+            'deleted': [0, 0],
+            'kind': ['법률', '시행령'],
+        }
+    )
+    got = max_seq.counts(df, lambda t: len(t))
+    assert got.to_dict('records') == [
+        {'article': '가법 제1조', 'group': '법률', 'tokens': len('가법 제1조(목적)\n짧음')},
+        {'article': '가법 시행령 제1조', 'group': '하위법령', 'tokens': len('가법 시행령 제1조(목적)\n본문')},
+    ]

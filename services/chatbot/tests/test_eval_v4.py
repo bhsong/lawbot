@@ -184,7 +184,7 @@ def test_stages_end_to_end_and_resume(tmp_path, env):
         },
         index=t.loc[t.eval_cat == 'A_lsa', 'id'],
     )
-    env.setattr(ev, 'keywords', lambda: kw)
+    env.setattr(ev, 'keywords', lambda *a: kw)
     for _ in range(2):  # 두 번째 실행은 이미 끝난 문항을 건너뜀
         ev.run_retrieval(app, t, tmp_path / 'retrieval_x.csv')
         ev.run_answers(app, 'pro', 'concise', t, tmp_path / 'answers_x.csv')
@@ -482,3 +482,83 @@ def test_resume_concurrent_keeps_order_and_resumes(tmp_path, monkeypatch):
     assert df['id'].tolist() == [f'q{i}' for i in range(6)] and df['v'].tolist() == [0, 10, 20, 30, 40, 50]
     assert peak[0] == 3
     assert ev.STAGE_TIMES['answers']['n'] == 2  # 두 번째 실행에서 남은 2개
+
+
+# ---- v5 (노동 + 세금·보험, docs/plans/v5-tax-scope.md 3-3) ----
+def test_v5_questions_split_by_gold_kind_and_keep_v4_samples():
+    """D_tax는 정답이 법률(부칙 특례 포함)이면 법률 검색·답변, 시행령·시행규칙이면 하위법령 단계. v4 문항·표본은 그대로"""
+    v4, t = ev.load_test('val'), ev.load_test('val', 'v5')
+    tax = t[t['eval_cat'] == 'D_tax']
+    assert t[t['eval_cat'] != 'D_tax'].reset_index(drop=True).equals(v4)
+    assert len(tax) and not tax['article_id'].map(ev.gold_is_decree).any()
+    dq, dq_v4 = ev.load_decree_questions('val', 'v5'), ev.load_decree_questions('val')
+    dq_tax = dq[dq['eval_cat'] == 'D_tax']
+    assert len(dq) == len(dq_v4) + len(dq_tax) and dq_tax['article_id'].map(ev.gold_is_decree).all()
+    assert len(tax) + len(dq_tax) == 2052  # split_tax_v5.csv의 val 전체
+    s = ev.answer_sample(t, 200, n_tax=100)
+    assert s[s['eval_cat'] != 'D_tax']['id'].tolist() == ev.answer_sample(v4, 200)['id'].tolist()
+    assert (s['eval_cat'] == 'D_tax').sum() == 100 and s['id'].tolist() == ev.answer_sample(t, 200, n_tax=100)[
+        'id'
+    ].tolist()
+    assert ev.answer_sample(v4, 200).equals(ev.answer_sample(v4, 200, n_tax=100))  # v4에는 D_tax가 없음
+
+
+def test_v5_tax_answers_use_answer_key_keywords():
+    t = ev.load_test('val', 'v5')
+    q = t[t['eval_cat'] == 'D_tax'].iloc[0]
+    kw = ev.keywords('v5')
+    key = pd.read_csv(DATA / 'v5' / 'answer_key_tax_v5.csv', **E).set_index('answer_key').loc[q['answer_key']]
+    assert kw.loc[q['id'], 'must_include'] == key['must_include']
+    good = key['answer'].replace('【근거 조문】', f'【근거 조문】\n{q["article_id"]}\n', 1)
+    sc = ev.score_answer(q['id'], 'D_tax', q['article_id'], good, kw)
+    assert sc['cite_v4'] == 1 and sc['group_score'] == 1.0 and sc['total_v4'] is not None
+    assert ev.keywords().equals(ev.keywords('v4'))
+
+
+def test_v5_oos_moves_oos073_into_scope(monkeypatch):
+    monkeypatch.setattr(ev, 'DATASET', 'v5')
+    items = {i[0]: i for i in ev.oos_items()}
+    assert items['OOS073'][4] == '조세특례제한법' and items['OOS074'][4] == '소득세법'  # 사용자 결정
+    assert ev.oos_scope('oos', items['OOS073'][4]) == 'in_reclassified'
+    assert ev.oos_scope('oos', items['OOS074'][4]) == 'out'
+    monkeypatch.setattr(ev, 'DATASET', 'v4')
+    assert {i[0]: i for i in ev.oos_items()}['OOS073'][4] == '소득세법'
+    assert ev.oos_scope('oos', '조세특례제한법') == 'out'
+
+
+def test_v5_summary_by_gold_length(tmp_path, monkeypatch):
+    """정답 조문 길이 구간별 검색·답변 (data/v5/doc_tokens_v5.csv). 조문 단위 임베딩을 계속 쓸지 판단용"""
+    monkeypatch.setattr(ev, 'OUT', tmp_path)
+    monkeypatch.setattr(ev, 'DATASET', 'v5')
+    tokens = pd.read_csv(DATA / 'v5' / 'doc_tokens_v5.csv', **E)
+    short = tokens.loc[tokens['tokens'].astype(int) <= 1000, 'article'].iloc[0]
+    long = tokens.loc[tokens['tokens'].astype(int) > 2304, 'article'].iloc[0]
+    t = pd.DataFrame({'id': ['a', 'b'], 'eval_cat': ['D_tax', 'D_tax'], 'article_id': [short, long]})
+    pd.DataFrame({'id': ['a', 'b'], 'emb_rank': [1, 20], 'rr_rank': [1, 999]}).assign(rerank_sec=0.1).to_csv(
+        tmp_path / 'retrieval_x.csv', index=False, **E
+    )
+    s = ev.summarize('x', t)
+    got = {(r.section, r.group, r.metric): r.value for r in s.itertuples()}
+    assert got[('검색 길이', '1,000토큰 이하', '리랭킹 Recall@3')] == 1.0
+    assert got[('검색 길이', '2,304토큰 초과', '리랭킹 Recall@3')] == 0.0
+
+
+def test_v5_main_adds_tax_questions_and_writes_results_v5(env, monkeypatch, tmp_path):
+    calls = []
+    env.setenv('LAWBOT_MODELS', 'pro')
+    monkeypatch.setattr(ev, 'OUT', tmp_path / 'v4')
+    monkeypatch.setattr(ev, 'DATASET', 'v4')  # main이 바꾸는 전역: 테스트가 끝나면 v4로 되돌림
+    monkeypatch.setattr(service, 'load_app', fake_app)
+    monkeypatch.setattr(ev, 'run_retrieval', lambda app, test, path, **k: calls.append(('retrieval', len(test), path)))
+    monkeypatch.setattr(ev, 'run_answers', lambda app, m, f, sample, path: calls.append(('answers', len(sample), path)))
+    monkeypatch.setattr(ev, 'run_refusal', lambda app, m, f, sample, path: calls.append(('refusal', sample)))
+    monkeypatch.setattr(ev, 'summarize', lambda tag, test: calls.append(('summary', tag)))
+    monkeypatch.setattr('sys.argv', ['lawbot-eval-v4', '--split', 'val', '--dataset', 'v5', '--n-tax', '50'])
+    ev.main()
+    n_tax_law = (ev.load_test('val', 'v5')['eval_cat'] == 'D_tax').sum()
+    assert calls[0] == ('retrieval', 1110 + n_tax_law, tmp_path / 'v5' / 'retrieval_pro_concise_rr_val.csv')
+    assert calls[1][:2] == ('answers', 250)  # v4 표본 200 + D_tax 50
+    v4_sample = ev.answer_sample(ev.load_test('val'), 200)
+    assert calls[2][1]['id'].tolist() == v4_sample['id'].tolist()  # 정답 없는 참고 조문 시험은 v4와 같은 문항에서
+    run = json.loads((tmp_path / 'v5' / 'run_pro_concise_rr_val.json').read_text(encoding='utf-8'))['runs'][0]
+    assert (run['eval_dataset'], run['n_tax']) == ('v5', 50)
