@@ -375,6 +375,7 @@ dependencies = [
     { name = "lawbot" },
     { name = "numpy" },
     { name = "pandas" },
+    { name = "scikit-learn" },
 ]
 
 [package.metadata]
@@ -382,6 +383,7 @@ requires-dist = [
     { name = "lawbot", editable = "services/chatbot" },
     { name = "numpy", specifier = ">=2.0" },
     { name = "pandas", specifier = ">=3.0.6" },
+    { name = "scikit-learn", specifier = ">=1.9" },
 ]
 
 [[package]]

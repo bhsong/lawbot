@@ -89,6 +89,24 @@
 
 ### 3단계 (PR 3): 웹앱 구성과 평가셋
 
+3단계는 PR 두 개로 나눈다.
+
+**3-1 (PR): 평가셋 넣기와 분할 도구** (2026-11-04 사용자: v4 노트북 분할 코드를 도구로, train도 미리 뺀다)
+
+- 질문·정답: 다른 세션이 v5 입력(684조문)으로 배치 100개를 만들었다 (질문 13,680, 정답 키 1,745. 확인 결과는 [evals 7절](../evals/2026-11-03-v5-generator.md)). B001~B079는 한 세션, B080~B100은 다른 세션의 고친 결과(작업 B).
+- 분할 도구 `lawbot-qa-split` (`tools/lawbot-tools/src/lawbot_tools/qa_split.py`): v4 노트북 `lawbot_v4_emb_1.ipynb` 셀 ①의 신규 질문 분할 규칙을 그대로 옮긴다.
+  1. 질문을 법령 순서 → 조문 순서(조문 CSV 행 순서) → 질문 유형(situation·keyword·colloquial·employer·indirect) 순으로 안정 정렬하고 ID를 붙인다
+  2. test: (조문, 질문 유형)마다 1개 (`groupby.sample(1, random_state=42)`). 그룹마다 2개 이상이어야 한다
+  3. 나머지에서 임베딩 val 20% (`train_test_split(stratify=article_id, random_state=42)`), 따로 sLLM val 10% (`stratify=law`)
+  4. 라벨: test → val → train. `split_emb`·`split_sllm` 두 열. 같은 문장이 서로 다른 분할에 있으면 실패
+- 도구가 맞는지: 레포의 v4 데이터(`qa_full_v4.csv`의 B_newlaw 5,016문항)로 돌려 `split_v4.csv`와 같게 나오는지 테스트한다.
+- 출력: `data/v5/qa_tax_v5.csv`(v4 `qa_full_v4.csv`와 같은 열 + 배치 원래 id `rid`), `data/v5/answer_key_tax_v5.csv`, `data/v5/split_tax_v5.csv`. ID는 `T00001`부터 (v4 `Q`, 하위법령 `D`와 겹치지 않게), `eval_cat`은 `D_tax`.
+- test는 평가 전용이다 (설정 선택·학습에 쓰지 않음). `docs/evals/README.md`의 사용 제한 목록에 넣는다.
+
+진행 (2026-11-04): 구현 완료. `lawbot-qa-split`이 v4 B_newlaw 5,016문항의 분할과 질문 순서를 그대로 재현하는 것을 테스트로 확인했다. v5: 질문 13,680 · 정답 키 1,745 · split_emb train 8,208 / val 2,052 / test 3,420 · split_sllm train 9,234 / val 1,026 / test 3,420.
+
+**3-2 (PR): 웹앱 구성**
+
 - 개발 `.env`만 v5 CSV를 가리키게 한다. 운영 `.env`·`data/live`는 건드리지 않는다.
 - system 프롬프트: 지금 "대한민국 노동법 상담 도우미"라서 세금 질문을 거절할 수 있다. 범위를 "노동법과 근로소득 원천징수·4대보험"으로 넓힌 후보를 만들고 val로만 고른다.
 - 평가셋: 세금·보험 질문 평가셋이 없다. **만드는 방법은 이 단계 시작 전에 사용자와 정한다**(아래 확인할 것 1).
