@@ -1,5 +1,6 @@
 # tests/test_build_articles.py  →  조문 CSV 생성기 (lawbot_tools.build_articles, 계획 docs/archives/article-generator.md)
-# 단위 테스트는 작은 git 저장소를 임시로 만들어 쓴다. 실제 legalize-kr로 레포 CSV와 바이트 비교는 -m network (LEGALIZE_KR)
+# 단위 테스트는 작은 git 저장소를 임시로 만들어 쓴다. 실제 legalize-kr로 레포 CSV와 비교는 -m network (LEGALIZE_KR)
+import io
 import os
 import re
 import subprocess
@@ -177,6 +178,61 @@ def test_schedule_fails_on_late_date_it_cannot_place():
     assert sched(add, promulgated='2026-06-01', effective='2026-06-01', asof='2028-01-01').main == '2026-06-01'
 
 
+def test_date_expression_years_and_months():
+    """'공포 후 1년 6개월이 경과한 날' = 18개월 (노인장기요양보험법 제18610호)"""
+    assert expr('공포 후 1년 6개월이 경과한 날부터', '2021-12-21') == '2023-06-22'
+
+
+def test_schedule_skips_articles_of_another_amending_law():
+    """'법률 제9911호 ○○법 일부개정법률 제21조의 개정규정'은 다른 개정법률의 조문이라 이 법 제21조가 아니다 (국세기본법 제21212호)"""
+    add = (
+        '부칙 <제300호,2025.12.23>\n\n제1조(시행일) 이 법은 2026년 1월 1일부터 시행한다. 다만, 제53조의 개정규정은 '
+        '2026년 7월 1일부터 시행하고, 법률 제9911호 시험법 일부개정법률 제53조의 개정규정은 법률 제9346호 다른법 폐지법률의 '
+        '시행일부터 시행한다.\n\n\n제2조(경과조치) 생략\n'
+    )
+    s = sched(add, promulgated='2025-12-23', effective='2026-01-01', asof='2026-11-03')
+    assert s.articles == {'제53조': '2026-07-01'}
+
+
+def test_schedule_of_another_laws_addendum_uses_the_front_matter_date():
+    """타법개정의 '부칙(정부조직법) <제21065호>'에 적힌 조문은 그 법의 조문이다. 이 법에는 머리말 시행일자만 쓴다 (소득세법)"""
+    add = (
+        '부칙(정부조직법) <제300호,2025.10.1>\n\n제1조(시행일) 이 법은 공포한 날부터 시행한다. 다만, 다음 각 호의 개정규정은 '
+        '해당 호에서 정하는 날부터 시행한다.\n\n1. 다음 각 목의 개정규정은 2026년 1월 2일부터 시행한다.\n\n'
+        '가. 제2조제4항 및 제53조의 개정규정\n\n2. 제110조의 개정규정: 대통령령으로 정하는 날\n\n\n제2조(다른 법률의 개정) 생략\n'
+    )
+    s = sched(add, promulgated='2025-10-01', effective='2025-10-01', asof='2025-11-03')
+    assert (s.main, s.articles) == ('2025-10-01', {})
+
+
+def test_schedule_reads_each_item_when_the_proviso_names_no_article():
+    """'다만, 다음 각 호의 개정규정은 해당 호에서 정하는 날부터': 호마다 대상과 날짜. 별표·서식만 적힌 호의 날짜는 그 별표의 것
+    (국민건강보험법 시행령 제36675호, 소득세법 시행규칙 제22호)"""
+    add = (
+        '부칙 <제300호,2026.9.15>\n\n제1조(시행일) 이 영은 2026년 10월 1일부터 시행한다. 다만, 다음 각 호의 개정규정은 '
+        '해당 호에서 정하는 날부터 시행한다.\n\n1. 제53조 및 별표 4의3 제1호너목의2의 개정규정: 2026년 12월 24일\n\n'
+        '2. 별표 2 제5호의2의 개정규정: 2027년 1월 1일\n\n3. 별지 제24호서식 부표의 개정규정: 2027년 1월 1일\n\n\n'
+        '제2조(경과조치) 생략\n'
+    )
+    s = sched(add, promulgated='2026-09-15', effective='2026-10-01', asof='2026-11-03')
+    assert s.articles == {'제53조': '2026-12-24'}
+    # 호에 '개정규정'이 없어도 문장이 '다음 각 호의 개정규정'이면 호마다 읽는다 (소득세법 제21221호)
+    add = (
+        '부칙 <제300호,2025.12.23>\n\n제1조(시행일) 이 법은 2026년 1월 1일부터 시행한다. 다만, 다음 각 호의 개정규정은 '
+        '해당 호에서 정하는 날부터 시행한다.\n\n1. 제53조제1항ㆍ제2항(제2호나목으로 한정한다) 및 제110조제8항부터 제11항까지: '
+        '2026년 7월 1일\n\n2. 제2조 및 제33조부터 제33조의3까지: 2027년 1월 1일\n\n\n제2조(경과조치) 생략\n'
+    )
+    s = sched(add, promulgated='2025-12-23', effective='2026-01-01', asof='2026-11-03')
+    assert s.articles == {
+        '제53조': '2026-07-01',
+        '제110조': '2026-07-01',
+        '제2조': '2027-01-01',
+        '제33조': '2027-01-01',
+        '제33조의2': '2027-01-01',
+        '제33조의3': '2027-01-01',
+    }
+
+
 # ── 본문 파싱 ────────────────────────────────────────────────────────
 
 BODY1 = """## 제1장 총칙 <개정 2020.1.1>
@@ -226,7 +282,7 @@ def article(no, title, text):
 
 
 def make_repo(tmp_path, versions):
-    """versions: [(공포일, 공포번호, 시행일자, 본문, 부칙)] 오래된 것부터. 커밋 날짜 = 공포일"""
+    """versions: [(공포일, 공포번호, 시행일자, 본문, 부칙[, 개정 종류])] 오래된 것부터. 커밋 날짜 = 공포일"""
     repo = tmp_path / 'legalize'
     (repo / 'kr/시험법').mkdir(parents=True)
     env = {
@@ -238,9 +294,9 @@ def make_repo(tmp_path, versions):
     }
     subprocess.run(['git', 'init', '-q', str(repo)], check=True)
     addenda = ''
-    for i, (date, number, effective, body, add) in enumerate(versions):
+    for i, (date, number, effective, body, add, *kind) in enumerate(versions):
         addenda += add
-        kind = '제정' if i == 0 else '일부개정'
+        kind = kind[0] if kind else '제정' if i == 0 else '일부개정'
         (repo / PATH).write_text(md(number, date, effective, body, addenda), encoding='utf-8')
         stamp = f'{date}T03:00:00Z'
         subprocess.run(['git', '-C', str(repo), 'add', '-A'], check=True)
@@ -328,7 +384,9 @@ def test_in_force_ignores_format_only_change_of_a_pending_article(tmp_path):
     assert got['제3조'] == ('처음  벌칙', '2020-01-01')
 
 
-def test_in_force_fails_when_a_pending_article_is_amended_again(tmp_path):
+def test_in_force_marks_a_pending_article_amended_again(tmp_path):
+    """시행 전 개정이 남은 조문을 그 뒤 개정이 다시 바꾸면 조문 단위로 나눌 수 없다: 최신 본문에 시행 전 내용이 섞였다고 표시
+    (2026-11-03 사용자 결정. 시행일이 지나면 표시가 없어진다)"""
     v3 = V2.replace('시행 전 정의', '다시 바뀐 정의')
     repo = make_repo(
         tmp_path,
@@ -338,8 +396,44 @@ def test_in_force_fails_when_a_pending_article_is_amended_again(tmp_path):
             ('2026-08-04', '300', '2026-08-04', v3, '부칙 <제300호,2026.8.4>\n\n이 법은 공포한 날부터 시행한다.\n\n'),
         ],
     )
-    with pytest.raises(ValueError, match='조합할 수 없음'):
-        b.in_force(repo, PATH, '2026-10-20')
+    arts, used = b.in_force(repo, PATH, '2026-10-20')
+    got = {a['no']: (a['text'], a['eff']) for a in arts}
+    assert got['제2조'] == (
+        '다시 바뀐 정의 <개정 2026.4.7>\n[주의: 2027.1.1. 시행 예정인 개정 내용이 함께 들어 있음]',
+        '2026-08-04',
+    )
+    assert used[-1]['mixed'] == [('제2조', ['2027-01-01'])]
+    later = {a['no']: a['text'] for a in b.in_force(repo, PATH, '2027-01-01')[0]}
+    assert later['제2조'] == '다시 바뀐 정의 <개정 2026.4.7>'
+
+
+def test_in_force_starts_from_the_last_full_revision(tmp_path):
+    """전부개정은 본문 전체를 새로 쓴다: 그 앞 버전은 조합하지 않는다 (앞 버전에서 조합할 수 없는 개정이 있어도 됨).
+    전부개정 때 그대로 둔 조문도 시행일은 전부개정의 시행일"""
+    v3 = V2.replace('시행 전 정의', '다시 바뀐 정의')
+    v4 = (
+        article('제1조', '목적', '새 목적')
+        + article('제2조', '정의', '새 정의')
+        + article('제3조', '벌칙', '처음 벌칙')
+    )
+    full = '부칙 <제400호,2026.9.1>\n\n이 법은 2026년 10월 1일부터 시행한다.\n\n'
+    repo = make_repo(
+        tmp_path,
+        [
+            ('2020-01-01', '100', '2020-01-01', V1, ''),
+            ('2026-04-07', '200', '2026-10-08', V2, ADD2),
+            ('2026-08-04', '300', '2026-08-04', v3, '부칙 <제300호,2026.8.4>\n\n이 법은 공포한 날부터 시행한다.\n\n'),
+            ('2026-09-01', '400', '2026-10-01', v4, full, '전부개정'),
+        ],
+    )
+    got = {a['no']: (a['text'], a['eff']) for a in b.in_force(repo, PATH, '2026-10-20')[0]}
+    assert got == {
+        '제1조': ('새 목적', '2026-10-01'),
+        '제2조': ('새 정의', '2026-10-01'),
+        '제3조': ('처음 벌칙', '2026-10-01'),
+    }
+    before = {a['no']: a['text'] for a in b.in_force(repo, PATH, '2026-08-31')[0]}  # 전부개정 시행 전: 앞 버전부터
+    assert before['제2조'].startswith('다시 바뀐 정의')
 
 
 UNKNOWN_ADD = (
@@ -510,15 +604,26 @@ def test_check_reports_first_difference():
 
 
 @pytest.mark.network
-def test_generated_csvs_are_byte_identical_to_repo():
-    """LEGALIZE_KR=<legalize-kr 클론> uv run pytest -m network -k byte_identical"""
+def test_generated_csvs_match_repo_except_known_rule_changes():
+    """LEGALIZE_KR=<legalize-kr 클론> uv run pytest -m network -k known_rule_changes
+    data/v4는 2026-11-03 규칙 변경 전 생성기 결과다. 바뀐 것은 전부개정 시작(근로자퇴직급여 보장법 제1조 effective_date)과
+    부칙 특례 1행뿐이고 나머지는 칸 단위로 같다 (docs/evals/2026-11-03-v5-generator.md)"""
+    import pandas as pd
+
     src = os.environ.get('LEGALIZE_KR')
-    if not src or not Path(src, '.git').exists():
+    if not src or not (Path(src, '.git').exists() or Path(src, 'HEAD').exists()):  # 일반·bare 클론
         pytest.skip('LEGALIZE_KR에 legalize-kr 클론 경로를 넣으세요')
     files, _, stats = b.build(src, '2026-10-20')
     assert re.fullmatch(r'[0-9a-f]{40}', stats['head'])
-    assert files[b.LAW_CSV] == V4_ARTICLES.read_bytes()
-    assert files[b.DECREE_CSV] == V4_DECREE_ARTICLES.read_bytes()
+    for name, repo_csv in ((b.LAW_CSV, V4_ARTICLES), (b.DECREE_CSV, V4_DECREE_ARTICLES)):
+        new = pd.read_csv(io.BytesIO(files[name]), encoding='utf-8-sig', dtype=str, keep_default_na=False)
+        old = pd.read_csv(repo_csv, encoding='utf-8-sig', dtype=str, keep_default_na=False)
+        added = new[new['article_no'].str.startswith('부칙<')]
+        assert list(added['article_id']) == ['근로자퇴직급여 보장법 부칙<제21475호>제2조']
+        new = new.drop(added.index).reset_index(drop=True)
+        changed = new != old
+        cells = [(new.at[i, 'article_id'], new.columns[j]) for i, j in zip(*changed.to_numpy().nonzero())]
+        assert cells == [('근로자퇴직급여 보장법 제1조', 'effective_date')]
 
 
 def test_row_order_laws_then_decrees_by_name():
@@ -527,3 +632,100 @@ def test_row_order_laws_then_decrees_by_name():
     assert order[:7] == [(law, '법률') for law in b.LAWS]
     assert [law for law, k in order[7:] if k == '시행령'] == sorted(b.LAWS)
     assert order[7:9] == [('근로기준법', '시행령'), ('근로기준법', '시행규칙')]
+
+
+# ── 부칙 특례 조문 ───────────────────────────────────────────────────
+
+SPECIAL = (
+    '부칙 <제100호,2020.1.1>\n\n제1조(시행일) 이 법은 공포한 날부터 시행한다.\n\n'
+    '제2조(옛 특례) 제3조에도 불구하고 2025년 12월 31일까지는 종전의 규정에 따른다.\n\n'
+    '부칙 <제200호,2025.4.2>\n\n제1조(시행일) 이 법은 2026년 1월 1일부터 시행한다.\n\n'
+    '제2조(적용례) 제2조의 개정규정은 이 법 시행 이후부터 적용한다.\n\n'
+    '제3조(요율에 관한 특례) ① 제2조제3항의 개정규정에도 불구하고 2026년부터 2032년까지는 다음 각 호의 비율로 한다.\n\n'
+    '1. 2026년은 1만분의 475\n\n2. 2027년은 1만분의 500\n\n'
+    '② 「다른 법」 제9조에도 불구하고 같다.\n\n'
+    '제4조(다른 법 특례) 「다른 법」 제3조에도 불구하고 2030년까지는 그러하지 아니하다.\n\n'
+    '부칙(정부조직법) <제250호,2025.10.1>\n\n제1조(시행일) 생략\n\n제2조(특례) 제3조에도 불구하고 2030년까지 같다.\n\n'
+    '부칙 <제300호,2026.9.1>\n\n제1조(시행일) 이 법은 2027년 1월 1일부터 시행한다.\n\n'
+    '제2조(신고 특례) 제3조의 개정규정에도 불구하고 2027년 3월 15일까지 신고하여야 한다.\n'
+)
+USED = [
+    {'공포번호': '100', '시행일자': '2020-01-01'},
+    {'공포번호': '200', '시행일자': '2026-01-01'},
+    {'공포번호': '250', '시행일자': '2025-10-01'},
+    {'공포번호': '300', '시행일자': '2027-01-01'},
+]
+
+
+def test_addendum_overrides_keep_running_special_cases_of_the_main_text():
+    """부칙 조문이 '제N조…에도 불구하고'로 이 문서 본칙을 기한부로 대신하고, 그 기한이 기준일 이후이며, 그 부칙이 시행 중이면 넣는다.
+    기한 지남(제100호), 다른 법 조문만 대신함(제200호 제4조), 타법개정 부칙(제250호), 부칙이 시행 전(제300호)은 뺀다"""
+    m = md(
+        '300', '2026-09-01', '2027-01-01', article('제2조', '요율', '본칙') + article('제3조', '신고', '본칙'), SPECIAL
+    )
+    got = b.addendum_overrides(m, USED, '2026-11-03', {'제2조', '제3조'})
+    assert [(r['no'], r['title'], r['eff'], r['targets']) for r in got] == [
+        ('부칙<제200호>제3조', '요율에 관한 특례', '2026-01-01', ['제2조'])
+    ]
+    assert got[0]['text'] == (
+        '① 제2조제3항의 개정규정에도 불구하고 2026년부터 2032년까지는 다음 각 호의 비율로 한다.\n'
+        '1. 2026년은 1만분의 475\n2. 2027년은 1만분의 500\n② 「다른 법」 제9조에도 불구하고 같다.'
+    )
+    assert got[0]['chapter'] == '부칙 <제200호,2025.4.2>'
+    assert b.addendum_overrides(m, USED, '2026-11-03', {'제3조'}) == []  # 대신하는 본칙이 범위 밖
+    assert b.addendum_overrides(m, USED, '2033-01-01', {'제2조', '제3조'}) == []  # 기한 지남
+
+
+# ── 범위 목록 (조문 일부만 넣는 문서) ─────────────────────────────────
+
+
+def test_load_scope_reads_law_kind_article(tmp_path):
+    p = tmp_path / 'scope.csv'
+    p.write_text(
+        '﻿law,kind,article_no,priority\n소득세법,법률,제1조,1\n소득세법,시행령,제2조,1\n소득세법,법률,제3조,2\n', 'utf-8'
+    )
+    assert b.load_scope(p) == {('소득세법', '법률'): {'제1조', '제3조'}, ('소득세법', '시행령'): {'제2조'}}
+
+
+def test_docs_put_scoped_documents_after_the_full_ones():
+    """노동 7개 법률 문서(전체)는 지금 순서 그대로, 범위 목록 문서는 그 뒤에 같은 규칙(법률 → 하위법령 이름순)으로"""
+    scope = {('소득세법', '시행령'): {'제2조'}, ('국민연금법', '법률'): {'제1조'}, ('소득세법', '법률'): {'제1조'}}
+    docs = b.docs(scope)
+    assert [(law, kind) for law, kind, _ in docs[:21]] == b.doc_order()
+    assert all(s is None for _, _, s in docs[:21])
+    assert docs[21:] == [  # 법률은 목록에 처음 나온 법령 순서
+        ('소득세법', '법률', {'제1조'}),
+        ('국민연금법', '법률', {'제1조'}),
+        ('소득세법', '시행령', {'제2조'}),
+    ]
+    assert b.docs(None) == [(law, kind, None) for law, kind in b.doc_order()]
+
+
+def test_build_rows_keeps_only_scoped_articles_and_their_addendum_overrides(tmp_path):
+    special = (
+        '부칙 <제200호,2026.4.7>\n\n제1조(시행일) 이 법은 공포한 날부터 시행한다.\n\n'
+        '제2조(벌칙 특례) 제3조에도 불구하고 2030년 12월 31일까지는 종전의 규정에 따른다.\n\n'
+        '제3조(정의 특례) 제2조에도 불구하고 2030년까지 같다.\n\n'
+    )
+    v2 = V1.replace('처음 벌칙', '바뀐 벌칙')
+    repo = make_repo(
+        tmp_path, [('2020-01-01', '100', '2020-01-01', V1, ''), ('2026-04-07', '200', '2026-04-07', v2, special)]
+    )
+    rows, _ = b.build_rows(repo, {'시험법': PATH}, '2026-10-20', [('시험법', '법률', {'제1조', '제3조'})])
+    assert [(r['article_id'], r['chapter'], r['effective_date']) for r in rows] == [
+        ('시험법 제1조', None, '2020-01-01'),
+        ('시험법 제3조', None, '2026-04-07'),
+        ('시험법 부칙<제200호>제2조', '부칙 <제200호,2026.4.7>', '2026-04-07'),
+    ]
+    assert rows[-1]['title'] == '벌칙 특례' and rows[-1]['deleted'] == 0
+    with pytest.raises(ValueError, match='범위 목록의 조문이 없습니다'):
+        b.build_rows(repo, {'시험법': PATH}, '2026-10-20', [('시험법', '법률', {'제1조', '제9조'})])
+    # 전체 문서(범위 None)도 같은 규칙: 모든 본칙이 대상 (2026-11-03 사용자: 노동 문서에도 켬)
+    full, _ = b.build_rows(repo, {'시험법': PATH}, '2026-10-20', [('시험법', '법률', None)])
+    assert [r['article_id'] for r in full] == [
+        '시험법 제1조',
+        '시험법 제2조',
+        '시험법 제3조',
+        '시험법 부칙<제200호>제2조',
+        '시험법 부칙<제200호>제3조',
+    ]
