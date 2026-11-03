@@ -8,10 +8,10 @@
     "ref": "bcb7aea7782e81c21fbeb08382c442f7c2041690"
   },
   "articles_file": "law_articles_v5_decree.csv",
-  "articles_sha256": "5d4956d539cbe04fb33fa8a31cec033271ad03dd974f7f513c2a186ecc25b701",
-  "articles_total": 1498,
+  "articles_sha256": "a379d1193dcf082d6492417c8b3a63ef3d358a0bb9c65aa22f13fcf997b7e540",
+  "articles_total": 1497,
   "articles_by_law": {
-    "소득세법 시행령": 193,
+    "소득세법 시행령": 192,
     "소득세법": 152,
     "근로기준법": 130,
     "근로자퇴직급여 보장법 시행령": 79,
@@ -60,7 +60,7 @@
   },
   "articles_by_kind": {
     "법률": 705,
-    "시행령": 571,
+    "시행령": 570,
     "시행규칙": 222
   },
   "trained_on": {}

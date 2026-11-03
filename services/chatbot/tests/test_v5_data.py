@@ -40,6 +40,13 @@ def test_amended_addendum_keeps_postponed_article_out(v5, scope):
     assert not ((scope['law'] == '소득세법') & (scope['article_no'] == '제164조의4')).any()
 
 
+def test_deleted_article_recreated_by_a_pending_amendment_stays_deleted(v5, scope):
+    """소득세법 시행령 제216조의4는 2022.2.15 삭제 뒤 제32516호가 2027-01-01 시행으로 다시 만든다. 정부조직법 타법개정(제35947호)이
+    그 시행 전 내용을 고친 것도 함께 시행 전이라 지금은 삭제 조문이고 범위 목록에서 뺐다 (생성 규칙은 test_build_articles)"""
+    assert '소득세법 시행령 제216조의4' not in set(v5['article_id'])
+    assert not ((scope['kind'] == '시행령') & (scope['article_no'] == '제216조의4')).any()
+
+
 def test_scoped_documents_have_exactly_the_scope_and_its_addendum_overrides(v5, scope):
     """세금·보험 문서: 범위 목록 조문과, 범위 안 본칙을 대신하는 부칙 특례만. 삭제 조문 없음.
     범위는 번호로만 정한다 (사용자 목록의 제목은 시행 전 개정의 제목인 것이 있음: 보험료징수법 제16조의10)"""
@@ -90,5 +97,4 @@ def test_mixed_articles_are_marked(v5):
         '소득세법 시행령 제179조',
         '소득세법 시행령 제207조',
         '소득세법 시행령 제216조의2',
-        '소득세법 시행령 제216조의4',
     ]
