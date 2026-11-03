@@ -98,3 +98,32 @@ def test_mixed_articles_are_marked(v5):
         '소득세법 시행령 제207조',
         '소득세법 시행령 제216조의2',
     ]
+
+
+# ── v5 세금·보험 질문 평가셋 (qa_split로 만든 것, 계획 3-1) ─────────────
+
+
+@pytest.fixture(scope='module')
+def tax_qa():
+    return pd.read_csv(V5 / 'qa_tax_v5.csv', **E)
+
+
+def test_tax_questions_cover_every_scoped_article_and_link_to_answer_keys(v5, scope, tax_qa):
+    keys = pd.read_csv(V5 / 'answer_key_tax_v5.csv', **E)
+    tax = v5[v5['parent_law'].isin(set(scope['law'])) & (v5['deleted'] == '0')]
+    assert set(tax_qa['article_id']) == set(tax['article_id'])  # 범위 조문 684개 모두 (부칙 특례 포함)
+    assert list(tax_qa['id']) == [f'T{i:05d}' for i in range(1, len(tax_qa) + 1)]
+    assert (tax_qa['eval_cat'] == 'D_tax').all() and tax_qa['rid'].is_unique and tax_qa['question'].is_unique
+    assert set(tax_qa['answer_key']) == set(keys['answer_key']) and keys['answer_key'].is_unique
+    owner = dict(zip(keys['answer_key'], keys['article_id']))
+    assert (tax_qa['answer_key'].map(owner) == tax_qa['article_id']).all()
+
+
+def test_tax_split_is_the_v4_rule_and_reproducible(tax_qa):
+    from lawbot_tools import qa_split
+
+    sp = pd.read_csv(V5 / 'split_tax_v5.csv', **E)
+    pd.testing.assert_frame_equal(qa_split.split(tax_qa), sp)
+    test = tax_qa[sp['split_emb'] == 'test']
+    assert (test.groupby(['article_id', 'question_type']).size() == 1).all()  # 조문×유형마다 test 1개
+    assert (sp['split_emb'] == 'test').equals(sp['split_sllm'] == 'test')

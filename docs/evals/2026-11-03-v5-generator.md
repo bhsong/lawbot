@@ -148,3 +148,14 @@ B001~B079는 한 세션(B001~B053 + 작업 A, B054~B070, B071~B079), B080~B100�
 | 채점 키워드가 결론에 없음 / 근거 조문이 v5에 없음 | 0 / 0 |
 | 결론 숫자를 원문에서 못 찾음 | 701 중 86, 표본은 모두 표기 변환 |
 | 조문당 정답 키 | 1개 226조문(대부분 B080~B100), 2~8개 458조문 |
+
+### 평가셋으로 합치기 (2026-11-04)
+
+`uv run lawbot-qa-split --batches <위 100개 배치> --articles data/v5/law_articles_v5_decree.csv --prefix T --name tax_v5 --out-dir data/v5`
+
+| 열 | train | val | test |
+|---|---|---|---|
+| `split_emb` | 8,208 | 2,052 | 3,420 |
+| `split_sllm` | 9,234 | 1,026 | 3,420 |
+
+test는 조문×유형마다 1개(684 × 5). 분할 규칙이 v4 노트북과 같은지는 `tests/test_qa_split.py`가 v4 B_newlaw 5,016문항으로 확인한다.
