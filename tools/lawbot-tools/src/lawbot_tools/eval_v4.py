@@ -67,31 +67,75 @@ SPLITS = ('test', 'val')
 DQ_QA, DQ_SPLIT = DATA / 'decree_exp' / 'qa_decree_v4.csv', DATA / 'decree_exp' / 'split_decree_v4.csv'
 DQ_SAMPLE = DATA / 'v4' / 'decree_ctx_dq_val200.csv'  # 하위법령 답변 표본 200 (실험 eval_decree와 같은 id)
 
+# ---- v5: 노동 + 세금·보험 (--dataset v5, docs/plans/v5-tax-scope.md 3-3). v4 문항·표본·채점은 그대로 ----
+DATASET = 'v4'  # main이 --dataset으로 정한다
+V5 = DATA / 'v5'
+TAX_QA, TAX_SPLIT, TAX_KEYS = V5 / 'qa_tax_v5.csv', V5 / 'split_tax_v5.csv', V5 / 'answer_key_tax_v5.csv'
+TAX_TOKENS = V5 / 'doc_tokens_v5.csv'  # 조문별 토큰 수 (lawbot-max-seq --counts): 정답 조문 길이 구간
+OOS_SOURCE_V5 = {
+    'OOS073': '조세특례제한법'
+}  # v5에서 범위 안으로 옮긴 범위 밖 문항 (2026-11-04 사용자 결정, OOS074는 그대로)
+LENGTH_BINS = ((1000, '1,000토큰 이하'), (2304, '1,000~2,304토큰'), (float('inf'), '2,304토큰 초과'))
 
-def load_decree_questions(split='val'):
-    """하위법령이 정답인 문항 (split_emb가 split). val 444"""
-    qa, sp = pd.read_csv(DQ_QA, **E), pd.read_csv(DQ_SPLIT, **E)
+
+def gold_is_decree(article_id):
+    """정답 조문 '소득세법 시행령 제12조'처럼 하위법령인지 (부칙 특례 '국민연금법 부칙<…>제4조'는 법률)"""
+    return article_id.rsplit(' ', 1)[0].endswith((' 시행령', ' 시행규칙'))
+
+
+def load_tax(split):
+    """세금·보험 문항(D_tax) 중 split_emb가 split인 것 (정답이 법률·하위법령 모두)"""
+    qa, sp = pd.read_csv(TAX_QA, **E), pd.read_csv(TAX_SPLIT, **E)
     t = qa.merge(sp[['id', 'split_emb']], on='id', validate='one_to_one')
     return t[t.split_emb == split].reset_index(drop=True)
 
 
-def load_test(split='test'):
-    """split_emb가 split인 A_lsa·B_newlaw 문항 (test 2,075 / val 1,110)"""
+def load_decree_questions(split='val', dataset='v4'):
+    """하위법령이 정답인 문항 (split_emb가 split). val 444. v5는 정답이 시행령·시행규칙인 D_tax를 더한다"""
+    qa, sp = pd.read_csv(DQ_QA, **E), pd.read_csv(DQ_SPLIT, **E)
+    t = qa.merge(sp[['id', 'split_emb']], on='id', validate='one_to_one')
+    t = t[t.split_emb == split].reset_index(drop=True)
+    if dataset == 'v5':
+        tax = load_tax(split)
+        t = pd.concat([t, tax.loc[tax['article_id'].map(gold_is_decree), t.columns]], ignore_index=True)
+    return t
+
+
+def load_test(split='test', dataset='v4'):
+    """split_emb가 split인 A_lsa·B_newlaw 문항 (test 2,075 / val 1,110). v5는 정답이 법률(부칙 특례 포함)인 D_tax를 더한다"""
     qa, sp = pd.read_csv(V4_QA, **E), pd.read_csv(V4_SPLIT, **E)
     t = qa.merge(sp[['id', 'split_emb']], on='id', validate='one_to_one')
-    return t[(t.split_emb == split) & t.eval_cat.isin(['A_lsa', 'B_newlaw'])].reset_index(drop=True)
+    t = t[(t.split_emb == split) & t.eval_cat.isin(['A_lsa', 'B_newlaw'])].reset_index(drop=True)
+    if dataset == 'v5':
+        tax = load_tax(split)
+        t = pd.concat([t, tax.loc[~tax['article_id'].map(gold_is_decree), t.columns]], ignore_index=True)
+    return t
 
 
-def answer_sample(test, n):
-    """A_lsa·B_newlaw에서 n//2개씩 (고정 시드). 순서는 id 순"""
-    parts = [g.sample(min(n // 2, len(g)), random_state=SEED) for _, g in test.groupby('eval_cat')]
+def answer_sample(test, n, n_tax=0):
+    """A_lsa·B_newlaw에서 n//2개씩 + D_tax에서 n_tax개 (고정 시드). 순서는 id 순. v4 문항 표본은 D_tax와 상관없이 같다"""
+    base = test[test.eval_cat.isin(['A_lsa', 'B_newlaw'])]
+    parts = [g.sample(min(n // 2, len(g)), random_state=SEED) for _, g in base.groupby('eval_cat')]
+    tax = test[test.eval_cat == 'D_tax']
+    if n_tax and len(tax):
+        parts.append(tax.sample(min(n_tax, len(tax)), random_state=SEED))
     return pd.concat(parts).sort_values('id').reset_index(drop=True)
 
 
-def keywords():
+def keywords(dataset='v4'):
+    """키워드 채점 기준 (id → must_include 등). v4: 근로기준법 test 650. v5는 D_tax 전체(정답 키의 키워드)를 더한다"""
     ev = pd.read_csv(EVAL, dtype=str, **E).set_index('id')
     for i, v in KEYWORD_FIX.items():
         ev.loc[i, 'must_include'] = v
+    if dataset == 'v5':
+        qa = pd.read_csv(TAX_QA, dtype=str, **E)
+        keys = pd.read_csv(TAX_KEYS, dtype=str, **E)[
+            ['answer_key', 'must_include', 'must_not_include', 'must_not_in_conclusion']
+        ]
+        tax = qa[['id', 'article_id', 'confusable_with', 'answer_key']].merge(
+            keys, on='answer_key', validate='many_to_one'
+        )
+        ev = pd.concat([ev, tax.drop(columns='answer_key').set_index('id')])
     return ev
 
 
@@ -99,13 +143,14 @@ def cited_text(answer):
     return '|'.join(f'{l} {a}' if l else a for l, a in citations(answer))
 
 
+KW_CATS = ('A_lsa', 'D_tax')  # 키워드 채점 기준이 있는 평가 범주
 KW_COLS = ('group_score', 'must_not_ok', 'total_v4', 'missing_groups', 'must_not_hits')
 
 
 def score_answer(qid, cat, gold, raw, kw):
-    """answers 채점 열 (생성 때와 summary 재채점에 같이 씀). 키워드 열은 키워드 기준이 있는 A_lsa(test 650)만 값,
-    나머지(B_newlaw, val의 A_lsa)는 빈 값 (이어 쓰기: 열은 항상 같게)"""
-    s = score_a(kw.loc[qid].to_dict() | {'gold': gold}, raw) if cat == 'A_lsa' and qid in kw.index else {}
+    """answers 채점 열 (생성 때와 summary 재채점에 같이 씀). 키워드 열은 키워드 기준이 있는 A_lsa(test 650)와
+    D_tax(정답 키)만 값, 나머지(B_newlaw, val의 A_lsa)는 빈 값 (이어 쓰기: 열은 항상 같게)"""
+    s = score_a(kw.loc[qid].to_dict() | {'gold': gold}, raw) if cat in KW_CATS and qid in kw.index else {}
     return {
         'refusal': refused(raw),
         'cite_v4': int(cite_gold(raw, gold)),
@@ -114,9 +159,27 @@ def score_answer(qid, cat, gold, raw, kw):
     } | {k: s.get(k) for k in KW_COLS}
 
 
+def scope_map():
+    """oos source → 범위 안 법령 (v5는 OOS_SOURCE_V5로 옮긴 법령도)"""
+    return OOS_IN_SCOPE | ({v: v for v in OOS_SOURCE_V5.values()} if DATASET == 'v5' else {})
+
+
+def oos_items():
+    """[(id, 질문, 'oos'·'control', category, source)]. v5는 OOS_SOURCE_V5 문항의 source를 그 법령으로"""
+    oos = pd.read_csv(DATA / 'oos_eval.csv', **E)
+    ctrl = pd.read_csv(DATA / 'scope_controls.csv', **E)
+    moved = OOS_SOURCE_V5 if DATASET == 'v5' else {}
+    items = [(r.id, r.question, 'oos', r.category, moved.get(r.id, r.source)) for r in oos.itertuples()]
+    return items + [(r.id, r.question, 'control', 'control', f'근로기준법 {r.article_id}') for r in ctrl.itertuples()]
+
+
+def oos_scope(kind, source):
+    return 'in_control' if kind == 'control' else ('in_reclassified' if source in scope_map() else 'out')
+
+
 def score_oos(scope, source, raw):
     """oos 채점 열. source: 범위 밖은 oos_eval의 source, 대조군은 정답 조문('근로기준법 제N조')"""
-    law = '근로기준법' if scope == 'in_control' else OOS_IN_SCOPE.get(source)
+    law = '근로기준법' if scope == 'in_control' else scope_map().get(source)
     cited, no = citations(raw), refused(raw)
     return {
         'refusal': no,
@@ -267,7 +330,7 @@ def run_retrieval(app, test, path, rerank=True, decree=False):
 
 
 def run_answers(app, model, fmt, sample, path):
-    kw = keywords()
+    kw = keywords(DATASET)
     decree = uses_decrees(app, model)
 
     def one(qid, q, gold, cat):
@@ -291,18 +354,14 @@ def run_answers(app, model, fmt, sample, path):
 
 
 def run_oos(app, model, fmt, path):
-    oos = pd.read_csv(DATA / 'oos_eval.csv', **E)
-    ctrl = pd.read_csv(DATA / 'scope_controls.csv', **E)
-    items = [(r.id, r.question, 'oos', r.category, r.source) for r in oos.itertuples()]
-    items += [(r.id, r.question, 'control', 'control', f'근로기준법 {r.article_id}') for r in ctrl.itertuples()]
-
+    items = oos_items()
     decree = uses_decrees(app, model)
 
     def one(qid, q, kind, category, source):
         hits, raw, st = answer(app, model, fmt, q)
         hits, dec = split_hits(hits)
-        scope = 'in_control' if kind == 'control' else ('in_reclassified' if source in OOS_IN_SCOPE else 'out')
-        law = '근로기준법' if kind == 'control' else OOS_IN_SCOPE.get(source)
+        scope = oos_scope(kind, source)
+        law = '근로기준법' if kind == 'control' else scope_map().get(source)
         return (
             {'id': qid, 'scope': scope, 'category': category, 'source': source}
             | score_oos(scope, source, raw)
@@ -392,11 +451,19 @@ def run_decree_retrieval(app, model, dq, path):
     resume(path, list(zip(dq['id'], dq['question'], dq['article_id'], dq['question_type'])), one, 'decree retrieval')
 
 
-def run_decree_answers(app, model, fmt, dq, path):
-    """하위법령 정답 표본 200 (decree_ctx_dq_val200.csv의 id)을 웹앱 경로(service.ask)로 답하고 채점"""
+def decree_sample(dq, n_tax=0):
+    """하위법령 답변 표본: v4 고정 200 (decree_ctx_dq_val200.csv의 id) + D_tax 하위법령 정답에서 n_tax개 (고정 시드)"""
     ids = set(pd.read_csv(DQ_SAMPLE, dtype=str, **E)['id'])
-    sample = dq[dq['id'].isin(ids)].sort_values('id')
-    assert len(sample) == len(ids), f'{DQ_SAMPLE.name}의 id가 하위법령 val 문항에 없음'
+    v4 = dq[dq['id'].isin(ids)]
+    assert len(v4) == len(ids), f'{DQ_SAMPLE.name}의 id가 하위법령 val 문항에 없음'
+    tax = dq[dq['eval_cat'] == 'D_tax']
+    parts = [v4] + ([tax.sample(min(n_tax, len(tax)), random_state=SEED)] if n_tax and len(tax) else [])
+    return pd.concat(parts).sort_values('id')
+
+
+def run_decree_answers(app, model, fmt, dq, path, n_tax=0):
+    """하위법령 정답 표본(decree_sample)을 웹앱 경로(service.ask)로 답하고 채점"""
+    sample = decree_sample(dq, n_tax)
 
     def one(qid, q, gold, qtype):
         hits, raw, st = answer(app, model, fmt, q)
@@ -427,7 +494,7 @@ def run_decree_answers(app, model, fmt, dq, path):
 
 def rescore(tag):
     """저장된 답변 원문으로 채점 열만 다시 계산해 덮어쓴다 (답변·측정값은 그대로). 채점 규칙을 고친 뒤 재생성 없이 반영"""
-    kw = keywords()
+    kw = keywords(DATASET)
     for stage, fn in (
         ('answers', lambda r: score_answer(r['id'], r['eval_cat'], r['gold'], r['answer'], kw)),
         ('oos', lambda r: score_oos(r['scope'], r['source'], r['answer'])),
@@ -762,6 +829,38 @@ def mean(s):
     return round(float(s.mean()), 4) if len(s) else None
 
 
+def length_bin(tokens):
+    return next(label for limit, label in LENGTH_BINS if tokens <= limit)
+
+
+def by_length(add, tag, test):
+    """정답 조문 길이 구간별 검색·답변 (v5: 조문 단위 임베딩을 계속 쓸지 판단, 계획 3-2 결정)"""
+    tokens = pd.read_csv(TAX_TOKENS, **E).set_index('article')['tokens'].astype(int)
+    gold = test.set_index('id')['article_id']
+    for stage in ('retrieval', 'answers'):
+        p = OUT / f'{stage}_{tag}.csv'
+        if not p.exists():
+            continue
+        d = pd.read_csv(p, **E)
+        d = d[d['id'].isin(gold.index)]
+        d['bin'] = d['id'].map(gold).map(tokens).map(length_bin)
+        for _, label in LENGTH_BINS:
+            x = d[d['bin'] == label]
+            if not len(x):
+                continue
+            if stage == 'retrieval':
+                e = x['emb_rank']
+                add('검색 길이', label, '임베딩 Recall@3', mean(e <= 3), len(x))
+                add('검색 길이', label, '임베딩 MRR@10', mean(np.where(e <= 10, 1 / e, 0)), len(x))
+                if 'rr_rank' in x:
+                    add('검색 길이', label, '리랭킹 Recall@3', mean(x['rr_rank'] <= 3), len(x))
+            else:
+                add('답변 길이', label, '조문 인용 정확도(법령명 포함)', mean(x['cite_v4']), len(x))
+                add('답변 길이', label, '첫 토큰(초, 중앙값)', round(float(x['ttft'].median()), 2), len(x))
+                if 'prompt_tokens' in x:
+                    add('답변 길이', label, '프롬프트 토큰(평균)', mean(x['prompt_tokens']), len(x))
+
+
 def summarize(tag, test):
     rows = []
 
@@ -802,7 +901,7 @@ def summarize(tag, test):
             add('답변', g, '조문 인용 정확도(법령명 포함)', mean(d['cite_v4']), len(d))
             add('답변', g, '거짓 거절률', mean(d['refusal']), len(d))
             add('답변', g, '거짓 거절률(검색 적중)', mean(d.loc[d['retrieved'], 'refusal']), int(d['retrieved'].sum()))
-            if g == 'A_lsa' and d['group_score'].notna().any():  # 키워드 채점은 기존 650문항(근로기준법 test)만
+            if g in KW_CATS and d['group_score'].notna().any():  # 키워드 채점: 근로기준법 test 650, D_tax
                 hit = d[d['retrieved']]
                 add('답변', g, '키워드 그룹 충족률', mean(d['group_score']), len(d))
                 add('답변', g, '금지 표현 없음', mean(d['must_not_ok']), len(d))
@@ -813,6 +912,8 @@ def summarize(tag, test):
             add('답변', g, '완료(초, 평균)', mean(d['total']), len(d))
             add('답변', g, '생성 속도(tok/s)', mean(d['tps']), len(d))
             add('답변', g, '최대 길이 잘림', mean(d['finish'] == 'length'), len(d))
+    if DATASET == 'v5':
+        by_length(add, tag, test)
     p = OUT / f'oos_{tag}.csv'
     if p.exists():
         o = pd.read_csv(p, **E)
@@ -821,9 +922,10 @@ def summarize(tag, test):
             add('범위 밖', g, '거절률', mean(d['refusal']), len(d))
             add('범위 밖', g, '억지적용률(거절 않고 조문 인용)', mean(d['cites_any']), len(d))
         r = o[o['scope'] == 'in_reclassified']
-        add('범위 밖→범위 안', '7개 법률 출처', '거짓 거절률', mean(r['refusal']), len(r))
-        add('범위 밖→범위 안', '7개 법률 출처', '해당 법률 인용률', mean(r['cites_law']), len(r))
-        add('범위 밖→범위 안', '7개 법률 출처', '해당 법률 검색률(top3)', mean(r['retrieved_law']), len(r))
+        src = '7개 법률 출처' if DATASET == 'v4' else '범위 안 법령 출처'  # v5: OOS073(조세특례제한법) 포함
+        add('범위 밖→범위 안', src, '거짓 거절률', mean(r['refusal']), len(r))
+        add('범위 밖→범위 안', src, '해당 법률 인용률', mean(r['cites_law']), len(r))
+        add('범위 밖→범위 안', src, '해당 법률 검색률(top3)', mean(r['retrieved_law']), len(r))
         c = o[o['scope'] == 'in_control']
         add('대조군', '근로기준법 20', '거짓 거절률', mean(c['refusal']), len(c))
         add('대조군', '근로기준법 20', '정답 조문 인용률', mean(c['cite_gold']), len(c))
@@ -880,6 +982,10 @@ def main():
     ap.add_argument('--new', default=None, help='compare: 비교 tag')
     ap.add_argument('--strict', action='store_true', help='compare: 경고가 있으면 종료 코드 1')
     ap.add_argument('--n', type=int, default=200, help='답변 생성 표본 수 (A_lsa·B_newlaw 반씩)')
+    ap.add_argument(
+        '--dataset', choices=['v4', 'v5'], default='v4', help='v5: 세금·보험 문항(D_tax)을 더한다. 결과는 results/v5'
+    )
+    ap.add_argument('--n-tax', type=int, default=100, help='v5: D_tax 답변 표본 수 (법률 정답, 하위법령 정답 각각)')
     ap.add_argument('--model', default=None, help='답변 모델 key (기본: .env의 첫 번째 모델)')
     ap.add_argument('--fmt', choices=['concise', 'full'], default=None, help='답변 형식 (기본: 그 모델의 기본 형식)')
     ap.add_argument('--no-rerank', action='store_true', help='retrieval 단계에서 리랭킹 순위를 재지 않음')
@@ -892,8 +998,12 @@ def main():
     args = ap.parse_args()
     if not 1 <= args.concurrency <= 16:
         raise SystemExit('--concurrency는 1–16')
-    global WORKERS
+    global WORKERS, DATASET, OUT
     WORKERS = args.concurrency
+    DATASET = args.dataset
+    if DATASET == 'v5':
+        OUT = OUT.parent / 'v5'
+    n_tax = args.n_tax if DATASET == 'v5' else 0
     envfile.load()
     OUT.mkdir(parents=True, exist_ok=True)
     if args.stage == 'compare':
@@ -907,7 +1017,7 @@ def main():
         raise SystemExit('범위 밖·대조군 문항은 평가 전용이라 val이 없습니다 (--split test로만 실행)')
     if args.split != 'val' and args.stage == 'decree':
         raise SystemExit('decree 단계는 --split val만 (고정 표본 decree_ctx_dq_val200.csv가 val 문항)')
-    test = load_test(args.split)
+    test = load_test(args.split, DATASET)
     if args.stage == 'summary':
         if not args.tag:
             raise SystemExit('summary는 --tag가 필요합니다 (results/v4의 파일 이름)')
@@ -930,7 +1040,7 @@ def main():
         + ('_dec' if decree else '')
         + ('_val' if args.split == 'val' else '')
     )
-    sample = answer_sample(test, args.n)
+    sample = answer_sample(test, args.n, n_tax)
     print(
         f'[eval_v4] tag {tag} · 모델 {model} · 형식 {fmt} · 리랭커 {"켜짐" if app.reranker else "꺼짐"} · '
         f'하위법령 {"첨부" if decree else "없음"} · '
@@ -939,7 +1049,11 @@ def main():
     stages = ['retrieval', 'answers', 'oos', 'refusal'] if args.stage == 'all' else [args.stage]
     if args.split == 'val':
         stages = [s for s in stages if s != 'oos'] + (['decree'] if args.stage == 'all' and decree else [])
-    write_run_meta(tag, run_meta(app, model, fmt, args.split, args.n, stages) | {'concurrency': WORKERS})
+    write_run_meta(
+        tag,
+        run_meta(app, model, fmt, args.split, args.n, stages)
+        | {'concurrency': WORKERS, 'eval_dataset': DATASET, 'n_tax': n_tax},
+    )
     t0 = time.perf_counter()
     for s in stages:
         if s == 'retrieval':
@@ -951,11 +1065,12 @@ def main():
         elif s == 'oos':
             run_oos(app, model, fmt, OUT / f'oos_{tag}.csv')
         elif s == 'refusal':
-            run_refusal(app, model, fmt, sample, OUT / f'refusal_{tag}.csv')
+            # v4 기준선과 같은 문항으로 비교하도록 v4 표본 부분에서만 뽑는다 (v5도)
+            run_refusal(app, model, fmt, sample[sample.eval_cat != 'D_tax'], OUT / f'refusal_{tag}.csv')
         elif s == 'decree':
-            dq = load_decree_questions('val')
+            dq = load_decree_questions('val', DATASET)
             run_decree_retrieval(app, model, dq, OUT / f'dqretrieval_{tag}.csv')
-            run_decree_answers(app, model, fmt, dq, OUT / f'dqanswers_{tag}.csv')
+            run_decree_answers(app, model, fmt, dq, OUT / f'dqanswers_{tag}.csv', n_tax)
     update_last_run(tag, stage_times=STAGE_TIMES)
     for label, t in STAGE_TIMES.items():
         if t['n'] and t['sec']:

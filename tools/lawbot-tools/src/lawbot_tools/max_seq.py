@@ -48,6 +48,12 @@ def longest(df: pd.DataFrame, count: Callable[[str], int]) -> dict[str, tuple[st
     return out
 
 
+def counts(df: pd.DataFrame, count: Callable[[str], int]) -> pd.DataFrame:
+    """[article(법령 제N조), group(법률·하위법령), tokens] 비삭제 조문마다 (평가 요약의 길이 구간용)"""
+    rows = [{'article': key, 'group': group, 'tokens': count(doc)} for group, key, doc in _docs(df)]
+    return pd.DataFrame(rows, columns=['article', 'group', 'tokens'])
+
+
 def settings(df: pd.DataFrame, count: Callable[[str], int]) -> dict[str, int]:
     """{'LAWBOT_MAX_SEQ': …, 'LAWBOT_DECREE_MAX_SEQ': …} (하위법령이 없으면 앞의 것만)"""
     return {ENV[g]: round_up(n) for g, (_, n) in longest(df, count).items()}
@@ -57,6 +63,7 @@ def main(argv=None):
     p = argparse.ArgumentParser(description='조문 CSV → 임베딩 최대 토큰 (.env 두 줄, v4 노트북 규칙)')
     p.add_argument('csv', type=Path)
     p.add_argument('--tokenizer', required=True, type=Path, help='임베딩 모델의 tokenizer.json')
+    p.add_argument('--counts', type=Path, help='조문별 토큰 수 CSV도 쓴다 (평가 요약의 길이 구간용)')
     a = p.parse_args(argv)
     from tokenizers import Tokenizer  # 모델 서버 의존성으로 설치됨. 이 명령에서만 쓴다
 
@@ -72,6 +79,9 @@ def main(argv=None):
         print(f'# {group} 최장: {key} {n:,}토큰')
     for name, value in settings(df, count).items():
         print(f'{name}={value}')
+    if a.counts:
+        counts(df, count).to_csv(a.counts, index=False, encoding='utf-8-sig', lineterminator='\n')
+        print(f'# 조문별 토큰 수: {a.counts}')
     return 0
 
 
