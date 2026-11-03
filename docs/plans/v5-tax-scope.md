@@ -73,6 +73,12 @@
 
 ### 2단계 (PR 2): v5 데이터 만들기
 
+진행 (2026-11-03): 구현 완료, 결과는 [data-provenance.md 6-1절](../data-provenance.md). 계획과 달라진 점:
+- 범위 목록 열은 `law·kind·article_no·priority·reason`. 제목은 넣지 않았다 (사용자 목록의 제목 하나가 시행 전 개정의 제목이었음)
+- 매니페스트에 범위 목록 해시는 넣지 않았다 (lawbot-reindex 형식 그대로). 범위 목록은 git으로 관리하고 `--check`로 재현을 확인한다
+- 1단계에서 넣은 `부칙<제N호>제M조` 번호를 `lawbot-reindex`·`check_deploy` 검사가 거부해서 함께 고쳤다. 고치지 않고 1단계 생성기를 운영에 반영하면 자동 갱신(06:30)이 검사에서 실패한다
+- 생성기에 `--version`(파일 이름)을 추가했다
+
 - `data/v5/scope_tax.csv`: 사용자 목록에서 삭제 조문 6개를 빼고 `law`(머리말 문서명), `kind`, `article_no`, `priority`, `선택근거`만 둔다. 커밋·글자 수 열은 생성기가 정하므로 두지 않는다.
 - 생성기로 `data/v5/articles_v5.csv`(법률)와 `law_articles_v5_decree.csv`(법률+하위법령), `manifest.json`(dataset_version `v5`, 기준일, `source.ref`, 범위 목록 해시)을 만든다.
 - 행 순서: v4 문서 순서를 그대로 두고 세금·보험 문서를 뒤에 붙인다(노동 조문 임베딩·`data/decree_exp` 후보 번호 유지).

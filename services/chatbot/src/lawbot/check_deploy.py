@@ -17,6 +17,9 @@ EXPECTED_ARTICLES = 415  # 법률 조문 수 (매니페스트가 없을 때 기�
 EXPECTED_DECREE = {'시행령': 273, '시행규칙': 124}  # 하위법령을 켰을 때 812조문 CSV의 하위법령 수
 DECREE_COLUMNS = {'kind', 'parent_law', 'article_no'}
 COLUMNS = {'law', 'article_id', 'title', 'deleted', 'text'}
+ARTICLE_NO = (
+    r'(?:부칙<제\d+호>)?제\d+조(?:의\d+)?'  # 조문 번호. 부칙 특례 행은 '부칙<제N호>제M조' (lawbot-build-articles)
+)
 
 
 def check_articles(p, out):
@@ -51,7 +54,7 @@ def check_articles(p, out):
     if len(dup):
         out.append(('FAIL', f'중복 조문 {len(dup)}행: {dup[key].head().values.tolist()}'))
     nums = live['article_no'] if 'article_no' in live else live['article_id']  # retriever와 같은 규칙
-    bad = nums[~nums.astype(str).str.fullmatch(r'제\d+조(?:의\d+)?')]
+    bad = nums[~nums.astype(str).str.fullmatch(ARTICLE_NO)]
     if len(bad):  # 법령명이 붙은 번호는 검색 문서·인용 대조에서 법령명이 두 번 들어감
         out.append(
             (

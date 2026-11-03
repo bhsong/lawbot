@@ -1,0 +1,36 @@
+{
+  "dataset_version": "v5",
+  "reference_date": "2026-11-03",
+  "collected_date": "2026-11-03",
+  "source": {
+    "name": "Legalize KR",
+    "url": "https://github.com/legalize-kr/legalize-kr",
+    "ref": "bcb7aea7782e81c21fbeb08382c442f7c2041690"
+  },
+  "articles_file": "articles_v5.csv",
+  "articles_sha256": "d16083cd6523ee725af2e36672e685bdcd675b0f4d02001100e2416b69a7920c",
+  "articles_total": 706,
+  "articles_by_law": {
+    "소득세법": 153,
+    "근로기준법": 130,
+    "남녀고용평등과 일ㆍ가정 양립 지원에 관한 법률": 72,
+    "근로자퇴직급여 보장법": 69,
+    "파견근로자 보호 등에 관한 법률": 50,
+    "조세특례제한법": 46,
+    "임금채권보장법": 37,
+    "지방세법": 34,
+    "최저임금법": 32,
+    "기간제 및 단시간근로자 보호 등에 관한 법률": 26,
+    "고용보험 및 산업재해보상보험의 보험료징수 등에 관한 법률": 14,
+    "국민연금법": 13,
+    "국민건강보험법": 13,
+    "노인장기요양보험법": 5,
+    "국세기본법": 5,
+    "농어촌특별세법": 5,
+    "고용보험법": 2
+  },
+  "articles_by_kind": {
+    "법률": 706
+  },
+  "trained_on": {}
+}

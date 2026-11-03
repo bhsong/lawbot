@@ -729,3 +729,8 @@ def test_build_rows_keeps_only_scoped_articles_and_their_addendum_overrides(tmp_
         '시험법 부칙<제200호>제2조',
         '시험법 부칙<제200호>제3조',
     ]
+
+
+def test_csv_names_follow_the_dataset_version():
+    assert b.csv_names('v4') == (b.LAW_CSV, b.DECREE_CSV) == ('articles_v4.csv', 'law_articles_v4_decree.csv')
+    assert b.csv_names('v5') == ('articles_v5.csv', 'law_articles_v5_decree.csv')

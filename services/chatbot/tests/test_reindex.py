@@ -148,3 +148,20 @@ def test_check_deploy_follows_new_manifest(folder, env):
     out = []
     check_deploy.check_articles(p, out)
     assert out[0][0] == 'OK' and '416개 (기대 416)' in out[0][1]
+
+
+def test_addendum_article_numbers_are_valid(folder, capsys):
+    """생성기의 부칙 특례 행(article_no '부칙<제N호>제M조')은 정상 번호다. 자동 갱신(lawbot-articles-update)도 이 검사를 쓴다"""
+    from types import SimpleNamespace
+
+    from lawbot import check_deploy
+
+    csv = folder / V4_ARTICLES.name
+    d = pd.read_csv(csv, **E)
+    row = d.iloc[0].to_dict() | {'article_id': '근로기준법 부칙<제100호>제2조', 'article_no': '부칙<제100호>제2조'}
+    pd.concat([d, pd.DataFrame([row])], ignore_index=True).to_csv(csv, index=False, encoding='utf-8-sig')
+    errors, live = reindex.validate(csv)
+    assert errors == [] and len(live) == 416
+    out = []
+    check_deploy.check_articles(SimpleNamespace(articles=csv), out)
+    assert not [m for lv, m in out if lv == 'FAIL' and '형식' in m], out
