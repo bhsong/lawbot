@@ -100,7 +100,7 @@ def build_cache(csv, live):
         return
     client = ModelServerClient(cfg.model_server, cfg.model_token)
     wait_ready(client, cfg.server_wait)
-    decree = deploy.DECREE_MAX_SEQ if 'kind' in live else None
+    decree = deploy.decree_max_seq() if 'kind' in live else None  # 웹앱과 같은 값이어야 캐시가 맞음
     Retriever(
         Embedder(client, cfg.profile.emb_model),
         csv,
