@@ -1,0 +1,15 @@
+{
+  "base": "Qwen/Qwen3-Embedding-0.6B",
+  "best_checkpoint": "/content/emb_v5/checkpoint-3604",
+  "epochs": 3,
+  "lr": 2e-05,
+  "batch": 8,
+  "mini_batch": 2,
+  "max_seq": {
+    "law": 4352,
+    "decree": 5120
+  },
+  "train": 14413,
+  "val": 3606,
+  "gpu": "NVIDIA A100-SXM4-40GB"
+}
