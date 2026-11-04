@@ -142,6 +142,11 @@ class DecreeConfig:
     max_seq: int = DECREE_MAX_SEQ
 
 
+def decree_max_seq(env=None):
+    """하위법령 인코딩 최대 토큰 (LAWBOT_DECREE_MAX_SEQ, 없으면 DECREE_MAX_SEQ). 웹앱과 캐시(lawbot-reindex)가 같이 쓴다"""
+    return _positive_int('LAWBOT_DECREE_MAX_SEQ', DECREE_MAX_SEQ, os.environ if env is None else env)
+
+
 def decree_enabled(env=None):
     env = os.environ if env is None else env
     flag = env.get('LAWBOT_DECREE_ENABLED', '0')
@@ -177,4 +182,4 @@ def decree(profile, env=None):
     bad = [k for k in keys if k not in known]
     if bad or len(set(keys)) != len(keys):
         raise ValueError(f'LAWBOT_DECREE_MODELS는 {", ".join(known)} 중에서 쉼표로: {value!r}')
-    return DecreeConfig(tau, int(raw), keys, max_seq=_positive_int('LAWBOT_DECREE_MAX_SEQ', DECREE_MAX_SEQ, env))
+    return DecreeConfig(tau, int(raw), keys, max_seq=decree_max_seq(env))

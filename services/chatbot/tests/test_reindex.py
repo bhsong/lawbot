@@ -102,6 +102,25 @@ def test_builds_embedding_cache_with_model_server(folder, env, tmp_path, model_s
     assert [c[2] for c in calls] == [416, 1]  # 전체 + 확인용
 
 
+def test_decree_cache_uses_the_decree_max_seq_setting(env, tmp_path, model_server):
+    """하위법령 캐시는 웹앱과 같은 max_seq로 (LAWBOT_DECREE_MAX_SEQ). 상수 3072로 만들면 웹앱이 캐시를 못 쓰고 다시 임베딩한다
+    (2026-11-04 4단계 A에서 발견)"""
+    d = tmp_path / 'v4'
+    d.mkdir()
+    for f in (V4_DECREE_ARTICLES, V4_DECREE_ARTICLES.with_name('manifest_decree.json')):
+        shutil.copy(f, d / f.name)
+    env.setenv('LAWBOT_EMBED_CACHE', '1')
+    env.setenv('LAWBOT_RERANKER_ENABLED', '1')
+    env.setenv('LAWBOT_DECREE_ENABLED', '1')
+    env.setenv('LAWBOT_MAX_SEQ', '2560')
+    env.setenv('LAWBOT_DECREE_MAX_SEQ', '5120')
+    env.setattr(embed_cache, 'CACHE_DIR', tmp_path / 'cache')
+    env.setattr(reindex, 'ModelServerClient', model_server)
+    assert reindex.main([str(d / V4_DECREE_ARTICLES.name), *ARGS[:-1]]) == 0
+    calls = [c for c in model_server.instances[-1].calls if c[0] == 'embed']
+    assert [(c[2], c[4]) for c in calls if c[2] > 1] == [(415, 2560), (397, 5120)]  # 확인용 1개 호출은 빼고
+
+
 def test_decree_csv(tmp_path):
     d = tmp_path / 'v4'
     d.mkdir()

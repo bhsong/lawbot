@@ -1,0 +1,157 @@
+{
+  "tag": "pro_concise_rr_dec_val",
+  "runs": [
+    {
+      "date": "2026-11-04T09:09:56+09:00",
+      "mode": "api",
+      "split": "val",
+      "n": 200,
+      "stages": [
+        "retrieval"
+      ],
+      "model": "pro",
+      "fmt": "concise",
+      "model_id": "qwen3.8-27b-4bit",
+      "emb_model": "lawbot-emb-v4",
+      "rerank_model": "qwen3-reranker-4b",
+      "info": {
+        "models": [
+          {
+            "id": "qwen3.8-27b-4bit",
+            "object": "model",
+            "created": 0,
+            "owned_by": "lawbot",
+            "type": "chat",
+            "loaded": true,
+            "revision": "sha256:3117f3d1ce819e8b"
+          },
+          {
+            "id": "lawbot-emb-v4",
+            "object": "model",
+            "created": 0,
+            "owned_by": "lawbot",
+            "type": "embedding",
+            "loaded": true,
+            "revision": "sha256:670621cfd5814dba"
+          },
+          {
+            "id": "qwen3-reranker-4b",
+            "object": "model",
+            "created": 0,
+            "owned_by": "lawbot",
+            "type": "rerank",
+            "loaded": true,
+            "revision": "sha256:56c06ce3fc96b749"
+          }
+        ]
+      },
+      "dataset": {
+        "dataset_version": "v5",
+        "reference_date": "2026-11-03",
+        "articles_sha256": "a379d1193dcf082d6492417c8b3a63ef3d358a0bb9c65aa22f13fcf997b7e540"
+      },
+      "commit": "9af614d37bbcfc53f8a15fa7a122973bb57c3854",
+      "dirty": false,
+      "decree": {
+        "tau": 0.9,
+        "k": 5,
+        "models": [
+          "pro"
+        ],
+        "applied": true
+      },
+      "argv": [
+        "retrieval",
+        "--split",
+        "val",
+        "--dataset",
+        "v5"
+      ],
+      "concurrency": 1,
+      "eval_dataset": "v5",
+      "n_tax": 100,
+      "stage_times": {
+        "retrieval": {
+          "n": 1977,
+          "sec": 10752.8
+        }
+      }
+    },
+    {
+      "date": "2026-11-04T12:09:24+09:00",
+      "mode": "api",
+      "split": "val",
+      "n": 200,
+      "stages": [
+        "decree-retrieval"
+      ],
+      "model": "pro",
+      "fmt": "concise",
+      "model_id": "qwen3.8-27b-4bit",
+      "emb_model": "lawbot-emb-v4",
+      "rerank_model": "qwen3-reranker-4b",
+      "info": {
+        "models": [
+          {
+            "id": "qwen3.8-27b-4bit",
+            "object": "model",
+            "created": 0,
+            "owned_by": "lawbot",
+            "type": "chat",
+            "loaded": true,
+            "revision": "sha256:3117f3d1ce819e8b"
+          },
+          {
+            "id": "lawbot-emb-v4",
+            "object": "model",
+            "created": 0,
+            "owned_by": "lawbot",
+            "type": "embedding",
+            "loaded": true,
+            "revision": "sha256:670621cfd5814dba"
+          },
+          {
+            "id": "qwen3-reranker-4b",
+            "object": "model",
+            "created": 0,
+            "owned_by": "lawbot",
+            "type": "rerank",
+            "loaded": true,
+            "revision": "sha256:56c06ce3fc96b749"
+          }
+        ]
+      },
+      "dataset": {
+        "dataset_version": "v5",
+        "reference_date": "2026-11-03",
+        "articles_sha256": "a379d1193dcf082d6492417c8b3a63ef3d358a0bb9c65aa22f13fcf997b7e540"
+      },
+      "commit": "659fa9dff037f45ba0d3a81a2a5818f47abeea6f",
+      "dirty": false,
+      "decree": {
+        "tau": 0.9,
+        "k": 5,
+        "models": [
+          "pro"
+        ],
+        "applied": true
+      },
+      "argv": [
+        "decree-retrieval",
+        "--split",
+        "val",
+        "--dataset",
+        "v5"
+      ],
+      "concurrency": 1,
+      "eval_dataset": "v5",
+      "n_tax": 100,
+      "stage_times": {
+        "decree retrieval": {
+          "n": 1629,
+          "sec": 10683.1
+        }
+      }
+    }
+  ]
+}
