@@ -22,6 +22,7 @@ import argparse
 import concurrent.futures
 import datetime
 import json
+import re
 import subprocess
 import sys
 import time
@@ -861,6 +862,29 @@ def by_length(add, tag, test):
                     add('답변 길이', label, '프롬프트 토큰(평균)', mean(x['prompt_tokens']), len(x))
 
 
+def parent_of(decree_key):
+    """'가법 시행령 제1조' → '가법'"""
+    return re.sub(r' (시행령|시행규칙)$', '', decree_key.rsplit(' ', 1)[0])
+
+
+def by_attach_count(add, r):
+    """첨부 목록은 점수순이라 앞 k개가 첨부 수 k일 때의 첨부와 같다 (deploy.decree의 필터는 k와 무관). k=1..최대 첨부 수"""
+    att = r['attached'].fillna('').map(lambda x: [k for k in str(x).split('|') if k])
+    for k in range(1, int(att.map(len).max() or 0) + 1):
+        top = att.map(lambda a, k=k: a[:k])
+        n = top.map(len).sum()
+        other = sum(sum(parent_of(x) != parent_of(g) for x in a) for a, g in zip(top, r['gold']))
+        add(
+            '하위법령 첨부 수',
+            f'k={k}',
+            '정답 하위법령 첨부율',
+            mean(pd.Series([g in a for a, g in zip(top, r['gold'])])),
+            len(r),
+        )
+        add('하위법령 첨부 수', f'k={k}', '첨부 중 다른 법 비율', round(float(other / max(n, 1)), 4), len(r))
+        add('하위법령 첨부 수', f'k={k}', '첨부 수(평균)', mean(top.map(len)), len(r))
+
+
 def summarize(tag, test):
     rows = []
 
@@ -942,6 +966,7 @@ def summarize(tag, test):
             add('하위법령 검색', g, '정답 하위법령 첨부율', mean(d['in_attached']), len(d))
             add('하위법령 검색', g, '하위법령 첨부 수(평균)', mean(d['n_att']), len(d))
         add('하위법령 검색', '전체', '하위법령 리랭킹 초(평균)', mean(r['decree_rerank_sec']), len(r))
+        by_attach_count(add, r)
     p = OUT / f'dqanswers_{tag}.csv'
     if p.exists():
         a = pd.read_csv(p, **E)
@@ -969,7 +994,7 @@ def main():
         'stage',
         nargs='?',
         default='all',
-        choices=['retrieval', 'answers', 'oos', 'refusal', 'decree', 'summary', 'compare', 'all'],
+        choices=['retrieval', 'answers', 'oos', 'refusal', 'decree', 'decree-retrieval', 'summary', 'compare', 'all'],
         help='생략하면 all (네 단계를 차례로 실행한 뒤 요약. 하위법령 구성 + val이면 decree도)',
     )
     ap.add_argument(
@@ -1015,7 +1040,7 @@ def main():
         return
     if args.split == 'val' and args.stage == 'oos':
         raise SystemExit('범위 밖·대조군 문항은 평가 전용이라 val이 없습니다 (--split test로만 실행)')
-    if args.split != 'val' and args.stage == 'decree':
+    if args.split != 'val' and args.stage in ('decree', 'decree-retrieval'):
         raise SystemExit('decree 단계는 --split val만 (고정 표본 decree_ctx_dq_val200.csv가 val 문항)')
     test = load_test(args.split, DATASET)
     if args.stage == 'summary':
@@ -1031,7 +1056,7 @@ def main():
     model = args.model or app.profile.models[0].key
     fmt = args.fmt or app.models.specs[model].fmt
     decree = uses_decrees(app, model)
-    if args.stage == 'decree' and not decree:
+    if args.stage in ('decree', 'decree-retrieval') and not decree:
         raise SystemExit(
             f'decree 단계는 하위법령 첨부 구성에서만: LAWBOT_DECREE_ENABLED=1, LAWBOT_DECREE_MODELS에 {model}'
         )
@@ -1071,6 +1096,8 @@ def main():
             dq = load_decree_questions('val', DATASET)
             run_decree_retrieval(app, model, dq, OUT / f'dqretrieval_{tag}.csv')
             run_decree_answers(app, model, fmt, dq, OUT / f'dqanswers_{tag}.csv', n_tax)
+        elif s == 'decree-retrieval':  # 답변 없이 하위법령 검색만 (첨부 수 고르기: LAWBOT_DECREE_K를 크게)
+            run_decree_retrieval(app, model, load_decree_questions('val', DATASET), OUT / f'dqretrieval_{tag}.csv')
     update_last_run(tag, stage_times=STAGE_TIMES)
     for label, t in STAGE_TIMES.items():
         if t['n'] and t['sec']:

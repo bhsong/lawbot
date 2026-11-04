@@ -562,3 +562,43 @@ def test_v5_main_adds_tax_questions_and_writes_results_v5(env, monkeypatch, tmp_
     assert calls[2][1]['id'].tolist() == v4_sample['id'].tolist()  # 정답 없는 참고 조문 시험은 v4와 같은 문항에서
     run = json.loads((tmp_path / 'v5' / 'run_pro_concise_rr_val.json').read_text(encoding='utf-8'))['runs'][0]
     assert (run['eval_dataset'], run['n_tax']) == ('v5', 50)
+
+
+def test_decree_retrieval_stage_runs_without_answers(env, monkeypatch, tmp_path):
+    """하위법령 검색만 (답변 생성 없음): 첨부 수를 고르려고 LAWBOT_DECREE_K를 크게 한 번 돌린다"""
+    calls = []
+    env.setenv('LAWBOT_MODELS', 'pro')
+    env.setenv('LAWBOT_RERANKER_ENABLED', '1')
+    env.setenv('LAWBOT_DECREE_ENABLED', '1')
+    monkeypatch.setattr(ev, 'OUT', tmp_path / 'v4')
+    monkeypatch.setattr(ev, 'DATASET', 'v4')
+    monkeypatch.setattr(service, 'load_app', fake_app)
+    monkeypatch.setattr(ev, 'uses_decrees', lambda app, model: True)
+    monkeypatch.setattr(ev, 'run_decree_retrieval', lambda app, m, dq, path: calls.append(('dqr', len(dq), path.name)))
+    monkeypatch.setattr(ev, 'run_decree_answers', lambda *a, **k: calls.append(('dqa',)))
+    monkeypatch.setattr('sys.argv', ['lawbot-eval-v4', 'decree-retrieval', '--split', 'val', '--dataset', 'v5'])
+    ev.main()
+    assert calls == [('dqr', len(ev.load_decree_questions('val', 'v5')), 'dqretrieval_pro_concise_rr_dec_val.csv')]
+
+
+def test_summary_attach_rate_by_number_of_attachments(tmp_path, monkeypatch):
+    """첨부 목록은 점수순이라 앞 k개가 '첨부 수 k'일 때의 첨부와 같다: k=1..최대 첨부 수별 정답 포함률·다른 법 비율"""
+    monkeypatch.setattr(ev, 'OUT', tmp_path)
+    gold = '가법 시행령 제1조'
+    pd.DataFrame(
+        {
+            'id': ['a', 'b'],
+            'question_type': ['keyword', 'keyword'],
+            'gold': [gold, gold],
+            'in_cands': [True, True],
+            'attached': [f'{gold}|나법 시행령 제2조', f'나법 시행령 제2조|{gold}'],
+            'n_att': [2, 2],
+            'in_attached': [True, True],
+            'decree_rerank_sec': [1.0, 1.0],
+        }
+    ).to_csv(tmp_path / 'dqretrieval_x.csv', index=False, **E)
+    s = ev.summarize('x', pd.DataFrame(columns=['id', 'eval_cat', 'article_id']))
+    got = {(r.section, r.group, r.metric): r.value for r in s.itertuples()}
+    assert got[('하위법령 첨부 수', 'k=1', '정답 하위법령 첨부율')] == 0.5
+    assert got[('하위법령 첨부 수', 'k=2', '정답 하위법령 첨부율')] == 1.0
+    assert got[('하위법령 첨부 수', 'k=1', '첨부 중 다른 법 비율')] == 0.5
