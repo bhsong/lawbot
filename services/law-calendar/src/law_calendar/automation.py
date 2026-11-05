@@ -8,12 +8,24 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 
-from law_calendar.article_fragments import HEADER, ITEM, PARAGRAPH, Fragment, partition_changes
-from law_calendar.effective_clause import ARTICLE, EffectiveSchedule, parse_schedule
-from law_calendar.source_addenda import borrowed_clause, own_addendum_matches
+from law_calendar.article_fragments import (
+    ANNOTATION,
+    DATE,
+    HEADER,
+    ITEM,
+    PARAGRAPH,
+    SUBITEM,
+    Fragment,
+    exclusive_parent_text,
+    partition_changes,
+    scope_contains,
+)
+from law_calendar.effective_clause import EffectiveSchedule, parse_schedule
+from law_calendar.effective_scope import ARTICLE
+from law_calendar.source_addenda import borrowed_clause, earlier_own_addenda, own_addendum_matches
 from law_calendar.validation import civil_date, official_url
 
-RULE_VERSION = 'effective-date-v5'
+RULE_VERSION = 'effective-date-v7'
 REASONS = {
     'delegated': '대통령령 등 별도로 정하는 시행일을 확인해야 합니다.',
     'complex': '부칙의 예외·적용례·경과조치를 추가 확인해야 합니다.',
@@ -59,7 +71,13 @@ def read_schedule(
             return None, 'complex'
         parts = re.split(r'(?:^|\n)\s*부칙[^\n]*\n', amendment)
         text = parts[-1] if len(parts) > 1 else ''
-    schedule, reason = parse_schedule(text or copied_clause, promulgated, article_order)
+    schedule, reason = parse_schedule(
+        text or copied_clause,
+        promulgated,
+        article_order,
+        raw.get('target', {}).get('law_name', ''),
+        earlier_own_addenda(new_document, promulgated) if text and new_document else None,
+    )
     return schedule, 'borrowed_addendum' if schedule and copied_clause and not text else reason
 
 
@@ -108,7 +126,7 @@ def resolve_date(
     return addendum_day, basis
 
 
-def _scope_metadata_agrees(raw: dict, article: str, scopes: dict[str, str], days: set[str]) -> bool:
+def _scope_metadata_agrees(raw: dict, article: str, scopes: dict[str, str | None], days: set[str | None]) -> bool:
     metadata = _metadata(raw)
     if not metadata:
         return True
@@ -142,6 +160,8 @@ def _note(schedule: EffectiveSchedule | None, article: str) -> str:
                 return ' · 부칙 적용례 있음'
             if '경과조치' in title:
                 return ' · 부칙 경과조치 있음'
+            if '특례' in title:
+                return ' · 부칙 특례 있음'
     return ''
 
 
@@ -149,10 +169,55 @@ def _join_fragments(fragments: list[Fragment], side: int) -> str | None:
     return ''.join(text for fragment in fragments if (text := fragment[side]) is not None) or None
 
 
-def _fragment_order(fragment: Fragment) -> tuple[int, int]:
+def _fragment_order(fragment: Fragment) -> tuple[int, tuple[int, ...], str]:
     paragraph = re.search(r'제(\d+)항', fragment[0])
-    item = re.search(r'제(\d+)호', fragment[0])
-    return (int(paragraph[1]) if paragraph else 0, int(item[1]) if item else 0)
+    item = re.search(r'제(\d+)호((?:의\d+)*)', fragment[0])
+    subitem = re.search(r'[가-힣]목$', fragment[0])
+    number = (int(item[1]), *map(int, re.findall(r'\d+', item[2]))) if item else ()
+    return int(paragraph[1]) if paragraph else 0, number, subitem[0] if subitem else ''
+
+
+def _annotation_days(text: str) -> set[tuple[int, ...]]:
+    return {
+        tuple(map(int, re.findall(r'\d+', stamp)))
+        for note in ANNOTATION.finditer(text)
+        for stamp in re.findall(DATE, note[0])
+    }
+
+
+def _matches_prior_amendment(fragment: Fragment, prior: str, current: str) -> bool:
+    """Require an earlier reference and the current edit to meet in a changed source span."""
+    prior_stamp, current_stamp = (tuple(map(int, day.split('-'))) for day in (prior, current))
+    _, before, after = fragment
+    new_days = _annotation_days(after or '')
+    return current_stamp in new_days and prior_stamp in (_annotation_days(before or '') | new_days)
+
+
+def _prior_fragment_matches(
+    fragments: list[Fragment], before: str, after: str, scope: str, prior: str, current: str
+) -> list[bool]:
+    prior_stamp = tuple(map(int, prior.split('-')))
+    matched = [_matches_prior_amendment(fragment, prior, current) for fragment in fragments]
+    cited_parent_replaced = bool(scope) and any(
+        fragment[0] == scope and known for fragment, known in zip(fragments, matched, strict=True)
+    )
+    for index, (label, old, new) in enumerate(fragments):
+        if matched[index]:
+            continue
+        old_days = _annotation_days(old or '')
+        # A removed child belongs to the directly cited and corroborated replacement.
+        if (
+            cited_parent_replaced
+            and new is None
+            and scope_contains(scope, label)
+            and (not old_days or prior_stamp in old_days)
+        ):
+            matched[index] = True
+        elif (
+            not old_days and not _annotation_days(new or '') and (parent := exclusive_parent_text(before, after, label))
+        ):
+            matched[index] = _matches_prior_amendment(parent, prior, current)
+    return matched
 
 
 def resolve_changes(
@@ -176,22 +241,31 @@ def resolve_changes(
         return [whole]
 
     scopes = schedule.scopes_for(article)
-    groups = partition_changes(before, after, [scope[len(article) :] for scope in scopes])
+    groups = partition_changes(before, after, {scope[len(article) :]: day for scope, day in scopes.items()})
     if not groups:
         return [whole]
-    by_day: dict[str, list[tuple[str, Fragment]]] = defaultdict(list)
+    by_day: dict[str | None, list[tuple[str, Fragment]]] = defaultdict(list)
     for scope, fragments in groups.items():
         effective_on = schedule.default_on if scope is None else scopes[article + scope]
-        for fragment in fragments:
+        fragment_days = [effective_on] * len(fragments)
+        if scope is not None and (prior := schedule.prior_amendments.get(article + scope)):
+            matched = _prior_fragment_matches(fragments, before, after, scope, prior, raw['dates']['promulgation'])
+            fragment_days = [effective_on if known else None for known in matched]
+        label_scope = scope if len(set(fragment_days)) == 1 else None
+        for fragment, fragment_day in zip(fragments, fragment_days, strict=True):
             path = fragment[0]
-            label = scope or (f'{path} 본문' if path.endswith('항') else path or '본문')
-            by_day[effective_on].append((label, fragment))
+            label = label_scope or (f'{path} 본문' if path.endswith('항') else path or '본문')
+            if label_scope and label_scope != '본문' and label_scope.endswith('본문'):
+                label = f'{label_scope.removesuffix("본문")} 본문'
+            by_day[fragment_day].append((label, fragment))
             if path:
-                scopes[article + path] = effective_on
+                scopes[article + path] = fragment_day
+        if scope is not None and None in fragment_days:
+            scopes[article + scope] = None
     if not _scope_metadata_agrees(raw, article, scopes, set(by_day)):
         return [DatedChange(article, before, after, None, 'conflict', note)]
     changes = []
-    for effective_on, items in sorted(by_day.items()):
+    for effective_on, items in sorted(by_day.items(), key=lambda entry: entry[0] or ''):
         items.sort(key=lambda item: _fragment_order(item[1]))
         label = '·'.join(dict.fromkeys(scope for scope, _ in items))
         fragments = [fragment for _, fragment in items]
@@ -201,7 +275,7 @@ def resolve_changes(
                 _join_fragments(fragments, 1),
                 _join_fragments(fragments, 2),
                 effective_on,
-                'scoped_fragment',
+                'scoped_fragment' if effective_on else 'complex',
                 note,
             )
         )
@@ -215,7 +289,7 @@ def article_kind(before: str | None, after: str | None) -> str:
         return '삭제'
     if HEADER.match(after):
         after = after.partition('\n')[2]
-    elif marker := PARAGRAPH.match(after) or ITEM.match(after):
+    elif marker := PARAGRAPH.match(after) or ITEM.match(after) or SUBITEM.match(after):
         after = after[marker.end() :]
     if re.fullmatch(r'삭제(?:\s*<\d{4}\.\d{1,2}\.\d{1,2}\.?\s*>)?', after.strip()):
         return '삭제'

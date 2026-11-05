@@ -10,11 +10,11 @@ from pathlib import Path
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from law_calendar.automation import apply_automation, read_schedule, resolve_changes
+from law_calendar.automation import DatedChange, apply_automation, read_schedule, resolve_changes
 from law_calendar.db import write_database
-from law_calendar.validation import timestamp
+from law_calendar.validation import civil_date, timestamp
 
-PARSER_VERSION = 'monitor-law-v5'
+PARSER_VERSION = 'monitor-law-v7'
 ARTICLE = re.compile(r'^#####\s*(제\d+조(?:의\d+)*)', re.MULTILINE)
 
 
@@ -112,6 +112,17 @@ def load_event(home: Path, path: Path):
     return event, raw, texts, articles, labels, files_json, snapshot_id
 
 
+def pending_backfill_cutoff(raw: dict) -> tuple[str, set[str]]:
+    """Keep a saved pending-only preview within the source's dated selection."""
+    backfill = raw.get('context', {}).get('offline_backfill')
+    if not isinstance(backfill, dict):
+        return '', set()
+    as_of, candidates = backfill.get('v5_scope_as_of'), backfill.get('v5_pending_candidates')
+    if not isinstance(as_of, str) or not isinstance(candidates, dict):
+        return '', set()
+    return civil_date(as_of), set(candidates)
+
+
 def import_event(database: Path, home: Path, path: Path) -> tuple[bool, str]:
     event, raw, texts, articles, labels, files_json, snapshot_id = load_event(home, path)
     event_id = digest(event.source + ':' + event.event_id)
@@ -193,12 +204,16 @@ def import_event(database: Path, home: Path, path: Path) -> tuple[bool, str]:
         raw_event = json.loads(raw)
         article_order = tuple(articles.get('new', {}))
         evidence = read_schedule(raw_event, article_order, new_document=texts.get('new', ''))
+        cutoff, pending_labels = pending_backfill_cutoff(raw_event)
         changes = {}
         for label in labels:
             before, after = (articles.get(side, {}).get(label) for side in ('old', 'new'))
-            for change in resolve_changes(
-                raw_event, label, before, after, article_order, evidence, texts.get('new', '')
-            ):
+            dated = resolve_changes(raw_event, label, before, after, article_order, evidence, texts.get('new', ''))
+            if label in pending_labels:
+                dated = [change for change in dated if change.day is None or change.day > cutoff]
+                if not dated:
+                    dated = [DatedChange(label, before, after, None, 'conflict')]
+            for change in dated:
                 change_id = digest(event_id + ':' + change.article)
                 changes[change_id] = change
                 conn.execute(

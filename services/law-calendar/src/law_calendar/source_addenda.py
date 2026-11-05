@@ -3,16 +3,19 @@
 import re
 from datetime import date
 
+from law_calendar.effective_scope import ARTICLE
+
 ADDENDUM = re.compile(
     r'^부칙[ \t]*(?:\((?P<owner>[^)\n]+)\))?[ \t]*'
     r'<제(?P<number>\d+)호[ \t]*,[ \t]*(?P<day>\d{4}\.\d{1,2}\.\d{1,2})\.?>[ \t]*$',
     re.MULTILINE,
 )
 NUMBER = re.compile(r"""^공포번호:[ \t]*['"]?(\d+)['"]?[ \t]*$""", re.MULTILINE)
-SECTION = re.compile(r'^제([1-9]\d*)조(?=[ \t]*\(|[ \t]+생략)', re.MULTILINE)
+SECTION = re.compile(r'^제([1-9]\d*)조(?=[ \t]*\(|[ \t]*(?:부터 제\d+조까지 )?생략)', re.MULTILINE)
 LAW_GROUP = re.compile(r'^[ \t]*[①-⑳][ \t]*(.+?) 일부를 다음과 같이 개정한다\.[ \t]*$', re.MULTILINE)
 GROUP_BOUNDARY = re.compile(r'^[ \t]*[①-⑳]', re.MULTILINE)
 OVERRIDE = re.compile(r'시행일\s*(?:은|을)\b|시행(?:한다|하고|하며|하되)')
+AMENDED_ARTICLE = re.compile(rf'^[ \t]*({ARTICLE})(?=[ \t을를은는]|제\d+[항호]|의[ \t])', re.MULTILINE)
 
 
 def _document_parts(text: str) -> tuple[str, list[str]]:
@@ -37,6 +40,18 @@ def own_addendum_matches(text: str, promulgated: str, document: str) -> bool:
         return _heading_day(heading['day']) == promulgated and (not numbers or numbers == [heading['number']])
     except ValueError:
         return False
+
+
+def earlier_own_addenda(text: str, promulgated: str) -> dict[str, str]:
+    body, numbers = _document_parts(text)
+    if len(numbers) != 1:
+        return {}
+    matches = [heading for heading in ADDENDUM.finditer(body) if not heading['owner']]
+    try:
+        stamps = {heading['number']: _heading_day(heading['day']) for heading in matches}
+    except ValueError:
+        return {}
+    return {number: day for number, day in stamps.items() if day < promulgated} if len(stamps) == len(matches) else {}
 
 
 def borrowed_clause(text: str, law: str, article: str, promulgated: str) -> str:
@@ -69,12 +84,14 @@ def borrowed_clause(text: str, law: str, article: str, promulgated: str) -> str:
     for index, section in enumerate(sections[1:], start=1):
         end = sections[index + 1].start() if index + 1 < len(sections) else len(block)
         amendments = block[section.start() : end]
-        if not re.match(r'제\d+조\s*\(다른 법률의 개정\)', amendments):
+        heading = re.match(r'제\d+조\s*\(다른 법률의 개정\)', amendments)
+        if not heading:
             continue
+        amendments = amendments[heading.end() :].lstrip(' \t')
         for group in LAW_GROUP.finditer(amendments):
             if group[1] == law:
                 end_group = GROUP_BOUNDARY.search(amendments, group.end())
                 group_matches.append(amendments[group.end() : end_group.start() if end_group else len(amendments)])
-    if len(group_matches) == 1 and re.search(rf'^[ \t]*{re.escape(article)}[ \t]', group_matches[0], re.MULTILINE):
+    if len(group_matches) == 1 and article in AMENDED_ARTICLE.findall(group_matches[0]):
         return clause
     return ''
