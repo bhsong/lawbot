@@ -55,3 +55,19 @@ class CalendarStatus(BaseModel):
     verifiedAt: str | None
     delayed: bool
     timezone: Literal['Asia/Seoul']
+
+
+class HeldChange(BaseModel):
+    id: str
+    lawName: str
+    article: str
+    reason: str
+    sourceUrl: str
+    collectedAt: str
+
+
+class HoldPage(BaseModel):
+    items: list[HeldChange]
+    total: int
+    page: int
+    page_size: int

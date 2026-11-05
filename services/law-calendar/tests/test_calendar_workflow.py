@@ -43,7 +43,7 @@ def workflow(tmp_path):
         'old': {'file': 'data/files/old.md', 'version_key': 'old-blob'},
         'new': {'file': 'data/files/new.md', 'version_key': 'new-blob'},
         'diff': {'chunks': [{'article': a} for a in ('제1조', '제2조', '제3조', '부칙 <예시>')]},
-        'context': {'source_url': SOURCE, 'lawgo': {'article_effective': '20261106:제3조'}},
+        'context': {'source_url': SOURCE, 'lawgo': {'article_effective': '20261106:제3조제1항'}},
     }
     event_file = home / 'event.json'
     event_file.write_text(json.dumps(event, ensure_ascii=False), encoding='utf-8')
@@ -271,12 +271,12 @@ def test_v1_upgrade_backs_up_preserves_public_data_and_refuses_unknown(tmp_path)
         conn.execute("INSERT INTO laws VALUES ('existing','existing')")
     migrate(db)
     migrate(db)
-    backup = db.with_suffix('.db.pre-v2.backup')
+    backup = db.with_suffix('.db.pre-v3.backup')
     assert backup.exists()
     with sqlite3.connect(backup) as conn:
         assert conn.execute('PRAGMA user_version').fetchone()[0] == 1
     with sqlite3.connect(db) as conn:
-        assert conn.execute('PRAGMA user_version').fetchone()[0] == 2
+        assert conn.execute('PRAGMA user_version').fetchone()[0] == 3
         assert conn.execute('SELECT name FROM laws').fetchone()[0] == 'existing'
         conn.execute('PRAGMA user_version=99')
     with pytest.raises(ValueError):

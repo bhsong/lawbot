@@ -26,6 +26,22 @@ export interface ChangePage {
   page_size: number
 }
 
+export interface HeldChange {
+  id: string
+  lawName: string
+  article: string
+  reason: string
+  sourceUrl: string
+  collectedAt: string
+}
+
+export interface HoldPage {
+  items: (HeldChange)[]
+  total: number
+  page: number
+  page_size: number
+}
+
 export interface PublicChange {
   id: string
   eventId: string

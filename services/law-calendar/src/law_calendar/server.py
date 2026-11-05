@@ -16,8 +16,9 @@ from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
+from law_calendar.automation import REASONS
 from law_calendar.db import read_database
-from law_calendar.models import CalendarMonth, CalendarStatus, ChangePage, PublicDetail
+from law_calendar.models import CalendarMonth, CalendarStatus, ChangePage, HoldPage, PublicDetail
 
 KST = timezone(timedelta(hours=9))
 
@@ -145,6 +146,31 @@ def create_app(database: Path, frontend: Path | None = None) -> FastAPI:
             except ValueError:
                 pass
         return {'collectedAt': collected, 'verifiedAt': verified, 'delayed': delayed, 'timezone': 'Asia/Seoul'}
+
+    @app.get('/api/law-holds', response_model=HoldPage)
+    def holds(page: int = Query(1, ge=1, le=100000), page_size: int = Query(20, ge=1, le=100)):
+        with read_database(database) as conn:
+            total = conn.execute('SELECT COUNT(*) FROM public_holds').fetchone()[0]
+            rows = conn.execute(
+                'SELECT * FROM public_holds ORDER BY law_name,article,id LIMIT ? OFFSET ?',
+                (page_size, (page - 1) * page_size),
+            ).fetchall()
+        return {
+            'items': [
+                {
+                    'id': r['id'],
+                    'lawName': r['law_name'],
+                    'article': r['article'],
+                    'reason': REASONS.get(r['reason'], REASONS['missing']),
+                    'sourceUrl': r['source_url'],
+                    'collectedAt': r['collected_at'],
+                }
+                for r in rows
+            ],
+            'total': total,
+            'page': page,
+            'page_size': page_size,
+        }
 
     if frontend is not None:
         app.mount('/', StaticFiles(directory=frontend, html=True), name='calendar')

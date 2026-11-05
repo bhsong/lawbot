@@ -10,6 +10,7 @@ from pathlib import Path
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from law_calendar.automation import apply_automation
 from law_calendar.db import write_database
 from law_calendar.validation import timestamp
 
@@ -118,7 +119,7 @@ def import_event(database: Path, home: Path, path: Path) -> tuple[bool, str]:
         prior = conn.execute('SELECT snapshot_id FROM event_sources WHERE event_id=?', (event_id,)).fetchone()
         if prior and prior['snapshot_id'] == snapshot_id:
             return False, event.detected_at
-        identity = conn.execute('SELECT law_id FROM change_events WHERE id=?', (event_id,)).fetchone()
+        identity = conn.execute('SELECT law_id,review_state FROM change_events WHERE id=?', (event_id,)).fetchone()
         if identity and identity['law_id'] != law_id:
             raise ValueError('Upstream event identity changed; resolve the law ID before importing')
         law = conn.execute('SELECT name FROM laws WHERE id=?', (law_id,)).fetchone()
@@ -181,6 +182,13 @@ def import_event(database: Path, home: Path, path: Path) -> tuple[bool, str]:
                 'snapshot_id=excluded.snapshot_id,before_version_id=excluded.before_version_id,after_version_id=excluded.after_version_id',
                 (change_id, snapshot_id, version_ids.get(('old', label)), version_ids.get(('new', label))),
             )
+        if identity and identity['review_state'] in ('rejected', 'withdrawn'):
+            conn.execute('UPDATE change_events SET review_state=? WHERE id=?', (identity['review_state'], event_id))
+            conn.execute(
+                'UPDATE article_changes SET review_state=? WHERE event_id=?', (identity['review_state'], event_id)
+            )
+        else:
+            apply_automation(conn, event_id, snapshot_id, json.loads(raw))
     return True, event.detected_at
 
 

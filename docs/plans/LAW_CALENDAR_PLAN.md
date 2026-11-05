@@ -1,5 +1,18 @@
 # Lawbot 법령 변경 캘린더: Phase 0 조사 및 Phase 1 계획
 
+## 자동 처리 및 보류 목록 계약 (2026-11-05 사용자 승인)
+
+사용자가 건별 수동 승인 대신 확실한 항목 자동 처리·모호한 항목 보류·표본 확인으로 운영 정책을 변경했다. PR #70의 수동 승인 기본값은 아래 범위에서 대체한다. #70이 아직 열려 있어 그 head `b534c31`에서 새 브랜치 `codex/law-calendar-auto-holds-20261105`를 만들며 후속 PR은 #70 브랜치를 대상으로 차이만 담는다. #70 병합·운영 배포·외부 수집·실제 모델 호출은 하지 않는다.
+
+- 저장된 monitor 입력을 가져올 때 순수 규칙으로 시행일을 판정한다. 공식 출처 링크, 유효한 공포일, 단순하고 명시적인 최신 부칙의 시행일 또는 조문 전체를 지칭하는 시행 메타데이터 등 판정 근거가 있는 경우 날짜를 자동 확인한다. 기본 시행일만 있거나 위임 표현·복잡한 부칙·항/호 일부 시행·상충 날짜는 보류한다. 지원하지 않는 표현은 추측하지 않는다.
+- 날짜가 자동 확인되면 원문과 별도의 규칙 기반 요약을 만들어 공개한다. 이 과정은 Git 구판·신판의 법적 효력 비교까지 검증하지 않으므로 comparable=false를 유지하고 화면에 비교 미확인을 표시한다. 원문 버전·자동 판정 근거와 규칙 버전을 감사 기록으로 남긴다. 명시적으로 반려·철회한 항목을 재입력만으로 자동 게시하지 않는다.
+- DB v3에 snapshot과 연결된 보류 사유를 추가한다. 공개 보류는 자동 판정기가 등록한 현재 snapshot의 검토 대기 조문으로 제한한다. 일반 미승인 데이터·원문·내부 오류·로컬 경로를 노출하지 않는다. 반려·철회·승인·과거 snapshot은 목록에서 제외한다.
+- GET /api/law-holds?page=1&page_size=20을 추가한다. 법령명·조문·보류 사유·공식 출처·수집 시각만 반환하는 읽기 전용 페이지 응답이며 달력 날짜나 건수에 섞지 않는다. TypeScript 계약 생성도 갱신한다.
+- 화면 상단에 '보류 목록' 버튼을 두고 누르면 전체 날짜에 걸친 목록을 dialog로 표시한다. 로딩·0건·오류/재시도·페이지 이동·모바일·키보드 닫기와 포커스 복귀를 지원한다. 개발 예시에만 명시적인 합성 보류 항목을 추가하고 production에 포함하지 않는다.
+- 이번 보류 dialog에는 수정·확정·승인 버튼을 만들지 않는다. 보류 전용 CLI 확정 흐름이나 웹 관리 기능도 추가하지 않는다. 수집 스케줄 자동 연결, 입법예고 실수집, 공식 시행 전후 버전 자동 검증은 후속 범위다.
+
+TDD로 확정/위임/복잡/누락/상충/부분 시행, 자동 공개와 보류 분리, 거절·철회 및 snapshot 상태, API 페이지·입력·정보 제한, dialog 빈/실패/페이지/모바일/키보드 흐름을 검증한다. 전체 기본 회귀·두 frontend·lint/type/build·lock/schema 검사 후 PR CI를 확인한다. 진행과 한계는 PLAN/evals에 기록하고 README에는 사용법만 반영한다.
+
 ## Phase 3 작업 계약 (2026-11-05)
 
 PR #69 병합 main `a59ea74`에서 새 브랜치 `codex/law-calendar-phase3-20261105`를 만들었다. 이번 요청은 다음 단계 구현을 허용하며 PR 병합·운영 반영·실제 모델 호출은 허용하지 않는다.
@@ -223,6 +236,7 @@ uv run pyright
 | Phase 1 | codex/law-calendar-phase0-20261105 / 이 결과 기록과 같은 분리 커밋 | 위 변경 목록 | 두 frontend typecheck/test/build, 독립 E2E, pytest, ruff, pyright, compileall, uv lock --check | 분리 후 calendar 12개·chatbot 19개·Python 전체 753개 통과(독립 E2E 4개 포함) | 실제 API 미연결, 실제 모델 미실행, 새 커밋 macOS CI 별도 확인 |
 | Phase 2 | codex/law-calendar-phase2-20261105 / 2ce30a7, PR #69 병합 a59ea74 | 독립 API/DB/schema, frontend 연결, CI·사용법·검증 기록 | pytest, 두 frontend 검사·빌드, ruff, pyright, compileall, 두 lock check, schema --check | 로컬 Python 774개·calendar Vitest 14개·chatbot 19개 및 macOS CI 41968175722 통과 | 실제 수집·공식 효력 검증은 후속 |
 | Phase 3 | codex/law-calendar-phase3-20261105 / 이 기록과 같은 구현 커밋 | services/law-calendar의 v2 DB·어댑터·검토 CLI·테스트, 계획·사용법·검증 기록 | 기본 pytest, 두 frontend 검사·빌드, ruff, pyright, compileall, 두 lock check, schema --check | 오프라인 흐름 구현·Python 798개·calendar Vitest 14개·chatbot 19개 및 품질 검사 통과, macOS CI 별도 확인 | 입법예고 키·응답/수집기, 실데이터 시행 전후 검증, 조항 효력 자동 판정·운영 연결 미완료 |
+| 자동 처리·보류 UI | codex/law-calendar-auto-holds-20261105 / 이 기록과 같은 커밋, PR #70 후속 | calendar 자동 판정·v3 DB·보류 API/타입·읽기 전용 dialog·검사, PLAN/evals·사용법 | 기본 pytest, 두 frontend 검사·빌드, ruff, pyright, compileall, lock/schema | Python 817개·캘린더 Vitest 16개·챗봇 19개 및 품질 검사 통과, macOS CI 별도 확인 | 외부 수집·스케줄·공식 효력 비교 자동 검증·보류 수정 기능은 제외 |
 | Phase 4 | 미시작 | 미정 | 미실행 | 미실행 | 조항별 효력·공개 배포·백업·이용 조건 |
 | Phase 5 | 미시작 | 미정 | 미실행 | 미실행 | 기존 RAG 자동 갱신과 승인 정책 조정 |
 

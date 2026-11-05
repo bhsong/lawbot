@@ -32,3 +32,5 @@ export interface CalendarSnapshot {
 }
 
 export type CalendarLoader = (month: string, signal: AbortSignal) => Promise<CalendarSnapshot>
+
+export type HoldLoader = (page: number, signal: AbortSignal) => Promise<import('./api-types').HoldPage>
