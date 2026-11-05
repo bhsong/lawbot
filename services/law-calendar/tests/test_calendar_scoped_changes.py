@@ -5,7 +5,7 @@ import json
 import pytest
 from fastapi.testclient import TestClient
 
-from law_calendar.automation import read_schedule, resolve_changes
+from law_calendar.automation import article_kind, read_schedule, resolve_changes
 from law_calendar.ingest import import_files
 from law_calendar.server import create_app
 from test_calendar_workflow import workflow as workflow
@@ -94,3 +94,30 @@ def test_scoped_schedule_checks_metadata_agreement(day, reason):
     (change,) = resolve_changes(raw, article, before, after, order, read_schedule(raw, order), '')
     assert change.basis == reason
     assert change.day == ('2026-12-08' if reason == 'scoped_fragment' else None)
+
+
+@pytest.mark.parametrize(
+    'after,kind',
+    [
+        ('  1\\. 삭제 <2026.4.7>\n\n', '삭제'),
+        ('**①** 삭제 <2026.4.7>\n\n', '삭제'),
+        ('##### 제2조\n\n삭제 <2026.4.7>\n\n', '삭제'),
+        ('  1\\. 삭제 <2026.4.7>\n\n  2\\. 다른 변경\n', '변경'),
+        ('  1\\. 자료를 삭제하여야 한다.\n', '변경'),
+    ],
+)
+def test_article_kind_recognizes_deletion_markers_in_whole_articles_and_fragments(after, kind):
+    assert article_kind('이전 원문', after) == kind
+
+
+@pytest.mark.parametrize('number,stamp', [('123', '2000.1.1'), ('124', '2026.4.7')])
+def test_unrelated_numbered_addendum_cannot_supply_the_effective_date(number, stamp):
+    raw = {
+        'dates': {'promulgation': '2026-04-07'},
+        'context': {
+            'source_url': 'https://www.law.go.kr/법령/예시',
+            'addenda_added': [f'부칙 <제{number}호,{stamp}>\n\n이 법은 공포한 날부터 시행한다.'],
+        },
+    }
+    document = "---\n공포번호: '123'\n---\n"
+    assert read_schedule(raw, ('제1조',), new_document=document) == (None, 'conflict')

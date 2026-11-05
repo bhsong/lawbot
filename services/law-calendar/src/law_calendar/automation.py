@@ -8,12 +8,12 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 
-from law_calendar.article_fragments import Fragment, partition_changes
+from law_calendar.article_fragments import HEADER, ITEM, PARAGRAPH, Fragment, partition_changes
 from law_calendar.effective_clause import ARTICLE, EffectiveSchedule, parse_schedule
-from law_calendar.source_addenda import borrowed_clause
+from law_calendar.source_addenda import borrowed_clause, own_addendum_matches
 from law_calendar.validation import civil_date, official_url
 
-RULE_VERSION = 'effective-date-v4'
+RULE_VERSION = 'effective-date-v5'
 REASONS = {
     'delegated': '대통령령 등 별도로 정하는 시행일을 확인해야 합니다.',
     'complex': '부칙의 예외·적용례·경과조치를 추가 확인해야 합니다.',
@@ -37,7 +37,9 @@ class DatedChange:
     note: str = ''
 
 
-def read_schedule(raw: dict, article_order: Sequence[str], copied_clause: str = '') -> DateEvidence:
+def read_schedule(
+    raw: dict, article_order: Sequence[str], copied_clause: str = '', *, new_document: str = ''
+) -> DateEvidence:
     context = raw.get('context', {})
     try:
         official_url(context.get('source_url') or '')
@@ -49,6 +51,8 @@ def read_schedule(raw: dict, article_order: Sequence[str], copied_clause: str = 
         return None, 'complex'
     if added:
         text = added[0]
+        if not own_addendum_matches(text, promulgated, new_document):
+            return None, 'conflict'
     else:
         amendment = context.get('amendment_text') or ''
         if not isinstance(amendment, str):
@@ -207,7 +211,13 @@ def resolve_changes(
 def article_kind(before: str | None, after: str | None) -> str:
     if before is None:
         return '신설'
-    if after is None or re.fullmatch(r'삭제(?:\s*<\d{4}\.\d{1,2}\.\d{1,2}\.?\s*>)?', after.partition('\n')[2].strip()):
+    if after is None:
+        return '삭제'
+    if HEADER.match(after):
+        after = after.partition('\n')[2]
+    elif marker := PARAGRAPH.match(after) or ITEM.match(after):
+        after = after[marker.end() :]
+    if re.fullmatch(r'삭제(?:\s*<\d{4}\.\d{1,2}\.\d{1,2}\.?\s*>)?', after.strip()):
         return '삭제'
     return '변경'
 

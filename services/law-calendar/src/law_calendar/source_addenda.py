@@ -15,23 +15,42 @@ GROUP_BOUNDARY = re.compile(r'^[ \t]*[①-⑳]', re.MULTILINE)
 OVERRIDE = re.compile(r'시행일\s*(?:은|을)\b|시행(?:한다|하고|하며|하되)')
 
 
-def borrowed_clause(text: str, law: str, article: str, promulgated: str) -> str:
-    """Read only a dated enactment that expressly names this law and article."""
+def _document_parts(text: str) -> tuple[str, list[str]]:
     parts = text.replace('\r\n', '\n').split('\n---\n', 1)
     if len(parts) != 2 or not parts[0].startswith('---\n'):
-        return ''
-    numbers = NUMBER.findall(parts[0])
+        return '', []
+    return parts[1], NUMBER.findall(parts[0])
+
+
+def _heading_day(stamp: str) -> str:
+    year, month, day = map(int, stamp.split('.'))
+    return date(year, month, day).isoformat()
+
+
+def own_addendum_matches(text: str, promulgated: str, document: str) -> bool:
+    """Check the date and any saved number before trusting a numbered addendum."""
+    heading = ADDENDUM.match(text.replace('\r\n', '\n').lstrip())
+    if not heading:
+        return True
+    _, numbers = _document_parts(document)
+    try:
+        return _heading_day(heading['day']) == promulgated and (not numbers or numbers == [heading['number']])
+    except ValueError:
+        return False
+
+
+def borrowed_clause(text: str, law: str, article: str, promulgated: str) -> str:
+    """Read only a dated enactment that expressly names this law and article."""
+    body, numbers = _document_parts(text)
     if len(numbers) != 1:
         return ''
-    body = parts[1]
     headings = list(ADDENDUM.finditer(body))
     blocks = []
     for index, heading in enumerate(headings):
         if not heading['owner'] or heading['number'] != numbers[0]:
             continue
         try:
-            year, month, day = map(int, heading['day'].split('.'))
-            stamp = date(year, month, day).isoformat()
+            stamp = _heading_day(heading['day'])
         except ValueError:
             return ''
         if stamp == promulgated:

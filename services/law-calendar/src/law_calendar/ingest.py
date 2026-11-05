@@ -14,7 +14,7 @@ from law_calendar.automation import apply_automation, read_schedule, resolve_cha
 from law_calendar.db import write_database
 from law_calendar.validation import timestamp
 
-PARSER_VERSION = 'monitor-law-v4'
+PARSER_VERSION = 'monitor-law-v5'
 ARTICLE = re.compile(r'^#####\s*(제\d+조(?:의\d+)*)', re.MULTILINE)
 
 
@@ -192,7 +192,7 @@ def import_event(database: Path, home: Path, path: Path) -> tuple[bool, str]:
                 version_ids[side, label] = article_id
         raw_event = json.loads(raw)
         article_order = tuple(articles.get('new', {}))
-        evidence = read_schedule(raw_event, article_order)
+        evidence = read_schedule(raw_event, article_order, new_document=texts.get('new', ''))
         changes = {}
         for label in labels:
             before, after = (articles.get(side, {}).get(label) for side in ('old', 'new'))
