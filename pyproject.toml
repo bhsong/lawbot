@@ -30,6 +30,8 @@ dev = [
     "pyright==1.1.408",   # 타입 검사 (설정은 아래 [tool.pyright], 평가 도구 tools/는 제외)
     "ruff==0.17.3",
     "playwright>=1.64.1",   # 브라우저 E2E (tests/test_e2e_*.py). 브라우저는 uv run playwright install chromium
+    "pypdfium2>=5.14.0",
+    "pillow>=13.0.0",
 ]
 
 [tool.pytest.ini_options]

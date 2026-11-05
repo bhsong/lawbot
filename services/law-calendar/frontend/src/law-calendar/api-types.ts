@@ -104,4 +104,11 @@ export interface PublicDetail {
   reviewState: "approved"
   assembly?: PublicAssembly | null
   diff: (string)[] | null
+  noticeContent?: PublicNoticeContent | null
+}
+
+export interface PublicNoticeContent {
+  summary: string | null
+  pdfUrl: string | null
+  comparisonPages: (number)[]
 }

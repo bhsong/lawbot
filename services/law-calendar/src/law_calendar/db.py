@@ -156,6 +156,20 @@ CREATE VIEW public_calendar_events AS
  FROM public_assembly;
 """
 
+SCHEMA_V5 = """
+CREATE TABLE assembly_notice_content(
+ snapshot_id TEXT PRIMARY KEY REFERENCES assembly_snapshots(id),
+ summary TEXT, pdf_url TEXT
+);
+CREATE TABLE assembly_notice_pages(
+ snapshot_id TEXT NOT NULL REFERENCES assembly_notice_content(snapshot_id),
+ page INTEGER NOT NULL CHECK(page > 0), png BLOB NOT NULL,
+ PRIMARY KEY(snapshot_id,page)
+);
+"""
+CURRENT_VERSION = 5
+SUPPORTED_VERSIONS = (4, CURRENT_VERSION)
+
 
 def migrate(path: Path) -> None:
     """Initialize or upgrade explicitly, backing up existing databases before DDL."""
@@ -164,14 +178,20 @@ def migrate(path: Path) -> None:
     existed = path.exists()
     with closing(sqlite3.connect(path, timeout=5)) as conn:
         version = conn.execute('PRAGMA user_version').fetchone()[0]
-        if version == 4:
+        if version == CURRENT_VERSION:
             return
-        if version not in (0, 1, 2, 3) or (
+        if version not in (0, 1, 2, 3, 4) or (
             version == 0 and conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchone()
         ):
             raise ValueError('Unsupported database schema; migration refused')
         if existed:
-            suffix = {0: '.pre-v1.backup', 1: '.pre-v3.backup', 2: '.pre-v3.backup', 3: '.pre-v4.backup'}
+            suffix = {
+                0: '.pre-v1.backup',
+                1: '.pre-v3.backup',
+                2: '.pre-v3.backup',
+                3: '.pre-v4.backup',
+                4: '.pre-v5.backup',
+            }
             backup = path.with_suffix(path.suffix + suffix[version])
             os.close(os.open(backup, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600))
             with closing(sqlite3.connect(backup)) as target:
@@ -179,9 +199,11 @@ def migrate(path: Path) -> None:
         conn.execute('PRAGMA journal_mode=WAL')
         conn.execute('PRAGMA foreign_keys=ON')
         script = ''.join(
-            schema for index, schema in enumerate((SCHEMA, SCHEMA_V2, SCHEMA_V3, SCHEMA_V4)) if version <= index
+            schema
+            for index, schema in enumerate((SCHEMA, SCHEMA_V2, SCHEMA_V3, SCHEMA_V4, SCHEMA_V5))
+            if version <= index
         )
-        conn.executescript('BEGIN IMMEDIATE;\n' + script + '\nPRAGMA user_version=4; COMMIT;')
+        conn.executescript(f'BEGIN IMMEDIATE;\n{script}\nPRAGMA user_version={CURRENT_VERSION}; COMMIT;')
 
 
 @contextmanager
@@ -190,7 +212,7 @@ def read_database(path: Path):
     try:
         conn.row_factory = sqlite3.Row
         conn.execute('PRAGMA query_only=ON')
-        if conn.execute('PRAGMA user_version').fetchone()[0] != 4:
+        if conn.execute('PRAGMA user_version').fetchone()[0] not in SUPPORTED_VERSIONS:
             raise sqlite3.DatabaseError('Unsupported schema')
         yield conn
     finally:
@@ -203,7 +225,7 @@ def write_database(path: Path):
     with closing(sqlite3.connect(path.resolve().as_uri() + '?mode=rw', uri=True, timeout=5)) as conn:
         conn.row_factory = sqlite3.Row
         conn.execute('PRAGMA foreign_keys=ON')
-        if conn.execute('PRAGMA user_version').fetchone()[0] != 4:
+        if conn.execute('PRAGMA user_version').fetchone()[0] not in SUPPORTED_VERSIONS:
             raise sqlite3.DatabaseError('Run the explicit database migration first')
         with conn:
             conn.execute('BEGIN IMMEDIATE')

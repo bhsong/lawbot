@@ -4,12 +4,15 @@ import datetime
 import json
 import subprocess
 import sys
+from io import BytesIO
 
 import pytest
+from PIL import Image
 from playwright.sync_api import expect
 
 import calendar_ui_support as support
 from law_calendar.assembly_ingest import review_assembly
+from law_calendar.notice_content import NoticeContent, refresh_notice_content
 from law_calendar.sync import synchronize
 from test_calendar_api import dataset as dataset
 from test_calendar_assembly import register
@@ -167,6 +170,20 @@ def test_assembly_notice_and_bill_dates_remain_separate(scheduled, tmp_path, cal
     assert synchronize(database, home)['failed'] == 0
     for item in (notice, bill):
         review_assembly(database, item, 'approve', reviewer='tester', note='공식 날짜 확인')
+    with BytesIO() as buffer:
+        Image.new('RGB', (600, 800), 'white').save(buffer, format='PNG')
+        png = buffer.getvalue()
+    assert (
+        refresh_notice_content(
+            database,
+            read=lambda *_: NoticeContent(
+                '정식 적용 범위를 확대하는 안입니다.',
+                'https://likms.assembly.go.kr/filegate/servlet/FileGate?bookId=example&type=1',
+                [(5, png)],
+            ),
+        )['stored']
+        == 1
+    )
     page = calendar_page
     page.set_viewport_size({'width': width, 'height': 900})
     page.clock.install(time=datetime.datetime(2026, 11, 5, tzinfo=datetime.UTC))
@@ -179,6 +196,14 @@ def test_assembly_notice_and_bill_dates_remain_separate(scheduled, tmp_path, cal
         notice_panel.get_by_role('button').click()
         dialog = page.get_by_role('dialog')
         expect(dialog.get_by_text('소관위원회', exact=True)).to_be_visible()
+        expect(dialog.get_by_role('heading', name='주요 변경 내용')).to_be_visible()
+        expect(dialog.get_by_text('정식 적용 범위를 확대하는 안입니다.')).to_be_visible()
+        image = dialog.get_by_role('img', name='공식 신·구조문대비표 원문 5쪽', include_hidden=True)
+        expect(image).not_to_be_visible()
+        dialog.get_by_text('공식 신·구조문대비표', exact=True).click()
+        expect(image).to_be_visible()
+        page.wait_for_function("document.querySelector('.lc-notice-pages img')?.naturalWidth === 600")
+        assert dialog.evaluate('(element) => element.scrollWidth <= element.clientWidth')
         expect(dialog.get_by_role('link', name='공식 원문 확인', exact=False)).to_have_attribute(
             'href', 'https://pal.assembly.go.kr/napal/lgsltpa/lgsltpaOngoing/view.do?lgsltPaId=PRC_NOTICE'
         )

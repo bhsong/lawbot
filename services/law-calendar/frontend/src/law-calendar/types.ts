@@ -1,5 +1,5 @@
 /** Display models for public records and development fixtures. API contracts are generated separately. */
-import type { CalendarDay, PublicAssembly } from './api-types'
+import type { CalendarDay, PublicAssembly, PublicNoticeContent } from './api-types'
 
 export type EventKind = 'notice' | 'effective' | 'bill'
 
@@ -36,6 +36,7 @@ export interface CalendarChange {
   collectedAt: string | null
   verifiedAt: string | null
   assembly?: PublicAssembly | null
+  noticeContent?: PublicNoticeContent | null
 }
 
 export interface CalendarSnapshot {

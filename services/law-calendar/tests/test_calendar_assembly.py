@@ -157,7 +157,7 @@ def test_v3_upgrade_keeps_existing_records_and_backup(tmp_path):
     migrate(path)
     migrate(path)
     with sqlite3.connect(path) as conn:
-        assert conn.execute('PRAGMA user_version').fetchone() == (4,)
+        assert conn.execute('PRAGMA user_version').fetchone() == (5,)
         assert conn.execute('SELECT name FROM laws').fetchone() == ('기존',)
         assert conn.execute('PRAGMA foreign_key_check').fetchall() == []
     backup = path.with_suffix('.db.pre-v4.backup')

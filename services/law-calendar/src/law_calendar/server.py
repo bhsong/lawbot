@@ -14,11 +14,11 @@ from typing import Literal
 
 import uvicorn
 from fastapi import FastAPI, HTTPException, Query, Request
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 
 from law_calendar.automation import REASONS
-from law_calendar.db import read_database
+from law_calendar.db import CURRENT_VERSION, read_database
 from law_calendar.models import CalendarMonth, CalendarStatus, ChangePage, HoldPage, PublicDetail
 
 KST = timezone(timedelta(hours=9))
@@ -85,6 +85,16 @@ def change_data(row) -> dict:
     return item
 
 
+def notice_snapshot(conn: sqlite3.Connection, change_id: str) -> str | None:
+    if conn.execute('PRAGMA user_version').fetchone()[0] < CURRENT_VERSION:
+        return None
+    row = conn.execute(
+        "SELECT id FROM public_assembly WHERE kind='notice' AND event_id || ':' || date_role=?",
+        (change_id,),
+    ).fetchone()
+    return row['id'] if row else None
+
+
 def create_app(database: Path, frontend: Path | None = None) -> FastAPI:
     app = FastAPI(title='Law Calendar', version='0.2.0')
 
@@ -147,16 +157,46 @@ def create_app(database: Path, frontend: Path | None = None) -> FastAPI:
     @app.get('/api/law-changes/{change_id}', response_model=PublicDetail, response_model_exclude_unset=True)
     def detail(change_id: str):
         with read_database(database) as conn:
+            conn.execute('BEGIN')
             row = conn.execute('SELECT * FROM public_calendar_events WHERE id=?', (change_id,)).fetchone()
-        if row is None:
-            raise HTTPException(404, 'Change not found')
-        result = change_data(row)
+            if row is None:
+                raise HTTPException(404, 'Change not found')
+            result = change_data(row)
+            if row['kind'] == 'notice' and row['assembly_json'] and (snapshot := notice_snapshot(conn, change_id)):
+                content = conn.execute(
+                    'SELECT summary,pdf_url FROM assembly_notice_content WHERE snapshot_id=?', (snapshot,)
+                ).fetchone()
+                if content and (content['summary'] or content['pdf_url']):
+                    pages = conn.execute(
+                        'SELECT page FROM assembly_notice_pages WHERE snapshot_id=? ORDER BY page', (snapshot,)
+                    ).fetchall()
+                    result['noticeContent'] = {
+                        'summary': content['summary'],
+                        'pdfUrl': content['pdf_url'],
+                        'comparisonPages': [page['page'] for page in pages],
+                    }
         result['diff'] = (
             list(difflib.ndiff((row['before_text'] or '').splitlines(), (row['after_text'] or '').splitlines()))
             if row['comparable']
             else None
         )
         return result
+
+    @app.get('/api/law-changes/{change_id}/notice-comparison/{page}', response_class=Response)
+    def notice_comparison(change_id: str, page: int):
+        with read_database(database) as conn:
+            conn.execute('BEGIN')
+            snapshot = notice_snapshot(conn, change_id)
+            row = (
+                conn.execute(
+                    'SELECT png FROM assembly_notice_pages WHERE snapshot_id=? AND page=?', (snapshot, page)
+                ).fetchone()
+                if snapshot
+                else None
+            )
+        if not row:
+            raise HTTPException(404, 'Notice comparison page not found')
+        return Response(row['png'], media_type='image/png')
 
     @app.get('/api/law-calendar/status', response_model=CalendarStatus, response_model_exclude_unset=True)
     def status():

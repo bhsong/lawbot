@@ -42,8 +42,15 @@ class PublicChange(BaseModel):
     assembly: PublicAssembly | None = None
 
 
+class PublicNoticeContent(BaseModel):
+    summary: str | None
+    pdfUrl: str | None
+    comparisonPages: list[int]
+
+
 class PublicDetail(PublicChange):
     diff: list[str] | None
+    noticeContent: PublicNoticeContent | None = None
 
 
 class ChangePage(BaseModel):
