@@ -129,6 +129,50 @@ def test_bill_a_to_b_to_a_and_source_failure_isolated(tmp_path):
     assert monitor.collect(only=bills.name).events == []
 
 
+def test_force_bootstrap_refreshes_existing_bill_at_same_revision(tmp_path):
+    feed = Feed()
+    feed.rows[BILLS] = [bill()]
+    collector = AssemblyCollector('assembly_bill', feed.client())
+    monitor = make_monitor(tmp_path, make_config(), collectors=[collector])
+    monitor.bootstrap(only=collector.name)
+    feed.rows[BILLS] = [bill(COMMITTEE_DT='2026-11-01')]
+    [first] = monitor.collect().events
+
+    feed.rows[BILLS] = [bill(PROC_DT='2026-11-05', PROC_RESULT_CD='원안가결')]
+    result = monitor.bootstrap(only=collector.name, force=True)
+    assert result.ok == [collector.name] and result.events == []
+    assert monitor.collect().events == []
+
+    feed.rows[BILLS] = [bill(PROC_DT='2026-11-06', PROC_RESULT_CD='수정가결')]
+    [changed] = monitor.collect().events
+    assert changed['old']['version_key'] == first['new']['version_key'] == '1'
+    assert changed['new']['version_key'] == '2'
+    previous = json.loads((monitor.paths.home / changed['old']['file']).read_text())
+    assert previous['dates']['bill_decided'] == '2026-11-05'
+
+
+@pytest.mark.parametrize('closed', [False, True])
+def test_force_bootstrap_refreshes_existing_notice_period(tmp_path, closed):
+    feed = Feed()
+    feed.rows[ACTIVE] = [notice()]
+    collector = AssemblyCollector('assembly_notice', feed.client())
+    monitor = make_monitor(tmp_path, make_config(), collectors=[collector])
+    monitor.bootstrap(only=collector.name)
+    [first] = monitor.collect().events
+
+    feed.html = feed.html.replace('2026-11-05', '2026-11-06')
+    feed.rows[ACTIVE] = [] if closed else [notice(NOTI_ED_DT='2026-11-06')]
+    feed.rows[CLOSED] = [notice(closed=True, NOTI_ED_DT='2026-11-06')] if closed else []
+    result = monitor.bootstrap(only=collector.name, force=True)
+    assert result.ok == [collector.name] and result.events == []
+    assert monitor.collect().events == []
+    item = monitor.state.items(collector.name)[NOTICE_ID]
+    assert item.version_key == first['new']['version_key'] == '1'
+    snapshot = json.loads((monitor.paths.home / item.file_path).read_text())
+    assert snapshot['dates'] == {'notice_start': '2026-10-26', 'notice_end': '2026-11-06'}
+    assert snapshot['context']['endpoint'] == (CLOSED if closed else ACTIVE)
+
+
 def test_conflicting_pages_leave_notice_state_and_key_out_of_logs(tmp_path, caplog):
     feed = Feed()
     feed.rows[ACTIVE] = [notice()]

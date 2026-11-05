@@ -168,16 +168,15 @@ class AssemblyCollector:
             after = snapshots[item_id]
             old = existing.get(item_id)
             revision = int(old.version_key) if old else 0
-            if bootstrap and old:
-                continue
             before = json.loads((ctx.paths.home / old.file_path).read_text(encoding='utf-8')) if old else None
-            if not bootstrap and self.name == 'assembly_notice':
+            if self.name == 'assembly_notice':
                 if before and before['target']['bill_id'] != after['target']['bill_id']:
                     raise AssemblyError('Notice identity was assigned to a different bill')
-                self._add_notice_start(after, before, revision)
+                if not bootstrap or revision > 0:
+                    self._add_notice_start(after, before, revision)
             payload = encoded(after)
             content_hash = digest(payload)
-            initial_active = revision == 0 and after['context']['endpoint'] == ACTIVE
+            initial_active = not bootstrap and revision == 0 and after['context']['endpoint'] == ACTIVE
             if old and old.content_hash == content_hash and not initial_active:
                 continue
             path = ctx.paths.files / f'assembly-{content_hash}.json'
