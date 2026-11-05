@@ -4,17 +4,17 @@
 - 저장소: https://github.com/bhsong/lawbot
 - 조사 기준: main 커밋 77e7aa0af8bbb5f43be245e988f5e326014e9184 (tree: 7913f64953241195b550760defaacb39d52961b8). 문서 기록 전 main과 작업 브랜치가 이 커밋에 있음을 재확인.
 - 요구사항 기준: 대화에 제공된 PLAN.md 전문. 별도 LAW_CALENDAR_PLAN.md 첨부는 현재 작업 공간에서 확인되지 않음.
-- 범위: 읽기 전용 실사와 문서 작성. 기능 구현·배포·모델 호출 없음.
-- 상태: 코드·문서 실사 완료, Phase 0 완료 기준 일부 미충족.
+- 범위: Phase 0 실사와 Phase 1 UI 목업·대역 검증. 실제 데이터 연결·배포·실제 모델 호출 없음.
+- 상태: Phase 1 UI 구현·로컬 검증 완료. Phase 0의 실제 데이터 전체 추적은 미완료.
 
 ## 1. 작업 상태와 제약
 
 신규 브랜치 `codex/law-calendar-phase0-20261105`를 main에서 생성했고, 문서 기록 전 HEAD가 조사 기준 커밋과 같음을 확인했다. 초기 GitHub 403 오류는 연결 권한 수정 후 해소되었다. 로컬 clone은 환경 proxy 연결 오류로 실패하여 GitHub 연결 도구로 조사 및 문서 기록을 수행했다.
 
-이번 변경은 이 계획·조사 문서만 추가한다. 기능 코드·기존 챗봇·운영 데이터와 기존 다른 계획서는 변경하지 않는다. 로컬 체크아웃의 HEAD/status/worktree는 확인하지 못했으며, Phase 1 구현·검증 전 정상 개발 체크아웃이 필요하다.
+Phase 0 기록 커밋은 `0030cda`다. Phase 1 시작 시 추가 네트워크 권한으로 `/workspace/lawbot` 체크아웃에 성공했고, 해당 브랜치 HEAD `0030cda`와 깨끗한 status, 개발 worktree 하나를 확인했다. 운영 worktree가 아닌 분리된 클라우드 개발 환경에서 작업한다. 기존 다른 계획서·학습 작업·운영 데이터는 변경하지 않는다.
 
 사용자 합의:
-- 이번 승인은 Phase 0 결과 및 Phase 1 계획의 브랜치 기록 범위다. Phase 1 기능 구현은 계획 보고 후 별도 확인한다.
+- 계획 보고 후 사용자가 Phase 1 UI 구현을 명시적으로 승인했다. Phase 2 이후 DB·API·수집 연결은 이번 구현 범위가 아니다.
 - PR 병합은 해당 PR에 대한 사용자 명시적 승인 후에만 수행한다.
 - 실제 모델 호출은 수행하지 않는다. 대역 검증과 실제 모델 미실행을 구분해 기록한다.
 - 운영 배포·서비스 재시작은 수행하지 않는다. 사용자가 진행 중인 모델 학습 작업과 함께 배포할 수 있도록 후속 배포 절차만 정리한다.
@@ -96,7 +96,7 @@ web.main은 load_app(cfg)를 거쳐 챗봇을 초기화한 뒤 앱을 만든다.
 
 따라서 계획서의 “입법예고/시행 각각 실제 1건을 끝까지 추적” 기준은 충족하지 못했다. Phase 0을 전체 완료로 표시하지 않는다.
 
-## 7. Phase 1 구현 계획 (아직 실행하지 않음)
+## 7. Phase 1 구현 계획 및 적용 사항
 
 1. 정상 개발 체크아웃에서 원격·HEAD·status·worktree와 지침을 확인하고 기존 신규 브랜치 codex/law-calendar-phase0-20261105를 이어간다. 이 문서는 대화의 원 계획을 바탕으로 작성한 실사·적용 계획이며 원문 전체를 복제한 문서는 아니다. 원문 첨부 확보 시 내용을 보존해 별도 수록한다.
 2. frontend/src/main.tsx에 최상위 경로 분기 도입. /law-calendar만 독립 페이지로 렌더링하고 기존 App.tsx의 로그인·Chat·SSE·피드백 동작을 보존한다. 우선 일반 링크와 pathname 분기로 두 경로를 지원하고, 향후 라우트 증가 시 라우터 도입을 검토한다.
@@ -105,18 +105,29 @@ web.main은 load_app(cfg)를 거쳐 챗봇을 초기화한 뒤 앱을 만든다.
 5. 로컬·테스트 전용 합성 fixture에 “예시 / 실제 법령 아님”을 명시한다. production 경로에서는 fixture 모듈을 동적으로 가져오지 않도록 개발 모드 분기를 두고, 승인 데이터 미연결 안내와 빈 화면을 제공한다. 단순 배지만으로 가상 법령을 운영에 노출하지 않는다.
 6. 상·하단 고지, 출처·게시/공포/시행/의견기한·수집/검증 시각, 빈 날짜, 로딩·오류·갱신 지연·더 보기 상태를 테스트용 데이터 공급자로 재현한다. 실제 API·외부 수집·LLM 호출은 Phase 1에 연결하지 않는다.
 
-예상 파일 (모두 제안이며 아직 생성·수정 안 함):
+Phase 1 변경 파일:
 
 | 위치 | 변경 |
 | --- | --- |
-| services/chatbot/frontend/src/main.tsx | 경로별 진입점 |
-| services/chatbot/frontend/src/law-calendar/ | LawCalendarPage, MonthCalendar, EventList, ChangeDialog, types, dates, 개발 fixture, 범위 지정 CSS와 Vitest 테스트 |
+| services/chatbot/frontend/src/main.tsx, Root.tsx, Root.test.tsx | 경로별 진입점과 기존 로그인 회귀 |
+| services/chatbot/frontend/src/law-calendar/ | LawCalendarPage, MonthCalendar, EventList, ChangeDialog, types, dates, data, 개발 전용 demo, 범위 지정 CSS와 Vitest 테스트 |
 | services/chatbot/tests/test_e2e_law_calendar.py | 비로그인 달력·모바일·키보드·상세·기존 인증 회귀 |
 | services/chatbot/tests/test_web.py | /law-calendar fallback과 기존 보호 API 회귀 보완 |
-| docs/plans/LAW_CALENDAR_PLAN.md | 원 계획과 실제 구조 차이, 결과 기록 |
+| docs/plans/LAW_CALENDAR_PLAN.md | 실제 구조 차이, 적용 사항 및 결과 기록 |
 | docs/evals/2026-11-05-law-calendar-phase1.md 및 README.md | 실제 검증 후 결과와 목록 기록 |
 
 FullCalendar·Tailwind·shadcn은 우선 추가하지 않는다. 선택 중심의 월간 grid를 기존 스타일로 구현하되 날짜 키보드 이동(방향키, Home/End, 월 이동), 윤년·월 경계·포커스 처리를 완료 기준에 넣는다. 접근성을 만족하지 못하면 달력 라이브러리 채택을 다시 판단한다.
+
+적용 사항:
+
+- 월간 grid와 두 목록, 개발용 상태 미리보기, 더 보기, 전체화면 모바일 dialog와 데스크톱 2열 비교를 구현했다.
+- 날짜 계산은 UTC 연산으로 KST 일자 문자열을 유지하고, 오늘은 Asia/Seoul에서 구한다. 날짜 클릭은 외부 수집이나 LLM을 호출하지 않는다.
+- `import.meta.env.DEV` 분기 안에서만 demo를 동적 import한다. production은 빈 데이터를 사용하며 query string으로 예시를 켤 수 없다. production 자산에서 합성 원문·고유 마커 부재를 브라우저 테스트로 검사한다.
+- 현재 diff는 원문을 그대로 보존한 단일 변경 구간 강조다. 항·호별 구조화 diff와 실제 법적 효력 검증은 후속 단계이며 이번 화면 타입은 공개 API 스키마가 아니다.
+- StrictMode의 effect 정리 중 발생하는 native close 이벤트가 새 dialog를 닫던 문제를 수정했다. native modal에 명시적 Tab 경계 처리를 더해 주소창으로 포커스가 빠지지 않도록 했다.
+- 기존 챗봇의 App.tsx, 인증·SSE·모니터링 런타임, 모델 서버 코드는 변경하지 않았다. main.tsx가 Root를 렌더링하며 /law-calendar(/) 외의 기존 경로는 App으로 간다.
+
+로컬 UI 확인은 frontend 폴더에서 `npm ci`, `npm run dev`를 실행하고 Vite가 표시하는 개발 주소의 `/law-calendar`로 접속한다. API 서버와 모델 서버는 필요하지 않다. 개발 예시는 KST 오늘에 배치한다. 일반 production 빌드는 예시 없는 빈 화면이며 실제 API 연결은 Phase 2 범위다.
 
 ## 8. Phase 2 이후 DB/API 전략 초안
 
@@ -128,7 +139,7 @@ Phase 1 DB migration은 없다. 후속 단계에서는 별도 calendar DB를 사
 
 ## 9. 검증 계획과 결과 기록
 
-아래는 실제 파일에서 확인한 후속 검증 명령이며 이번에는 실행하지 않았다. fish에서 heredoc 없이 실행할 수 있다.
+아래는 저장소 지원 환경의 검증 명령이다. Phase 0에서는 명령만 확인했고 Phase 1에서는 별도 Linux 테스트 venv로 동일 검사를 실행했다. 상세 환경 차이와 결과는 [검증 기록](../evals/2026-11-05-law-calendar-phase1.md)에 있다. fish에서 heredoc 없이 실행할 수 있다.
 
 ```fish
 cd services/chatbot/frontend
@@ -147,8 +158,8 @@ uv run pyright
 
 | 단계 | 작업 브랜치/커밋 | 주요 변경 파일 | 테스트 명령 | 결과 | 미해결 |
 | --- | --- | --- | --- | --- | --- |
-| Phase 0 | codex/law-calendar-phase0-20261105; 이 문서를 추가한 커밋 | docs/plans/LAW_CALENDAR_PLAN.md | 코드·문서 읽기 및 기준 커밋 재확인 | 실사 기록 완료 / 전체 완료 기준 미충족 | CONTEXT/첨부 파일 부재, 실제 이벤트 2유형 전체 추적 |
-| Phase 1 | 미시작 | 위 예상 목록 | 위 명령(미실행) | 미실행 | 계획 보고 후 별도 확인, 정상 개발 체크아웃 확보 |
+| Phase 0 | codex/law-calendar-phase0-20261105 / 0030cda | docs/plans/LAW_CALENDAR_PLAN.md | 코드·문서 읽기 및 기준 커밋 재확인 | 실사 기록 완료 / 전체 완료 기준 미충족 | CONTEXT/첨부 파일 부재, 실제 이벤트 2유형 전체 추적 |
+| Phase 1 | codex/law-calendar-phase0-20261105 / 이 결과 기록과 같은 구현 커밋 | 위 변경 목록 | npm typecheck/test/build, pytest, ruff, pyright, compileall | UI·로컬 검사 통과: frontend 32개, Python 753개(대역 E2E 포함) | 실제 API 미연결, 실제 모델 미실행, macOS CI 별도 확인, 기존 스케줄러 집계 검사 간헐 실패 이력 |
 | Phase 2 | 미시작 | 미정 | 미실행 | 미실행 | 공개 DB·승인·조회 계약 확정 |
 | Phase 3 | 미시작 | 미정 | 미실행 | 미실행 | 입법예고 키·응답 및 adapter |
 | Phase 4 | 미시작 | 미정 | 미실행 | 미실행 | 조항별 효력·공개 배포·백업·이용 조건 |

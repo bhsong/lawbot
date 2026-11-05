@@ -345,6 +345,8 @@ def test_spa_files_and_fallback(lawbot, tmp_path):
     with make_client(lawbot, dist=tmp_path) as c:
         assert 'spa' in c.get('/').text  # 로그인 화면은 SPA가 그린다
         assert 'spa' in c.get('/some/page').text
+        assert 'spa' in c.get('/law-calendar').text
+        assert c.get('/api/me').status_code == 401
         assert c.get('/assets/app.js').text == 'console.log(1)'
         assert c.get('/assets/none.js').status_code == 404
         assert c.get('/api/unknown').status_code == 404
