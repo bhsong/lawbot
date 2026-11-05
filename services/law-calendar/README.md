@@ -62,7 +62,7 @@ uv run --project services/law-calendar law-calendar --database services/law-cale
 
 기존 monitor의 `legalize_law` 이벤트 JSON과 원문 사본을 오프라인으로 가져온다. DB 초기화 명령은 새 DB 생성 및 기존 v1/v2 DB의 v3 업그레이드를 지원한다. 기존 DB는 `.pre-v3.backup`으로 백업하며 같은 이름의 백업을 덮어쓰지 않는다. 공개 서버를 새 코드로 실행하기 전에 마이그레이션을 수행한다.
 
-import는 명확한 최신 부칙의 절대 날짜·공포일 시행 또는 조문 전체의 구조화 시행 메타데이터를 자동 판정한다. 날짜가 확정되면 규칙 기반 요약과 함께 달력에 표시한다. 위임 표현·복잡한 부칙·부분 시행·상충·근거 부족은 보류한다. 자동 확인은 시행일에 한정되며 Git 구판·신판의 법적 효력 비교는 미검증으로 표시한다. 실제 외부 수집과 import 스케줄 등록은 별도 작업이다.
+import는 명확한 최신 부칙의 절대 날짜·공포일 시행 또는 조문 전체의 구조화 시행 메타데이터를 자동 판정한다. 날짜가 확정되면 규칙 기반 요약과 함께 달력에 표시한다. 위임 표현·복잡한 부칙·부분 시행·상충·근거 부족은 보류한다. 자동 확인은 시행일에 한정되며 Git 구판·신판의 법적 효력 비교는 미검증으로 표시한다.
 
 화면 상단의 **보류 목록** 버튼은 날짜와 무관한 보류 조문·사유·공식 원문 링크를 읽기 전용 dialog로 표시한다. 보류는 달력 건수에 포함되지 않는다. 빈 목록·로딩·오류 재시도·페이지 이동을 지원하며 수정·확정 기능은 제공하지 않는다. 조회 API는 `/api/law-holds?page=1&page_size=20`이다.
 
@@ -85,3 +85,17 @@ uv run --project services/law-calendar python -m law_calendar.manage --database 
 `decision`은 `approve`, `reject`, `withdraw`다. 반려·철회에는 현재 `event_id`, `snapshot_id`, `note`, `decision`만 있는 JSON을 사용할 수 있다. 수정한 원천을 재입력하면 새 snapshot으로 다시 판정하며 이전 snapshot의 검토 파일은 거절된다. 명시적으로 반려·철회한 이벤트는 재입력으로 자동 공개하지 않는다. 검토 이력과 원문 버전은 DB에 보존한다. 승인 도구는 신뢰하는 관리자의 로컬 DB 접근 권한으로만 실행하며 공개 HTTP 쓰기 API는 제공하지 않는다.
 
 동일 파일 재입력은 중복을 만들지 않는다. import 실패가 하나라도 있으면 종료 코드 1을 반환하고 `runs`에 원인을 기록한다. 수정 후 같은 명령을 다시 실행할 수 있다. 수집 시각은 가져온 원천의 감지 시각이며 import 실행 시각으로 갱신하지 않는다. 입법예고·행정규칙·서식 이벤트는 이 어댑터가 지원하지 않는다.
+
+## 06:30 모니터링과 정기 import
+
+기존 모니터링의 `daily`는 수집 직후 첫 점검으로 캘린더 sync를 실행하고, 기존 챗봇 점검·모델 요약으로 이어진다. 독립 API 환경과 DB를 사전에 준비하고 monitor launchd 템플릿의 `LAW_MONITOR_UV`·`LAW_CALENDAR_DB`를 지정한다. 같은 06:30 작업 안에서 순차 실행하므로 별도 캘린더 launchd 작업을 만들지 않는다. 템플릿은 Mac 시스템 시간대가 KST인 환경을 기준으로 한다.
+
+```fish
+uv sync --project services/law-calendar --locked
+uv run --project services/law-calendar python -m law_calendar.db $CALENDAR_DB
+uv run --project services/law-calendar --frozen --no-sync python -m law_calendar.sync --monitor-home $MONITOR_HOME --database $CALENDAR_DB
+```
+
+sync는 monitor state.db의 최신 정상 법령 수집과 등록된 이벤트 파일만 읽고 원천에 쓰지 않는다. 모델 요약의 처리 여부와 무관하게 재확인하며 과거 실패도 재시도한다. 성공하면 변경이 0건인 날에도 마지막 정상 수집 완료 시각을 기록한다. 수집/입력 실패는 종료 코드 2를 반환하고 신선도를 갱신하지 않는다. 실행 로그와 모니터링 요약의 점검 절에서 결과를 확인할 수 있다. DB가 없으면 자동 생성하지 않으며 실제 launchd 등록·운영 반영은 별도로 수행한다.
+
+입법예고 실수집·입력은 현재 지원하지 않으므로 공개 입법예고 패널에는 데이터가 없을 때 빈 상태 안내가 표시된다. 개발 예시는 production에 삽입되지 않는다.
