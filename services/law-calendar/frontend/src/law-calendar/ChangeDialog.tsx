@@ -23,6 +23,9 @@ export function ChangeDialog({ change, demo, onClose }: { change: CalendarChange
   }, [])
 
   const assembly = change.assembly
+  const notice = change.kind === 'notice'
+  const storedComparison = !change.comparable && (change.before !== null || change.after !== null)
+  const highlight = change.comparable || (change.before !== null && change.after !== null)
   const metadata = assembly ? [
     ['의안번호', assembly.billNo], ['소관기관', assembly.agency],
     ...(change.kind === 'notice'
@@ -60,17 +63,23 @@ export function ChangeDialog({ change, demo, onClose }: { change: CalendarChange
       <h2 id="lc-detail-title">{change.lawName} {change.article}</h2>
       <p className="lc-item-status">{change.status}</p>
       {change.summary && <p className="lc-detail-summary">{change.summary}</p>}
-      <p id="lc-detail-notice">{assembly ? '열린국회정보와 국회 공식 원문에서 확인한 내용입니다.' : change.kind === 'notice'
-        ? '입법예고안은 확정된 법령이 아닙니다. 게시 시점의 현행 조문과 개정안의 비교입니다.'
-        : '시행 직전과 이후의 유효 조문 비교입니다. 부칙·경과조치와 공식 원문을 함께 확인하세요.'}</p>
-      {!assembly && (change.comparable ? <div className="lc-comparison">
-        <section><h3>Before · {change.kind === 'notice' ? '게시 시점 현행' : '시행 직전'}</h3>
-          {change.before === null ? <p>신설 · 이전 조문 없음</p>
-            : <pre>{highlightedText(change.before, change.after ?? '', 'del')}</pre>}</section>
-        <section><h3>After · {change.kind === 'notice' ? '개정안' : '시행 이후'}</h3>
-          {change.after === null ? <p>삭제 · 이후 조문 없음</p>
-            : <pre>{highlightedText(change.after, change.before ?? '', 'ins')}</pre>}</section>
-      </div> : <p className="lc-warning">비교 불가 · 신뢰할 수 있는 이전/이후 원문을 확인해야 합니다.</p>)}
+      <p id="lc-detail-notice">{assembly ? '열린국회정보와 국회 공식 원문에서 확인한 내용입니다.' : notice
+        ? <>입법예고안은 확정된 법령이 아닙니다.{change.comparable && ' 게시 시점의 현행 조문과 개정안의 비교입니다.'}</>
+        : <>{change.comparable && '시행 직전과 이후의 유효 조문 비교입니다. '}부칙·경과조치와 공식 원문을 함께 확인하세요.</>}</p>
+      {!assembly && <>
+        {!change.comparable && <p className="lc-warning">{storedComparison
+          ? <><strong>저장 원문 비교</strong> · <span>{notice ? '게시 시점 효력 미검증' : '시행 전후 효력 미검증'}</span></>
+          : '비교 불가 · 저장된 원문이 없습니다.'}</p>}
+        {(change.comparable || storedComparison) && <div className="lc-comparison" role="group"
+          aria-label={storedComparison ? '저장 원문 비교' : '검증된 원문 비교'}>
+          <section><h3>Before · {storedComparison ? '저장 구판' : notice ? '게시 시점 현행' : '시행 직전'}</h3>
+            {change.before === null ? <p>{storedComparison ? '저장 구판 없음' : '신설 · 이전 조문 없음'}</p>
+              : <pre>{highlight ? highlightedText(change.before, change.after ?? '', 'del') : change.before}</pre>}</section>
+          <section><h3>After · {storedComparison ? '저장 신판' : notice ? '개정안' : '시행 이후'}</h3>
+            {change.after === null ? <p>{storedComparison ? '저장 신판 없음' : '삭제 · 이후 조문 없음'}</p>
+              : <pre>{highlight ? highlightedText(change.after, change.before ?? '', 'ins') : change.after}</pre>}</section>
+        </div>}
+      </>}
       <dl className="lc-metadata">{metadata.map(([label, value]) => <div key={label}><dt>{label}</dt><dd>{value ?? '확인되지 않음'}</dd></div>)}</dl>
       {change.sourceUrl && /^https:\/\//.test(change.sourceUrl)
         ? <a href={change.sourceUrl} target="_blank" rel="noopener noreferrer">공식 원문 확인 (새 창)</a>
