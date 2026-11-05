@@ -17,7 +17,7 @@ Phase 1 캘린더 실행에는 Node 또는 정적 호스팅만 필요하다. 후
 
 ## 독립 검증
 
-캘린더 브라우저 검사는 먼저 **pytest·httpx·Playwright만 설치된 최소 venv**에서 실행했다. 이때 Lawbot Python 패키지·MLX·torch와 모델 서버를 설치하거나 실행하지 않은 상태로 4개가 통과했다. 개발 모드는 Vite, production은 Python 표준 라이브러리 정적 파일 서버만 사용한다. 테스트 도우미가 다른 서비스 패키지나 챗봇 fixture를 import하지 않는다.
+캘린더 브라우저 검사는 먼저 **pytest·httpx·Playwright만 설치된 최소 venv**에서 실행했다. 이때 Lawbot Python 패키지·MLX·torch와 모델 서버를 설치하거나 실행하지 않은 상태로 4개가 통과했다. 최종 테스트 서버는 개발·production 모두 Vite를 사용하며 production은 빌드된 dist를 preview로 제공한다. 테스트 도우미가 다른 서비스 패키지나 챗봇 fixture를 import하지 않는다.
 
 확인한 항목:
 
@@ -41,11 +41,13 @@ Linux 개발 체크아웃, Node 26, Python 3.14.8, Playwright 1.64.1 Chromium을
 | ruff check / ruff format --check | 통과 |
 | pyright / compileall | 통과 |
 | 전체 기본 pytest | 분리 후 753 통과 / 기본 제외 12개 (92.44초). 단위·계약·통합·대역 및 독립 UI E2E 포함 |
-| macOS GitHub CI | 분리 변경 커밋 후 확인 예정 |
+| macOS GitHub CI | b185111은 752 통과 / production 정적 테스트 서버 준비 시간 초과 1건. 수정 후 확인 예정 |
 | 실제 모델 E2E / 모델 스모크 / 품질 평가 | 실행 안 함 |
 | 운영 반영 / DNS·일반 공개 배포 | 수행 안 함 |
 
 전체 회귀 venv 구성 시 pydantic과 pydantic-core 버전 불일치 및 python-dateutil의 전이 의존성 six 누락으로 수집 실패가 있었다. 패키지 이름의 하이픈/밑줄을 정규화해 버전을 uv.lock과 일치시키고 six를 설치했다. uv pip check에서 호환성을 확인한 뒤 전체 검사를 재실행했으며 환경 오류 결과를 통과로 세지 않았다.
+
+macOS CI의 b185111 실행에서는 Python 표준 라이브러리 production 정적 테스트 서버가 살아 있어도 준비 확인이 30초 안에 끝나지 않았다. 다른 752개는 통과했다. 준비 제한을 늘리거나 테스트를 건너뛰지 않고, 이미 CI에서 동작한 Vite의 정적 preview로 production 검사를 통일했다. 타임아웃에는 서버 로그도 포함하도록 수정했다. 이 서버는 테스트용이며 실제 배포에 Vite 프로세스가 필요한 것은 아니다.
 
 ## 이전 구현 검증 이력
 
@@ -60,3 +62,21 @@ Linux 개발 체크아웃, Node 26, Python 3.14.8, Playwright 1.64.1 Chromium을
 전체 회귀는 두 frontend를 각각 빌드한 뒤 루트에서 `uv run pytest`, `uv run ruff check`, `uv run ruff format --check`, `uv run pyright`, `uv run python -m compileall -q services packages tools`로 실행한다. CI도 두 frontend를 각각 검증한다.
 
 Phase 2 이후 공개 데이터·API·승인·실제 시행일을 검증해야 한다. 실제 법령 정보는 아직 연결하지 않아 production은 승인 데이터 연결 전 빈 화면이다. 고지문 법률 검토·재이용 조건 검토도 미완료다. PR 병합은 별도 사용자 명시적 승인 후에만 수행하고 운영 배포는 진행 중인 모델 학습 작업과 함께 추후 진행한다.
+
+## 병합 후 CI 수정 검증
+
+- 기준: PR #67 병합 커밋 d0fb7e7. 수정 브랜치: `codex/fix-law-calendar-ci-20261105`.
+- 원 PR CI 41954818300과 병합된 main CI 41964288413 모두 같은 production 정적 테스트 서버 준비 시간 초과로 752 통과 / 1 오류였다.
+- Python http.server 대신 Vite의 정적 preview로 테스트 서버를 통일하고 준비 실패 시 서버 로그를 포함했다. 검사 내용·30초 준비 제한·승인 데이터 보호 조건은 그대로다. 제품·챗봇·모델 서버 코드는 변경하지 않았다.
+- README의 단계·후속 계획 설명은 PLAN으로 옮겼다. 이 절은 실제 검증 결과만 기록한다.
+
+| 수정 후 검사 | 결과 |
+| --- | --- |
+| 캘린더 / 챗봇 typecheck·단위·build | 통과, 각각 12개 / 19개 |
+| 전체 기본 pytest | 753 통과 / 기본 제외 12개 (106.21초), 독립 캘린더 E2E 4개 포함 |
+| ruff check / format | 통과 |
+| pyright / compileall / uv lock --check | 통과 |
+| 챗봇 변경 없음·캘린더 코드 이동 완료 | 기준 main과 비교해 재확인 |
+| 수정 PR의 macOS CI | 새 커밋 후 확인 예정 |
+
+병합과 운영 배포, 실제 모델 호출은 수행하지 않았다.
