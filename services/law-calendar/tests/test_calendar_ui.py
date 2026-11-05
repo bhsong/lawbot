@@ -9,7 +9,11 @@ import pytest
 from playwright.sync_api import expect
 
 import calendar_ui_support as support
+from law_calendar.assembly_ingest import review_assembly
+from law_calendar.sync import synchronize
 from test_calendar_api import dataset as dataset
+from test_calendar_assembly import register
+from test_calendar_sync import scheduled as scheduled
 from test_calendar_workflow import approval, import_one
 from test_calendar_workflow import workflow as workflow
 
@@ -86,7 +90,7 @@ def test_date_selection_and_dialog_focus(demo, width):
     current = demo.get_by_role('button', pressed=True)
     current.focus()
     demo.keyboard.press('ArrowRight')
-    expect(demo.get_by_text('이 날짜에 게시된 입법예고가 없습니다.')).to_be_visible()
+    expect(demo.get_by_text('이 날짜에 표시할 입법예고가 없습니다.')).to_be_visible()
     expect(demo.get_by_text('이 날짜에 시행되는 조문이 없습니다.')).to_be_visible()
     demo.get_by_role('button', name='오늘', exact=True).click()
     notice = demo.get_by_role('region', name='입법예고 10건')
@@ -153,6 +157,37 @@ def test_database_to_public_calendar_and_comparison(dataset, tmp_path, calendar_
         page.get_by_role('button', pressed=True).focus()
         page.keyboard.press('ArrowRight')
         expect(page.get_by_role('region', name='시행 조문 1건')).to_be_visible()
+
+
+@pytest.mark.parametrize('width', [390, 1280])
+def test_assembly_notice_and_bill_dates_remain_separate(scheduled, tmp_path, calendar_page, width):
+    (database, home, _, _), state = scheduled
+    notice = register(home, state)
+    bill = register(home, state, source='assembly_bill', date='2026-11-05')
+    assert synchronize(database, home)['failed'] == 0
+    for item in (notice, bill):
+        review_assembly(database, item, 'approve', reviewer='tester', note='공식 날짜 확인')
+    page = calendar_page
+    page.set_viewport_size({'width': width, 'height': 900})
+    page.clock.install(time=datetime.datetime(2026, 11, 5, tzinfo=datetime.UTC))
+    with support.serve(tmp_path, development=False, database=database) as (url, _):
+        page.goto(url)
+        notice_panel = page.get_by_role('region', name='입법예고 1건')
+        expect(notice_panel.get_by_text('예고 종료일', exact=False)).to_be_visible()
+        bill_panel = page.get_by_role('region', name='법률안 1건')
+        expect(bill_panel.get_by_role('button')).to_contain_text('발의·제안일')
+        notice_panel.get_by_role('button').click()
+        dialog = page.get_by_role('dialog')
+        expect(dialog.get_by_text('소관위원회', exact=True)).to_be_visible()
+        expect(dialog.get_by_role('link', name='공식 원문 확인', exact=False)).to_have_attribute(
+            'href', 'https://pal.assembly.go.kr/napal/lgsltpa/lgsltpaOngoing/view.do?lgsltPaId=PRC_NOTICE'
+        )
+        page.keyboard.press('Escape')
+        expect(notice_panel.get_by_role('button')).to_be_focused()
+        page.get_by_role('button', pressed=True).focus()
+        page.keyboard.press('ArrowLeft')
+        expect(notice_panel.get_by_text('예고 시작일', exact=False)).to_be_visible()
+        expect(bill_panel).to_have_count(0)
 
 
 def test_review_cli_controls_public_browser_visibility(workflow, tmp_path, calendar_page):

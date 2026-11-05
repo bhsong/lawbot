@@ -34,7 +34,7 @@ test('selection updates both panels, empty dates, month navigation and today', a
   expect(await screen.findByText('예시 변경 요약')).toBeInTheDocument()
   expect(screen.getByText('예시 시행 요약')).toBeInTheDocument()
   await userEvent.click(screen.getByRole('button', { name: /^2026년 11월 6일/ }))
-  expect(screen.getByText('이 날짜에 게시된 입법예고가 없습니다.')).toBeInTheDocument()
+  expect(screen.getByText('이 날짜에 표시할 입법예고가 없습니다.')).toBeInTheDocument()
   expect(screen.getByText('이 날짜에 시행되는 조문이 없습니다.')).toBeInTheDocument()
   await userEvent.click(screen.getByRole('button', { name: '다음 달' }))
   expect(screen.getByRole('heading', { name: '2026년 12월' })).toBeInTheDocument()

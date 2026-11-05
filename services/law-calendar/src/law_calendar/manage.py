@@ -5,6 +5,7 @@ import json
 import sqlite3
 from pathlib import Path
 
+from law_calendar.assembly_ingest import inspect_assembly, list_assembly, review_assembly
 from law_calendar.db import read_database
 from law_calendar.ingest import import_files
 from law_calendar.review import inspect_event, review, review_template
@@ -25,6 +26,14 @@ def main():
     reviewer = sub.add_parser('review')
     reviewer.add_argument('manifest', type=Path)
     reviewer.add_argument('--reviewer', required=True)
+    sub.add_parser('assembly-list')
+    assembly_show = sub.add_parser('assembly-show')
+    assembly_show.add_argument('snapshot_id')
+    assembly_review = sub.add_parser('assembly-review')
+    assembly_review.add_argument('snapshot_id')
+    assembly_review.add_argument('decision', choices=['approve', 'reject', 'withdraw'])
+    assembly_review.add_argument('--reviewer', required=True)
+    assembly_review.add_argument('--note', required=True)
     args = parser.parse_args()
     failed = False
     try:
@@ -44,6 +53,13 @@ def main():
             result = inspect_event(args.database, args.event_id)
             if args.template:
                 result = review_template(result)
+        elif args.command == 'assembly-list':
+            result = list_assembly(args.database)
+        elif args.command == 'assembly-show':
+            result = inspect_assembly(args.database, args.snapshot_id)
+        elif args.command == 'assembly-review':
+            review_assembly(args.database, args.snapshot_id, args.decision, reviewer=args.reviewer, note=args.note)
+            result = {'decision': 'recorded'}
         else:
             review(args.database, json.loads(args.manifest.read_text(encoding='utf-8')), reviewer=args.reviewer)
             result = {'decision': 'recorded'}

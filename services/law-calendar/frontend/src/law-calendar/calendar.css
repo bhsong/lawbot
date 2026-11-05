@@ -41,6 +41,7 @@
 .lc-month button:hover, .lc-more:hover { background: var(--soft); }
 .lc-legend { display: flex; flex-wrap: wrap; gap: 12px; font-size: 12px; margin: 12px 0 16px; }
 .lc-page .lc-notice { color: var(--lc-blue); }
+.lc-page .lc-bill { color: #315e45; }
 .lc-page .lc-effective { color: var(--lc-orange); }
 .lc-month table { width: 100%; table-layout: fixed; border-collapse: collapse; }
 .lc-month th { font-size: 12px; color: var(--muted); font-weight: 500; padding: 8px; }
@@ -53,6 +54,7 @@
 .lc-day-counts { display: flex; flex-wrap: wrap; gap: 3px 6px; margin-top: 10px; font-size: 11px; font-weight: 600; }
 .lc-day-counts .lc-notice { background: var(--lc-blue-bg); }
 .lc-day-counts .lc-effective { background: var(--lc-orange-bg); }
+.lc-day-counts .lc-bill { background: #e3f2e8; }
 .lc-day-counts > span { padding: 1px 5px; border-radius: 4px; }
 .lc-caption { font-size: 12px; color: var(--muted); }
 .lc-key-help { margin-bottom: 0; }

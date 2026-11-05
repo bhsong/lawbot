@@ -1,6 +1,7 @@
 """Explicit, versioned SQLite initialization; serving never creates or changes a DB."""
 
 import argparse
+import os
 import sqlite3
 from contextlib import closing, contextmanager
 from pathlib import Path
@@ -106,6 +107,55 @@ CREATE VIEW public_holds AS
  OR e.source_url GLOB 'https://opinion.lawmaking.go.kr/*');
 """
 
+SCHEMA_V4 = """
+CREATE TABLE assembly_snapshots(
+ id TEXT PRIMARY KEY, source TEXT NOT NULL CHECK(source IN ('assembly_bill','assembly_notice')),
+ upstream_id TEXT NOT NULL, revision INTEGER NOT NULL CHECK(revision > 0),
+ title TEXT NOT NULL, agency TEXT, bill_no TEXT NOT NULL, status TEXT NOT NULL,
+ source_url TEXT NOT NULL, collected_at TEXT NOT NULL, event_json TEXT NOT NULL,
+ UNIQUE(source,upstream_id,revision)
+);
+CREATE TABLE assembly_entries(
+ id TEXT PRIMARY KEY, source TEXT NOT NULL, upstream_id TEXT NOT NULL,
+ snapshot_id TEXT NOT NULL REFERENCES assembly_snapshots(id),
+ review_state TEXT NOT NULL CHECK(review_state IN ('pending','approved','rejected','withdrawn')),
+ verified_at TEXT, UNIQUE(source,upstream_id)
+);
+CREATE TABLE assembly_dates(
+ snapshot_id TEXT NOT NULL REFERENCES assembly_snapshots(id),
+ role TEXT NOT NULL CHECK(role IN ('notice_start','notice_end','bill_proposed','bill_decided')),
+ event_on TEXT NOT NULL, PRIMARY KEY(snapshot_id,role)
+);
+CREATE INDEX assembly_date_index ON assembly_dates(event_on,snapshot_id);
+CREATE TABLE assembly_review_audit(
+ id INTEGER PRIMARY KEY, entry_id TEXT NOT NULL REFERENCES assembly_entries(id),
+ snapshot_id TEXT NOT NULL REFERENCES assembly_snapshots(id),
+ decision TEXT NOT NULL, reviewer TEXT NOT NULL, reviewed_at TEXT NOT NULL, note TEXT NOT NULL
+);
+CREATE TABLE assembly_collection_status(
+ source TEXT PRIMARY KEY, collected_at TEXT NOT NULL
+);
+CREATE VIEW public_assembly AS
+ SELECT e.id AS event_id, s.*, e.verified_at, d.event_on,
+ CASE WHEN s.source='assembly_notice' THEN 'notice' ELSE 'bill' END AS kind,
+ CASE WHEN COUNT(*)=1 THEN MIN(d.role)
+      WHEN s.source='assembly_notice' THEN 'notice_period' ELSE 'bill_proposed_decided' END AS date_role
+ FROM assembly_entries e JOIN assembly_snapshots s ON s.id=e.snapshot_id
+ JOIN assembly_dates d ON d.snapshot_id=s.id
+ WHERE e.review_state='approved' AND julianday(e.verified_at) IS NOT NULL
+ AND julianday(s.collected_at) IS NOT NULL AND date(d.event_on)=d.event_on
+ GROUP BY e.id,d.event_on;
+CREATE VIEW public_calendar_events AS
+ SELECT id,event_id,kind,event_on,law_name,article,summary,status,before_text,after_text,comparable,
+ published_on,promulgated_on,effective_on,comment_deadline,source_url,collected_at,verified_at,
+ NULL AS date_role,NULL AS agency,NULL AS bill_no,NULL AS assembly_json
+ FROM public_changes
+ UNION ALL
+ SELECT event_id || ':' || date_role,event_id,kind,event_on,title,'','',status,NULL,NULL,0,
+ NULL,NULL,NULL,NULL,source_url,collected_at,verified_at,date_role,agency,bill_no,event_json
+ FROM public_assembly;
+"""
+
 
 def migrate(path: Path) -> None:
     """Initialize or upgrade explicitly, backing up existing databases before DDL."""
@@ -114,22 +164,24 @@ def migrate(path: Path) -> None:
     existed = path.exists()
     with closing(sqlite3.connect(path, timeout=5)) as conn:
         version = conn.execute('PRAGMA user_version').fetchone()[0]
-        if version == 3:
+        if version == 4:
             return
-        if version not in (0, 1, 2) or (
+        if version not in (0, 1, 2, 3) or (
             version == 0 and conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchone()
         ):
             raise ValueError('Unsupported database schema; migration refused')
         if existed:
-            backup = path.with_suffix(path.suffix + ('.pre-v3.backup' if version else '.pre-v1.backup'))
-            if backup.exists():
-                raise FileExistsError('Migration backup already exists')
+            suffix = {0: '.pre-v1.backup', 1: '.pre-v3.backup', 2: '.pre-v3.backup', 3: '.pre-v4.backup'}
+            backup = path.with_suffix(path.suffix + suffix[version])
+            os.close(os.open(backup, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600))
             with closing(sqlite3.connect(backup)) as target:
                 conn.backup(target)
         conn.execute('PRAGMA journal_mode=WAL')
         conn.execute('PRAGMA foreign_keys=ON')
-        script = (SCHEMA if version == 0 else '') + (SCHEMA_V2 if version < 2 else '') + SCHEMA_V3
-        conn.executescript('BEGIN IMMEDIATE;\n' + script + '\nPRAGMA user_version=3; COMMIT;')
+        script = ''.join(
+            schema for index, schema in enumerate((SCHEMA, SCHEMA_V2, SCHEMA_V3, SCHEMA_V4)) if version <= index
+        )
+        conn.executescript('BEGIN IMMEDIATE;\n' + script + '\nPRAGMA user_version=4; COMMIT;')
 
 
 @contextmanager
@@ -138,7 +190,7 @@ def read_database(path: Path):
     try:
         conn.row_factory = sqlite3.Row
         conn.execute('PRAGMA query_only=ON')
-        if conn.execute('PRAGMA user_version').fetchone()[0] != 3:
+        if conn.execute('PRAGMA user_version').fetchone()[0] != 4:
             raise sqlite3.DatabaseError('Unsupported schema')
         yield conn
     finally:
@@ -151,7 +203,7 @@ def write_database(path: Path):
     with closing(sqlite3.connect(path.resolve().as_uri() + '?mode=rw', uri=True, timeout=5)) as conn:
         conn.row_factory = sqlite3.Row
         conn.execute('PRAGMA foreign_keys=ON')
-        if conn.execute('PRAGMA user_version').fetchone()[0] != 3:
+        if conn.execute('PRAGMA user_version').fetchone()[0] != 4:
             raise sqlite3.DatabaseError('Run the explicit database migration first')
         with conn:
             conn.execute('BEGIN IMMEDIATE')
