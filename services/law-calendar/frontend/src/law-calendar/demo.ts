@@ -1,5 +1,5 @@
 import { todayKst, shiftDay } from './dates'
-import type { CalendarChange, CalendarLoader } from './types'
+import type { CalendarChange, CalendarLoader, HoldLoader } from './types'
 
 /** Synthetic UI fixtures only; this marker must never occur in production assets. */
 const DEMO_ID = 'LAW_CALENDAR_SYNTHETIC_ONLY'
@@ -31,4 +31,11 @@ export const loadDemo: CalendarLoader = async (month, signal) => {
     { ...sample('effective', 3), after: null, summary: '조문 삭제 표시 예시' },
   ].filter((event) => event.date.startsWith(month))
   return { changes, demo: true, delayed: false, collectedAt: null, verifiedAt: null }
+}
+
+export const demoHolds: HoldLoader = async (page, signal) => {
+  if (signal.aborted) throw new DOMException('Aborted', 'AbortError')
+  return { items: page === 1 ? [{ id: `${DEMO_ID}-held`, lawName: '[예시] 가상 업무절차법', article: '제9조',
+    reason: '대통령령 등 별도로 정하는 시행일을 확인해야 합니다.', sourceUrl: 'https://www.law.go.kr/', collectedAt: day }] : [],
+    total: 1, page, page_size: 20 }
 }

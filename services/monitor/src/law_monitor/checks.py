@@ -9,16 +9,18 @@ monitor가 다른 패키지를 import하지 않고 결과만 받는다. 예: 챗
 """
 
 import logging
+import os
 import re
+import shutil
 import subprocess
 import sys
 from dataclasses import dataclass
 from pathlib import Path
 
 from law_monitor.config import ConfigError
-from law_monitor.paths import Paths
+from law_monitor.paths import SERVICE_DIR, Paths
 
-PLACEHOLDERS = ('bin', 'home', 'data', 'repos')
+PLACEHOLDERS = ('bin', 'home', 'data', 'repos', 'root', 'uv')
 TIMEOUT = 900  # 초. 조문 점검은 약 1분
 STATUS = {0: '이상 없음', 1: '확인 필요'}
 log = logging.getLogger('law_monitor')
@@ -76,6 +78,8 @@ def expand(command: tuple[str, ...], paths: Paths) -> list[str]:
         'home': str(paths.home),
         'data': str(paths.data),
         'repos': str(paths.repos),
+        'root': str(SERVICE_DIR.parents[1]),
+        'uv': os.environ.get('LAW_MONITOR_UV') or shutil.which('uv') or 'uv',
     }
     return [arg.format(**values) for arg in command]
 

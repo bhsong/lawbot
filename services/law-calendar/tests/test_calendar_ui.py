@@ -195,3 +195,34 @@ def test_review_cli_controls_public_browser_visibility(workflow, tmp_path, calen
                 page.get_by_role('button', name='상세 닫기').click()
             else:
                 expect(page.get_by_text('이 달에 공개 승인된', exact=False)).to_be_visible()
+
+
+@pytest.mark.parametrize('width', [390, 1280])
+def test_public_holds_dialog_is_undated_read_only_and_keyboard_accessible(workflow, tmp_path, calendar_page, width):
+    db, home, path, event = workflow
+    event['context']['addenda_added'] = ['제1조(시행일) 이 법은 대통령령으로 정하는 날부터 시행한다.']
+    path.write_text(json.dumps(event), encoding='utf-8')
+    import_one(workflow)
+    page = calendar_page
+    page.set_viewport_size({'width': width, 'height': 844})
+    page.clock.install(time=datetime.datetime(2026, 11, 5, tzinfo=datetime.UTC))
+    with support.serve(tmp_path, development=False, database=db) as (url, _):
+        page.goto(url)
+        expect(page.get_by_text('이 달에 공개 승인된', exact=False)).to_be_visible()
+        opener = page.get_by_role('button', name='보류 목록', exact=True)
+        opener.click()
+        dialog = page.get_by_role('dialog', name='보류 목록', exact=True)
+        expect(dialog).to_be_visible()
+        expect(dialog.get_by_text('총 3건', exact=False)).to_be_visible()
+        expect(dialog.get_by_text('대통령령 등 별도로', exact=False).first).to_be_visible()
+        expect(dialog.get_by_role('button', name='보류 목록 닫기')).to_be_focused()
+        assert dialog.get_by_role('textbox').count() == 0
+        assert dialog.get_by_role('button', name='확정', exact=False).count() == 0
+        assert dialog.evaluate('(el) => el.scrollWidth <= el.clientWidth')
+        page.keyboard.press('Shift+Tab')
+        assert dialog.evaluate('(el) => el.contains(document.activeElement)')
+        page.keyboard.press('Tab')
+        expect(dialog.get_by_role('button', name='보류 목록 닫기')).to_be_focused()
+        page.keyboard.press('Escape')
+        expect(dialog).not_to_be_visible()
+        expect(opener).to_be_focused()

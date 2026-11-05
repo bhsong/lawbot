@@ -38,7 +38,32 @@ def test_parse_checks_and_reject_bad_values():
 def test_repo_targets_yaml_has_article_check():
     from law_monitor.config import load
 
-    assert [c.name for c in load().checks] == ['챗봇 조문 데이터']
+    assert [c.name for c in load().checks] == ['법령 캘린더 import', '챗봇 조문 데이터']
+
+
+def test_calendar_check_uses_independent_project_and_launchd_uv(monkeypatch, tmp_path):
+    from law_monitor.config import load
+    from law_monitor.paths import SERVICE_DIR
+
+    monkeypatch.setenv('LAW_MONITOR_UV', '/explicit/uv')
+    check = load().checks[0]
+    command = checks.expand(check.command, Paths(tmp_path))
+    assert command[0] == '/explicit/uv'
+    assert command[command.index('--project') + 1] == str(SERVICE_DIR.parents[1] / 'services/law-calendar')
+    assert '--no-sync' in command
+    assert command[-3:] == ['law_calendar.sync', '--monitor-home', str(tmp_path)]
+
+
+def test_single_monitor_launchd_job_keeps_0630_and_supplies_calendar_configuration():
+    import plistlib
+
+    from law_monitor.paths import SERVICE_DIR
+
+    job = plistlib.loads((SERVICE_DIR / 'deploy/com.lawbot.monitor.plist.example').read_bytes())
+    assert job['StartCalendarInterval'] == {'Hour': 6, 'Minute': 30}
+    assert job['ProgramArguments'][-2:] == ['law-monitor', 'daily']
+    assert job['EnvironmentVariables']['LAW_MONITOR_UV'] == '__UV__'
+    assert job['EnvironmentVariables']['LAW_CALENDAR_DB'] == '__CALENDAR_DB__'
 
 
 def test_placeholders(tmp_path):
@@ -108,3 +133,54 @@ def test_cli_check_command(tmp_path, capsys):
     bad = repr(script('import sys; sys.exit(3)'))
     cfg.write_text(cfg.read_text(encoding='utf-8').replace(ok, bad), encoding='utf-8')
     assert cli.main(['--home', str(tmp_path / 'h'), '--config', str(cfg), 'check']) == 1
+
+
+@pytest.mark.parametrize('missing_database', [False, True])
+def test_daily_import_runs_after_collection_and_keeps_later_steps(tmp_path, monkeypatch, missing_database):
+    import sqlite3
+    from dataclasses import replace
+
+    from law_calendar.db import migrate
+    from law_monitor.lock import run_lock
+    from mon_helpers import LAW_PATH, SourceRepo, law_md, make_config, make_monitor
+
+    repo = SourceRepo(tmp_path / 'source')
+    repo.commit({LAW_PATH: law_md('근로기준법', {'제1조': '[예시] 이전'})}, 'initial')
+    db = tmp_path / 'calendar.db'
+    if not missing_database:
+        migrate(db)
+    later = tmp_path / 'later.txt'
+    config = replace(
+        make_config(repo),
+        checks=(
+            checks.Check(
+                'calendar',
+                (sys.executable, '-m', 'law_calendar.sync', '--monitor-home', '{home}', '--database', str(db)),
+            ),
+            checks.Check(
+                'later',
+                tuple(script(f'from pathlib import Path; Path({str(later)!r}).write_text("done"); print("later ok")')),
+            ),
+        ),
+    )
+    monitor = make_monitor(tmp_path, config)
+    monitor.bootstrap(only='legalize_law')
+    repo.commit({LAW_PATH: law_md('근로기준법', {'제1조': '[예시] 이후'})}, 'change')
+    calls = []
+
+    def summarize(mon, **kwargs):
+        assert later.read_text() == 'done'
+        assert [r.code for r in kwargs['checks']] == ([2, 0] if missing_database else [0, 0])
+        calls.append('summary')
+        return 0
+
+    monkeypatch.setattr(cli, '_summarize', summarize)
+    with run_lock(monitor.paths):
+        assert cli._daily(monitor, 'legalize_law') == (1 if missing_database else 0)
+    assert calls == ['summary']
+    if missing_database:
+        assert not db.exists()
+    else:
+        with sqlite3.connect(db) as conn:
+            assert conn.execute('SELECT COUNT(*) FROM change_events').fetchone()[0] == 1
+            assert conn.execute('SELECT COUNT(*) FROM collection_status').fetchone()[0] == 1

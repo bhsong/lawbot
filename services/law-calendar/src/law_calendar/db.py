@@ -88,6 +88,24 @@ CREATE TABLE import_runs(
 CREATE INDEX snapshots_event ON source_snapshots(event_id);
 """
 
+SCHEMA_V3 = """
+CREATE TABLE held_changes(
+ change_id TEXT PRIMARY KEY REFERENCES article_changes(id),
+ snapshot_id TEXT NOT NULL REFERENCES source_snapshots(id),
+ reason TEXT NOT NULL, rule_version TEXT NOT NULL
+);
+CREATE VIEW public_holds AS
+ SELECT c.id,l.name AS law_name,c.article,h.reason,e.source_url,e.collected_at
+ FROM held_changes h JOIN article_changes c ON c.id=h.change_id
+ JOIN change_events e ON e.id=c.event_id JOIN laws l ON l.id=e.law_id
+ JOIN event_sources s ON s.event_id=e.id AND s.snapshot_id=h.snapshot_id
+ JOIN change_versions v ON v.change_id=c.id AND v.snapshot_id=h.snapshot_id
+ WHERE c.review_state='pending' AND e.review_state IN ('pending','approved')
+ AND (e.source_url GLOB 'https://www.law.go.kr/*'
+ OR e.source_url GLOB 'https://law.go.kr/*'
+ OR e.source_url GLOB 'https://opinion.lawmaking.go.kr/*');
+"""
+
 
 def migrate(path: Path) -> None:
     """Initialize or upgrade explicitly, backing up existing databases before DDL."""
@@ -96,22 +114,22 @@ def migrate(path: Path) -> None:
     existed = path.exists()
     with closing(sqlite3.connect(path, timeout=5)) as conn:
         version = conn.execute('PRAGMA user_version').fetchone()[0]
-        if version == 2:
+        if version == 3:
             return
-        if version not in (0, 1) or (
+        if version not in (0, 1, 2) or (
             version == 0 and conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchone()
         ):
             raise ValueError('Unsupported database schema; migration refused')
         if existed:
-            backup = path.with_suffix(path.suffix + ('.pre-v2.backup' if version == 1 else '.pre-v1.backup'))
+            backup = path.with_suffix(path.suffix + ('.pre-v3.backup' if version else '.pre-v1.backup'))
             if backup.exists():
                 raise FileExistsError('Migration backup already exists')
             with closing(sqlite3.connect(backup)) as target:
                 conn.backup(target)
         conn.execute('PRAGMA journal_mode=WAL')
         conn.execute('PRAGMA foreign_keys=ON')
-        script = (SCHEMA if version == 0 else '') + SCHEMA_V2
-        conn.executescript('BEGIN IMMEDIATE;\n' + script + '\nPRAGMA user_version=2; COMMIT;')
+        script = (SCHEMA if version == 0 else '') + (SCHEMA_V2 if version < 2 else '') + SCHEMA_V3
+        conn.executescript('BEGIN IMMEDIATE;\n' + script + '\nPRAGMA user_version=3; COMMIT;')
 
 
 @contextmanager
@@ -120,7 +138,7 @@ def read_database(path: Path):
     try:
         conn.row_factory = sqlite3.Row
         conn.execute('PRAGMA query_only=ON')
-        if conn.execute('PRAGMA user_version').fetchone()[0] != 2:
+        if conn.execute('PRAGMA user_version').fetchone()[0] != 3:
             raise sqlite3.DatabaseError('Unsupported schema')
         yield conn
     finally:
@@ -133,7 +151,7 @@ def write_database(path: Path):
     with closing(sqlite3.connect(path.resolve().as_uri() + '?mode=rw', uri=True, timeout=5)) as conn:
         conn.row_factory = sqlite3.Row
         conn.execute('PRAGMA foreign_keys=ON')
-        if conn.execute('PRAGMA user_version').fetchone()[0] != 2:
+        if conn.execute('PRAGMA user_version').fetchone()[0] != 3:
             raise sqlite3.DatabaseError('Run the explicit database migration first')
         with conn:
             conn.execute('BEGIN IMMEDIATE')

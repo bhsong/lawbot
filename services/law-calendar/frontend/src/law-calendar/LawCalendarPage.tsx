@@ -3,6 +3,7 @@ import { ChangeDialog } from './ChangeDialog'
 import { loadCalendar, loadChange } from './data'
 import { dateLabel, todayKst } from './dates'
 import { EventList } from './EventList'
+import { HoldDialog } from './HoldDialog'
 import { MonthCalendar } from './MonthCalendar'
 import type { CalendarChange, CalendarLoader, CalendarSnapshot } from './types'
 import './calendar.css'
@@ -17,6 +18,7 @@ export default function LawCalendarPage({ loader = loadCalendar, initialDate }: 
   const [attempt, setAttempt] = useState(0)
   const [scenario, setScenario] = useState<Scenario>('normal')
   const [opened, setOpened] = useState<CalendarChange | null>(null)
+  const [holdsOpen, setHoldsOpen] = useState(false)
   const detailRequest = useRef<AbortController | null>(null)
   const [detailPending, setDetailPending] = useState(false)
   const [detailError, setDetailError] = useState(false)
@@ -75,6 +77,7 @@ export default function LawCalendarPage({ loader = loadCalendar, initialDate }: 
     <header className="lc-header">
       <div><p className="lc-eyebrow">LAWBOT / LAW CALENDAR</p><h1>법령 변경 캘린더</h1>
         <p className="lc-subtitle">게시된 예고와 시행되는 조문을 날짜별로 확인하세요.</p></div>
+      <button type="button" className="lc-more" onClick={() => { detailRequest.current?.abort(); setDetailPending(false); setOpened(null); setHoldsOpen(true) }}>보류 목록</button>
     </header>
     <aside className="lc-disclaimer" aria-label="법령 정보 이용 안내">{DISCLAIMER}</aside>
     {import.meta.env.DEV && <details className="lc-preview"><summary>개발용 예시 화면 설정</summary>
@@ -111,5 +114,6 @@ export default function LawCalendarPage({ loader = loadCalendar, initialDate }: 
         <a href="https://opinion.lawmaking.go.kr/" target="_blank" rel="noopener noreferrer">국민참여입법센터 ↗</a></nav>
     </footer>
     {opened && <ChangeDialog change={opened} demo={snapshot?.demo ?? false} onClose={() => setOpened(null)} />}
+    {holdsOpen && <HoldDialog demo={snapshot?.demo ?? false} onClose={() => setHoldsOpen(false)} />}
   </main>
 }
