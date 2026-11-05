@@ -2,7 +2,7 @@
 
 import argparse
 import sqlite3
-from contextlib import contextmanager
+from contextlib import closing, contextmanager
 from pathlib import Path
 
 SCHEMA = """
@@ -52,27 +52,66 @@ CREATE VIEW public_changes AS
  OR e.kind='effective' AND c.effective_on IS NOT NULL);
 """
 
+SCHEMA_V2 = """
+CREATE TABLE source_snapshots(
+ id TEXT PRIMARY KEY, event_id TEXT NOT NULL REFERENCES change_events(id),
+ raw_event TEXT NOT NULL, files_json TEXT NOT NULL, parser_version TEXT NOT NULL,
+ collected_at TEXT NOT NULL, imported_at TEXT NOT NULL
+);
+CREATE TABLE event_sources(
+ event_id TEXT PRIMARY KEY REFERENCES change_events(id), source TEXT NOT NULL,
+ upstream_id TEXT NOT NULL, snapshot_id TEXT NOT NULL REFERENCES source_snapshots(id),
+ UNIQUE(source,upstream_id)
+);
+CREATE TABLE law_versions(
+ id TEXT PRIMARY KEY, law_id TEXT NOT NULL REFERENCES laws(id),
+ snapshot_id TEXT NOT NULL REFERENCES source_snapshots(id), side TEXT NOT NULL,
+ version_key TEXT NOT NULL, raw_text TEXT NOT NULL, content_hash TEXT NOT NULL
+);
+CREATE TABLE article_versions(
+ id TEXT PRIMARY KEY, law_version_id TEXT NOT NULL REFERENCES law_versions(id),
+ article TEXT NOT NULL, raw_text TEXT NOT NULL
+);
+CREATE TABLE change_versions(
+ change_id TEXT PRIMARY KEY REFERENCES article_changes(id),
+ snapshot_id TEXT NOT NULL REFERENCES source_snapshots(id),
+ before_version_id TEXT REFERENCES article_versions(id), after_version_id TEXT REFERENCES article_versions(id)
+);
+CREATE TABLE review_details(
+ audit_id INTEGER PRIMARY KEY REFERENCES review_audit(id),
+ snapshot_id TEXT NOT NULL REFERENCES source_snapshots(id), payload_json TEXT NOT NULL
+);
+CREATE TABLE import_runs(
+ id TEXT PRIMARY KEY, started_at TEXT NOT NULL, finished_at TEXT NOT NULL,
+ imported INTEGER NOT NULL, unchanged INTEGER NOT NULL, failed INTEGER NOT NULL, errors_json TEXT NOT NULL
+);
+CREATE INDEX snapshots_event ON source_snapshots(event_id);
+"""
+
 
 def migrate(path: Path) -> None:
-    """Initialize v1 atomically, retaining an existing database as a SQLite backup."""
+    """Initialize or upgrade explicitly, backing up existing databases before DDL."""
     path = path.resolve()
     path.parent.mkdir(parents=True, exist_ok=True)
     existed = path.exists()
-    with sqlite3.connect(path) as conn:
+    with closing(sqlite3.connect(path, timeout=5)) as conn:
         version = conn.execute('PRAGMA user_version').fetchone()[0]
-        if version == 1:
+        if version == 2:
             return
-        if version != 0 or conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchone():
+        if version not in (0, 1) or (
+            version == 0 and conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchone()
+        ):
             raise ValueError('Unsupported database schema; migration refused')
         if existed:
-            backup = path.with_suffix(path.suffix + '.pre-v1.backup')
+            backup = path.with_suffix(path.suffix + ('.pre-v2.backup' if version == 1 else '.pre-v1.backup'))
             if backup.exists():
                 raise FileExistsError('Migration backup already exists')
-            with sqlite3.connect(backup) as target:
+            with closing(sqlite3.connect(backup)) as target:
                 conn.backup(target)
         conn.execute('PRAGMA journal_mode=WAL')
         conn.execute('PRAGMA foreign_keys=ON')
-        conn.executescript('BEGIN IMMEDIATE;\n' + SCHEMA + '\nPRAGMA user_version=1; COMMIT;')
+        script = (SCHEMA if version == 0 else '') + SCHEMA_V2
+        conn.executescript('BEGIN IMMEDIATE;\n' + script + '\nPRAGMA user_version=2; COMMIT;')
 
 
 @contextmanager
@@ -81,11 +120,24 @@ def read_database(path: Path):
     try:
         conn.row_factory = sqlite3.Row
         conn.execute('PRAGMA query_only=ON')
-        if conn.execute('PRAGMA user_version').fetchone()[0] != 1:
+        if conn.execute('PRAGMA user_version').fetchone()[0] != 2:
             raise sqlite3.DatabaseError('Unsupported schema')
         yield conn
     finally:
         conn.close()
+
+
+@contextmanager
+def write_database(path: Path):
+    """Serialize offline imports/reviews; never create or migrate an implicit DB."""
+    with closing(sqlite3.connect(path.resolve().as_uri() + '?mode=rw', uri=True, timeout=5)) as conn:
+        conn.row_factory = sqlite3.Row
+        conn.execute('PRAGMA foreign_keys=ON')
+        if conn.execute('PRAGMA user_version').fetchone()[0] != 2:
+            raise sqlite3.DatabaseError('Run the explicit database migration first')
+        with conn:
+            conn.execute('BEGIN IMMEDIATE')
+            yield conn
 
 
 def main():
