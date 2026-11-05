@@ -1,0 +1,12 @@
+[project]
+name = "law-calendar"
+version = "0.1.0"
+requires-python = ">=3.14"
+dependencies = ["fastapi==0.143.3", "uvicorn==0.54.0"]
+
+[project.scripts]
+law-calendar = "law_calendar.server:main"
+
+[build-system]
+requires = ["uv_build>=0.12.19,<0.13.0"]
+build-backend = "uv_build"

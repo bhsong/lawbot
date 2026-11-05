@@ -31,6 +31,12 @@ jobs:
       - name: 문법 검사 (테스트가 import하지 않는 평가 스크립트 포함)
         run: uv run python -m compileall -q services packages tools
 
+      - name: 독립 캘린더 API 설치
+        run: uv pip install --no-deps -e services/law-calendar
+
+      - name: 독립 캘린더 API 타입 검사
+        run: uv run pyright services/law-calendar/src && uv run python -m law_calendar.schema --check
+
       - name: 린트 (ruff, 설정은 pyproject.toml)
         run: uv run ruff check --output-format=github
 

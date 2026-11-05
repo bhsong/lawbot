@@ -1,9 +1,12 @@
 """Run the public calendar at its own origin with no Lawbot backend available."""
 
+import datetime
+
 import pytest
 from playwright.sync_api import expect
 
 import calendar_ui_support as support
+from test_calendar_api import dataset as dataset
 
 pytest_plugins = ['calendar_test_fixtures']
 pytestmark = [pytest.mark.e2e_stub, pytest.mark.usefixtures('calendar_network')]
@@ -35,13 +38,25 @@ def demo(development, calendar_page, request):
 def test_standalone_production_needs_no_login_or_backend(production, calendar_page, request):
     page = calendar_page
     url, log = production
+    page.route(
+        '**/api/law-**',
+        lambda route: route.fulfill(
+            json=(
+                {'collectedAt': None, 'verifiedAt': None, 'delayed': False}
+                if 'status' in route.request.url
+                else {'items': [], 'total': 0, 'page': 1}
+                if 'law-events' in route.request.url
+                else {'days': []}
+            )
+        ),
+    )
     calls = []
     page.on('request', lambda req: calls.append(req.url) if '/api/' in req.url else None)
     try:
         response = page.goto(url + '/?demo=true')
         expect(page.get_by_role('heading', name='법령 변경 캘린더', exact=True)).to_be_visible()
-        expect(page.get_by_text('승인 데이터 연결 전', exact=False)).to_be_visible()
-        assert calls == [], calls
+        expect(page.get_by_text('이 달에 공개 승인된', exact=False)).to_be_visible()
+        assert len(calls) == 3 and all('/api/law-' in url for url in calls)
         assert response is not None and response.status == 200
         assert 'set-cookie' not in response.headers
         assert page.context.cookies() == []
@@ -114,3 +129,22 @@ def test_preview_loading_error_and_delay_states(demo):
     expect(demo.get_by_role('region', name='입법예고 10건')).to_be_visible()
     scenario.select_option('delayed')
     expect(demo.get_by_role('status').filter(has_text='갱신이 지연')).to_be_visible()
+
+
+def test_database_to_public_calendar_and_comparison(dataset, tmp_path, calendar_page):
+    page = calendar_page
+    page.clock.install(time=datetime.datetime(2026, 11, 5, tzinfo=datetime.UTC))
+    with support.serve(tmp_path, development=False, database=dataset) as (url, _):
+        page.goto(url)
+        expect(page.get_by_text('예시 요약').first).to_be_visible()
+        expect(page.get_by_role('button', pressed=True)).to_contain_text('예고 1')
+        page.get_by_role('region', name='시행 조문 1건').get_by_role('button').click()
+        detail = page.get_by_role('dialog')
+        expect(detail.get_by_text('원문 이전', exact=True)).to_be_visible()
+        expect(detail.get_by_role('link', name='공식 원문 확인', exact=False)).to_have_attribute(
+            'href', 'https://www.law.go.kr/법령/예시'
+        )
+        page.get_by_role('button', name='상세 닫기').click()
+        page.get_by_role('button', pressed=True).focus()
+        page.keyboard.press('ArrowRight')
+        expect(page.get_by_role('region', name='시행 조문 1건')).to_be_visible()
