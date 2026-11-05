@@ -5,7 +5,7 @@ import json
 import pytest
 from fastapi.testclient import TestClient
 
-from law_calendar.automation import article_kind, read_schedule, resolve_changes
+from law_calendar.automation import article_kind, read_schedule, resolve_changes, resolve_date
 from law_calendar.ingest import import_files
 from law_calendar.server import create_app
 from test_calendar_workflow import workflow as workflow
@@ -166,6 +166,97 @@ def test_same_law_prior_amendment_requires_matching_version_annotations(mark, it
     changes = resolve_changes(raw, '제10조', before, after, order, evidence, document)
     change = next(change for change in changes if change.article == f'제10조 {scope.removeprefix("제10조")}')
     assert change.day == expected
+
+
+def test_prior_amendment_evidence_does_not_cross_changed_paragraphs():
+    raw = {
+        'target': {'law_name': '가상법'},
+        'dates': {'promulgation': '2026-04-07'},
+        'context': {
+            'source_url': 'https://www.law.go.kr/법령/예시',
+            'addenda_added': [
+                '이 법은 공포한 날부터 시행한다. 다만, '
+                '법률 제123호 가상법 일부개정법률 제10조의 개정규정은 2027년 1월 1일부터 시행한다.'
+            ],
+        },
+    }
+    document = "---\n공포번호: '124'\n---\n\n부칙 <제123호,2025.4.7>\n\n이 법은 2027년 1월 1일부터 시행한다."
+    before = '##### 제10조\n\n**①** 종전 본문 <신설 2025.4.7>\n\n**②** 종전 조항 <신설 2025.5.7>\n'
+    after = before.replace('종전', '개정').replace('>', ', 2026.4.7>')
+    order = ('제10조',)
+    evidence = read_schedule(raw, order, new_document=document)
+    changes = resolve_changes(raw, '제10조', before, after, order, evidence, document)
+    by_date = {change.day: change for change in changes}
+    assert by_date['2027-01-01'].after == '**①** 개정 본문 <신설 2025.4.7, 2026.4.7>\n\n'
+    assert by_date[None].after == '**②** 개정 조항 <신설 2025.5.7, 2026.4.7>\n'
+
+
+def test_cited_paragraph_replacement_covers_removed_items_with_compatible_history():
+    raw = {
+        'target': {'law_name': '가상법'},
+        'dates': {'promulgation': '2026-04-07'},
+        'context': {
+            'source_url': 'https://www.law.go.kr/법령/예시',
+            'addenda_added': [
+                '이 법은 공포한 날부터 시행한다. 다만, '
+                '법률 제123호 가상법 일부개정법률 제10조제1항의 개정규정은 2027년 1월 1일부터 시행한다.'
+            ],
+        },
+    }
+    document = "---\n공포번호: '124'\n---\n\n부칙 <제123호,2025.4.7>\n\n이 법은 2027년 1월 1일부터 시행한다."
+    before = (
+        '##### 제10조\n\n**①** 종전 본문 <신설 2025.4.7>\n\n'
+        '  1\\. 종전 제1호\n\n  2\\. 별도 개정된 제2호 <신설 2025.5.7>\n'
+    )
+    after = '##### 제10조\n\n**①** 개정 본문 <개정 2026.4.7>\n'
+    order = ('제10조',)
+    evidence = read_schedule(raw, order, new_document=document)
+    changes = resolve_changes(raw, '제10조', before, after, order, evidence, document)
+    by_date = {change.day: change for change in changes}
+    assert '종전 제1호' in by_date['2027-01-01'].before
+    assert '별도 개정된 제2호' not in by_date['2027-01-01'].before
+    assert by_date[None].article == '제10조 제1항제2호'
+
+
+@pytest.mark.parametrize('annex', ['별표 1', '별지 제1호서식'])
+def test_annex_item_does_not_take_the_preceding_article_reference(annex):
+    raw = {
+        'dates': {'promulgation': '2026-04-07'},
+        'context': {
+            'source_url': 'https://www.law.go.kr/법령/예시',
+            'addenda_added': [
+                '이 법은 공포한 날부터 시행한다. 다만, '
+                f'제10조제1항제1호, {annex} 제1호 및 제2호, 제11조의 개정규정은 2027년 1월 1일부터 시행한다.'
+            ],
+        },
+    }
+    before = '##### 제10조\n\n**①** 같은 본문\n\n  1\\. 종전 제1호\n\n  2\\. 종전 제2호\n'
+    after = before.replace('종전', '개정')
+    order = ('제10조', '제11조')
+    evidence = read_schedule(raw, order)
+    changes = resolve_changes(raw, '제10조', before, after, order, evidence, '')
+    by_date = {change.day: change for change in changes}
+    assert by_date['2027-01-01'].after == '  1\\. 개정 제1호\n\n'
+    assert by_date['2026-04-07'].after == '  2\\. 개정 제2호\n'
+    assert resolve_date(raw, '제11조', order, evidence)[0] == '2027-01-01'
+
+
+@pytest.mark.parametrize(
+    'period,expected',
+    [('부터', None), ('부터 2028년 1월 1일까지', None), ('까지', '2026-04-07')],
+)
+def test_later_effect_start_is_not_treated_as_an_expiration(period, expected):
+    raw = {
+        'dates': {'promulgation': '2026-04-07'},
+        'context': {
+            'source_url': 'https://www.law.go.kr/법령/예시',
+            'addenda_added': [
+                '제1조(시행일) 이 법은 공포한 날부터 시행한다.\n'
+                f'제2조(경과조치) 제10조의 개정규정은 2027년 1월 1일{period} 효력을 가진다.'
+            ],
+        },
+    }
+    assert resolve_date(raw, '제10조', ('제10조',))[0] == expected
 
 
 def test_pending_backfill_keeps_future_fragments_and_unresolved_candidates(workflow):

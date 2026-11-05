@@ -7,6 +7,7 @@ from itertools import pairwise
 ARTICLE = r'제\d+조(?:의\d+)*'
 PART_NUMBER = r'제?\d+[항호](?:의\d+)*'
 PART = re.compile(rf'{PART_NUMBER}|[가-힣]목')
+RELATIVE_PART = re.compile(rf'{PART.pattern}|같은[항호목]')
 RANK = {'항': 0, '호': 1, '목': 2}
 TITLE = re.compile(r'제\d+장(?:의\d+)*(?:제\d+절(?:의\d+)*)?의제목')
 EARLIER = re.compile(
@@ -79,6 +80,7 @@ def parse_targets(text: str, order: Sequence[str], law: str) -> tuple[dict[str, 
     previous: tuple[str, ...] = ()
     uses_order = False
     earlier = ''
+    non_article = False
     for label in split_targets(text):
         if prefix := EARLIER.match(label):
             earlier = prefix[1] if ''.join(prefix[2].split()) == ''.join(law.split()) else 'other'
@@ -92,10 +94,15 @@ def parse_targets(text: str, order: Sequence[str], law: str) -> tuple[dict[str, 
         closes_earlier = label.endswith('의')
         if closes_earlier:
             label = label[:-1]
-        if label.startswith(('별표', '별지', '부칙')) or TITLE.fullmatch(label):
+        outside_article = label.startswith(('별표', '별지', '부칙')) or TITLE.fullmatch(label) is not None
+        if outside_article:
+            previous = ()
+            non_article = True
+        if outside_article or (non_article and RELATIVE_PART.match(label)):
             if closes_earlier:
                 earlier = ''
             continue
+        non_article = False
         if interval := RANGE.fullmatch(re.split(r'[("“]', label, maxsplit=1)[0]):
             start = _reference(interval[1], previous)
             stop = _reference(interval[2].removesuffix('까지'), start[0]) if start and not start[1] else None

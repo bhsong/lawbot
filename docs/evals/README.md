@@ -4,6 +4,7 @@
 
 ## 기록 목록
 
+- **PR #75 캘린더 리뷰 반영 검증 (2026-11-06)** — 개정 20건 재입력 후 보류 5건 및 공개 일정·Before/After 60건을 API·Chromium에서 재확인 → [기록](2026-11-06-calendar-effective-schedule-review.md)
 - **v5 법령 캘린더 시행일·신구 원문 검증 (2026-11-06)** — 개발 DB 재처리 후 보류 33→5건, 시행 일정 31→60건. Chromium에서 60건의 저장 원문과 보류 5건 대조 → [기록](2026-11-06-calendar-effective-schedule-v5.md)
 
 - **국회 수집기 강제 bootstrap 회귀 검증 (2026-11-05)** — 비교 스냅샷 갱신과 관측 순번 보존, 동일 응답 이벤트 0건, 기본 테스트 852개 통과 → [기록](2026-11-05-assembly-force-bootstrap.md)

@@ -13,7 +13,10 @@ from law_calendar.effective_scope import ARTICLE, parse_targets
 ARTICLE_PREFIX = re.compile(ARTICLE)
 HEADING = re.compile(r'^부칙(?:[ \t]*<[^>\n]+>)?[ \t]*\r?\n')
 LATER_ARTICLE = re.compile(r'^[ \t]*제(?:[2-9]|[1-9]\d+)조\s*\(([^)\n]+)\)', re.MULTILINE)
-LATER_DATE_RULE = re.compile(r'시행일\s*(?:은|을|[:：])|시행(?:한다|하고|하며|하되)|효력(?:이|을)\s*발생')
+LATER_DATE_RULE = re.compile(
+    r'시행일\s*(?:은|을|[:：])|시행(?:한다|하고|하며|하되)|효력(?:이|을)\s*발생'
+    r'|(?:부터[^.]*?까지\s*|(?P<expiry>까지\s*))?효력(?:이|을)\s*가진'
+)
 DELEGATED = re.compile(r'(?:대통령령|부령|조례|규칙)으로\s*정하|(?:따로|별도로)\s*정하|정하는\s*날')
 MAIN = re.compile(r'(?:제1조\s*\(시행일\)\s*)?(?:①\s*)?이 (?:법|영|규칙)은 (.+?)부터 시행한다\.')
 PROVISO = re.compile(r'(.+?(?:개정규정))(?:은|는) (.+?)부터|(.+)(?:은|는) (.+?)부터')
@@ -130,9 +133,10 @@ def parse_schedule(
             )
             for match in later
         ) or any(
-            LATER_DATE_RULE.search(clause)
+            not rule['expiry']
             for match, clause in zip(later, related, strict=True)
             if match[1] not in {'다른 법률의 개정', '다른 법령의 개정'}
+            for rule in LATER_DATE_RULE.finditer(clause)
         ):
             return None, 'complex'
         text = text[: starts[0]]

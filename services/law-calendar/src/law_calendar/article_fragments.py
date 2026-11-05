@@ -91,6 +91,11 @@ def _covers(target: Path, path: Path, body: bool, last: Path | None = None) -> b
     return not paragraph or paragraph == path[0]
 
 
+def scope_contains(parent: str, child: str) -> bool:
+    outer, inner = _scope_path(parent), _scope_path(child)
+    return bool(outer and inner and outer[0] != inner[0] and _covers(outer[0], inner[0], outer[1]))
+
+
 def exclusive_parent_text(before: str, after: str, scope: str) -> Fragment | None:
     """Find a parent whose substantive changes all belong to the specified child."""
     target, old, new = _scope_path(scope), _parts(before), _parts(after)
