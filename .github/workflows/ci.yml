@@ -46,7 +46,9 @@ jobs:
         with:
           node-version-file: services/chatbot/frontend/.nvmrc
           cache: npm
-          cache-dependency-path: services/chatbot/frontend/package-lock.json
+          cache-dependency-path: |
+            services/chatbot/frontend/package-lock.json
+            services/law-calendar/frontend/package-lock.json
 
       - name: 새 화면 의존성 설치 (package-lock.json 그대로)
         working-directory: services/chatbot/frontend
@@ -63,6 +65,14 @@ jobs:
       - name: 새 화면 빌드 (대역 E2E가 dist를 씀)
         working-directory: services/chatbot/frontend
         run: npm run build
+
+      - name: 독립 캘린더 의존성 설치
+        working-directory: services/law-calendar/frontend
+        run: npm ci
+
+      - name: 독립 캘린더 타입 검사·단위 테스트·빌드
+        working-directory: services/law-calendar/frontend
+        run: npm run typecheck && npm test && npm run build
 
       - name: 브라우저 캐시 (브라우저 E2E e2e_stub용 Chromium)
         uses: actions/cache@v6

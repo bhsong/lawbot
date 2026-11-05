@@ -52,7 +52,6 @@ export default function LawCalendarPage({ loader = loadCalendar, initialDate }: 
     <header className="lc-header">
       <div><p className="lc-eyebrow">LAWBOT / LAW CALENDAR</p><h1>법령 변경 캘린더</h1>
         <p className="lc-subtitle">게시된 예고와 시행되는 조문을 날짜별로 확인하세요.</p></div>
-      <a className="lc-chat-link" href="/">Lawbot 챗봇 ↗</a>
     </header>
     <aside className="lc-disclaimer" aria-label="법령 정보 이용 안내">{DISCLAIMER}</aside>
     {import.meta.env.DEV && <details className="lc-preview"><summary>개발용 예시 화면 설정</summary>

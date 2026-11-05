@@ -16,6 +16,19 @@ const snapshot: CalendarSnapshot = {
 }
 const loader: CalendarLoader = async () => snapshot
 
+test('public calendar has no chatbot navigation or authentication requests', async () => {
+  const fetch = vi.fn()
+  vi.stubGlobal('fetch', fetch)
+  try {
+    render(<LawCalendarPage loader={loader} initialDate="2026-11-05" />)
+    await screen.findByText('예시 변경 요약')
+    expect(screen.queryByRole('link', { name: /Lawbot 챗봇/ })).not.toBeInTheDocument()
+    expect(fetch).not.toHaveBeenCalled()
+  } finally {
+    vi.unstubAllGlobals()
+  }
+})
+
 test('selection updates both panels, empty dates, month navigation and today', async () => {
   render(<LawCalendarPage loader={loader} initialDate="2026-11-05" />)
   expect(await screen.findByText('예시 변경 요약')).toBeInTheDocument()

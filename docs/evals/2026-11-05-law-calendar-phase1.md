@@ -1,75 +1,62 @@
 # 법령 변경 캘린더 Phase 1 UI 검증
 
 - 작성일: 2026-11-05 (UTC)
-- 브랜치: `codex/law-calendar-phase0-20261105`
-- 기준 커밋: `0030cda` + 이 기록과 함께 검증한 Phase 1 변경분
+- 브랜치 / PR: `codex/law-calendar-phase0-20261105` / #67
+- 범위: 별도 서브도메인의 `/`에서 실행하는 독립 공개 UI. DB·조회 API·수집 연결은 후속 단계다.
 - 계획: [LAW_CALENDAR_PLAN.md](../plans/LAW_CALENDAR_PLAN.md)
-- 범위: UI 목업. DB·공개 API·입법예고 수집·실제 법적 효력 검증은 구현하지 않았다.
-- 실제 모델 호출, 모델 가중치 다운로드, 학습·평가셋 변경, 운영 배포·서비스 재시작은 수행하지 않았다.
+- 실행 안내: [services/law-calendar/README.md](../../services/law-calendar/README.md)
+- 실제 모델 호출·모델 가중치 다운로드·학습/평가셋 수정·운영 배포·서비스 재시작은 수행하지 않았다.
 
-## 구현과 확인 방식
+## 최종 서비스 경계
 
-`/law-calendar`는 로그인 확인을 호출하지 않고 독립 렌더링한다. `/`의 챗봇 로그인과 질문 스트리밍은 기존 코드를 유지한다. 날짜 선택·월 이동·오늘·두 목록·더 보기·상세 비교·공식 사이트 안내·빈 상태·로딩·오류·갱신 지연을 구현했다. 개발용 합성 예시는 별도 모듈이며 production에서 제거한다. 실제 법령명과 원문을 합성 문구로 대체해 공개하지 않는다.
+사용자 지시에 따라 처음의 같은 사이트 `/law-calendar` 통합안을 대체했다. `services/law-calendar/frontend`는 별도의 package.json·lock·Vite 설정·main·CSS·정적 dist를 사용한다. 챗봇 소스나 CSS를 import하지 않고 챗봇 링크·세션 확인·인증 요청도 없다. 캘린더 서브도메인에는 이 정적 앱만 제공하면 된다. 실제 호스트명·DNS·TLS·호스팅 작업은 수행하지 않았다.
 
-날짜 유틸 테스트를 먼저 작성해 미구현 동작 3건의 실패를 확인한 뒤 구현했다. 페이지 테스트도 달력·목록·상태가 없는 초기 구현에서 5건 실패를 확인했다. 브라우저에서 StrictMode의 상세창 즉시 닫힘과 Tab 경계 이탈을 발견해 수정했고, 실제 Chromium에서 회귀 검증했다.
+초기 통합 변경은 챗봇 폴더에서 제거했다. `git diff 77e7aa0 --exit-code -- services/chatbot`로 기준 main과 동일함을 확인했다. 기존 챗봇의 로그인, 모델 서버 연결, 쿠키, SSE, 피드백은 이번 PR에서 변경하지 않는다.
 
-## 환경
+Phase 1 캘린더 실행에는 Node 또는 정적 호스팅만 필요하다. 후속 조회 API도 calendar 서비스에 별도로 추가할 계획이며 Mac mini 챗봇 프로세스나 모델·RAG API를 노출하지 않는다. frontend-only 서비스 폴더는 uv workspace에서 제외하고 독립 E2E 경로만 기본 pytest에 등록했다. `uv lock --check`가 통과하며 uv.lock은 바뀌지 않았다.
 
-- 분리된 Linux 개발 체크아웃. Node 26, Python 3.14.8, Playwright 1.64.1 Chromium.
-- npm은 기존 package-lock.json을 그대로 사용. package.json·lock 파일 변경 없음.
-- uv workspace의 macOS 전용 잠금 설정 때문에 별도 테스트 venv에 로컬 패키지를 editable/no-deps로 설치하고, 사용한 공통 패키지 버전은 uv.lock에 맞췄다. torch는 같은 2.14.1의 Linux CPU 빌드, MLX는 0.32.4 CPU backend를 사용했다. macOS 운영 환경 검증으로 표현하지 않는다.
-- HF_HUB_OFFLINE/TRANSFORMERS_OFFLINE을 설정했다. 기존 기본 테스트의 작은 무작위 모델·가짜 서버만 사용했으며 운영 모델 서버는 호출하지 않았다.
-- 최초 설치의 cache 쓰기 경로 문제를 전용 /tmp 경로로 해결했다. 이후 GPU 라이브러리 설치로 디스크가 부족해 전체 검사를 중단했고, 직접 만든 GPU 패키지와 전용 cache를 제거한 후 CPU 환경으로 복구했다. 이 중단 결과를 통과로 세지 않았다.
+## 독립 검증
 
-## 검증 결과
+캘린더 브라우저 검사는 먼저 **pytest·httpx·Playwright만 설치된 최소 venv**에서 실행했다. 이때 Lawbot Python 패키지·MLX·torch와 모델 서버를 설치하거나 실행하지 않은 상태로 4개가 통과했다. 개발 모드는 Vite, production은 Python 표준 라이브러리 정적 파일 서버만 사용한다. 테스트 도우미가 다른 서비스 패키지나 챗봇 fixture를 import하지 않는다.
 
-| 검사 | 결과 |
+확인한 항목:
+
+- `/` 및 `/?demo=true`에서 바로 열리고 로그인 화면·인증 API 요청이 없다.
+- 캘린더 방문 시 API 요청 0건, Set-Cookie 없음, 브라우저 쿠키 없음.
+- production JS에 `/api/me`, `/api/login`, `/api/chat`, `lawbot_session`과 합성 원문·예시 마커가 없다.
+- Vite 개발 예시의 날짜 선택, 빈 날짜, 더 보기, 로딩·오류·재시도·갱신 지연 표시가 동작한다.
+- 모바일 단일 열과 데스크톱 병렬 목록·Before/After 비교, 가로 넘침 없음, 상세 초기 포커스·Tab 경계·Escape·포커스 복귀를 검증했다.
+- 원문 줄바꿈·유니코드 보존, 원문 HTML 실행 방지, 비교 불가·신설·삭제 표시를 유지했다.
+
+## 환경 및 결과
+
+Linux 개발 체크아웃, Node 26, Python 3.14.8, Playwright 1.64.1 Chromium을 사용했다. 두 frontend의 lock은 독립적이며 챗봇 package/lock은 바뀌지 않았다. 전체 회귀 검사는 별도 venv에서 uv.lock 버전, torch 2.14.1 CPU 및 MLX 0.32.4 CPU backend로 실행한다. HF_HUB_OFFLINE/TRANSFORMERS_OFFLINE을 설정해 운영 모델과 가중치 다운로드를 사용하지 않는다.
+
+| 검사 | 서비스 분리 후 결과 |
 | --- | --- |
-| frontend `npm run typecheck` | 통과 |
-| frontend `npm test` | 32개 통과 (기존 챗봇 테스트 포함) |
-| frontend `npm run build` | 통과, 캘린더 코드·CSS 별도 chunk |
-| `pytest services/chatbot/tests/test_e2e_law_calendar.py -q` | 대역 E2E 4개 통과 |
-| `ruff check` / `ruff format --check` | 통과 |
-| `pyright` | 0 errors / 0 warnings |
-| `python -m compileall -q services packages tools` | 통과 |
-| 전체 기본 `pytest` | 최종 753 통과 / 기본 제외 12개 (99.64초). 단위·계약·통합·대역 E2E 포함 |
+| 캘린더 typecheck / Vitest / build | 통과, 단위 12개 |
+| 챗봇 typecheck / Vitest / build | 통과, 기존 단위 19개 |
+| 캘린더 독립 브라우저 E2E | 최소 환경에서 4개 통과 |
+| uv lock --check | 통과, uv.lock 변경 없음 |
+| ruff check / ruff format --check | 통과 |
+| pyright / compileall | 통과 |
+| 전체 기본 pytest | 분리 후 753 통과 / 기본 제외 12개 (92.44초). 단위·계약·통합·대역 및 독립 UI E2E 포함 |
+| macOS GitHub CI | 분리 변경 커밋 후 확인 예정 |
 | 실제 모델 E2E / 모델 스모크 / 품질 평가 | 실행 안 함 |
-| 운영 반영 / 일반 공개 배포 | 수행 안 함 |
+| 운영 반영 / DNS·일반 공개 배포 | 수행 안 함 |
 
-앞선 전체 검사(752 통과 / 1 실패)에서 변경하지 않은 `test_two_streams_interleave_within_limit`의 종료 직후 `s.pending() == 0` 검사가 2를 받아 실패했다. pending은 코드상 대략값이며 스레드가 종료 알림을 전달한 뒤 집계가 갱신되는 순서라 시점 의존 가능성이 있다. 직접 관련 없는 모델 서버 코드나 테스트는 수정하지 않았다. 동일 테스트는 네트워크 권한 없는 샌드박스 실행에서 타임아웃이 있었으나, 로컬 소켓 권한을 준 단독 실행과 기준 커밋의 별도 worktree 실행에서는 통과했다. 최종 전체 재실행은 753개 모두 통과했다. 최초 실패를 숨기지 않으며 스케줄러 집계 검사에 대한 간헐 실패 가능성은 후속 확인 사항으로 남긴다.
+전체 회귀 venv 구성 시 pydantic과 pydantic-core 버전 불일치 및 python-dateutil의 전이 의존성 six 누락으로 수집 실패가 있었다. 패키지 이름의 하이픈/밑줄을 정규화해 버전을 uv.lock과 일치시키고 six를 설치했다. uv pip check에서 호환성을 확인한 뒤 전체 검사를 재실행했으며 환경 오류 결과를 통과로 세지 않았다.
 
-## 사용자 흐름별 확인
+## 이전 구현 검증 이력
 
-| ID | 확인 결과 |
-| --- | --- |
-| UI-01 | 월 이동·오늘·날짜 선택, KST 경계·윤년·월말, 키보드 월 경계 이동 통과 |
-| UI-02 | 같은 날 입법예고와 시행 조문을 별도 건수와 목록으로 표시. 모바일도 색과 함께 유형 텍스트 유지 |
-| UI-03 | 이벤트 없는 날짜의 두 목록 빈 상태 통과. production은 승인 데이터 미연결 안내 표시 |
-| UI-04 | 상세 초기 포커스·Tab/Shift+Tab 경계·Escape·닫기 후 원래 항목 포커스 복귀 통과 |
-| 표시 | 원문 줄바꿈·유니코드 보존, 원문 HTML 실행 방지, 비교 불가·신설·삭제 상태 구현 |
-| 출처 | 합성 예시에 공식 개별 원문이 없음을 명시, 수집·검증 미확인 표시, 공식 사이트 링크 제공 |
-| 반응형 | Chromium에서 모바일/데스크톱 목록 및 Before/After 배치 확인, 가로 넘침 없음. 수동 화면 확인도 수행 |
-| 배포 보호 | production JS에 합성 고유 마커와 가상 원문 부재 확인, `?demo=true`도 예시를 노출하지 않음 |
-| 챗봇 회귀 | 비로그인 캘린더 진입 시 API 요청 0건, 챗봇 링크 이동 후 로그인·대역 답변 완료, 보호 API 401 및 미등록 API 404 유지 |
+초기 통합 커밋 `d7244c2`는 프론트엔드 32개·Python 753개 및 macOS CI가 통과했다. 이는 서비스 분리 후의 결과로 재사용하지 않는다. 당시 변경하지 않은 스케줄러의 `test_two_streams_interleave_within_limit`이 한 차례 `pending() == 0` 검사에서 2를 받아 실패했고, 단독·기준 코드 단독·최종 전체 재검사는 통과했다. 집계 갱신 시점에 따른 간헐 실패 가능성을 기록하며 해당 코드와 테스트는 수정하지 않았다.
 
-DATA/PUB/OPS의 실제 수집·승인·시행일 테스트는 이 UI 단계의 통과 항목이 아니다. 공개 API·승인·실제 원문 연결은 Phase 2 이후에 검증한다. 고지문 법률 검토와 재이용 조건 검토도 완료하지 않았다.
+날짜/페이지 테스트는 초기 미구현 상태에서 실패를 먼저 확인한 뒤 구현했고, 브라우저에서 발견한 StrictMode의 상세창 즉시 닫힘과 Tab 경계 이탈을 고쳤다. 이번 분리 작업에서도 챗봇 링크가 남아 있는 상태의 독립성 테스트 실패를 먼저 확인한 뒤 제거했다.
 
-## 실행 명령
+## 실행 및 후속 작업
 
-저장소 지원 환경(macOS)에서는 기존 문서대로 아래 명령을 사용한다. 이 실행에서는 별도 venv의 동일 도구를 사용했고, 로컬 테스트 서버용 네트워크 권한과 위 CPU 환경 차이가 있다.
+캘린더만 개발하거나 빌드하려면 `services/law-calendar/frontend`에서 `npm ci`, `npm run typecheck`, `npm test`, `npm run build`를 실행한다. `npm run dev`로 표시된 로컬 개발 주소의 `/`에서 예시를 확인한다. 독립 E2E의 모델 라이브러리가 필요 없는 실행 명령은 서비스 README에 있다.
 
-```fish
-cd services/chatbot/frontend
-npm ci
-npm run typecheck
-npm test
-npm run build
-cd ../../..
-uv run pytest
-uv run ruff check
-uv run ruff format --check
-uv run pyright
-uv run python -m compileall -q services packages tools
-```
+전체 회귀는 두 frontend를 각각 빌드한 뒤 루트에서 `uv run pytest`, `uv run ruff check`, `uv run ruff format --check`, `uv run pyright`, `uv run python -m compileall -q services packages tools`로 실행한다. CI도 두 frontend를 각각 검증한다.
 
-배포 절차: 후속 API 연결과 검토를 끝낸 뒤 사용자가 진행 중인 모델 학습 작업과 함께 반영한다. UI 소스 변경이므로 그때 frontend 빌드를 갱신해야 한다. 이번 작업에서 모델 서버 재시작이나 데이터 전환을 실행하지 않는다. PR 병합은 해당 PR의 사용자 명시적 승인이 있어야 한다.
+Phase 2 이후 공개 데이터·API·승인·실제 시행일을 검증해야 한다. 실제 법령 정보는 아직 연결하지 않아 production은 승인 데이터 연결 전 빈 화면이다. 고지문 법률 검토·재이용 조건 검토도 미완료다. PR 병합은 별도 사용자 명시적 승인 후에만 수행하고 운영 배포는 진행 중인 모델 학습 작업과 함께 추후 진행한다.

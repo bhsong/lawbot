@@ -1,5 +1,19 @@
 # Lawbot 법령 변경 캘린더: Phase 0 조사 및 Phase 1 계획
 
+## 변경된 배포·서비스 경계 (2026-11-05 사용자 지시)
+
+캘린더는 챗봇과 다른 서브도메인의 루트 `/`에서 로그인 없이 제공하는 독립 앱이다. 아래 실사 당시의 같은 사이트 `/law-calendar` 가정과 chatbot 패키지 통합 제안은 이 지시로 대체한다. 챗봇은 Mac mini 모델 서버를 사용하는 비공개 로그인 서비스로 유지한다.
+
+- UI·package.json·lock·Vite 설정·빌드 출력은 `services/law-calendar/frontend`로 이동하고 독립한다. 다른 서비스 소스나 챗봇 CSS를 import하지 않는다.
+- 챗봇의 main/App/인증 경로는 캘린더 추가 전 상태로 되돌린다. 캘린더에 챗봇 링크나 세션 확인을 넣지 않는다.
+- Phase 1 배포 산출물은 독립 정적 `dist/`다. 챗봇 서버·모델 서버·monitor가 꺼져 있어도 실행 가능해야 한다. Python 런타임을 새로 만들지 않으며 uv workspace에서는 frontend-only 서비스 폴더를 제외한다.
+- 독립 브라우저 테스트는 `services/law-calendar/tests`에서 정적 파일 서버와 Vite 개발 서버만 사용한다. 챗봇·모델 서버 테스트 도우미를 import하거나 서버를 띄우지 않는다. 기존 챗봇의 회귀 검사는 그대로 유지한다.
+- CI에서 두 프론트엔드를 각각 설치·타입 검사·테스트·빌드하고, 독립 캘린더 E2E를 기본 pytest에 포함한다.
+- Phase 2 조회 API도 별도 calendar 서비스에 둔다. 브라우저는 calendar origin의 공개 승인 데이터만 읽으며 챗봇 인증 쿠키·모델 토큰·모델/RAG API에 접근하지 않는다. monitor는 오프라인 수집/검토/공개 데이터 전달자로만 연결한다.
+- 실제 서브도메인 이름, DNS·TLS·호스팅은 배포 시 확정한다. 다른 서브도메인만으로 격리가 보장된다고 보지 않으며, 캘린더 경로를 챗봇 프로세스로 프록시하거나 챗봇 인증·모델 API를 노출하지 않는다. 기존 쿠키의 Domain을 부모 도메인으로 확대하지 않는다.
+
+독립 루트 접속·API/인증 요청 0건·쿠키 발급 없음·production 자산에 챗봇/합성 데이터 부재·별도 빌드 성공을 검증한다. PR #67을 같은 브랜치에서 수정하며 병합·실제 모델 호출·운영 배포는 수행하지 않는다.
+
 - 조사일: 2026-11-05 (UTC)
 - 저장소: https://github.com/bhsong/lawbot
 - 조사 기준: main 커밋 77e7aa0af8bbb5f43be245e988f5e326014e9184 (tree: 7913f64953241195b550760defaacb39d52961b8). 문서 기록 전 main과 작업 브랜치가 이 커밋에 있음을 재확인.
@@ -39,28 +53,28 @@ deploy/launchd/                  웹앱·모델 서버 실행 템플릿
 docs/operations.md               운영·설치·검사 명령
 ```
 
-재귀 트리에는 CONTEXT.md, LAW_CALENDAR_PLAN.md, 루트 package.json이 없다. CONTEXT.md를 읽었다고 보고할 수 없다. 대신 AGENTS.md, README.md, 각 pyproject.toml, frontend/package.json, 실제 코드·운영 문서를 확인했다. 기존 docs/plans와 실습 가이드는 수정하지 않았다.
+최초 실사 기준 트리에는 CONTEXT.md, LAW_CALENDAR_PLAN.md, 루트 package.json이 없었다. CONTEXT.md를 읽었다고 보고할 수 없다. 대신 AGENTS.md, README.md, 각 pyproject.toml, frontend/package.json, 실제 코드·운영 문서를 확인했다. 다른 작업의 계획서와 실습 가이드는 수정하지 않았다.
 
 ## 3. 계획서와 다른 점 및 수정 방향
 
 | 항목 | 실제 확인 | 적용 방향 |
 | --- | --- | --- |
-| Python 위치 | 루트 src/lawbot이 아니라 서비스별 패키지 | 웹 조회는 services/chatbot/src/lawbot, 수집은 services/monitor/src/law_monitor를 유지 |
+| Python 위치 | 루트 src/lawbot이 아니라 서비스별 패키지 | 수집은 services/monitor/src/law_monitor를 유지. 후속 조회 API는 별도 services/law-calendar 서비스에 추가 |
 | 서비스 연결 | 루트 pyproject는 서비스끼리 import하지 않고 lawbot_common만 공유하도록 명시 | 웹앱이 monitor를 직접 import하지 않도록 공개 데이터 계약으로 연결 |
-| React 라우터 | App.tsx는 로그인 확인 후 Chat 렌더링. 라우터 의존성 없음 | 인증 앱 바깥에서 /law-calendar를 분기하고 기존 App 흐름 보존 |
-| 서버 라우팅 | web.mount_spa는 /assets와 SPA fallback 지원, /api의 미등록 경로는 404 | /law-calendar 직접 접속 가능. 새 API는 fallback 등록 전에 추가 |
-| UI 시스템 | 자체 CSS 변수, Pretendard, 라이트·다크 모드. Tailwind/shadcn 없음 | CSS 변수 재사용, 캘린더 CSS 범위 격리. 중복 UI 프레임워크 도입 보류 |
-| 조회 서버 | 이미 FastAPI 사용 | 새 서버 프레임워크 불필요 |
+| React 라우터 | App.tsx는 로그인 확인 후 Chat 렌더링. 라우터 의존성 없음 | 챗봇 진입점은 원상 유지. 캘린더는 독립 Vite 앱의 /로 접속 |
+| 서버 라우팅 | 챗봇 web.mount_spa는 /assets와 SPA fallback 지원, /api의 미등록 경로는 404 | 캘린더 정적 파일은 별도 공개 호스트가 제공. 챗봇 fallback에 연결하지 않음 |
+| UI 시스템 | 자체 CSS 변수, Pretendard, 라이트·다크 모드. Tailwind/shadcn 없음 | 같은 시각 스타일을 독립 CSS로 유지하고 chatbot CSS를 import하지 않음 |
+| 조회 서버 | 챗봇은 FastAPI 사용 | Phase 1은 정적 앱. 후속 FastAPI 조회 서버도 캘린더 전용으로 분리 |
 | 입법예고 | 설정 키워드는 있으나 default_collectors는 legalize_law/legalize_admrule 둘뿐 | 수집기와 원천 계약을 후속 단계에서 추가해야 함 |
 | 변경 이벤트 | law_amended/new/repealed 등 감지 이벤트, 공포·시행 날짜 메타데이터 | notice_published/effective 공개 일정과 별도 모델로 변환 |
 | 기존 DB | SQLite state.db + JSON 이벤트·파일 스냅샷·diff | 수집 상태 DB를 공개용 DB로 그대로 노출하지 않음 |
 | 승인 | processed_at은 요약 처리 여부, 승인 상태가 아님 | 별도의 검토·승인·감사 모델 필요 |
 | diff | difflib unified diff 및 조문·부칙 블록 diff 존재 | 항·호 및 효력 시점별 비교는 추가 작업 |
 | 요약 | 모델로 이벤트 요약 Markdown 작성 | 공개용 한 줄 요약·검토 이력·원문을 분리 |
-| 공개 배포 | 문서상 Mac mini + launchd + Tailscale Serve, tailnet 내부. Funnel 사용 안 함 | 같은 사이트 경로는 재사용 가능하지만 일반 공개는 별도 배포 설계 필요 |
+| 공개 배포 | 챗봇은 Mac mini + launchd + Tailscale Serve, tailnet 내부. Funnel 사용 안 함 | 챗봇 비공개 경계를 유지하고 캘린더는 별도 서브도메인·정적 호스팅으로 배포 |
 | RAG 최신성 | daily checks가 조문 생성·임베딩·전환·웹앱 재시작 가능 | Phase 5는 백지 구현이 아니라 기존 자동 갱신과 승인 정책 조정 필요 |
 
-web.main은 load_app(cfg)를 거쳐 챗봇을 초기화한 뒤 앱을 만든다. 공개 경로 추가만으로 모델 서버 없이 독립 기동할 수 있게 되는 것은 아니다. 공개 배포 시 이 결합의 운영 영향을 따로 검토한다. 챗봇 인증을 전체 해제해서 캘린더를 공개하면 안 된다.
+web.main은 load_app(cfg)를 거쳐 챗봇을 초기화한 뒤 앱을 만든다. 따라서 캘린더를 그 서버에 통합하지 않는다. 독립 정적 앱으로 분리하여 챗봇·모델 서버의 가용성과 인증에 영향을 받지 않게 한다.
 
 ## 4. 확인한 패키지와 실행 방식
 
@@ -99,7 +113,7 @@ web.main은 load_app(cfg)를 거쳐 챗봇을 초기화한 뒤 앱을 만든다.
 ## 7. Phase 1 구현 계획 및 적용 사항
 
 1. 정상 개발 체크아웃에서 원격·HEAD·status·worktree와 지침을 확인하고 기존 신규 브랜치 codex/law-calendar-phase0-20261105를 이어간다. 이 문서는 대화의 원 계획을 바탕으로 작성한 실사·적용 계획이며 원문 전체를 복제한 문서는 아니다. 원문 첨부 확보 시 내용을 보존해 별도 수록한다.
-2. frontend/src/main.tsx에 최상위 경로 분기 도입. /law-calendar만 독립 페이지로 렌더링하고 기존 App.tsx의 로그인·Chat·SSE·피드백 동작을 보존한다. 우선 일반 링크와 pathname 분기로 두 경로를 지원하고, 향후 라우트 증가 시 라우터 도입을 검토한다.
+2. services/law-calendar/frontend의 독립 main.tsx에서 캘린더를 렌더링한다. 별도 서브도메인의 /가 진입점이며 chatbot App/main/인증 코드는 원상 유지한다. 독립 package.json·lock·Vite 설정·dist를 사용한다.
 3. 월간 달력, 월 이동/오늘/날짜 선택, KST 기준 오늘, 파란 입법예고/주황 시행 표시와 텍스트 건수, 선택일별 두 목록 구현. 모바일 세로 순서와 데스크톱 2열 목록 지원.
 4. 상세는 native dialog 기반으로 초기 포커스·모달 탭 이동·Escape·닫은 뒤 포커스 복귀를 검증한다. Before/After는 데스크톱 2열, 모바일 세로 스택. 원문 텍스트와 표시용 강조를 분리하고 비교 불가 상태를 둔다.
 5. 로컬·테스트 전용 합성 fixture에 “예시 / 실제 법령 아님”을 명시한다. production 경로에서는 fixture 모듈을 동적으로 가져오지 않도록 개발 모드 분기를 두고, 승인 데이터 미연결 안내와 빈 화면을 제공한다. 단순 배지만으로 가상 법령을 운영에 노출하지 않는다.
@@ -109,10 +123,11 @@ Phase 1 변경 파일:
 
 | 위치 | 변경 |
 | --- | --- |
-| services/chatbot/frontend/src/main.tsx, Root.tsx, Root.test.tsx | 경로별 진입점과 기존 로그인 회귀 |
-| services/chatbot/frontend/src/law-calendar/ | LawCalendarPage, MonthCalendar, EventList, ChangeDialog, types, dates, data, 개발 전용 demo, 범위 지정 CSS와 Vitest 테스트 |
-| services/chatbot/tests/test_e2e_law_calendar.py | 비로그인 달력·모바일·키보드·상세·기존 인증 회귀 |
-| services/chatbot/tests/test_web.py | /law-calendar fallback과 기존 보호 API 회귀 보완 |
+| services/law-calendar/frontend/ | 독립 package/lock·main·styles·Vite/TS 설정, 캘린더 컴포넌트·개발 예시·Vitest 테스트 |
+| services/law-calendar/tests/ | 모델·챗봇 fixture 없이 루트 접속·미인증·모바일·키보드·상세·bundle 격리 검사 |
+| services/law-calendar/README.md, README.md | 독립 실행·정적 빌드·서브도메인 배포 경계 안내 |
+| pyproject.toml, .github/workflows/ci.yml | frontend-only 서비스 workspace 제외, 독립 E2E 등록, 두 frontend 각각 빌드·검증 |
+| services/chatbot/ | 통합 시도 변경을 되돌려 최종 PR은 기준 main 대비 변경 없음 |
 | docs/plans/LAW_CALENDAR_PLAN.md | 실제 구조 차이, 적용 사항 및 결과 기록 |
 | docs/evals/2026-11-05-law-calendar-phase1.md 및 README.md | 실제 검증 후 결과와 목록 기록 |
 
@@ -125,9 +140,9 @@ FullCalendar·Tailwind·shadcn은 우선 추가하지 않는다. 선택 중심�
 - `import.meta.env.DEV` 분기 안에서만 demo를 동적 import한다. production은 빈 데이터를 사용하며 query string으로 예시를 켤 수 없다. production 자산에서 합성 원문·고유 마커 부재를 브라우저 테스트로 검사한다.
 - 현재 diff는 원문을 그대로 보존한 단일 변경 구간 강조다. 항·호별 구조화 diff와 실제 법적 효력 검증은 후속 단계이며 이번 화면 타입은 공개 API 스키마가 아니다.
 - StrictMode의 effect 정리 중 발생하는 native close 이벤트가 새 dialog를 닫던 문제를 수정했다. native modal에 명시적 Tab 경계 처리를 더해 주소창으로 포커스가 빠지지 않도록 했다.
-- 기존 챗봇의 App.tsx, 인증·SSE·모니터링 런타임, 모델 서버 코드는 변경하지 않았다. main.tsx가 Root를 렌더링하며 /law-calendar(/) 외의 기존 경로는 App으로 간다.
+- 기존 챗봇의 frontend/main.tsx와 tests/test_web.py를 기준 main 상태로 되돌리고 Root 및 캘린더 코드를 제거했다. 최종 PR에서 services/chatbot 전체는 기준 main과 동일하다. 캘린더 UI·테스트는 별도 서비스에만 있다.
 
-로컬 UI 확인은 frontend 폴더에서 `npm ci`, `npm run dev`를 실행하고 Vite가 표시하는 개발 주소의 `/law-calendar`로 접속한다. API 서버와 모델 서버는 필요하지 않다. 개발 예시는 KST 오늘에 배치한다. 일반 production 빌드는 예시 없는 빈 화면이며 실제 API 연결은 Phase 2 범위다.
+로컬 UI 확인은 services/law-calendar/frontend에서 `npm ci`, `npm run dev`를 실행하고 Vite가 표시하는 개발 주소의 `/`로 접속한다. Python·API·모델 서버는 필요하지 않다. 개발 예시는 KST 오늘에 배치한다. 일반 production 빌드는 예시 없는 빈 화면이며 실제 API 연결은 Phase 2 범위다.
 
 ## 8. Phase 2 이후 DB/API 전략 초안
 
@@ -135,13 +150,19 @@ Phase 1 DB migration은 없다. 후속 단계에서는 별도 calendar DB를 사
 
 수집 측 adapter가 calendar의 laws/versions/article_versions/change_events/article_changes/source_snapshots/review_audit에 정규화·upsert한다. 웹은 공개 읽기 계약만 이용한다. 기본은 검토 대기이며 event와 article_change 양쪽 승인, 철회·정정 상태를 함께 필터링한다. processed_at을 승인으로 변환하지 않는다. 승인 후 원문·요약 수정 시 재검토가 필요하다.
 
-월 집계·일 목록·상세는 같은 공개 조건을 사용한다. 한 이벤트가 여러 조문을 바꿀 때 notice_count는 예고 문서 수, effective_count는 당일 시행 조문 변경 수로 정의하는 안을 권장하며 Phase 2 계약에 명시해야 한다. 날짜/시각/날짜 미확정을 구분하고, 검증되지 않은 시행일은 달력에 배치하지 않는다. OpenAPI가 현재 비활성화되어 있으므로 타입 생성은 별도 schema export 또는 명시 TS 계약 테스트 방식으로 검토한다.
+월 집계·일 목록·상세는 캘린더 전용 서버에서 같은 공개 조건을 사용한다. 한 이벤트가 여러 조문을 바꿀 때 notice_count는 예고 문서 수, effective_count는 당일 시행 조문 변경 수로 정의하는 안을 권장하며 Phase 2 계약에 명시해야 한다. 날짜/시각/날짜 미확정을 구분하고, 검증되지 않은 시행일은 달력에 배치하지 않는다. 챗봇의 OpenAPI 비활성화 설정과 분리하여 캘린더 API schema export·타입 생성 방식을 결정한다.
 
 ## 9. 검증 계획과 결과 기록
 
 아래는 저장소 지원 환경의 검증 명령이다. Phase 0에서는 명령만 확인했고 Phase 1에서는 별도 Linux 테스트 venv로 동일 검사를 실행했다. 상세 환경 차이와 결과는 [검증 기록](../evals/2026-11-05-law-calendar-phase1.md)에 있다. fish에서 heredoc 없이 실행할 수 있다.
 
 ```fish
+cd services/law-calendar/frontend
+npm ci
+npm run typecheck
+npm test
+npm run build
+cd ../../..
 cd services/chatbot/frontend
 npm ci
 npm run typecheck
@@ -159,7 +180,7 @@ uv run pyright
 | 단계 | 작업 브랜치/커밋 | 주요 변경 파일 | 테스트 명령 | 결과 | 미해결 |
 | --- | --- | --- | --- | --- | --- |
 | Phase 0 | codex/law-calendar-phase0-20261105 / 0030cda | docs/plans/LAW_CALENDAR_PLAN.md | 코드·문서 읽기 및 기준 커밋 재확인 | 실사 기록 완료 / 전체 완료 기준 미충족 | CONTEXT/첨부 파일 부재, 실제 이벤트 2유형 전체 추적 |
-| Phase 1 | codex/law-calendar-phase0-20261105 / 이 결과 기록과 같은 구현 커밋 | 위 변경 목록 | npm typecheck/test/build, pytest, ruff, pyright, compileall | UI·로컬 검사 통과: frontend 32개, Python 753개(대역 E2E 포함) | 실제 API 미연결, 실제 모델 미실행, macOS CI 별도 확인, 기존 스케줄러 집계 검사 간헐 실패 이력 |
+| Phase 1 | codex/law-calendar-phase0-20261105 / 이 결과 기록과 같은 분리 커밋 | 위 변경 목록 | 두 frontend typecheck/test/build, 독립 E2E, pytest, ruff, pyright, compileall, uv lock --check | 분리 후 calendar 12개·chatbot 19개·Python 전체 753개 통과(독립 E2E 4개 포함) | 실제 API 미연결, 실제 모델 미실행, 새 커밋 macOS CI 별도 확인 |
 | Phase 2 | 미시작 | 미정 | 미실행 | 미실행 | 공개 DB·승인·조회 계약 확정 |
 | Phase 3 | 미시작 | 미정 | 미실행 | 미실행 | 입법예고 키·응답 및 adapter |
 | Phase 4 | 미시작 | 미정 | 미실행 | 미실행 | 조항별 효력·공개 배포·백업·이용 조건 |
@@ -167,4 +188,4 @@ uv run pyright
 
 ## 10. 남은 결정
 
-Phase 1 합성 UI 작업에는 대상 법령 전체 확정이 필요하지 않다. 실제 데이터 연결 전에는 공개 범위(기존 13개 폴더와 행정규칙/서식까지인지 노동법만인지), 입법예고 원천과 인증, 별도 공개 호스트/경로 프록시, CLI 승인 운영자, 요약 생성 정책과 이용 조건·고지 검토를 확정해야 한다. 현재 tailnet 제한을 임의로 해제하지 않는다.
+Phase 1 합성 UI 작업에는 대상 법령 전체 확정이 필요하지 않다. 실제 데이터 연결 전에는 공개 범위(기존 13개 폴더와 행정규칙/서식까지인지 노동법만인지), 입법예고 원천과 인증, 캘린더 전용 공개 호스트·DNS·TLS·호스팅, CLI 승인 운영자, 요약 생성 정책과 이용 조건·고지 검토를 확정해야 한다. 현재 챗봇의 tailnet 제한을 임의로 해제하지 않는다.

@@ -1,61 +1,52 @@
-"""Exercise calendar UI and production fixture exclusion without any real model calls."""
-
-import shutil
+"""Run the public calendar at its own origin with no Lawbot backend available."""
 
 import pytest
 from playwright.sync_api import expect
 
-import e2e_support as e2e
-from conftest import free_port
+import calendar_ui_support as support
 
-pytestmark = pytest.mark.e2e_stub
-FRONTEND = e2e.ROOT / 'services' / 'chatbot' / 'frontend'
+pytest_plugins = ['calendar_test_fixtures']
+pytestmark = [pytest.mark.e2e_stub, pytest.mark.usefixtures('calendar_network')]
+FRONTEND = support.FRONTEND
 
 
 @pytest.fixture(scope='module')
 def development(tmp_path_factory):
     tmp = tmp_path_factory.mktemp('law_calendar_dev')
-    port = free_port()
-    npm = shutil.which('npm')
-    assert npm, 'npm is required for the existing Vite development server'
-    proc = e2e.Proc(
-        'calendar-vite',
-        [npm, '--prefix', str(FRONTEND), 'run', 'dev', '--', '--port', str(port), '--strictPort'],
-        e2e.clean_env(),
-        tmp,
-    )
-    url = f'http://127.0.0.1:{port}'
-    try:
-        proc.wait_http(url + '/law-calendar', lambda response: response.status_code == 200)
-        yield url, proc
-    finally:
-        proc.stop()
+    with support.serve(tmp, development=True) as server:
+        yield server
 
 
 @pytest.fixture(scope='module')
 def production(tmp_path_factory):
-    stack = e2e.Stack(tmp_path_factory.mktemp('law_calendar_prod'), read_timeout=10)
-    yield stack
-    stack.stop()
+    with support.serve(tmp_path_factory.mktemp('law_calendar_prod'), development=False) as server:
+        yield server
 
 
 @pytest.fixture
-def demo(development, page, request):
-    url, proc = development
-    page.goto(url + '/law-calendar')
-    page.get_by_text('예시 / 실제 법령 아님', exact=True).wait_for()
-    yield page
-    e2e.keep_on_failure(request, 'e2e_stub', [proc.log], page)
+def demo(development, calendar_page, request):
+    url, log = development
+    calendar_page.goto(url + '/')
+    calendar_page.get_by_text('예시 / 실제 법령 아님', exact=True).wait_for()
+    yield calendar_page
+    support.keep_on_failure(request, log, calendar_page)
 
 
-def test_production_calendar_is_public_but_chat_remains_private(production, page, request):
+def test_standalone_production_needs_no_login_or_backend(production, calendar_page, request):
+    page = calendar_page
+    url, log = production
     calls = []
     page.on('request', lambda req: calls.append(req.url) if '/api/' in req.url else None)
     try:
-        page.goto(production.url + '/law-calendar?demo=true')
+        response = page.goto(url + '/?demo=true')
         expect(page.get_by_role('heading', name='법령 변경 캘린더', exact=True)).to_be_visible()
         expect(page.get_by_text('승인 데이터 연결 전', exact=False)).to_be_visible()
         assert calls == [], calls
+        assert response is not None and response.status == 200
+        assert 'set-cookie' not in response.headers
+        assert page.context.cookies() == []
+        assert page.get_by_role('link', name='Lawbot 챗봇', exact=False).count() == 0
+        assert page.get_by_label('비밀번호').count() == 0
         assert page.get_by_text('예시 / 실제 법령 아님', exact=True).count() == 0
         assets = list((FRONTEND / 'dist' / 'assets').glob('*.js'))
         assert assets
@@ -63,14 +54,10 @@ def test_production_calendar_is_public_but_chat_remains_private(production, page
             text = asset.read_text(encoding='utf-8')
             assert 'LAW_CALENDAR_SYNTHETIC_ONLY' not in text, asset.name
             assert '가상 업무절차법' not in text, asset.name
-        page.get_by_role('link', name='Lawbot 챗봇').click()
-        expect(page.get_by_label('비밀번호')).to_be_visible()
-        e2e.login(page, production.url)
-        e2e.ask(page, '해고 예고는 언제 하나요?')
-        e2e.wait_done(page)
-        expect(e2e.answer(page)).to_contain_text('가짜 모델 답변입니다.')
+            for private in ('/api/me', '/api/login', '/api/chat', 'lawbot_session'):
+                assert private not in text, asset.name
     finally:
-        e2e.keep_on_failure(request, 'e2e_stub', production.logs(), page)
+        support.keep_on_failure(request, log, page)
 
 
 @pytest.mark.parametrize('width', [390, 1280])
