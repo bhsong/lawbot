@@ -32,6 +32,7 @@ class CollectResult:
     items: list[ItemState] = field(default_factory=list)
     removed: list[tuple[str, str]] = field(default_factory=list)  # (source, item_id)
     replace_sources: list[str] = field(default_factory=list)  # bootstrap: 이 source의 기존 items를 지우고 새로
+    baselines: dict[str, str] = field(default_factory=dict)
 
 
 class Collector(Protocol):

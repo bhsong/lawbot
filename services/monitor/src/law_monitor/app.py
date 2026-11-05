@@ -13,6 +13,8 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 
 from law_monitor import checks as checks_mod
+from law_monitor.assembly import SOURCES, AssemblyClient
+from law_monitor.collectors.assembly import AssemblyCollector
 from law_monitor.collectors.base import Collector, CollectResult, RunContext
 from law_monitor.collectors.legalize_git import LegalizeGitCollector, default_collectors
 from law_monitor.config import Config
@@ -61,11 +63,17 @@ class Monitor:
         now: Callable[[], datetime] | None = None,
         lawgo: LawGoClient | None = None,
         llm: ChatClient | None = None,
+        assembly: AssemblyClient | None = None,
     ):
         """lawgo가 없으면 bootstrap만 된다 (collect·replay는 법제처 원문 보강이 필요해 거부). llm은 요약 모델."""
         self.paths, self.config, self.lawgo, self.llm = paths, config, lawgo, llm
         enricher = LawGoEnricher(lawgo, config) if lawgo is not None else None
-        self.collectors = collectors if collectors is not None else default_collectors(config, enricher)
+        self.collectors: list[Collector] = list(
+            collectors if collectors is not None else default_collectors(config, enricher)
+        )
+        if collectors is None and (config.assembly_enabled or assembly is not None):
+            client = assembly or AssemblyClient(None)
+            self.collectors.extend(AssemblyCollector(source, client) for source in SOURCES)
         self.now = now or (lambda: datetime.now(KST))
         self.state = State(paths.state_db)
 
@@ -95,7 +103,9 @@ class Monitor:
     def collect(self, only: str | None = None) -> RunSummary:
         chosen = self._select(only)
         self._require_lawgo(chosen)
-        missing = [c.name for c in chosen if not c.has_baseline(self.state)]
+        missing = [
+            c.name for c in chosen if not getattr(c, 'isolated_baseline', False) and not c.has_baseline(self.state)
+        ]
         if missing:
             raise BootstrapRequired(f'기준점이 없습니다: {", ".join(missing)}. 먼저 law-monitor bootstrap을 실행하세요')
         return self._run(chosen, 'normal')
@@ -245,6 +255,7 @@ class Monitor:
                 events=summary.events,
                 event_paths=paths,
                 replace_sources=[s for r in results.values() for s in r.replace_sources],
+                baselines={k: v for r in results.values() for k, v in r.baselines.items()},
                 now=finished,
                 run=(
                     run_id,

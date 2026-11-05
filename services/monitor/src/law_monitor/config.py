@@ -52,6 +52,8 @@ class Config:
     keyword_rules: tuple[KeywordRule, ...]
     prelegislation_keywords: tuple[str, ...]
     checks: tuple = ()  # law_monitor.checks.Check: daily에서 부르는 점검 명령
+    assembly_enabled: bool = False
+    assembly_age: int = 22
 
     def law_category(self, folder: str) -> int | None:
         return next((law.category for law in self.laws if law.name == folder), None)
@@ -106,10 +108,17 @@ def from_dict(data: dict) -> Config:
             KeywordRule(_name(x.get('agency'), 'keyword_rules agency'), keywords, _category(x, 'keyword_rules'))
         )
 
-    pre = tuple((data.get('prelegislation') or {}).get('keywords') or ())
+    prelegislation = data.get('prelegislation') or {}
+    pre = tuple(_name(value, 'prelegislation.keywords') for value in prelegislation.get('keywords') or ())
+    assembly = prelegislation.get('assembly') or {}
+    enabled, age = assembly.get('enabled', False), assembly.get('age', 22)
+    if type(enabled) is not bool or type(age) is not int or age < 1 or (enabled and not pre):
+        raise ConfigError('Invalid prelegislation.assembly settings')
     from law_monitor import checks  # checks가 ConfigError를 쓰므로 여기서
 
-    return Config(dict(repos), laws, forms, tuple(names), tuple(rules), pre, checks.parse(data.get('checks')))
+    return Config(
+        dict(repos), laws, forms, tuple(names), tuple(rules), pre, checks.parse(data.get('checks')), enabled, age
+    )
 
 
 def _name(value, where: str) -> str:

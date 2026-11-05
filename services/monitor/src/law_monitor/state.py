@@ -26,6 +26,10 @@ create table if not exists seen_posts (
     first_seen_at text,
     primary key (source, post_id)
 );
+create table if not exists collector_baselines (
+    source text primary key not null,
+    scope text not null
+);
 create table if not exists events (
     event_id text primary key not null,
     source text,
@@ -71,6 +75,10 @@ class State:
             'select source, item_id, version_key, content_hash, file_path from items where source = ?', (source,)
         )
         return {r['item_id']: ItemState(*r) for r in rows}
+
+    def baseline(self, source: str) -> str | None:
+        row = self.conn.execute('select scope from collector_baselines where source = ?', (source,)).fetchone()
+        return row[0] if row else None
 
     def event_exists(self, event_id: str) -> bool:
         return self.conn.execute('select 1 from events where event_id = ?', (event_id,)).fetchone() is not None
@@ -148,11 +156,18 @@ class State:
         now: str,
         event_paths: dict[str, str] | None = None,
         replace_sources: list[str] | None = None,
+        baselines: dict[str, str] | None = None,
         run: tuple[str, str, str, str] | None = None,
     ) -> None:
         """run = (run_id, finished_at, status, summary_json). 하나라도 실패하면 모두 되돌린다."""
         paths = event_paths or {}
         with self.conn:
+            for source, scope in (baselines or {}).items():
+                self.conn.execute(
+                    'insert into collector_baselines values (?, ?) '
+                    'on conflict(source) do update set scope=excluded.scope',
+                    (source, scope),
+                )
             for source in replace_sources or []:
                 self.conn.execute('delete from items where source = ?', (source,))
             for repo, commit in cursors.items():

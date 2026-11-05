@@ -60,7 +60,7 @@ uv run --project services/law-calendar law-calendar --database services/law-cale
 
 ## 저장된 모니터링 결과와 공개 검토
 
-기존 monitor의 `legalize_law` 이벤트 JSON과 원문 사본을 오프라인으로 가져온다. DB 초기화 명령은 새 DB 생성 및 기존 v1/v2 DB의 v3 업그레이드를 지원한다. 기존 DB는 `.pre-v3.backup`으로 백업하며 같은 이름의 백업을 덮어쓰지 않는다. 공개 서버를 새 코드로 실행하기 전에 마이그레이션을 수행한다.
+기존 monitor의 `legalize_law` 이벤트 JSON과 원문 사본을 오프라인으로 가져온다. DB 초기화 명령은 새 DB와 기존 v1~v3 DB를 v4로 준비한다. v3에서 올릴 때는 SQLite backup으로 `.pre-v4.backup` 사본을 만들며 기존 백업 이름은 보존한다. 새 공개 서버를 실행하기 전에 마이그레이션을 수행한다. [배포와 복구 절차](../../docs/operations.md#국회-입법예고-캘린더-db-v4-반영)
 
 import는 명확한 최신 부칙의 절대 날짜·공포일 시행 또는 조문 전체의 구조화 시행 메타데이터를 자동 판정한다. 날짜가 확정되면 규칙 기반 요약과 함께 달력에 표시한다. 위임 표현·복잡한 부칙·부분 시행·상충·근거 부족은 보류한다. 자동 확인은 시행일에 한정되며 Git 구판·신판의 법적 효력 비교는 미검증으로 표시한다.
 
@@ -96,6 +96,16 @@ uv run --project services/law-calendar python -m law_calendar.db $CALENDAR_DB
 uv run --project services/law-calendar --frozen --no-sync python -m law_calendar.sync --monitor-home $MONITOR_HOME --database $CALENDAR_DB
 ```
 
-sync는 monitor state.db의 최신 정상 법령 수집과 등록된 이벤트 파일만 읽고 원천에 쓰지 않는다. 모델 요약의 처리 여부와 무관하게 재확인하며 과거 실패도 재시도한다. 성공하면 변경이 0건인 날에도 마지막 정상 수집 완료 시각을 기록한다. 수집/입력 실패는 종료 코드 2를 반환하고 신선도를 갱신하지 않는다. 실행 로그와 모니터링 요약의 점검 절에서 결과를 확인할 수 있다. DB가 없으면 자동 생성하지 않으며 실제 launchd 등록·운영 반영은 별도로 수행한다.
+sync는 monitor state.db의 최신 수집 결과와 등록된 이벤트 파일을 읽기 전용으로 가져온다. 법령·의안·예고 출처별로 검증하고 변경이 0건인 정상 실행도 각 마지막 수집 시각을 기록한다. 실패한 출처는 시각과 기존 데이터를 보존하고 다른 출처의 입력은 진행한다. 일부 실패 시 종료 코드 2를 반환하며 다음 정상 실행에서 재시도한다.
 
-입법예고 실수집·입력은 현재 지원하지 않으므로 공개 입법예고 패널에는 데이터가 없을 때 빈 상태 안내가 표시된다. 개발 예시는 production에 삽입되지 않는다.
+### 국회 이벤트 공개 검토
+
+국회 항목은 정기 sync에서 검토 대기로 등록된다. `assembly-list`에서 최신 snapshot ID를 찾고, `assembly-show`에서 공식 링크·날짜 근거·소관위원회·상태를 확인한 뒤 검토한다.
+
+```bash
+uv run --project services/law-calendar python -m law_calendar.manage --database "$CALENDAR_DB" assembly-list
+uv run --project services/law-calendar python -m law_calendar.manage --database "$CALENDAR_DB" assembly-show "$SNAPSHOT_ID"
+uv run --project services/law-calendar python -m law_calendar.manage --database "$CALENDAR_DB" assembly-review "$SNAPSHOT_ID" approve --reviewer "$REVIEWER_ID" --note '공식 원문과 날짜 확인'
+```
+
+같은 명령에서 `reject` 또는 `withdraw`로 반려·철회한다. 정정 자료가 들어오면 새 snapshot의 검토가 끝날 때까지 공개 일정이 숨겨진다. 공개 화면은 공식 예고 시작·종료일과 법률안 발의·의결일을 구분하며, 같은 예고의 시작과 종료가 같은 날이면 한 건으로 집계한다.

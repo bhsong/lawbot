@@ -52,6 +52,7 @@ export default function LawCalendarPage({ loader = loadCalendar, initialDate }: 
   const notices = changes.filter((change) => change.date === selected && change.kind === 'notice')
   const noticeCount = new Set(notices.map(change => change.eventId ?? change.id)).size
   const effective = changes.filter((change) => change.date === selected && change.kind === 'effective')
+  const bills = changes.filter((change) => change.date === selected && change.kind === 'bill')
   function select(day: string) {
     detailRequest.current?.abort()
     setDetailPending(false); setDetailError(false); setOpened(null); setSelected(day)
@@ -91,18 +92,22 @@ export default function LawCalendarPage({ loader = loadCalendar, initialDate }: 
     <section aria-label="데이터 확인 상태" className="lc-data-status">
       <span>수집 시각: {snapshot?.collectedAt ?? '확인되지 않음'}</span>
       <span>검증 시각: {snapshot?.verifiedAt ?? '확인되지 않음'}</span>
+      {snapshot?.noticeCollectedAt && <span>국회 입법예고 수집: {snapshot.noticeCollectedAt}</span>}
+      {snapshot?.billCollectedAt && <span>국회 법률안 수집: {snapshot.billCollectedAt}</span>}
       <span>날짜 기준: 한국 표준시(KST)</span>
     </section>
     {(snapshot?.delayed || scenario === 'delayed') && <p className="lc-warning" role="status">데이터 갱신이 지연되고 있습니다. 마지막 확인 시각과 공식 원문을 확인하세요.</p>}
     <MonthCalendar selected={selected} changes={changes} totals={snapshot?.counts} onSelect={select} />
     <section className="lc-results" aria-labelledby="lc-selected-date" aria-busy={state === 'loading'}>
       <div className="lc-selected"><h2 id="lc-selected-date">{dateLabel(selected)}</h2>
-        {state === 'ready' && <p aria-live="polite">입법예고 {noticeCount}건 · 시행 조문 {effective.length}건</p>}</div>
+        {state === 'ready' && <p aria-live="polite">입법예고 {noticeCount}건 · 시행 조문 {effective.length}건
+          {bills.length > 0 && ` · 법률안 ${bills.length}건`}</p>}</div>
       {state === 'loading' && <p className="lc-empty" role="status">법령 변경 정보를 불러오는 중입니다.</p>}
       {state === 'error' && <div className="lc-warning" role="alert"><p>법령 변경 정보를 불러오지 못했습니다.</p><button type="button" onClick={retry}>다시 시도</button></div>}
       {state === 'ready' && <div className="lc-panels">
         <EventList key={`notice-${selected}`} kind="notice" changes={notices} onOpen={openChange} />
         <EventList key={`effective-${selected}`} kind="effective" changes={effective} onOpen={openChange} />
+        {bills.length > 0 && <EventList key={`bill-${selected}`} kind="bill" changes={bills} onOpen={openChange} />}
       </div>}
     </section>
     {detailPending && <p role="status">상세 정보를 불러오는 중입니다.</p>}

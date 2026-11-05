@@ -4,6 +4,7 @@ export interface CalendarDay {
   event_on: string
   notice_count: number
   effective_count: number
+  bill_count?: number
 }
 
 export interface CalendarMonth {
@@ -17,6 +18,8 @@ export interface CalendarStatus {
   verifiedAt: string | null
   delayed: boolean
   timezone: "Asia/Seoul"
+  billCollectedAt?: string | null
+  noticeCollectedAt?: string | null
 }
 
 export interface ChangePage {
@@ -42,10 +45,24 @@ export interface HoldPage {
   page_size: number
 }
 
+export interface PublicAssembly {
+  agency: string | null
+  billNo: string
+  dateRole: string
+  noticeStart: string | null
+  noticeEnd: string | null
+  billProposed: string | null
+  billDecided: string | null
+  committeeDecided: string | null
+  committeeResult: string | null
+  judiciaryDecided: string | null
+  judiciaryResult: string | null
+}
+
 export interface PublicChange {
   id: string
   eventId: string
-  kind: "notice" | "effective"
+  kind: "notice" | "effective" | "bill"
   date: string
   lawName: string
   article: string
@@ -62,12 +79,13 @@ export interface PublicChange {
   collectedAt: string
   verifiedAt: string
   reviewState: "approved"
+  assembly?: PublicAssembly | null
 }
 
 export interface PublicDetail {
   id: string
   eventId: string
-  kind: "notice" | "effective"
+  kind: "notice" | "effective" | "bill"
   date: string
   lawName: string
   article: string
@@ -84,5 +102,6 @@ export interface PublicDetail {
   collectedAt: string
   verifiedAt: string
   reviewState: "approved"
+  assembly?: PublicAssembly | null
   diff: (string)[] | null
 }

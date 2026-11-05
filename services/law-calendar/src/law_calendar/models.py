@@ -5,10 +5,24 @@ from typing import Literal
 from pydantic import BaseModel
 
 
+class PublicAssembly(BaseModel):
+    agency: str | None
+    billNo: str
+    dateRole: str
+    noticeStart: str | None
+    noticeEnd: str | None
+    billProposed: str | None
+    billDecided: str | None
+    committeeDecided: str | None
+    committeeResult: str | None
+    judiciaryDecided: str | None
+    judiciaryResult: str | None
+
+
 class PublicChange(BaseModel):
     id: str
     eventId: str
-    kind: Literal['notice', 'effective']
+    kind: Literal['notice', 'effective', 'bill']
     date: str
     lawName: str
     article: str
@@ -25,6 +39,7 @@ class PublicChange(BaseModel):
     collectedAt: str
     verifiedAt: str
     reviewState: Literal['approved']
+    assembly: PublicAssembly | None = None
 
 
 class PublicDetail(PublicChange):
@@ -42,6 +57,7 @@ class CalendarDay(BaseModel):
     event_on: str
     notice_count: int
     effective_count: int
+    bill_count: int = 0
 
 
 class CalendarMonth(BaseModel):
@@ -55,6 +71,8 @@ class CalendarStatus(BaseModel):
     verifiedAt: str | None
     delayed: bool
     timezone: Literal['Asia/Seoul']
+    billCollectedAt: str | None = None
+    noticeCollectedAt: str | None = None
 
 
 class HeldChange(BaseModel):

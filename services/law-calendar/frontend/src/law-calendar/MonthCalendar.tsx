@@ -12,15 +12,17 @@ export function MonthCalendar({ selected, changes, onSelect, totals }: {
   const focusDate = useRef(false)
   const grid = useRef<HTMLTableElement>(null)
   const today = todayKst()
-  const counts = new Map<string, { notice: number; effective: number }>()
+  const counts = new Map<string, { notice: number; effective: number; bill: number }>()
   for (const change of changes) {
-    const count = counts.get(change.date) ?? { notice: 0, effective: 0 }
+    const count = counts.get(change.date) ?? { notice: 0, effective: 0, bill: 0 }
     count[change.kind]++
     counts.set(change.date, count)
   }
   if (totals) {
     counts.clear()
-    for (const day of totals) counts.set(day.event_on, { notice: day.notice_count, effective: day.effective_count })
+    for (const day of totals) counts.set(day.event_on, {
+      notice: day.notice_count, effective: day.effective_count, bill: day.bill_count ?? 0,
+    })
   }
 
   useLayoutEffect(() => {
@@ -53,7 +55,8 @@ export function MonthCalendar({ selected, changes, onSelect, totals }: {
         <button type="button" aria-label="다음 달" onClick={() => onSelect(shiftMonth(selected, 1))}>→</button>
       </div>
     </div>
-    <p className="lc-legend"><span className="lc-notice">● 입법예고 · 게시일</span><span className="lc-effective">● 시행 · 조문 시행일</span></p>
+    <p className="lc-legend"><span className="lc-notice">● 입법예고 · 시작/종료/게시</span>
+      <span className="lc-effective">● 시행 · 조문 시행일</span><span className="lc-bill">● 법률안 · 발의/의결</span></p>
     <table ref={grid} role="grid" aria-labelledby="lc-month-title" aria-describedby="lc-key-help">
       <thead><tr>{['일', '월', '화', '수', '목', '금', '토'].map((label) => <th key={label} scope="col">{label}</th>)}</tr></thead>
       <tbody>{Array.from({ length: days.length / 7 }, (_, week) => <tr key={week}>
@@ -61,7 +64,8 @@ export function MonthCalendar({ selected, changes, onSelect, totals }: {
           const count = counts.get(day)
           return <td key={day} aria-selected={day === selected}>
             <button type="button" data-outside={!day.startsWith(month)} tabIndex={day === selected ? 0 : -1}
-              aria-label={`${dateLabel(day)}, 입법예고 ${count?.notice ?? 0}건, 시행 ${count?.effective ?? 0}건`}
+              aria-label={`${dateLabel(day)}, 입법예고 ${count?.notice ?? 0}건, 시행 ${count?.effective ?? 0}건`
+                + (count?.bill ? `, 법률안 ${count.bill}건` : '')}
               aria-pressed={day === selected} aria-current={day === today ? 'date' : undefined}
               onClick={() => onSelect(day)} onKeyDown={(event) => navigate(event, day)}>
               <span className="lc-day-number">{Number(day.slice(-2))}</span>
@@ -69,6 +73,7 @@ export function MonthCalendar({ selected, changes, onSelect, totals }: {
               {count && <span className="lc-day-counts">
                 {count.notice > 0 && <span className="lc-notice"><span className="lc-count-label">예고 </span>{count.notice}</span>}
                 {count.effective > 0 && <span className="lc-effective"><span className="lc-count-label">시행 </span>{count.effective}</span>}
+                {count.bill > 0 && <span className="lc-bill"><span className="lc-count-label">의안 </span>{count.bill}</span>}
               </span>}
             </button>
           </td>

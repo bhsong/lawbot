@@ -160,7 +160,7 @@ def test_v2_upgrade_keeps_a_backup_and_existing_rows(tmp_path):
         assert conn.execute('PRAGMA user_version').fetchone()[0] == 2
     with sqlite3.connect(db) as conn:
         assert conn.execute('SELECT name FROM laws').fetchone()[0] == 'existing'
-        assert conn.execute('PRAGMA user_version').fetchone()[0] == 3
+        assert conn.execute('PRAGMA user_version').fetchone()[0] == 4
 
 
 from test_calendar_api import dataset as dataset

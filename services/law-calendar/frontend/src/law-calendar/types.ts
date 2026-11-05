@@ -1,5 +1,20 @@
 /** Display models for public records and development fixtures. API contracts are generated separately. */
-export type EventKind = 'notice' | 'effective'
+import type { CalendarDay, PublicAssembly } from './api-types'
+
+export type EventKind = 'notice' | 'effective' | 'bill'
+
+const dateRoles: Record<string, string> = {
+  notice_start: '예고 시작일',
+  notice_end: '예고 종료일',
+  notice_period: '예고 시작·종료일',
+  bill_proposed: '발의·제안일',
+  bill_decided: '의결일',
+  bill_proposed_decided: '발의·제안 및 의결일',
+}
+
+export function dateRoleLabel(role: string) {
+  return dateRoles[role] ?? '공식 일정'
+}
 
 export interface CalendarChange {
   eventId?: string
@@ -20,15 +35,18 @@ export interface CalendarChange {
   sourceUrl: string | null
   collectedAt: string | null
   verifiedAt: string | null
+  assembly?: PublicAssembly | null
 }
 
 export interface CalendarSnapshot {
-  counts?: { event_on: string; notice_count: number; effective_count: number }[]
+  counts?: CalendarDay[]
   changes: CalendarChange[]
   demo: boolean
   delayed: boolean
   collectedAt: string | null
   verifiedAt: string | null
+  billCollectedAt?: string | null
+  noticeCollectedAt?: string | null
 }
 
 export type CalendarLoader = (month: string, signal: AbortSignal) => Promise<CalendarSnapshot>

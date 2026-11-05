@@ -6,8 +6,8 @@
 - 지금 있는 수집기: `legalize_law`([legalize-kr](https://github.com/legalize-kr/legalize-kr), 법률·시행령·시행규칙), `legalize_admrule`([admrule-kr](https://github.com/legalize-kr/admrule-kr), 고시 등). 변경은 공개 git 저장소에서 찾고, 이벤트마다 법제처 Open API로 개정문·제개정이유를 채웁니다 ([계획](../../docs/archives/monitor-lawgo.md)).
 - 별표·서식: `forms` 대상 법령과 추적 행정규칙은 신·구판의 별표·서식 텍스트를 비교해 바뀐 것만 `lawgo_forms`·`lawgo_admrul` 이벤트로 만들고, 그 서식의 PDF·HWP 원본을 받습니다.
 - 요약(2단계): 요약하지 않은 이벤트를 운영 모델 서버의 `qwen3.8-27b-4bit`로 요약해 `data/summaries/YYYY-MM-DD.md`를 만듭니다 ([계획](../../docs/archives/monitor-summary.md)).
-- 점검: `config/targets.yaml`의 `checks` 명령을 `daily`에서 부르고 결과 줄을 요약 md에 붙입니다. 지금은 챗봇 조문 데이터 자동 갱신(`lawbot-articles-update`) 하나입니다 ([계획](../../docs/archives/articles-auto-update.md)).
-- 아직 없는 것: 입법예고·국회 법안(PR 3). 한눈에 보기 5번 전자신고 파일 레이아웃(지급명세서 전산매체 제출요령)은 수집하지 않고 3단계 연례 리마인드로 합니다 ([결정](../../docs/plans/monitor-collector.md) 9절).
+- 점검: `config/targets.yaml`의 `checks`에 지정된 캘린더 sync와 챗봇 조문 데이터 자동 갱신을 `daily`가 순차 실행합니다.
+- 국회 법률안과 입법예고는 아래 절의 선택 수집기로 연결합니다. 전자신고 파일 레이아웃(지급명세서 전산매체 제출요령)은 3단계 연례 리마인드 대상입니다 ([결정](../../docs/plans/monitor-collector.md) 9절).
 
 ## 설치
 
@@ -40,6 +40,20 @@ uv run law-monitor daily                  # launchd가 매일 실행: collect �
 - 법제처 호출이 실패하면(재시도 3회 뒤) 그 수집기가 실패로 끝나고 커서가 그대로라, 다음 실행에서 같은 변경을 다시 처리합니다. 원문이 빠진 이벤트는 저장하지 않습니다.
 - 한 수집기가 3번 연속 실패하면 `collector_failing` 이벤트가 한 번 생깁니다.
 - `bootstrap --force`는 기준점을 다시 잡습니다. 그 사이 변경은 이벤트가 생기지 않으니, 대상 설정을 바꿔서 새 행정규칙을 처음부터 추적할 때만 씁니다 (설정만 바꾸면 이미 있는 행정규칙은 다음 개정부터 잡힘).
+
+## 국회 법률안과 입법예고
+
+`services/monitor/.env`의 `LAW_ASSEMBLY_KEY`를 사용합니다. `prelegislation.keywords`의 제목 필터와 `prelegislation.assembly.age` 설정에 따라 의안검색·진행 중·종료 예고를 읽습니다. 배포 전에는 임시 home에서 아래 명령을 사용합니다.
+
+```bash
+uv run law-monitor --home "$MONITOR_HOME" bootstrap --only assembly_bill
+uv run law-monitor --home "$MONITOR_HOME" bootstrap --only assembly_notice
+uv run law-monitor --home "$MONITOR_HOME" collect --only assembly_notice
+```
+
+기준선을 잡은 뒤 첫 정상 예고 수집에서 해당 키워드의 진행 중 예고를 검토 후보로 발행합니다. 이후 의안·예고 변경을 이어서 추적합니다. 필터나 국회 대수를 바꿀 때는 각 국회 수집기에 `bootstrap --only <수집기> --force`를 실행해 기준을 갱신합니다.
+
+일일 수집을 활성화하려면 캘린더 DB v4와 두 국회 기준선이 준비된 뒤 Monitor 환경의 `LAW_ASSEMBLY_ENABLED=1`을 사용합니다. 이 값은 YAML 활성화 설정에 우선합니다. 기존 06:30 작업에서 각 국회 수집기 실패를 별도로 기록합니다. 국회 이벤트는 공식 날짜와 상태로 별도 요약하므로 모델 호출 수를 늘리지 않습니다. [실제 API 검증 방법](../../docs/evals/2026-11-05-assembly-api-validation-guide.md)
 
 ## 요약 (2단계)
 

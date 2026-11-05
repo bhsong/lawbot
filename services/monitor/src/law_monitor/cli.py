@@ -6,10 +6,12 @@
 import argparse
 import logging
 import sys
+from dataclasses import replace
 from pathlib import Path
 
 from law_monitor import secrets
 from law_monitor.app import AlreadyBootstrapped, BootstrapRequired, MissingSecret, Monitor
+from law_monitor.assembly import SOURCES, AssemblyClient
 from law_monitor.config import CONFIG_FILE, REPOS, ConfigError, load
 from law_monitor.gitrepo import GitError
 from law_monitor.lawgo import LawGoClient
@@ -25,7 +27,7 @@ def build_parser() -> argparse.ArgumentParser:
     sub = p.add_subparsers(dest='command', required=True)
 
     b = sub.add_parser('bootstrap', help='첫 실행: 현재 상태를 기준점으로 저장 (이벤트 없음)')
-    b.add_argument('--only', help='이 수집기만 (legalize_law, legalize_admrule)')
+    b.add_argument('--only', help='이 수집기만 (legalize_law, legalize_admrule, assembly_bill, assembly_notice)')
     b.add_argument(
         '--force', action='store_true', help='이미 있는 기준점을 다시 잡음 (그 사이 변경은 이벤트가 안 생김)'
     )
@@ -121,7 +123,16 @@ def _run(args, paths: Paths) -> int:
     lawgo = LawGoClient(oc) if oc else None
     llm_config = load_config()
     llm = ChatClient(llm_config) if llm_config else None
-    monitor = Monitor(paths, load(args.config), lawgo=lawgo, llm=llm)
+    config = load(args.config)
+    enabled = secrets.get('LAW_ASSEMBLY_ENABLED')
+    if enabled is not None:
+        if enabled not in ('0', '1') or (enabled == '1' and not config.prelegislation_keywords):
+            raise ConfigError('LAW_ASSEMBLY_ENABLED must be 0 or 1, with keywords required when enabled')
+        config = replace(config, assembly_enabled=enabled == '1')
+    assembly = None
+    if config.assembly_enabled or getattr(args, 'only', None) in SOURCES:
+        assembly = AssemblyClient(secrets.get('LAW_ASSEMBLY_KEY'))
+    monitor = Monitor(paths, config, lawgo=lawgo, llm=llm, assembly=assembly)
     if args.command == 'summarize':
         return _summarize(monitor, events_dir=args.events_dir)
     if args.command == 'daily':
