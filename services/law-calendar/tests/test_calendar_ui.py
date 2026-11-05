@@ -1,12 +1,17 @@
 """Run the public calendar at its own origin with no Lawbot backend available."""
 
 import datetime
+import json
+import subprocess
+import sys
 
 import pytest
 from playwright.sync_api import expect
 
 import calendar_ui_support as support
 from test_calendar_api import dataset as dataset
+from test_calendar_workflow import approval, import_one
+from test_calendar_workflow import workflow as workflow
 
 pytest_plugins = ['calendar_test_fixtures']
 pytestmark = [pytest.mark.e2e_stub, pytest.mark.usefixtures('calendar_network')]
@@ -148,3 +153,45 @@ def test_database_to_public_calendar_and_comparison(dataset, tmp_path, calendar_
         page.get_by_role('button', pressed=True).focus()
         page.keyboard.press('ArrowRight')
         expect(page.get_by_role('region', name='시행 조문 1건')).to_be_visible()
+
+
+def test_review_cli_controls_public_browser_visibility(workflow, tmp_path, calendar_page):
+    db = workflow[0]
+    event_id = import_one(workflow)
+    manifest = tmp_path / 'review.json'
+    payload = approval(db, event_id)
+    page = calendar_page
+    page.clock.install(time=datetime.datetime(2026, 11, 5, tzinfo=datetime.UTC))
+    with support.serve(tmp_path, development=False, database=db) as (url, _):
+        page.goto(url)
+        expect(page.get_by_text('이 달에 공개 승인된', exact=False)).to_be_visible()
+        for decision in ('approve', 'withdraw'):
+            payload['decision'] = decision
+            manifest.write_text(json.dumps(payload), encoding='utf-8')
+            subprocess.run(
+                [
+                    sys.executable,
+                    '-m',
+                    'law_calendar.manage',
+                    '--database',
+                    str(db),
+                    'review',
+                    str(manifest),
+                    '--reviewer',
+                    'test-reviewer',
+                ],
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+            page.reload()
+            if decision == 'approve':
+                panel = page.get_by_role('region', name='시행 조문 2건')
+                expect(panel).to_be_visible()
+                panel.get_by_role('button').filter(has_text='제1조').click()
+                dialog = page.get_by_role('dialog')
+                expect(dialog).to_contain_text('이전 원문')
+                expect(dialog).to_contain_text('이후 원문')
+                page.get_by_role('button', name='상세 닫기').click()
+            else:
+                expect(page.get_by_text('이 달에 공개 승인된', exact=False)).to_be_visible()
