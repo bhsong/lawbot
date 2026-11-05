@@ -6,6 +6,7 @@ import os
 import shutil
 import socket
 import subprocess
+import sys
 import time
 from pathlib import Path
 
@@ -17,7 +18,7 @@ ROOT = SERVICE.parents[1]
 
 
 @contextlib.contextmanager
-def serve(tmp, *, development):
+def serve(tmp, *, development, database=None):
     with socket.socket() as sock:
         sock.bind(('127.0.0.1', 0))
         port = sock.getsockname()[1]
@@ -29,6 +30,18 @@ def serve(tmp, *, development):
         assert (FRONTEND / 'dist/index.html').is_file(), 'Build the independent calendar frontend first'
         args.append('preview')
     args.extend(['--host', '127.0.0.1', '--port', str(port), '--strictPort'])
+    if database is not None:
+        args = [
+            sys.executable,
+            '-m',
+            'law_calendar.server',
+            '--database',
+            str(database),
+            '--frontend',
+            str(FRONTEND / 'dist'),
+            '--port',
+            str(port),
+        ]
     env = {key: value for key, value in os.environ.items() if not key.startswith(('LAWBOT_', 'LAW_MONITOR_'))}
     log = tmp / 'calendar-server.log'
     with log.open('w') as out:

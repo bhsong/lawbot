@@ -1,6 +1,6 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { ChangeDialog } from './ChangeDialog'
-import { loadCalendar } from './data'
+import { loadCalendar, loadChange } from './data'
 import { dateLabel, todayKst } from './dates'
 import { EventList } from './EventList'
 import { MonthCalendar } from './MonthCalendar'
@@ -17,6 +17,10 @@ export default function LawCalendarPage({ loader = loadCalendar, initialDate }: 
   const [attempt, setAttempt] = useState(0)
   const [scenario, setScenario] = useState<Scenario>('normal')
   const [opened, setOpened] = useState<CalendarChange | null>(null)
+  const detailRequest = useRef<AbortController | null>(null)
+  const [detailPending, setDetailPending] = useState(false)
+  const [detailError, setDetailError] = useState(false)
+  useEffect(() => () => detailRequest.current?.abort(), [])
   const month = selected.slice(0, 7)
 
   useEffect(() => {
@@ -44,8 +48,27 @@ export default function LawCalendarPage({ loader = loadCalendar, initialDate }: 
 
   const changes = snapshot?.changes ?? []
   const notices = changes.filter((change) => change.date === selected && change.kind === 'notice')
+  const noticeCount = new Set(notices.map(change => change.eventId ?? change.id)).size
   const effective = changes.filter((change) => change.date === selected && change.kind === 'effective')
-  function select(day: string) { setOpened(null); setSelected(day) }
+  function select(day: string) {
+    detailRequest.current?.abort()
+    setDetailPending(false); setDetailError(false); setOpened(null); setSelected(day)
+  }
+  async function openChange(change: CalendarChange) {
+    if (snapshot?.demo) { setOpened(change); return }
+    detailRequest.current?.abort()
+    const controller = new AbortController()
+    detailRequest.current = controller
+    setDetailPending(true); setDetailError(false)
+    try {
+      const detail = await loadChange(change.id, controller.signal)
+      if (!controller.signal.aborted) setOpened(detail)
+    } catch {
+      if (!controller.signal.aborted) setDetailError(true)
+    } finally {
+      if (!controller.signal.aborted) setDetailPending(false)
+    }
+  }
   function retry() { setScenario('normal'); setAttempt((value) => value + 1) }
 
   return <main className="lc-page">
@@ -61,24 +84,26 @@ export default function LawCalendarPage({ loader = loadCalendar, initialDate }: 
       </select></label>
     </details>}
     {snapshot?.demo && <p className="lc-demo-badge">예시 / 실제 법령 아님</p>}
-    {state === 'ready' && !snapshot?.demo && <p className="lc-warning">승인 데이터 연결 전입니다. 현재 공개된 법령 정보가 없습니다.</p>}
+    {state === 'ready' && !snapshot?.demo && changes.length === 0 && <p className="lc-warning">이 달에 공개 승인된 법령 변경 정보가 없습니다.</p>}
     <section aria-label="데이터 확인 상태" className="lc-data-status">
       <span>수집 시각: {snapshot?.collectedAt ?? '확인되지 않음'}</span>
       <span>검증 시각: {snapshot?.verifiedAt ?? '확인되지 않음'}</span>
       <span>날짜 기준: 한국 표준시(KST)</span>
     </section>
     {(snapshot?.delayed || scenario === 'delayed') && <p className="lc-warning" role="status">데이터 갱신이 지연되고 있습니다. 마지막 확인 시각과 공식 원문을 확인하세요.</p>}
-    <MonthCalendar selected={selected} changes={changes} onSelect={select} />
+    <MonthCalendar selected={selected} changes={changes} totals={snapshot?.counts} onSelect={select} />
     <section className="lc-results" aria-labelledby="lc-selected-date" aria-busy={state === 'loading'}>
       <div className="lc-selected"><h2 id="lc-selected-date">{dateLabel(selected)}</h2>
-        {state === 'ready' && <p aria-live="polite">입법예고 {notices.length}건 · 시행 조문 {effective.length}건</p>}</div>
+        {state === 'ready' && <p aria-live="polite">입법예고 {noticeCount}건 · 시행 조문 {effective.length}건</p>}</div>
       {state === 'loading' && <p className="lc-empty" role="status">법령 변경 정보를 불러오는 중입니다.</p>}
       {state === 'error' && <div className="lc-warning" role="alert"><p>법령 변경 정보를 불러오지 못했습니다.</p><button type="button" onClick={retry}>다시 시도</button></div>}
       {state === 'ready' && <div className="lc-panels">
-        <EventList key={`notice-${selected}`} kind="notice" changes={notices} onOpen={setOpened} />
-        <EventList key={`effective-${selected}`} kind="effective" changes={effective} onOpen={setOpened} />
+        <EventList key={`notice-${selected}`} kind="notice" changes={notices} onOpen={openChange} />
+        <EventList key={`effective-${selected}`} kind="effective" changes={effective} onOpen={openChange} />
       </div>}
     </section>
+    {detailPending && <p role="status">상세 정보를 불러오는 중입니다.</p>}
+    {detailError && <p className="lc-warning" role="alert">상세 정보를 확인하지 못했습니다. 항목을 다시 선택하세요.</p>}
     <footer className="lc-footer">
       <h2>공식 원문을 먼저 확인하세요</h2>
       <p>본 서비스는 공개된 법령·입법예고 자료를 수집·가공하여 제공하며, 수집 지연, 누락, 해석 또는 요약 오류가 발생할 수 있습니다. 법령의 적용 여부는 개별 조항의 시행일, 부칙, 경과조치 및 사실관계에 따라 달라질 수 있습니다. 중요한 법적 판단이나 조치를 하기 전 공식 법령·입법예고 원문을 직접 확인하고, 필요하면 전문가의 검토를 받으시기 바랍니다. 이 서비스는 개별 사건에 대한 법률 자문을 대신하지 않습니다.</p>

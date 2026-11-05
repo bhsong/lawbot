@@ -1,7 +1,8 @@
-/** Phase 1 display models, not the future public API contract. Dates are KST civil dates. */
+/** Display models for public records and development fixtures. API contracts are generated separately. */
 export type EventKind = 'notice' | 'effective'
 
 export interface CalendarChange {
+  eventId?: string
   id: string
   kind: EventKind
   date: string
@@ -22,6 +23,7 @@ export interface CalendarChange {
 }
 
 export interface CalendarSnapshot {
+  counts?: { event_on: string; notice_count: number; effective_count: number }[]
   changes: CalendarChange[]
   demo: boolean
   delayed: boolean

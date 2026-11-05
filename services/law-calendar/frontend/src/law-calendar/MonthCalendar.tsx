@@ -1,10 +1,10 @@
 import { useLayoutEffect, useRef } from 'react'
 import type { KeyboardEvent } from 'react'
 import { dateLabel, monthDays, shiftDay, shiftMonth, todayKst, weekday } from './dates'
-import type { CalendarChange } from './types'
+import type { CalendarChange, CalendarSnapshot } from './types'
 
-export function MonthCalendar({ selected, changes, onSelect }: {
-  selected: string; changes: CalendarChange[]; onSelect: (date: string) => void
+export function MonthCalendar({ selected, changes, onSelect, totals }: {
+  selected: string; changes: CalendarChange[]; onSelect: (date: string) => void; totals?: CalendarSnapshot['counts']
 }) {
   const month = selected.slice(0, 7)
   const days = monthDays(month)
@@ -17,6 +17,10 @@ export function MonthCalendar({ selected, changes, onSelect }: {
     const count = counts.get(change.date) ?? { notice: 0, effective: 0 }
     count[change.kind]++
     counts.set(change.date, count)
+  }
+  if (totals) {
+    counts.clear()
+    for (const day of totals) counts.set(day.event_on, { notice: day.notice_count, effective: day.effective_count })
   }
 
   useLayoutEffect(() => {

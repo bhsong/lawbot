@@ -1,5 +1,17 @@
 # Lawbot 법령 변경 캘린더: Phase 0 조사 및 Phase 1 계획
 
+## Phase 2 작업 계약 (2026-11-05)
+
+PR #68 병합 main 9a54fc3에서 `codex/law-calendar-phase2-20261105`를 생성했다. 독립 Python 패키지 law_calendar를 services/law-calendar에 추가한다. 수집·LLM·챗봇 패키지를 import하지 않는다. 별도 SQLite DB를 명시적으로 초기화하고 조회 서버는 read-only로 연다. 운영 DB를 자동 생성하거나 예시 데이터를 자동 삽입하지 않는다.
+
+스키마 v1: laws, change_events, article_changes, review_audit, collection_status. 이벤트와 조문 변경은 1:N, 각각 pending/approved/rejected/withdrawn 상태이며 두 레벨 모두 승인·검증되고 공식 HTTPS 출처가 있는 건만 공개한다. published_on/promulgated_on/effective_on/comment_deadline/collected_at/verified_at을 분리한다. raw before/after와 summary는 별도 열이며 diff는 응답에서 계산한다. 원문 버전·snapshot 수집 모델은 Phase 3에서 추가 마이그레이션한다.
+
+API: /api/law-calendar?month=YYYY-MM, /api/law-events?date=YYYY-MM-DD&type=all|notice|effective&page=1&page_size=100, /api/law-changes/{id}, /api/law-calendar/status. UI의 월 공급자 호환을 위해 law-events는 month 필터도 지원한다(date와 배타적). 목록은 공개된 조문 변경 행이며 notice_count는 예고 문서 수, effective_count는 시행 조문 변경 수다. 응답은 KST 일자, 날짜별 집계, 페이지 정보, 공개 검증 상태·출처를 포함한다. 월 목록에는 화면 비교용 원문도 제공하며 상세 endpoint와 같은 공개 조건을 사용한다.
+
+개발 예시는 기존 개발 모드에만 유지한다. production은 same-origin API를 credentials:omit으로 읽고, 데이터 미연결/오류를 공개 항목 0건과 구분한다. 큰 월 목록은 페이지를 순차로 조회하고 취소·실패 시 불완전 월을 표시하지 않는다. 샘플은 pytest 임시 DB에서만 사용한다. 마이그레이션은 user_version과 순방향 SQL로 관리하고, 기존 DB에는 backup API로 사본을 만든 뒤 적용한다.
+
+검증: 대기/반려/철회·검증 시각/출처 미확인 비노출, 집계/목록/상세 일치, 날짜·유형·페이지 검증, 다조문·조문별 시행일, 원문/diff 보존, DB 부재 503, frontend 취소·페이지·오류 처리, DB→독립 서버→브라우저. 실제 데이터 수집과 승인 CLI/UI는 Phase 3이며 이번 단계는 공개 쓰기 endpoint를 만들지 않는다. README에는 사용법만, 과정·계약 변경은 이 계획과 검증 기록에 남긴다.
+
 ## 변경된 배포·서비스 경계 (2026-11-05 사용자 지시)
 
 캘린더는 챗봇과 다른 서브도메인의 루트 `/`에서 로그인 없이 제공하는 독립 앱이다. 아래 실사 당시의 같은 사이트 `/law-calendar` 가정과 chatbot 패키지 통합 제안은 이 지시로 대체한다. 챗봇은 Mac mini 모델 서버를 사용하는 비공개 로그인 서비스로 유지한다.
@@ -196,7 +208,7 @@ uv run pyright
 | --- | --- | --- | --- | --- | --- |
 | Phase 0 | codex/law-calendar-phase0-20261105 / 0030cda | docs/plans/LAW_CALENDAR_PLAN.md | 코드·문서 읽기 및 기준 커밋 재확인 | 실사 기록 완료 / 전체 완료 기준 미충족 | CONTEXT/첨부 파일 부재, 실제 이벤트 2유형 전체 추적 |
 | Phase 1 | codex/law-calendar-phase0-20261105 / 이 결과 기록과 같은 분리 커밋 | 위 변경 목록 | 두 frontend typecheck/test/build, 독립 E2E, pytest, ruff, pyright, compileall, uv lock --check | 분리 후 calendar 12개·chatbot 19개·Python 전체 753개 통과(독립 E2E 4개 포함) | 실제 API 미연결, 실제 모델 미실행, 새 커밋 macOS CI 별도 확인 |
-| Phase 2 | 미시작 | 미정 | 미실행 | 미실행 | 공개 DB·승인·조회 계약 확정 |
+| Phase 2 | codex/law-calendar-phase2-20261105 / 이 기록과 같은 구현 커밋 | 독립 API/DB/schema, frontend 연결, CI·사용법·검증 기록 | pytest, 두 frontend 검사·빌드, ruff, pyright, compileall, 두 lock check, schema --check | 로컬 Python 774개·calendar Vitest 14개·chatbot 19개 통과 | CI 확인, 실데이터 adapter·승인 CLI·원천 버전 모델은 Phase 3 |
 | Phase 3 | 미시작 | 미정 | 미실행 | 미실행 | 입법예고 키·응답 및 adapter |
 | Phase 4 | 미시작 | 미정 | 미실행 | 미실행 | 조항별 효력·공개 배포·백업·이용 조건 |
 | Phase 5 | 미시작 | 미정 | 미실행 | 미실행 | 기존 RAG 자동 갱신과 승인 정책 조정 |
