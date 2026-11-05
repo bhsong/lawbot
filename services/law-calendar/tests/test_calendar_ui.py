@@ -261,3 +261,35 @@ def test_public_holds_dialog_is_undated_read_only_and_keyboard_accessible(workfl
         page.keyboard.press('Escape')
         expect(dialog).not_to_be_visible()
         expect(opener).to_be_focused()
+
+
+def test_numbered_commencement_shows_changed_scope_and_separate_hold(workflow, tmp_path, calendar_page):
+    db, home, path, event = workflow
+    before = '##### 제1조\n\n**①** 종전 본문\n\n**②** 종전 제한\n'
+    after = before.replace('종전', '개정')
+    (home / 'data/files/old.md').write_text(before, encoding='utf-8')
+    (home / 'data/files/new.md').write_text(after, encoding='utf-8')
+    event['diff']['chunks'] = [{'article': '제1조'}]
+    event['context'].pop('lawgo')
+    event['context']['addenda_added'] = [
+        '이 법은 공포한 날부터 시행한다. 다만, 다음 각 호의 개정규정은 해당 호에서 정하는 날부터 시행한다.\n'
+        '1. 제1조제1항: 2027년 1월 1일\n'
+        '2. 제1조제2항(상시 50명 미만인 사업장으로 한정한다): 2027년 1월 1일'
+    ]
+    path.write_text(json.dumps(event, ensure_ascii=False), encoding='utf-8')
+    import_one(workflow)
+    page = calendar_page
+    page.clock.set_fixed_time(datetime.datetime(2027, 1, 1, tzinfo=datetime.UTC))
+    with support.serve(tmp_path, development=False, database=db) as (url, _):
+        page.goto(url)
+        panel = page.get_by_role('region', name='시행 조문 1건')
+        panel.get_by_role('button', name='제1조 제1항', exact=False).click()
+        dialog = page.get_by_role('dialog')
+        comparison = dialog.get_by_role('group', name='저장 원문 비교')
+        expect(comparison).to_be_visible()
+        assert comparison.locator('pre').all_text_contents() == ['**①** 종전 본문\n\n', '**①** 개정 본문\n\n']
+        dialog.get_by_role('button', name='상세 닫기').click()
+        page.get_by_role('button', name='보류 목록', exact=True).click()
+        holds = page.get_by_role('dialog', name='보류 목록', exact=True)
+        expect(holds.get_by_text('총 1건', exact=False)).to_be_visible()
+        expect(holds.get_by_text('제1조 제2항', exact=False)).to_be_visible()
