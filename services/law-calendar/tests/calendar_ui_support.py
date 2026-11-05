@@ -6,7 +6,6 @@ import os
 import shutil
 import socket
 import subprocess
-import sys
 import time
 from pathlib import Path
 
@@ -23,22 +22,13 @@ def serve(tmp, *, development):
         sock.bind(('127.0.0.1', 0))
         port = sock.getsockname()[1]
     url = f'http://127.0.0.1:{port}'
-    if development:
-        node = shutil.which('node')
-        assert node, 'Node is required for Vite development fixtures'
-        args = [node, str(FRONTEND / 'node_modules/vite/bin/vite.js'), '--port', str(port), '--strictPort']
-    else:
+    node = shutil.which('node')
+    assert node, 'Node is required for Vite test servers'
+    args = [node, str(FRONTEND / 'node_modules/vite/bin/vite.js')]
+    if not development:
         assert (FRONTEND / 'dist/index.html').is_file(), 'Build the independent calendar frontend first'
-        args = [
-            sys.executable,
-            '-m',
-            'http.server',
-            str(port),
-            '--bind',
-            '127.0.0.1',
-            '--directory',
-            str(FRONTEND / 'dist'),
-        ]
+        args.append('preview')
+    args.extend(['--host', '127.0.0.1', '--port', str(port), '--strictPort'])
     env = {key: value for key, value in os.environ.items() if not key.startswith(('LAWBOT_', 'LAW_MONITOR_'))}
     log = tmp / 'calendar-server.log'
     with log.open('w') as out:
@@ -52,7 +42,7 @@ def serve(tmp, *, development):
                     break
             except httpx.TransportError:
                 pass
-            assert time.monotonic() < deadline, 'Calendar server startup timed out'
+            assert time.monotonic() < deadline, 'Calendar server startup timed out\n' + log.read_text()
             time.sleep(0.1)
         yield url, log
     finally:
