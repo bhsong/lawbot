@@ -7,6 +7,7 @@
 # 공통 개발 도구(pytest·ruff)와 설정은 여기에 둔다. uv.lock은 workspace 전체에 하나
 [tool.uv.workspace]
 members = ["services/*", "packages/*", "tools/*"]
+exclude = ["services/law-calendar"]  # Standalone frontend; no Python runtime in Phase 1.
 
 [tool.uv.sources]
 lawbot = { workspace = true }
@@ -32,7 +33,7 @@ dev = [
 ]
 
 [tool.pytest.ini_options]
-testpaths = ["services/chatbot/tests", "services/model-server/tests", "services/monitor/tests", "packages/lawbot-common/tests"]
+testpaths = ["services/chatbot/tests", "services/model-server/tests", "services/monitor/tests", "services/law-calendar/tests", "packages/lawbot-common/tests"]
 addopts = "-ra --strict-markers -m 'not models and not network and not e2e_live'"   # 실제 모델·외부 접속 테스트는 -m models / -m network / -m e2e_live로 따로 실행
 filterwarnings = [
     # OpenAI SDK가 TestClient(계약 테스트)에 요청마다 timeout을 넘김: 테스트 대역에서만 나는 경고
@@ -42,7 +43,7 @@ markers = [
     "models: 실제 모델 파일(models/)과 Apple Silicon이 필요한 테스트",
     "integration: 실제 웹앱 서버를 별도 프로세스로 띄우는 테스트 (127.0.0.1만 접속)",
     "network: 실제 외부 API·git 저장소에 접속하는 테스트 (services/monitor, 기본 실행에서 제외)",
-    "e2e_stub: 브라우저 E2E (대역): Playwright → 실제 웹앱 → 실제 모델 서버 앱 + 가짜 모델 (127.0.0.1만, 기본 실행·CI 포함)",
+    "e2e_stub: 브라우저 E2E: 챗봇은 가짜 모델, 캘린더는 독립 정적 앱 (127.0.0.1만, 기본 실행·CI 포함)",
     "e2e_live: 브라우저 E2E (실제 모델): 개발 웹앱 → 공유 모델 서버. 승인 후 맥 미니에서만 (기본 실행에서 제외)",
 ]
 
