@@ -2,12 +2,22 @@
 
 from contextlib import closing
 from io import BytesIO
+from typing import Literal
 
 import pypdfium2 as pdfium
 from pypdfium2 import raw
 
 MAX_PAGES = 150
 MAX_IMAGE_BYTES = 2 * 1024 * 1024
+LimitReason = Literal['page_limit', 'image_limit']
+
+
+class ComparisonLimitError(ValueError):
+    """The official attachment exceeds a fixed comparison processing limit."""
+
+    def __init__(self, reason: LimitReason) -> None:
+        super().__init__(reason)
+        self.reason: LimitReason = reason
 
 
 def _table_dividers(page, width: float) -> list[float]:
@@ -21,11 +31,11 @@ def _table_dividers(page, width: float) -> list[float]:
 
 
 def comparison_images(payload: bytes) -> list[tuple[int, bytes]]:
-    """Return comparison pages from a PDF. Raise PdfiumError if it cannot be opened."""
+    """Return comparison pages or raise if the PDF cannot be opened or exceeds a processing limit."""
     images = []
     with pdfium.PdfDocument(payload) as document:
         if len(document) > MAX_PAGES:
-            return []
+            raise ComparisonLimitError('page_limit')
         previous_dividers: list[float] = []
         for index in range(len(document)):
             with closing(document[index]) as page, closing(page.get_textpage()) as text:
@@ -43,7 +53,7 @@ def comparison_images(payload: bytes) -> list[tuple[int, bytes]]:
                             bitmap.to_pil().save(buffer, format='PNG')
                             png = buffer.getvalue()
                     if len(png) > MAX_IMAGE_BYTES:
-                        return []
+                        raise ComparisonLimitError('image_limit')
                     images.append((index + 1, png))
                     previous_dividers = dividers
                 else:

@@ -12,6 +12,8 @@ from playwright.sync_api import expect
 
 import calendar_ui_support as support
 from law_calendar.assembly_ingest import import_assembly, review_assembly
+from law_calendar.notice_comparison import ComparisonLimitError
+from law_calendar.notice_content import refresh_notice_content
 from law_calendar.sync import synchronize
 from test_calendar_api import dataset as dataset
 from test_calendar_assembly import register
@@ -202,6 +204,18 @@ def test_assembly_notice_and_bill_dates_remain_separate(scheduled, tmp_path, cal
         )
         page.keyboard.press('Escape')
         expect(notice_panel.get_by_role('button')).to_be_focused()
+
+        def oversized(_payload):
+            raise ComparisonLimitError('page_limit')
+
+        monkeypatch.setattr('law_calendar.notice_content.comparison_images', oversized)
+        assert refresh_notice_content(database, refresh=True)['pdfLimits']
+        notice_panel.get_by_role('button').click()
+        expect(dialog.get_by_text('개정안은 공식 PDF에서 확인해 주세요.', exact=False)).to_be_visible()
+        expect(dialog.get_by_role('link', name='법률안 PDF 원문 (새 창)')).to_be_visible()
+        dialog.get_by_text('이전에 저장한 신·구조문대비표', exact=True).click()
+        expect(image).to_be_visible()
+        page.keyboard.press('Escape')
         page.get_by_role('button', pressed=True).focus()
         page.keyboard.press('ArrowLeft')
         expect(notice_panel.get_by_text('예고 시작일', exact=False)).to_be_visible()

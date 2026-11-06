@@ -55,7 +55,7 @@ uv run law-monitor --home "$MONITOR_HOME" collect --only assembly_notice
 
 강제 bootstrap은 기존 관측 순번을 유지하면서 비교 기준을 갱신합니다. 기준에 흡수된 변경은 이벤트 발행 대상에서 제외됩니다. 정상 수집에서 들어온 변경 예고는 캘린더 sync에서 공식 상세의 의안번호와 기간이 일치하면 자동 공개됩니다. 의안 공개는 수동 검토를 거칩니다.
 
-일일 수집과 예고 자동 공개를 사용하려면 캘린더 DB v6과 두 국회 기준선이 준비된 뒤 Monitor 환경의 `LAW_ASSEMBLY_ENABLED=1`을 사용합니다. 이 값은 YAML 활성화 설정에 우선합니다. 기존 06:30 작업에서 각 국회 수집기 실패를 별도로 기록합니다. 국회 이벤트는 공식 날짜와 상태로 별도 요약하므로 모델 호출 수를 늘리지 않습니다. [캘린더 공개 검토 절차](../law-calendar/README.md#국회-이벤트-공개-검토) · [실제 API 검증 방법](../../docs/evals/2026-11-05-assembly-api-validation-guide.md)
+일일 수집과 예고 자동 공개를 사용하려면 캘린더 DB v7과 두 국회 기준선이 준비된 뒤 Monitor 환경의 `LAW_ASSEMBLY_ENABLED=1`을 사용합니다. 이 값은 YAML 활성화 설정에 우선합니다. 기존 06:30 작업에서 각 국회 수집기 실패를 별도로 기록합니다. 국회 이벤트는 공식 날짜와 상태로 별도 요약하므로 모델 호출 수를 늘리지 않습니다. [캘린더 공개 검토 절차](../law-calendar/README.md#국회-이벤트-공개-검토) · [실제 API 검증 방법](../../docs/evals/2026-11-05-assembly-api-validation-guide.md)
 
 ## 요약 (2단계)
 

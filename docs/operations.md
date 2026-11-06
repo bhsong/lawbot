@@ -28,9 +28,9 @@ uv sync
 
 복구가 필요한 경우 새 쓰기를 먼저 멈추고, v4 DB와 WAL을 보존합니다. v3 백업을 별도 복구 경로에 복사해 정합성과 버전을 확인한 뒤 승인된 이전 코드와 그 DB 경로로 되돌립니다. 반영 뒤 새로 기록된 검토가 있으면 별도로 보존해 확인합니다.
 
-## 국회 입법예고 자동 공개용 캘린더 DB v6
+## 국회 입법예고 자동 공개용 캘린더 DB v7
 
-승인된 운영 반영 시 위 절차에 따라 DB 사본을 먼저 마이그레이션합니다. `PRAGMA quick_check`, `PRAGMA foreign_key_check`, 기존 예고 일정과 검토 이력, `assembly_notice_content`의 본문과 `assembly_notice_pages`의 이미지 수를 확인합니다. v5에서 올리면 `.pre-v6.backup`이 생성됩니다. 국회 수집을 활성화한 환경에서는 다음 06:30 캘린더 sync가 일치한 예고를 자동 공개합니다. 점검 결과에 남은 검토 대기와 PDF 재시도 건수를 확인합니다. [샘플 검토 방법](../services/law-calendar/README.md#국회-이벤트-공개-검토)
+승인된 운영 반영 시 위 절차에 따라 DB 사본을 먼저 마이그레이션합니다. `PRAGMA quick_check`, `PRAGMA foreign_key_check`, 기존 예고 일정과 검토 이력, `assembly_notice_content`의 본문과 `assembly_notice_pages`의 이미지 수를 확인합니다. v6에서 올리면 `.pre-v7.backup`이 생성됩니다. 국회 수집을 활성화한 환경에서는 다음 06:30 캘린더 sync가 일치한 예고를 자동 공개합니다. 점검 결과에 남은 검토 대기, PDF 재시도, PDF 처리 한도 초과 건수를 확인합니다. [샘플 검토 방법](../services/law-calendar/README.md#국회-이벤트-공개-검토)
 
 ## 모델 준비
 

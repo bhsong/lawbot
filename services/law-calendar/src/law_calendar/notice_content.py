@@ -9,7 +9,7 @@ from pypdfium2 import PdfiumError
 from law_calendar.assembly_ingest import AUTO_NOTICE_REVIEWER, record_assembly_review
 from law_calendar.db import CURRENT_VERSION, read_database, write_database
 from law_calendar.ingest import utc_now
-from law_calendar.notice_comparison import comparison_images
+from law_calendar.notice_comparison import ComparisonLimitError, LimitReason, comparison_images
 from law_calendar.notice_source import NoticeSourceError, fetch_official, parse_notice_detail
 
 MAX_NOTICES = 150
@@ -22,6 +22,7 @@ class NoticeContent:
     pdf_url: str | None
     pages: list[tuple[int, bytes]] = field(default_factory=list)
     pdf_error: str | None = None
+    pdf_limit_reason: LimitReason | None = None
 
 
 def read_notice_content(url: str, bill_no: str, start: str | None, end: str) -> NoticeContent:
@@ -34,6 +35,8 @@ def read_notice_content(url: str, bill_no: str, start: str | None, end: str) -> 
         return NoticeContent(summary, None)
     try:
         pages = comparison_images(fetch_official(pdf_url, pdf=True))
+    except ComparisonLimitError as exc:
+        return NoticeContent(summary, pdf_url, pdf_limit_reason=exc.reason)
     except (NoticeSourceError, PdfiumError) as exc:
         return NoticeContent(summary, pdf_url, pdf_error=type(exc).__name__)
     return NoticeContent(summary, pdf_url, pages)
@@ -99,6 +102,7 @@ def refresh_notice_content(
         'stale': 0,
         'failed': [],
         'pdfErrors': [],
+        'pdfLimits': [],
     }
     if paginated_refresh:
         result['nextAfterSnapshot'] = batch[-1]['id'] if len(rows) > limit else None
@@ -110,6 +114,8 @@ def refresh_notice_content(
             content = None
         if content and content.pdf_error:
             result['pdfErrors'].append({'billNo': row['bill_no'], 'reason': content.pdf_error})
+        if content and content.pdf_limit_reason:
+            result['pdfLimits'].append({'billNo': row['bill_no'], 'reason': content.pdf_limit_reason})
         with write_database(database) as conn:
             current = conn.execute(
                 'SELECT review_state FROM assembly_entries WHERE id=? AND snapshot_id=?',
@@ -138,19 +144,33 @@ def refresh_notice_content(
                 )
                 result['published'] += 1
             updated = conn.execute(
-                'INSERT INTO assembly_notice_content VALUES (?,?,?,?) ON CONFLICT(snapshot_id) DO UPDATE SET '
-                'summary=excluded.summary,pdf_url=excluded.pdf_url,pdf_pending=excluded.pdf_pending '
+                'INSERT INTO assembly_notice_content VALUES (?,?,?,?,?) ON CONFLICT(snapshot_id) DO UPDATE SET '
+                'summary=excluded.summary,pdf_url=excluded.pdf_url,pdf_pending=excluded.pdf_pending, '
+                'pdf_limit_reason=excluded.pdf_limit_reason '
                 'WHERE NOT excluded.pdf_pending AND (? OR assembly_notice_content.pdf_pending)',
-                (row['id'], content.summary, content.pdf_url, bool(content.pdf_error), refresh),
+                (
+                    row['id'],
+                    content.summary,
+                    content.pdf_url,
+                    bool(content.pdf_error),
+                    content.pdf_limit_reason,
+                    refresh,
+                ),
             )
             if not updated.rowcount:
+                if refresh and content.pdf_error:
+                    conn.execute(
+                        'UPDATE assembly_notice_content SET pdf_pending=1 '
+                        'WHERE snapshot_id=? AND pdf_limit_reason IS NULL',
+                        (row['id'],),
+                    )
                 continue
-            if refresh:
+            if not content.pdf_error and not content.pdf_limit_reason:
                 conn.execute('DELETE FROM assembly_notice_pages WHERE snapshot_id=?', (row['id'],))
-            conn.executemany(
-                'INSERT INTO assembly_notice_pages VALUES (?,?,?)',
-                [(row['id'], page, png) for page, png in content.pages],
-            )
+                conn.executemany(
+                    'INSERT INTO assembly_notice_pages VALUES (?,?,?)',
+                    [(row['id'], page, png) for page, png in content.pages],
+                )
         result['stored'] += 1
         result['summaries'] += bool(content.summary)
         result['comparisons'] += bool(content.pages)
@@ -165,9 +185,10 @@ def synchronize_notice_content(database: Path) -> dict[str, int]:
             return {'notice_migration_required': 1}
     result = refresh_notice_content(database, limit=DAILY_NOTICE_LIMIT, publish_verified=True)
     with read_database(database) as conn:
-        pending, pdf_pending = conn.execute(
+        pending, pdf_pending, pdf_limits = conn.execute(
             "SELECT COUNT(*) FILTER (WHERE e.review_state='pending'), "
-            "COUNT(*) FILTER (WHERE e.review_state='approved' AND c.pdf_pending) "
+            "COUNT(*) FILTER (WHERE e.review_state='approved' AND c.pdf_pending), "
+            "COUNT(*) FILTER (WHERE e.review_state='approved' AND c.pdf_limit_reason IS NOT NULL) "
             'FROM assembly_entries e LEFT JOIN assembly_notice_content c ON c.snapshot_id=e.snapshot_id '
             "WHERE e.source='assembly_notice'"
         ).fetchone()
@@ -177,4 +198,5 @@ def synchronize_notice_content(database: Path) -> dict[str, int]:
         'notice_content_errors': len(result['failed']),
         'notice_pending': pending,
         'notice_pdf_pending': pdf_pending,
+        'notice_pdf_limits': pdf_limits,
     }

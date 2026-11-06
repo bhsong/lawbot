@@ -70,8 +70,11 @@ export function ChangeDialog({ change, demo, onClose }: { change: CalendarChange
         : <>{change.comparable && '시행 직전과 이후의 유효 조문 비교입니다. '}부칙·경과조치와 공식 원문을 함께 확인하세요.</>}</p>
       {noticeContent && <section className="lc-notice-content" aria-label="공식 개정안 내용">
         {noticeContent.summary && <><h3>주요 변경 내용</h3><p className="lc-notice-text">{noticeContent.summary}</p></>}
+        {noticeContent.comparisonLimited && <p className="lc-warning">
+          첨부 파일의 처리 한도를 초과했습니다. 개정안은 공식 PDF에서 확인해 주세요.
+        </p>}
         {noticeContent.comparisonPages.length > 0 && <details className="lc-notice-comparison">
-          <summary>공식 신·구조문대비표</summary>
+          <summary>{noticeContent.comparisonLimited ? '이전에 저장한 신·구조문대비표' : '공식 신·구조문대비표'}</summary>
           <div className="lc-notice-pages" role="region" aria-label="대비표 원문 페이지" tabIndex={0}>
             {noticeContent.comparisonPages.map(page => <img key={page} loading="lazy" decoding="async"
               src={`/api/law-changes/${encodeURIComponent(change.id)}/notice-comparison/${page}`}

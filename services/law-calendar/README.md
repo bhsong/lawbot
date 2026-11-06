@@ -60,7 +60,7 @@ uv run --project services/law-calendar law-calendar --database services/law-cale
 
 ## 저장된 모니터링 결과와 공개 검토
 
-기존 monitor의 `legalize_law` 이벤트 JSON과 원문 사본을 오프라인으로 가져온다. DB 초기화 명령은 새 DB와 기존 v1~v5 DB를 v6으로 준비한다. v5에서 올릴 때는 SQLite backup으로 `.pre-v6.backup` 사본을 만든다. 이전 버전의 백업 규칙도 유지한다. v4·v5에서 기존 일정 조회와 검토를 지원한다. 예고 자동 공개와 PDF 재시도는 v6이 필요하다. [v6 반영 절차](../../docs/operations.md#국회-입법예고-자동-공개용-캘린더-db-v6)
+기존 monitor의 `legalize_law` 이벤트 JSON과 원문 사본을 오프라인으로 가져온다. DB 초기화 명령은 새 DB와 기존 v1~v6 DB를 v7로 준비한다. v6에서 올릴 때는 SQLite backup으로 `.pre-v7.backup` 사본을 만든다. 이전 버전의 백업 규칙도 유지한다. v4~v6에서 기존 일정 조회와 검토를 지원한다. 최신 수집 코드의 예고 자동 공개와 첨부 처리 상태 저장은 v7이 필요하다. [v7 반영 절차](../../docs/operations.md#국회-입법예고-자동-공개용-캘린더-db-v7)
 
 import는 명확한 최신 부칙의 절대 날짜·공포일 시행 또는 조문 전체의 구조화 시행 메타데이터를 자동 판정한다. 날짜가 확정되면 규칙 기반 요약과 함께 달력에 표시한다. 위임 표현·복잡한 부칙·부분 시행·상충·근거 부족은 보류한다. 자동 확인은 시행일에 한정되며 Git 구판·신판의 법적 효력 비교는 미검증으로 표시한다.
 
@@ -116,7 +116,7 @@ uv run --project services/law-calendar python -m law_calendar.manage --database 
 
 ### 입법예고 주요 변경 내용과 공식 대비표
 
-정기 sync는 한 번에 최대 24건을 대조해 본문과 대비표를 함께 저장한다. PDF 조회만 실패하면 확인한 본문과 공식 링크를 표시하고, 다음 정기 sync에서 PDF를 다시 확인한다. 이미 공개한 자료를 별도로 보강하려면 캘린더 DB를 v6으로 올린 뒤 다음 명령을 실행한다.
+정기 sync는 한 번에 최대 24건을 대조해 본문과 대비표를 함께 저장한다. 일시적인 PDF 조회 오류는 다음 정기 sync에서 재시도한다. PDF가 150쪽 또는 대비표 PNG 한 장이 2MiB를 초과하면 상세창에서 공식 PDF로 안내하고, 기존 이미지는 이전에 저장한 대비표로 표시한다. 한도 초과 건은 새 스냅샷을 수집하거나 `--refresh`를 실행할 때 다시 확인한다. 이미 공개한 자료를 별도로 보강하려면 캘린더 DB를 v7로 올린 뒤 다음 명령을 실행한다.
 
 ```bash
 uv sync --project services/law-calendar --locked
@@ -128,4 +128,4 @@ uv run --project services/law-calendar python -m law_calendar.manage --database 
 
 수동 명령은 현재 승인 snapshot 중 보강이나 PDF 재시도가 필요한 자료를 최대 150건 읽으며, `--limit`으로 배치 크기를 줄일 수 있다. 이미 보강한 자료를 다시 대조할 때는 `--refresh`를 사용한다. 재조회에 실패하면 기존 대비표를 보존한다. PDF는 메모리에서 처리하고, 공개 API는 SQLite에 저장한 본문과 PNG 데이터를 읽는다.
 
-`--refresh` 출력에 `nextAfterSnapshot` 값이 있으면 다음 실행에 `--refresh --after-snapshot "$NEXT_SNAPSHOT"`을 넣어 이어서 처리한다. 값이 `null`이면 마지막 배치까지 도달한 것이다. 실패한 항목은 각 배치의 `failed`와 `pdfErrors`에 기록된다.
+`--refresh` 출력에 `nextAfterSnapshot` 값이 있으면 다음 실행에 `--refresh --after-snapshot "$NEXT_SNAPSHOT"`을 넣어 이어서 처리한다. 값이 `null`이면 마지막 배치까지 도달한 것이다. 실패한 항목은 각 배치의 `failed`와 `pdfErrors`, 한도 초과는 `pdfLimits`에 기록된다.

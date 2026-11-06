@@ -3,6 +3,7 @@
 import json
 import sqlite3
 import sys
+from contextlib import nullcontext
 from io import BytesIO
 
 import pytest
@@ -10,7 +11,7 @@ from fastapi.testclient import TestClient
 from PIL import Image
 
 from law_calendar.assembly_ingest import import_assembly, list_assembly, review_assembly
-from law_calendar.db import SCHEMA, SCHEMA_V2, SCHEMA_V3, SCHEMA_V4, SCHEMA_V5, migrate
+from law_calendar.db import SCHEMA, SCHEMA_V2, SCHEMA_V3, SCHEMA_V4, SCHEMA_V5, SCHEMA_V6, migrate
 from law_calendar.manage import main as manage
 from law_calendar.notice_comparison import comparison_images
 from law_calendar.notice_content import NoticeContent, refresh_notice_content
@@ -98,8 +99,8 @@ def test_legacy_approved_notice_is_enriched_without_changing_its_calendar_rows(t
         assert client.get(f'{url}/notice-comparison/5').status_code == 404
 
 
-@pytest.mark.parametrize('preceding_pages', [1, 100])
-def test_comparison_follows_only_the_contiguous_table_pages(monkeypatch, preceding_pages):
+@pytest.mark.parametrize('preceding_pages,max_image_bytes', [(1, None), (100, None), (1, 1)])
+def test_comparison_follows_only_the_contiguous_table_pages(monkeypatch, preceding_pages, max_image_bytes):
     class Text:
         def __init__(self, value):
             self.value = value
@@ -141,8 +142,6 @@ def test_comparison_follows_only_the_contiguous_table_pages(monkeypatch, precedi
         def close(self):
             return None
 
-    from contextlib import nullcontext
-
     from law_calendar import notice_comparison
 
     pages = [
@@ -153,9 +152,60 @@ def test_comparison_follows_only_the_contiguous_table_pages(monkeypatch, precedi
         Page('다른 자료의 표', divider=True),
     ]
     monkeypatch.setattr(notice_comparison.pdfium, 'PdfDocument', lambda _: nullcontext(pages))
+    if max_image_bytes is not None:
+        monkeypatch.setattr(notice_comparison, 'MAX_IMAGE_BYTES', max_image_bytes)
+        with pytest.raises(ValueError, match='image_limit'):
+            comparison_images(b'%PDF-test')
+        return
     result = comparison_images(b'%PDF-test')
     assert [number for number, _ in result] == [preceding_pages + 1, preceding_pages + 2]
     assert all(image.startswith(b'\x89PNG') for _, image in result)
+
+
+@pytest.mark.parametrize('existing', [False, True], ids=['new-notice', 'previous-comparison'])
+def test_oversized_pdf_is_reported_preserves_images_and_is_not_retried_daily(scheduled, monkeypatch, existing):
+    (path, home, _, _), state = scheduled
+    snapshot = register(home, state)
+    if existing:
+        notice = json.loads((home / f'{snapshot}.json').read_text())
+        import_assembly(path, 'assembly_notice', notice['detected_at'], [notice])
+        review_assembly(path, snapshot, 'approve', reviewer='reviewer', note='날짜 확인')
+        refresh_notice_content(path, read=lambda *_: NoticeContent('기존 내용', PDF_URL, [(2, b'old image')]))
+
+    latest_pdf = PDF_URL.replace('123-abc', 'latest-pdf')
+    html = detail_html('2200012', '2026-11-04~2026-11-05', '새 주요내용', pdf_url=latest_pdf)
+    monkeypatch.setattr(
+        'law_calendar.notice_content.fetch_official', lambda _url, *, pdf=False: b'%PDF-test' if pdf else html.encode()
+    )
+    monkeypatch.setattr('law_calendar.notice_comparison.pdfium.PdfDocument', lambda _: nullcontext([None] * 151))
+    if existing:
+        assert refresh_notice_content(path, refresh=True)['pdfLimits'] == [
+            {'billNo': '2200012', 'reason': 'page_limit'}
+        ]
+    else:
+        result = synchronize(path, home)
+        assert result['notice_auto_published'] == 1 and result['notice_pdf_limits'] == 1
+
+    with TestClient(create_app(path)) as client:
+        [item] = client.get('/api/law-events?date=2026-11-05&type=notice').json()['items']
+        url = f'/api/law-changes/{item["id"]}'
+        assert client.get(url).json()['noticeContent'] == {
+            'summary': '새 주요내용',
+            'pdfUrl': latest_pdf,
+            'comparisonPages': [2] if existing else [],
+            'comparisonLimited': True,
+        }
+        if existing:
+            assert client.get(f'{url}/notice-comparison/2').content == b'old image'
+        with monkeypatch.context() as patches:
+            patches.setattr('law_calendar.notice_content.fetch_official', lambda *_: pytest.fail('Retried capped PDF'))
+            result = synchronize(path, home)
+            assert result['notice_pdf_pending'] == 0 and result['notice_pdf_limits'] == 1
+        refresh_notice_content(
+            path, refresh=True, read=lambda *_: NoticeContent('재확인한 내용', PDF_URL, [(3, b'new')])
+        )
+        assert client.get(url).json()['noticeContent']['comparisonPages'] == [3]
+        assert 'comparisonLimited' not in client.get(url).json()['noticeContent']
 
 
 def test_source_failure_does_not_replace_saved_comparison_or_approve_pending_items(scheduled):
@@ -173,6 +223,11 @@ def test_source_failure_does_not_replace_saved_comparison_or_approve_pending_ite
     with sqlite3.connect(path) as db:
         assert db.execute('SELECT summary FROM assembly_notice_content').fetchone() == ('보관된 주요 내용',)
         assert db.execute('SELECT png FROM assembly_notice_pages').fetchone() == (b'old image',)
+        assert db.execute('SELECT pdf_pending FROM assembly_notice_content').fetchone() == (1,)
+    result = refresh_notice_content(path, read=lambda *_: NoticeContent('재시도한 내용', PDF_URL, [(2, b'new image')]))
+    assert result['stored'] == 1
+    with sqlite3.connect(path) as db:
+        assert db.execute('SELECT png FROM assembly_notice_pages').fetchall() == [(b'new image',)]
 
 
 @pytest.mark.parametrize('valid_pdf', [False, True], ids=['error-html', 'pdf-without-table'])
@@ -321,17 +376,30 @@ def test_daily_batch_checks_unattempted_notices_before_retrying_a_persistent_mis
     assert synchronize(path, home)['notice_pending'] == 1
 
 
-def test_v5_notice_keeps_summary_and_images_when_migrated_for_automation(tmp_path, scheduled):
-    path = tmp_path / 'v5.db'
+@pytest.mark.parametrize('version', [5, 6])
+def test_legacy_notice_keeps_summary_and_images_when_migrated_for_automation(tmp_path, scheduled, version):
+    path = tmp_path / 'legacy.db'
+    automation_schema = SCHEMA_V6 if version == 6 else ''
     with sqlite3.connect(path) as db:
-        db.executescript(SCHEMA + SCHEMA_V2 + SCHEMA_V3 + SCHEMA_V4 + SCHEMA_V5 + 'PRAGMA user_version=5;')
+        db.executescript(
+            SCHEMA
+            + SCHEMA_V2
+            + SCHEMA_V3
+            + SCHEMA_V4
+            + SCHEMA_V5
+            + automation_schema
+            + f'PRAGMA user_version={version};'
+        )
     (_, home, _, _), state = scheduled
     snapshot = register(home, state)
     notice = json.loads((home / f'{snapshot}.json').read_text())
     import_assembly(path, 'assembly_notice', notice['detected_at'], [notice])
     review_assembly(path, snapshot, 'approve', reviewer='reviewer', note='날짜 확인')
     with sqlite3.connect(path) as db:
-        db.execute('INSERT INTO assembly_notice_content VALUES (?,?,?)', (snapshot, '주요 변경 내용', PDF_URL))
+        db.execute(
+            'INSERT INTO assembly_notice_content(snapshot_id,summary,pdf_url) VALUES (?,?,?)',
+            (snapshot, '주요 변경 내용', PDF_URL),
+        )
         db.execute('INSERT INTO assembly_notice_pages VALUES (?,?,?)', (snapshot, 2, b'png'))
     with TestClient(create_app(path)) as client:
         items = client.get('/api/law-events?month=2026-11&type=notice').json()['items']
@@ -339,7 +407,7 @@ def test_v5_notice_keeps_summary_and_images_when_migrated_for_automation(tmp_pat
         before = client.get(url).json()
         assert before['noticeContent']['comparisonPages'] == [2]
         migrate(path)
-        assert path.with_suffix('.db.pre-v6.backup').exists()
+        assert path.with_suffix(f'.db.pre-v{version + 1}.backup').exists()
         assert client.get(url).json() == before
         assert client.get(f'{url}/notice-comparison/2').content == b'png'
     assert synchronize(path, home)['notice_content_stored'] == 0

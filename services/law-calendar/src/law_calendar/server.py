@@ -18,7 +18,7 @@ from fastapi.responses import JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 
 from law_calendar.automation import REASONS
-from law_calendar.db import NOTICE_CONTENT_VERSION, read_database
+from law_calendar.db import NOTICE_CONTENT_VERSION, NOTICE_LIMIT_VERSION, read_database
 from law_calendar.models import CalendarMonth, CalendarStatus, ChangePage, HoldPage, PublicDetail
 
 KST = timezone(timedelta(hours=9))
@@ -163,8 +163,11 @@ def create_app(database: Path, frontend: Path | None = None) -> FastAPI:
                 raise HTTPException(404, 'Change not found')
             result = change_data(row)
             if row['kind'] == 'notice' and row['assembly_json'] and (snapshot := notice_snapshot(conn, change_id)):
+                has_limit_status = conn.execute('PRAGMA user_version').fetchone()[0] >= NOTICE_LIMIT_VERSION
+                limit_column = 'pdf_limit_reason' if has_limit_status else 'NULL AS pdf_limit_reason'
                 content = conn.execute(
-                    'SELECT summary,pdf_url FROM assembly_notice_content WHERE snapshot_id=?', (snapshot,)
+                    f'SELECT summary,pdf_url,{limit_column} FROM assembly_notice_content WHERE snapshot_id=?',
+                    (snapshot,),
                 ).fetchone()
                 if content and (content['summary'] or content['pdf_url']):
                     pages = conn.execute(
@@ -175,6 +178,8 @@ def create_app(database: Path, frontend: Path | None = None) -> FastAPI:
                         'pdfUrl': content['pdf_url'],
                         'comparisonPages': [page['page'] for page in pages],
                     }
+                    if content['pdf_limit_reason']:
+                        result['noticeContent']['comparisonLimited'] = True
         result['diff'] = (
             list(difflib.ndiff((row['before_text'] or '').splitlines(), (row['after_text'] or '').splitlines()))
             if row['comparable']
