@@ -24,6 +24,7 @@ export function ChangeDialog({ change, demo, onClose }: { change: CalendarChange
 
   const assembly = change.assembly
   const notice = change.kind === 'notice'
+  const noticeContent = notice ? change.noticeContent : null
   const storedComparison = !change.comparable && (change.before !== null || change.after !== null)
   const highlight = change.comparable || (change.before !== null && change.after !== null)
   const metadata = assembly ? [
@@ -41,7 +42,8 @@ export function ChangeDialog({ change, demo, onClose }: { change: CalendarChange
   ]
   function keepFocus(event: KeyboardEvent<HTMLDialogElement>) {
     if (event.key !== 'Tab') return
-    const elements = dialog.current!.querySelectorAll<HTMLElement>('button:not([disabled]), a[href]')
+    const elements = [...dialog.current!.querySelectorAll<HTMLElement>('button:not([disabled]), a[href], summary, [tabindex="0"]')]
+      .filter(element => element.getClientRects().length > 0)
     const first = elements[0], last = elements[elements.length - 1]
     if (event.shiftKey && document.activeElement === first) {
       event.preventDefault()
@@ -66,6 +68,22 @@ export function ChangeDialog({ change, demo, onClose }: { change: CalendarChange
       <p id="lc-detail-notice">{assembly ? '열린국회정보와 국회 공식 원문에서 확인한 내용입니다.' : notice
         ? <>입법예고안은 확정된 법령이 아닙니다.{change.comparable && ' 게시 시점의 현행 조문과 개정안의 비교입니다.'}</>
         : <>{change.comparable && '시행 직전과 이후의 유효 조문 비교입니다. '}부칙·경과조치와 공식 원문을 함께 확인하세요.</>}</p>
+      {noticeContent && <section className="lc-notice-content" aria-label="공식 개정안 내용">
+        {noticeContent.summary && <><h3>주요 변경 내용</h3><p className="lc-notice-text">{noticeContent.summary}</p></>}
+        {noticeContent.comparisonLimited && <p className="lc-warning">
+          첨부 파일의 처리 한도를 초과했습니다. 개정안은 공식 PDF에서 확인해 주세요.
+        </p>}
+        {noticeContent.comparisonPages.length > 0 && <details className="lc-notice-comparison">
+          <summary>{noticeContent.comparisonLimited ? '이전에 저장한 신·구조문대비표' : '공식 신·구조문대비표'}</summary>
+          <div className="lc-notice-pages" role="region" aria-label="대비표 원문 페이지" tabIndex={0}>
+            {noticeContent.comparisonPages.map(page => <img key={page} loading="lazy" decoding="async"
+              src={`/api/law-changes/${encodeURIComponent(change.id)}/notice-comparison/${page}`}
+              alt={`공식 신·구조문대비표 원문 ${page}쪽`} />)}
+          </div>
+        </details>}
+        {noticeContent.pdfUrl?.startsWith('https://likms.assembly.go.kr/filegate/servlet/FileGate?') &&
+          <p><a href={noticeContent.pdfUrl} target="_blank" rel="noopener noreferrer">법률안 PDF 원문 (새 창)</a></p>}
+      </section>}
       {!assembly && <>
         {!change.comparable && <p className="lc-warning">{storedComparison
           ? <><strong>저장 원문 비교</strong> · <span>{notice ? '게시 시점 효력 미검증' : '시행 전후 효력 미검증'}</span></>

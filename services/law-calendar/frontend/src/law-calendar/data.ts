@@ -1,4 +1,4 @@
-import type { CalendarChange, CalendarLoader } from './types'
+import type { CalendarChange, CalendarLoader, HoldKind } from './types'
 import type { CalendarMonth, CalendarStatus, ChangePage, HoldPage, PublicDetail } from './api-types'
 
 async function read<T>(path: string, signal: AbortSignal): Promise<T> {
@@ -11,12 +11,12 @@ export function loadChange(id: string, signal: AbortSignal): Promise<CalendarCha
   return read<PublicDetail>(`/api/law-changes/${encodeURIComponent(id)}`, signal)
 }
 
-export async function loadHolds(page: number, signal: AbortSignal, demo = false): Promise<HoldPage> {
+export async function loadHolds(page: number, signal: AbortSignal, kind: HoldKind, demo = false): Promise<HoldPage> {
   if (import.meta.env.DEV && demo) {
     const { demoHolds } = await import('./demo')
-    return demoHolds(page, signal)
+    return demoHolds(page, signal, kind)
   }
-  const result = await read<HoldPage>(`/api/law-holds?page=${page}&page_size=20`, signal)
+  const result = await read<HoldPage>(`/api/law-holds?type=${kind}&page=${page}&page_size=20`, signal)
   if (!Array.isArray(result.items) || result.page !== page || result.page_size !== 20 || result.total < 0
     || (result.items.length === 0 && result.total > (page - 1) * 20)) throw new Error('Invalid hold pagination')
   return result

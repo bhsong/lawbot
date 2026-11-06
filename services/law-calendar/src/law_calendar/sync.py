@@ -12,6 +12,7 @@ from pathlib import Path
 from law_calendar.assembly_ingest import ASSEMBLY_TYPES, import_assembly
 from law_calendar.db import write_database
 from law_calendar.ingest import ARTICLE, Diff, import_files, inside
+from law_calendar.notice_content import synchronize_notice_content
 from law_calendar.validation import timestamp
 
 LAW_SOURCE = 'legalize_law'
@@ -118,6 +119,12 @@ def synchronize(database: Path, monitor_home: Path) -> dict[str, int]:
             print(f'calendar sync {source} failed: {type(exc).__name__}', file=sys.stderr)
         else:
             result.update({f'{source}_imported': imported, f'{source}_unchanged': unchanged, f'{source}_failed': 0})
+    if result.get('assembly_notice_failed') == 0:
+        try:
+            result.update(synchronize_notice_content(database))
+        except (OSError, ValueError, sqlite3.Error) as exc:
+            result['failed'] += 1
+            print(f'calendar sync notice content failed: {type(exc).__name__}', file=sys.stderr)
     return result
 
 
@@ -134,7 +141,19 @@ def main() -> int:
         print(f'calendar sync failed: {type(exc).__name__}: {exc}', file=sys.stderr)
         return 2
     print('calendar sync ' + ' '.join(f'{key}={value}' for key, value in result.items()))
-    return 2 if result['failed'] else 0
+    if result['failed']:
+        return 2
+    return int(
+        any(
+            result.get(key)
+            for key in (
+                'notice_pending',
+                'notice_pdf_pending',
+                'notice_content_errors',
+                'notice_migration_required',
+            )
+        )
+    )
 
 
 if __name__ == '__main__':

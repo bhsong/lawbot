@@ -4,15 +4,20 @@ import datetime
 import json
 import subprocess
 import sys
+from io import BytesIO
 
 import pytest
+from PIL import Image
 from playwright.sync_api import expect
 
 import calendar_ui_support as support
-from law_calendar.assembly_ingest import review_assembly
+from law_calendar.assembly_ingest import import_assembly, review_assembly
+from law_calendar.notice_comparison import ComparisonLimitError
+from law_calendar.notice_content import refresh_notice_content
 from law_calendar.sync import synchronize
 from test_calendar_api import dataset as dataset
 from test_calendar_assembly import register
+from test_calendar_notice_content import detail_html
 from test_calendar_sync import scheduled as scheduled
 from test_calendar_workflow import approval, import_one
 from test_calendar_workflow import workflow as workflow
@@ -160,13 +165,20 @@ def test_database_to_public_calendar_and_comparison(dataset, tmp_path, calendar_
 
 
 @pytest.mark.parametrize('width', [390, 1280])
-def test_assembly_notice_and_bill_dates_remain_separate(scheduled, tmp_path, calendar_page, width):
+def test_assembly_notice_and_bill_dates_remain_separate(scheduled, tmp_path, calendar_page, width, monkeypatch):
     (database, home, _, _), state = scheduled
-    notice = register(home, state)
+    register(home, state)
     bill = register(home, state, source='assembly_bill', date='2026-11-05')
-    assert synchronize(database, home)['failed'] == 0
-    for item in (notice, bill):
-        review_assembly(database, item, 'approve', reviewer='tester', note='공식 날짜 확인')
+    with BytesIO() as buffer:
+        Image.new('RGB', (600, 800), 'white').save(buffer, format='PNG')
+        png = buffer.getvalue()
+    html = detail_html('2200012', '2026-11-04~2026-11-05', '정식 적용 범위를 확대하는 안입니다.')
+    monkeypatch.setattr(
+        'law_calendar.notice_content.fetch_official', lambda _url, *, pdf=False: b'%PDF-test' if pdf else html.encode()
+    )
+    monkeypatch.setattr('law_calendar.notice_content.comparison_images', lambda _: [(5, png)])
+    assert synchronize(database, home)['notice_auto_published'] == 1
+    review_assembly(database, bill, 'approve', reviewer='tester', note='공식 날짜 확인')
     page = calendar_page
     page.set_viewport_size({'width': width, 'height': 900})
     page.clock.install(time=datetime.datetime(2026, 11, 5, tzinfo=datetime.UTC))
@@ -179,11 +191,31 @@ def test_assembly_notice_and_bill_dates_remain_separate(scheduled, tmp_path, cal
         notice_panel.get_by_role('button').click()
         dialog = page.get_by_role('dialog')
         expect(dialog.get_by_text('소관위원회', exact=True)).to_be_visible()
+        expect(dialog.get_by_role('heading', name='주요 변경 내용')).to_be_visible()
+        expect(dialog.get_by_text('정식 적용 범위를 확대하는 안입니다.')).to_be_visible()
+        image = dialog.get_by_role('img', name='공식 신·구조문대비표 원문 5쪽', include_hidden=True)
+        expect(image).not_to_be_visible()
+        dialog.get_by_text('공식 신·구조문대비표', exact=True).click()
+        expect(image).to_be_visible()
+        page.wait_for_function("document.querySelector('.lc-notice-pages img')?.naturalWidth === 600")
+        assert dialog.evaluate('(element) => element.scrollWidth <= element.clientWidth')
         expect(dialog.get_by_role('link', name='공식 원문 확인', exact=False)).to_have_attribute(
             'href', 'https://pal.assembly.go.kr/napal/lgsltpa/lgsltpaOngoing/view.do?lgsltPaId=PRC_NOTICE'
         )
         page.keyboard.press('Escape')
         expect(notice_panel.get_by_role('button')).to_be_focused()
+
+        def oversized(_payload):
+            raise ComparisonLimitError('page_limit')
+
+        monkeypatch.setattr('law_calendar.notice_content.comparison_images', oversized)
+        assert refresh_notice_content(database, refresh=True)['pdfLimits']
+        notice_panel.get_by_role('button').click()
+        expect(dialog.get_by_text('개정안은 공식 PDF에서 확인해 주세요.', exact=False)).to_be_visible()
+        expect(dialog.get_by_role('link', name='법률안 PDF 원문 (새 창)')).to_be_visible()
+        dialog.get_by_text('이전에 저장한 신·구조문대비표', exact=True).click()
+        expect(image).to_be_visible()
+        page.keyboard.press('Escape')
         page.get_by_role('button', pressed=True).focus()
         page.keyboard.press('ArrowLeft')
         expect(notice_panel.get_by_text('예고 시작일', exact=False)).to_be_visible()
@@ -233,11 +265,15 @@ def test_review_cli_controls_public_browser_visibility(workflow, tmp_path, calen
 
 
 @pytest.mark.parametrize('width', [390, 1280])
-def test_public_holds_dialog_is_undated_read_only_and_keyboard_accessible(workflow, tmp_path, calendar_page, width):
+def test_public_holds_dialog_is_undated_read_only_and_keyboard_accessible(scheduled, tmp_path, calendar_page, width):
+    workflow, state = scheduled
     db, home, path, event = workflow
     event['context']['addenda_added'] = ['제1조(시행일) 이 법은 대통령령으로 정하는 날부터 시행한다.']
     path.write_text(json.dumps(event), encoding='utf-8')
     import_one(workflow)
+    notice = register(home, state, start=None)
+    snapshot = json.loads((home / f'{notice}.json').read_text())
+    import_assembly(db, 'assembly_notice', snapshot['detected_at'], [snapshot])
     page = calendar_page
     page.set_viewport_size({'width': width, 'height': 844})
     page.clock.install(time=datetime.datetime(2026, 11, 5, tzinfo=datetime.UTC))
@@ -258,6 +294,16 @@ def test_public_holds_dialog_is_undated_read_only_and_keyboard_accessible(workfl
         assert dialog.evaluate('(el) => el.contains(document.activeElement)')
         page.keyboard.press('Tab')
         expect(dialog.get_by_role('button', name='보류 목록 닫기')).to_be_focused()
+        dialog.get_by_role('button', name='입법예고 검토 대기').click()
+        expect(dialog.get_by_text('총 1건', exact=False)).to_be_visible()
+        expect(dialog.get_by_text('의안번호 2200012')).to_be_visible()
+        expect(dialog.get_by_text('예고 시작일 또는 종료일 확인 필요')).to_be_visible()
+        expect(dialog.get_by_role('link', name='공식 원문 확인 (새 창)')).to_have_attribute(
+            'href', snapshot['context']['source_url']
+        )
+        assert dialog.evaluate('(el) => el.scrollWidth <= el.clientWidth')
+        dialog.get_by_role('button', name='시행일 보류').click()
+        expect(dialog.get_by_text('총 3건', exact=False)).to_be_visible()
         page.keyboard.press('Escape')
         expect(dialog).not_to_be_visible()
         expect(opener).to_be_focused()

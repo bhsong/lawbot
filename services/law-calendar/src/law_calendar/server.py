@@ -14,11 +14,11 @@ from typing import Literal
 
 import uvicorn
 from fastapi import FastAPI, HTTPException, Query, Request
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 
 from law_calendar.automation import REASONS
-from law_calendar.db import read_database
+from law_calendar.db import NOTICE_CONTENT_VERSION, NOTICE_LIMIT_VERSION, read_database
 from law_calendar.models import CalendarMonth, CalendarStatus, ChangePage, HoldPage, PublicDetail
 
 KST = timezone(timedelta(hours=9))
@@ -85,6 +85,16 @@ def change_data(row) -> dict:
     return item
 
 
+def notice_snapshot(conn: sqlite3.Connection, change_id: str) -> str | None:
+    if conn.execute('PRAGMA user_version').fetchone()[0] < NOTICE_CONTENT_VERSION:
+        return None
+    row = conn.execute(
+        "SELECT id FROM public_assembly WHERE kind='notice' AND event_id || ':' || date_role=?",
+        (change_id,),
+    ).fetchone()
+    return row['id'] if row else None
+
+
 def create_app(database: Path, frontend: Path | None = None) -> FastAPI:
     app = FastAPI(title='Law Calendar', version='0.2.0')
 
@@ -147,16 +157,51 @@ def create_app(database: Path, frontend: Path | None = None) -> FastAPI:
     @app.get('/api/law-changes/{change_id}', response_model=PublicDetail, response_model_exclude_unset=True)
     def detail(change_id: str):
         with read_database(database) as conn:
+            conn.execute('BEGIN')
             row = conn.execute('SELECT * FROM public_calendar_events WHERE id=?', (change_id,)).fetchone()
-        if row is None:
-            raise HTTPException(404, 'Change not found')
-        result = change_data(row)
+            if row is None:
+                raise HTTPException(404, 'Change not found')
+            result = change_data(row)
+            if row['kind'] == 'notice' and row['assembly_json'] and (snapshot := notice_snapshot(conn, change_id)):
+                has_limit_status = conn.execute('PRAGMA user_version').fetchone()[0] >= NOTICE_LIMIT_VERSION
+                limit_column = 'pdf_limit_reason' if has_limit_status else 'NULL AS pdf_limit_reason'
+                content = conn.execute(
+                    f'SELECT summary,pdf_url,{limit_column} FROM assembly_notice_content WHERE snapshot_id=?',
+                    (snapshot,),
+                ).fetchone()
+                if content and (content['summary'] or content['pdf_url']):
+                    pages = conn.execute(
+                        'SELECT page FROM assembly_notice_pages WHERE snapshot_id=? ORDER BY page', (snapshot,)
+                    ).fetchall()
+                    result['noticeContent'] = {
+                        'summary': content['summary'],
+                        'pdfUrl': content['pdf_url'],
+                        'comparisonPages': [page['page'] for page in pages],
+                    }
+                    if content['pdf_limit_reason']:
+                        result['noticeContent']['comparisonLimited'] = True
         result['diff'] = (
             list(difflib.ndiff((row['before_text'] or '').splitlines(), (row['after_text'] or '').splitlines()))
             if row['comparable']
             else None
         )
         return result
+
+    @app.get('/api/law-changes/{change_id}/notice-comparison/{page}', response_class=Response)
+    def notice_comparison(change_id: str, page: int):
+        with read_database(database) as conn:
+            conn.execute('BEGIN')
+            snapshot = notice_snapshot(conn, change_id)
+            row = (
+                conn.execute(
+                    'SELECT png FROM assembly_notice_pages WHERE snapshot_id=? AND page=?', (snapshot, page)
+                ).fetchone()
+                if snapshot
+                else None
+            )
+        if not row:
+            raise HTTPException(404, 'Notice comparison page not found')
+        return Response(row['png'], media_type='image/png')
 
     @app.get('/api/law-calendar/status', response_model=CalendarStatus, response_model_exclude_unset=True)
     def status():
@@ -178,29 +223,55 @@ def create_app(database: Path, frontend: Path | None = None) -> FastAPI:
         return result
 
     @app.get('/api/law-holds', response_model=HoldPage)
-    def holds(page: int = Query(1, ge=1, le=100000), page_size: int = Query(20, ge=1, le=100)):
+    def holds(
+        page: int = Query(1, ge=1, le=100000),
+        page_size: int = Query(20, ge=1, le=100),
+        type: Literal['effective', 'notice'] = 'effective',
+    ):
+        params = (page_size, (page - 1) * page_size)
         with read_database(database) as conn:
-            total = conn.execute('SELECT COUNT(*) FROM public_holds').fetchone()[0]
-            rows = conn.execute(
-                'SELECT * FROM public_holds ORDER BY law_name,article,id LIMIT ? OFFSET ?',
-                (page_size, (page - 1) * page_size),
-            ).fetchall()
-        return {
-            'items': [
-                {
-                    'id': r['id'],
-                    'lawName': r['law_name'],
-                    'article': r['article'],
-                    'reason': REASONS.get(r['reason'], REASONS['missing']),
-                    'sourceUrl': r['source_url'],
-                    'collectedAt': r['collected_at'],
-                }
-                for r in rows
-            ],
-            'total': total,
-            'page': page,
-            'page_size': page_size,
-        }
+            conn.execute('BEGIN')
+            if type == 'notice':
+                source = (
+                    'FROM assembly_entries e JOIN assembly_snapshots s ON s.id=e.snapshot_id '
+                    "WHERE e.source='assembly_notice' AND e.review_state='pending' "
+                    "AND s.source_url GLOB 'https://pal.assembly.go.kr/napal/lgsltpa/*'"
+                )
+                total = conn.execute(f'SELECT COUNT(*) {source}').fetchone()[0]
+                rows = conn.execute(
+                    'SELECT s.id,s.title AS lawName,s.bill_no AS billNo,s.source_url AS sourceUrl, '
+                    's.collected_at AS collectedAt, '
+                    '(SELECT COUNT(*) FROM assembly_dates d WHERE d.snapshot_id=s.id '
+                    "AND d.role IN ('notice_start','notice_end'))=2 AS has_period "
+                    f'{source} ORDER BY s.collected_at DESC,s.id LIMIT ? OFFSET ?',
+                    params,
+                ).fetchall()
+                items = []
+                for row in rows:
+                    item = dict(row)
+                    item['reason'] = (
+                        '국회 공식 상세의 의안번호와 예고기간 확인 필요'
+                        if item.pop('has_period')
+                        else '예고 시작일 또는 종료일 확인 필요'
+                    )
+                    items.append(item)
+            else:
+                total = conn.execute('SELECT COUNT(*) FROM public_holds').fetchone()[0]
+                rows = conn.execute(
+                    'SELECT * FROM public_holds ORDER BY law_name,article,id LIMIT ? OFFSET ?', params
+                ).fetchall()
+                items = [
+                    {
+                        'id': row['id'],
+                        'lawName': row['law_name'],
+                        'article': row['article'],
+                        'reason': REASONS.get(row['reason'], REASONS['missing']),
+                        'sourceUrl': row['source_url'],
+                        'collectedAt': row['collected_at'],
+                    }
+                    for row in rows
+                ]
+        return {'items': items, 'total': total, 'page': page, 'page_size': page_size}
 
     if frontend is not None:
         app.mount('/', StaticFiles(directory=frontend, html=True), name='calendar')

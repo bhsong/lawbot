@@ -1,4 +1,4 @@
-"""Local-only import and review CLI. No HTTP writes, secrets, collectors or LLM calls."""
+"""Local import, review and official notice content CLI."""
 
 import argparse
 import json
@@ -8,11 +8,12 @@ from pathlib import Path
 from law_calendar.assembly_ingest import inspect_assembly, list_assembly, review_assembly
 from law_calendar.db import read_database
 from law_calendar.ingest import import_files
+from law_calendar.notice_content import MAX_NOTICES, refresh_notice_content
 from law_calendar.review import inspect_event, review, review_template
 
 
 def main():
-    parser = argparse.ArgumentParser(description='Offline calendar import and human review')
+    parser = argparse.ArgumentParser(description='Local calendar import, review and notice content')
     parser.add_argument('--database', type=Path, required=True)
     sub = parser.add_subparsers(dest='command', required=True)
     importer = sub.add_parser('import')
@@ -26,7 +27,8 @@ def main():
     reviewer = sub.add_parser('review')
     reviewer.add_argument('manifest', type=Path)
     reviewer.add_argument('--reviewer', required=True)
-    sub.add_parser('assembly-list')
+    assembly_list = sub.add_parser('assembly-list')
+    assembly_list.add_argument('--notice-sample', type=int, help='Show this many recently auto-published notices')
     assembly_show = sub.add_parser('assembly-show')
     assembly_show.add_argument('snapshot_id')
     assembly_review = sub.add_parser('assembly-review')
@@ -34,6 +36,10 @@ def main():
     assembly_review.add_argument('decision', choices=['approve', 'reject', 'withdraw'])
     assembly_review.add_argument('--reviewer', required=True)
     assembly_review.add_argument('--note', required=True)
+    notice_content = sub.add_parser('notice-content', help='Collect official content for approved notices')
+    notice_content.add_argument('--limit', type=int, default=MAX_NOTICES)
+    notice_content.add_argument('--refresh', action='store_true')
+    notice_content.add_argument('--after-snapshot', help='Continue --refresh after its previous nextAfterSnapshot')
     args = parser.parse_args()
     failed = False
     try:
@@ -54,12 +60,17 @@ def main():
             if args.template:
                 result = review_template(result)
         elif args.command == 'assembly-list':
-            result = list_assembly(args.database)
+            result = list_assembly(args.database, notice_sample=args.notice_sample)
         elif args.command == 'assembly-show':
             result = inspect_assembly(args.database, args.snapshot_id)
         elif args.command == 'assembly-review':
             review_assembly(args.database, args.snapshot_id, args.decision, reviewer=args.reviewer, note=args.note)
             result = {'decision': 'recorded'}
+        elif args.command == 'notice-content':
+            result = refresh_notice_content(
+                args.database, limit=args.limit, refresh=args.refresh, after_snapshot=args.after_snapshot
+            )
+            failed = bool(result['failed'] or result['pdfErrors'] or result['pdfLimits'])
         else:
             review(args.database, json.loads(args.manifest.read_text(encoding='utf-8')), reviewer=args.reviewer)
             result = {'decision': 'recorded'}

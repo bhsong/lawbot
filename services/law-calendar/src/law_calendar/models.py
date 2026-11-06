@@ -42,8 +42,16 @@ class PublicChange(BaseModel):
     assembly: PublicAssembly | None = None
 
 
+class PublicNoticeContent(BaseModel):
+    summary: str | None
+    pdfUrl: str | None
+    comparisonPages: list[int]
+    comparisonLimited: bool = False
+
+
 class PublicDetail(PublicChange):
     diff: list[str] | None
+    noticeContent: PublicNoticeContent | None = None
 
 
 class ChangePage(BaseModel):
@@ -75,17 +83,24 @@ class CalendarStatus(BaseModel):
     noticeCollectedAt: str | None = None
 
 
-class HeldChange(BaseModel):
+class HoldItem(BaseModel):
     id: str
     lawName: str
-    article: str
     reason: str
     sourceUrl: str
     collectedAt: str
 
 
+class HeldChange(HoldItem):
+    article: str
+
+
+class HeldNotice(HoldItem):
+    billNo: str
+
+
 class HoldPage(BaseModel):
-    items: list[HeldChange]
+    items: list[HeldChange | HeldNotice]
     total: int
     page: int
     page_size: int

@@ -32,14 +32,23 @@ export interface ChangePage {
 export interface HeldChange {
   id: string
   lawName: string
-  article: string
   reason: string
   sourceUrl: string
   collectedAt: string
+  article: string
+}
+
+export interface HeldNotice {
+  id: string
+  lawName: string
+  reason: string
+  sourceUrl: string
+  collectedAt: string
+  billNo: string
 }
 
 export interface HoldPage {
-  items: (HeldChange)[]
+  items: (HeldChange | HeldNotice)[]
   total: number
   page: number
   page_size: number
@@ -104,4 +113,12 @@ export interface PublicDetail {
   reviewState: "approved"
   assembly?: PublicAssembly | null
   diff: (string)[] | null
+  noticeContent?: PublicNoticeContent | null
+}
+
+export interface PublicNoticeContent {
+  summary: string | null
+  pdfUrl: string | null
+  comparisonPages: (number)[]
+  comparisonLimited?: boolean
 }
