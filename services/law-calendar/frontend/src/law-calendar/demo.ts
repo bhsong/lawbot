@@ -33,8 +33,9 @@ export const loadDemo: CalendarLoader = async (month, signal) => {
   return { changes, demo: true, delayed: false, collectedAt: null, verifiedAt: null }
 }
 
-export const demoHolds: HoldLoader = async (page, signal) => {
+export const demoHolds: HoldLoader = async (page, signal, kind) => {
   if (signal.aborted) throw new DOMException('Aborted', 'AbortError')
+  if (kind === 'notice') return { items: [], total: 0, page, page_size: 20 }
   return { items: page === 1 ? [{ id: `${DEMO_ID}-held`, lawName: '[예시] 가상 업무절차법', article: '제9조',
     reason: '대통령령 등 별도로 정하는 시행일을 확인해야 합니다.', sourceUrl: 'https://www.law.go.kr/', collectedAt: day }] : [],
     total: 1, page, page_size: 20 }

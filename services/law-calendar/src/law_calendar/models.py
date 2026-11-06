@@ -82,17 +82,24 @@ class CalendarStatus(BaseModel):
     noticeCollectedAt: str | None = None
 
 
-class HeldChange(BaseModel):
+class HoldItem(BaseModel):
     id: str
     lawName: str
-    article: str
     reason: str
     sourceUrl: str
     collectedAt: str
 
 
+class HeldChange(HoldItem):
+    article: str
+
+
+class HeldNotice(HoldItem):
+    billNo: str
+
+
 class HoldPage(BaseModel):
-    items: list[HeldChange]
+    items: list[HeldChange | HeldNotice]
     total: int
     page: int
     page_size: int

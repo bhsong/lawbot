@@ -7,6 +7,7 @@ import sqlite3
 import pytest
 from fastapi.testclient import TestClient
 
+from law_calendar.assembly_ingest import import_assembly, review_assembly
 from law_calendar.db import migrate
 from law_calendar.notice_source import NoticeSourceError
 from law_calendar.server import create_app
@@ -38,7 +39,9 @@ def register(
         if notice
         else 'https://likms.assembly.go.kr/bill/billDetail.do?billId=PRC_BILL'
     )
-    dates = {'notice_start': start, 'notice_end': end} if notice else ({'bill_proposed': date} if date else {})
+    dates = {'notice_end': end} if notice else ({'bill_proposed': date} if date else {})
+    if notice and start:
+        dates['notice_start'] = start
     change_type = (
         ('assembly_notice_observed' if revision == 1 else 'assembly_notice_changed') if notice else 'assembly_bill_new'
     )
@@ -89,8 +92,6 @@ def test_approved_notice_dates_correction_and_failed_source(scheduled, unavailab
     (database, home, _, _), state = scheduled
     event_id = register(home, state)
     assert synchronize(database, home)['assembly_notice_imported'] == 1
-    from law_calendar.assembly_ingest import review_assembly
-
     with TestClient(create_app(database)) as client:
         path = '/api/law-events?month=2026-11&type=notice'
         assert client.get(path).json()['total'] == 0
@@ -125,8 +126,6 @@ def test_bill_dates_are_separate_from_notices(scheduled):
     (database, home, _, _), state = scheduled
     event_id = register(home, state, source='assembly_bill', date='2026-11-05')
     synchronize(database, home)
-    from law_calendar.assembly_ingest import review_assembly
-
     review_assembly(database, event_id, 'approve', reviewer='tester', note='제안일 검토')
     with TestClient(create_app(database)) as client:
         assert client.get('/api/law-events?date=2026-11-05&type=notice').json()['total'] == 0
@@ -140,8 +139,6 @@ def test_same_day_notice_counts_once_and_undated_bill_is_not_publishable(schedul
     notice = register(home, state, start='2026-11-05')
     bill = register(home, state, source='assembly_bill')
     assert synchronize(database, home)['failed'] == 0
-    from law_calendar.assembly_ingest import review_assembly
-
     review_assembly(database, notice, 'approve', reviewer='tester', note='예고기간 확인')
     with pytest.raises(ValueError, match='official date'):
         review_assembly(database, bill, 'approve', reviewer='tester', note='일자 없음')
@@ -166,6 +163,45 @@ def test_bad_assembly_evidence_does_not_block_other_sources(scheduled):
         status = client.get('/api/law-calendar/status').json()
         assert status['billCollectedAt'] == NOW
         assert 'noticeCollectedAt' not in status
+
+
+def test_notice_hold_list_shows_only_current_pending_notices_and_paginates(scheduled):
+    (database, home, _, _), state = scheduled
+    waiting = register(home, state, notice_id='PRC_A', start=None)
+    checking = register(home, state, notice_id='PRC_B')
+    reviewed = {
+        decision: register(home, state, notice_id=f'PRC_{decision}') for decision in ('approve', 'reject', 'withdraw')
+    }
+    bill = register(home, state, source='assembly_bill', date='2026-11-05')
+
+    def read(snapshot):
+        return json.loads((home / f'{snapshot}.json').read_text())
+
+    import_assembly(database, 'assembly_notice', NOW, [read(i) for i in (waiting, checking, *reviewed.values())])
+    import_assembly(database, 'assembly_bill', NOW, [read(bill)])
+    for decision, snapshot in reviewed.items():
+        review_assembly(database, snapshot, decision, reviewer='tester', note='날짜 확인')
+    latest = register(home, state, notice_id='PRC_B', revision=2, end='2026-11-07')
+    import_assembly(database, 'assembly_notice', NOW, [read(latest)])
+
+    with TestClient(create_app(database)) as client:
+        route = '/api/law-holds?type=notice&page_size=1'
+        first = client.get(route).json()
+        second = client.get(route + '&page=2').json()
+        assert first['total'] == second['total'] == 2
+        rows = {row['id']: row for row in first['items'] + second['items']}
+        assert set(rows) == {waiting, latest}
+        assert rows[waiting]['billNo'] == '2200012'
+        assert rows[waiting]['sourceUrl'].endswith('PRC_A')
+        assert rows[waiting]['reason'] == '예고 시작일 또는 종료일 확인 필요'
+        assert rows[latest]['reason'] == '국회 공식 상세의 의안번호와 예고기간 확인 필요'
+        assert client.get('/api/law-holds').json()['total'] == 0
+        assert client.get('/api/law-events?month=2026-11&type=notice').json()['total'] == 2
+        assert client.get('/api/law-holds?type=bill').status_code == 422
+        assert client.post('/api/law-holds?type=notice').status_code == 405
+        review_assembly(database, latest, 'approve', reviewer='tester', note='예고기간 대조')
+        assert [row['id'] for row in client.get(route).json()['items']] == [waiting]
+        assert client.get('/api/law-events?month=2026-11&type=notice').json()['total'] == 4
 
 
 def test_v3_upgrade_keeps_existing_records_and_backup(tmp_path):

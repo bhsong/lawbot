@@ -218,29 +218,55 @@ def create_app(database: Path, frontend: Path | None = None) -> FastAPI:
         return result
 
     @app.get('/api/law-holds', response_model=HoldPage)
-    def holds(page: int = Query(1, ge=1, le=100000), page_size: int = Query(20, ge=1, le=100)):
+    def holds(
+        page: int = Query(1, ge=1, le=100000),
+        page_size: int = Query(20, ge=1, le=100),
+        type: Literal['effective', 'notice'] = 'effective',
+    ):
+        params = (page_size, (page - 1) * page_size)
         with read_database(database) as conn:
-            total = conn.execute('SELECT COUNT(*) FROM public_holds').fetchone()[0]
-            rows = conn.execute(
-                'SELECT * FROM public_holds ORDER BY law_name,article,id LIMIT ? OFFSET ?',
-                (page_size, (page - 1) * page_size),
-            ).fetchall()
-        return {
-            'items': [
-                {
-                    'id': r['id'],
-                    'lawName': r['law_name'],
-                    'article': r['article'],
-                    'reason': REASONS.get(r['reason'], REASONS['missing']),
-                    'sourceUrl': r['source_url'],
-                    'collectedAt': r['collected_at'],
-                }
-                for r in rows
-            ],
-            'total': total,
-            'page': page,
-            'page_size': page_size,
-        }
+            conn.execute('BEGIN')
+            if type == 'notice':
+                source = (
+                    'FROM assembly_entries e JOIN assembly_snapshots s ON s.id=e.snapshot_id '
+                    "WHERE e.source='assembly_notice' AND e.review_state='pending' "
+                    "AND s.source_url GLOB 'https://pal.assembly.go.kr/napal/lgsltpa/*'"
+                )
+                total = conn.execute(f'SELECT COUNT(*) {source}').fetchone()[0]
+                rows = conn.execute(
+                    'SELECT s.id,s.title AS lawName,s.bill_no AS billNo,s.source_url AS sourceUrl, '
+                    's.collected_at AS collectedAt, '
+                    '(SELECT COUNT(*) FROM assembly_dates d WHERE d.snapshot_id=s.id '
+                    "AND d.role IN ('notice_start','notice_end'))=2 AS has_period "
+                    f'{source} ORDER BY s.collected_at DESC,s.id LIMIT ? OFFSET ?',
+                    params,
+                ).fetchall()
+                items = []
+                for row in rows:
+                    item = dict(row)
+                    item['reason'] = (
+                        '국회 공식 상세의 의안번호와 예고기간 확인 필요'
+                        if item.pop('has_period')
+                        else '예고 시작일 또는 종료일 확인 필요'
+                    )
+                    items.append(item)
+            else:
+                total = conn.execute('SELECT COUNT(*) FROM public_holds').fetchone()[0]
+                rows = conn.execute(
+                    'SELECT * FROM public_holds ORDER BY law_name,article,id LIMIT ? OFFSET ?', params
+                ).fetchall()
+                items = [
+                    {
+                        'id': row['id'],
+                        'lawName': row['law_name'],
+                        'article': row['article'],
+                        'reason': REASONS.get(row['reason'], REASONS['missing']),
+                        'sourceUrl': row['source_url'],
+                        'collectedAt': row['collected_at'],
+                    }
+                    for row in rows
+                ]
+        return {'items': items, 'total': total, 'page': page, 'page_size': page_size}
 
     if frontend is not None:
         app.mount('/', StaticFiles(directory=frontend, html=True), name='calendar')

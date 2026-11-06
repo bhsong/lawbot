@@ -47,3 +47,20 @@ test('handles empty results and retries failures without showing internal errors
   await userEvent.click(screen.getByRole('button', { name: '다시 시도' }))
   expect(await screen.findByText('현재 공개된 보류 항목이 없습니다.')).toBeInTheDocument()
 })
+
+test('switches to pending notices with an independent first page', async () => {
+  const pending = { id: 'pending', lawName: '근로기준법 개정안', billNo: '2200012', reason: '예고 시작일 또는 종료일 확인 필요',
+    sourceUrl: 'https://pal.assembly.go.kr/notice', collectedAt: item.collectedAt }
+  const loader: HoldLoader = vi.fn(async (page, _signal, kind) => kind === 'notice'
+    ? { items: [pending], total: 1, page, page_size: 20 }
+    : { items: [{ ...item, article: `제${page}조` }], total: 21, page, page_size: 20 })
+  render(<HoldDialog demo={false} loader={loader} onClose={() => {}} />)
+  await screen.findByText('제1조')
+  await userEvent.click(screen.getByRole('button', { name: '다음 보류 목록' }))
+  await screen.findByText('제2조')
+  await userEvent.click(screen.getByRole('button', { name: '입법예고 검토 대기' }))
+  expect(await screen.findByText('의안번호 2200012')).toBeInTheDocument()
+  expect(screen.getByText('총 1건 · 1페이지')).toBeInTheDocument()
+  expect(screen.getByText(pending.reason)).toBeInTheDocument()
+  expect(screen.queryByText('제2조')).not.toBeInTheDocument()
+})
