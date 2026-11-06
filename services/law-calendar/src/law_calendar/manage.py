@@ -39,6 +39,7 @@ def main():
     notice_content = sub.add_parser('notice-content', help='Collect official content for approved notices')
     notice_content.add_argument('--limit', type=int, default=MAX_NOTICES)
     notice_content.add_argument('--refresh', action='store_true')
+    notice_content.add_argument('--after-snapshot', help='Continue --refresh after its previous nextAfterSnapshot')
     args = parser.parse_args()
     failed = False
     try:
@@ -66,7 +67,9 @@ def main():
             review_assembly(args.database, args.snapshot_id, args.decision, reviewer=args.reviewer, note=args.note)
             result = {'decision': 'recorded'}
         elif args.command == 'notice-content':
-            result = refresh_notice_content(args.database, limit=args.limit, refresh=args.refresh)
+            result = refresh_notice_content(
+                args.database, limit=args.limit, refresh=args.refresh, after_snapshot=args.after_snapshot
+            )
             failed = bool(result['failed'] or result['pdfErrors'])
         else:
             review(args.database, json.loads(args.manifest.read_text(encoding='utf-8')), reviewer=args.reviewer)

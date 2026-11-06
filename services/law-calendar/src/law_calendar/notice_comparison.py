@@ -21,8 +21,7 @@ def _table_dividers(page, width: float) -> list[float]:
 
 
 def comparison_images(payload: bytes) -> list[tuple[int, bytes]]:
-    if not payload.startswith(b'%PDF-'):
-        return []
+    """Return comparison pages from a PDF. Raise PdfiumError if it cannot be opened."""
     images = []
     with pdfium.PdfDocument(payload) as document:
         if len(document) > MAX_PAGES:

@@ -127,3 +127,5 @@ uv run --project services/law-calendar python -m law_calendar.manage --database 
 명령은 국회 상세의 의안번호·예고기간과 저장된 현재 snapshot을 대조한다. 주요내용을 평문으로 저장하고, 국회가 제안이유와 주요내용을 한 문단으로 제공하면 그 문단을 보존한다. 공식 PDF에서 확인한 신·구조문대비표는 원본 페이지 이미지와 PDF 원문 링크로 제공한다. 상세창에서 대비표를 펼치면 같은 화면에서 확인할 수 있다.
 
 수동 명령은 현재 승인 snapshot 중 보강이나 PDF 재시도가 필요한 자료를 최대 150건 읽으며, `--limit`으로 배치 크기를 줄일 수 있다. 이미 보강한 자료를 다시 대조할 때는 `--refresh`를 사용한다. 재조회에 실패하면 기존 대비표를 보존한다. PDF는 메모리에서 처리하고, 공개 API는 SQLite에 저장한 본문과 PNG 데이터를 읽는다.
+
+`--refresh` 출력에 `nextAfterSnapshot` 값이 있으면 다음 실행에 `--refresh --after-snapshot "$NEXT_SNAPSHOT"`을 넣어 이어서 처리한다. 값이 `null`이면 마지막 배치까지 도달한 것이다. 실패한 항목은 각 배치의 `failed`와 `pdfErrors`에 기록된다.

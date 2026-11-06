@@ -2,6 +2,7 @@
 
 import json
 import sqlite3
+import sys
 from io import BytesIO
 
 import pytest
@@ -10,6 +11,7 @@ from PIL import Image
 
 from law_calendar.assembly_ingest import import_assembly, list_assembly, review_assembly
 from law_calendar.db import SCHEMA, SCHEMA_V2, SCHEMA_V3, SCHEMA_V4, SCHEMA_V5, migrate
+from law_calendar.manage import main as manage
 from law_calendar.notice_comparison import comparison_images
 from law_calendar.notice_content import NoticeContent, refresh_notice_content
 from law_calendar.notice_source import NoticeSourceError, parse_notice_detail
@@ -171,6 +173,68 @@ def test_source_failure_does_not_replace_saved_comparison_or_approve_pending_ite
     with sqlite3.connect(path) as db:
         assert db.execute('SELECT summary FROM assembly_notice_content').fetchone() == ('보관된 주요 내용',)
         assert db.execute('SELECT png FROM assembly_notice_pages').fetchone() == (b'old image',)
+
+
+@pytest.mark.parametrize('valid_pdf', [False, True], ids=['error-html', 'pdf-without-table'])
+def test_refresh_distinguishes_non_pdf_response_from_a_pdf_without_a_comparison(scheduled, monkeypatch, valid_pdf):
+    (path, home, _, _), state = scheduled
+    snapshot = register(home, state)
+    notice = json.loads((home / f'{snapshot}.json').read_text())
+    import_assembly(path, 'assembly_notice', notice['detected_at'], [notice])
+    review_assembly(path, snapshot, 'approve', reviewer='reviewer', note='날짜 확인')
+    refresh_notice_content(path, read=lambda *_: NoticeContent('보관된 주요 내용', PDF_URL, [(2, b'old image')]))
+    html = detail_html('2200012', '2026-11-04~2026-11-05', '안 제10조를 신설함.')
+    with BytesIO() as buffer:
+        Image.new('RGB', (8, 12), 'white').save(buffer, format='PDF')
+        payload = buffer.getvalue() if valid_pdf else b'<html>Service unavailable</html>'
+    monkeypatch.setattr(
+        'law_calendar.notice_content.fetch_official', lambda _url, *, pdf=False: payload if pdf else html.encode()
+    )
+    result = refresh_notice_content(path, refresh=True)
+    with sqlite3.connect(path) as db:
+        summary = db.execute('SELECT summary FROM assembly_notice_content').fetchone()[0]
+        pages = db.execute('SELECT png FROM assembly_notice_pages').fetchall()
+    if valid_pdf:
+        assert result['stored'] == 1 and result['pdfErrors'] == []
+        assert summary == '안 제10조를 신설함.' and pages == []
+    else:
+        assert result['stored'] == 0 and len(result['pdfErrors']) == 1
+        assert summary == '보관된 주요 내용' and pages == [(b'old image',)]
+
+
+def test_refresh_can_continue_after_the_first_150_approved_notices(scheduled, monkeypatch, capsys):
+    (path, home, _, _), state = scheduled
+    snapshots = [register(home, state, notice_id=f'PRC_{index:03d}') for index in range(151)]
+    notices = [json.loads((home / f'{snapshot}.json').read_text()) for snapshot in snapshots]
+    import_assembly(path, 'assembly_notice', notices[0]['detected_at'], notices)
+    for snapshot in snapshots:
+        review_assembly(path, snapshot, 'approve', reviewer='reviewer', note='날짜 확인')
+
+    def old(*_):
+        return NoticeContent('기존 내용', None)
+
+    def new(*_):
+        return NoticeContent('새 내용', None)
+
+    assert refresh_notice_content(path, read=old)['stored'] == 150
+    assert refresh_notice_content(path, read=old)['stored'] == 1
+    first = refresh_notice_content(path, refresh=True, read=new)
+    assert first['stored'] == 150 and first['nextAfterSnapshot'] == snapshots[149]
+    review_assembly(path, snapshots[149], 'withdraw', reviewer='reviewer', note='배치 처리 뒤 철회')
+    html = detail_html('2200012', '2026-11-04~2026-11-05', '새 내용', pdf_url='')
+    monkeypatch.setattr('law_calendar.notice_content.fetch_official', lambda _url: html.encode())
+    monkeypatch.setattr(
+        sys,
+        'argv',
+        ['manage', '--database', str(path), 'notice-content', '--refresh', '--after-snapshot', snapshots[149]],
+    )
+    manage()
+    second = json.loads(capsys.readouterr().out)
+    assert second['stored'] == 1 and second['nextAfterSnapshot'] is None
+    with sqlite3.connect(path) as db:
+        assert db.execute('SELECT summary, COUNT(*) FROM assembly_notice_content GROUP BY summary').fetchall() == [
+            ('새 내용', 151)
+        ]
 
 
 def test_daily_sync_publishes_verified_notice_and_retries_pdf_without_manual_approval(scheduled, monkeypatch):

@@ -44,15 +44,29 @@ def refresh_notice_content(
     *,
     limit: int = MAX_NOTICES,
     refresh: bool = False,
+    after_snapshot: str | None = None,
     publish_verified: bool = False,
     read: Callable[[str, str, str | None, str], NoticeContent] = read_notice_content,
 ) -> dict:
     """Attach official content and optionally publish pending notices with a verified period."""
     if not 1 <= limit <= MAX_NOTICES:
         raise ValueError(f'Notice limit must be between 1 and {MAX_NOTICES}')
+    paginated_refresh = refresh and not publish_verified
+    if after_snapshot is not None and not paginated_refresh:
+        raise ValueError('A continuation snapshot requires a manual refresh')
     with read_database(database) as conn:
+        conn.execute('BEGIN')
         if conn.execute('PRAGMA user_version').fetchone()[0] != CURRENT_VERSION:
             raise ValueError('Migrate the calendar database before collecting notice content')
+        after_stamp = None
+        if after_snapshot is not None:
+            anchor = conn.execute(
+                "SELECT collected_at FROM assembly_snapshots WHERE id=? AND source='assembly_notice'",
+                (after_snapshot,),
+            ).fetchone()
+            if not anchor:
+                raise ValueError('Continuation notice snapshot not found')
+            after_stamp = anchor['collected_at']
         rows = conn.execute(
             """SELECT e.id AS entry_id,s.id,s.bill_no,s.source_url,start.event_on AS start,end.event_on AS end
             FROM assembly_entries e JOIN assembly_snapshots s ON s.id=e.snapshot_id
@@ -61,14 +75,22 @@ def refresh_notice_content(
             LEFT JOIN assembly_notice_content c ON c.snapshot_id=s.id
             LEFT JOIN assembly_notice_attempts a ON a.snapshot_id=s.id
             WHERE e.source='assembly_notice'
-            AND (e.review_state='approved' OR (? AND e.review_state='pending' AND start.event_on IS NOT NULL))
-            AND (? OR c.snapshot_id IS NULL OR c.pdf_pending)
-            ORDER BY CASE WHEN ? THEN a.attempted_at END,s.collected_at,s.id LIMIT ?""",
-            (publish_verified, refresh, publish_verified, limit),
+            AND (e.review_state='approved' OR (:publish AND e.review_state='pending' AND start.event_on IS NOT NULL))
+            AND (:refresh OR c.snapshot_id IS NULL OR c.pdf_pending)
+            AND (:after_id IS NULL OR (s.collected_at,s.id) > (:after_stamp,:after_id))
+            ORDER BY CASE WHEN :publish THEN a.attempted_at END,s.collected_at,s.id LIMIT :limit""",
+            {
+                'publish': publish_verified,
+                'refresh': refresh,
+                'after_id': after_snapshot,
+                'after_stamp': after_stamp,
+                'limit': limit + int(paginated_refresh),
+            },
         ).fetchall()
 
+    batch = rows[:limit]
     result = {
-        'selected': len(rows),
+        'selected': len(batch),
         'stored': 0,
         'summaries': 0,
         'comparisons': 0,
@@ -78,7 +100,9 @@ def refresh_notice_content(
         'failed': [],
         'pdfErrors': [],
     }
-    for row in rows:
+    if paginated_refresh:
+        result['nextAfterSnapshot'] = batch[-1]['id'] if len(rows) > limit else None
+    for row in batch:
         try:
             content = read(row['source_url'], row['bill_no'], row['start'], row['end'])
         except NoticeSourceError as exc:
