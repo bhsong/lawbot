@@ -1,6 +1,7 @@
 """Persist and review dated Assembly observations independently of article changes."""
 
 import json
+import sqlite3
 from datetime import datetime
 from hashlib import sha256
 from pathlib import Path
@@ -32,6 +33,8 @@ BILL_ROLES = {
     'judiciary_presented',
     'judiciary_decided',
 }
+REVIEW_STATES = {'approve': 'approved', 'reject': 'rejected', 'withdraw': 'withdrawn'}
+AUTO_NOTICE_REVIEWER = 'notice-auto'
 
 
 class AssemblyTarget(BaseModel):
@@ -152,15 +155,18 @@ def import_assembly(database: Path, source: str, collected_at: str, events: list
                 (entry_id,),
             ).fetchone()
             if not latest or revision > latest['revision']:
+                review_state = 'pending'
+                if latest and source == 'assembly_notice' and latest['review_state'] in ('rejected', 'withdrawn'):
+                    review_state = latest['review_state']
                 if latest and latest['review_state'] == 'approved':
                     conn.execute(
                         "INSERT INTO assembly_review_audit VALUES (NULL,?,?,'invalidate','sync',?,?)",
                         (entry_id, latest['snapshot_id'], utc_now(), '공식 원천 관측값 변경'),
                     )
                 conn.execute(
-                    "INSERT INTO assembly_entries VALUES (?,?,?,?,'pending',NULL) "
-                    "ON CONFLICT(id) DO UPDATE SET snapshot_id=excluded.snapshot_id,review_state='pending',verified_at=NULL",
-                    (entry_id, source, target.item_id, event.event_id),
+                    'INSERT INTO assembly_entries VALUES (?,?,?,?,?,NULL) ON CONFLICT(id) DO UPDATE SET '
+                    'snapshot_id=excluded.snapshot_id,review_state=excluded.review_state,verified_at=NULL',
+                    (entry_id, source, target.item_id, event.event_id, review_state),
                 )
             imported += 1
         previous = conn.execute(
@@ -175,11 +181,17 @@ def import_assembly(database: Path, source: str, collected_at: str, events: list
     return imported, len(events) - imported
 
 
-def list_assembly(database: Path) -> list[dict]:
+def list_assembly(database: Path, *, notice_sample: int | None = None) -> list[dict]:
+    if notice_sample is not None and notice_sample < 1:
+        raise ValueError('Notice sample size must be positive')
     with read_database(database) as conn:
         rows = conn.execute(
-            'SELECT e.id,e.snapshot_id,e.review_state,s.title,s.bill_no,s.status,s.collected_at '
-            'FROM assembly_entries e JOIN assembly_snapshots s ON s.id=e.snapshot_id ORDER BY s.collected_at DESC,e.id'
+            'SELECT e.id,e.snapshot_id,e.review_state,s.title,s.bill_no,s.status,s.collected_at, '
+            'a.reviewer,a.reviewed_at,a.note FROM assembly_entries e JOIN assembly_snapshots s ON s.id=e.snapshot_id '
+            'LEFT JOIN assembly_review_audit a ON a.id=(SELECT MAX(id) FROM assembly_review_audit WHERE entry_id=e.id) '
+            "WHERE (? IS NULL OR (e.source='assembly_notice' AND e.review_state='approved' AND a.reviewer=?)) "
+            'ORDER BY CASE WHEN ? IS NULL THEN s.collected_at ELSE a.reviewed_at END DESC,e.id LIMIT COALESCE(?,-1)',
+            (notice_sample, AUTO_NOTICE_REVIEWER, notice_sample, notice_sample),
         ).fetchall()
     return [dict(row) for row in rows]
 
@@ -197,10 +209,8 @@ def inspect_assembly(database: Path, snapshot_id: str) -> dict:
 
 
 def review_assembly(database: Path, snapshot_id: str, decision: str, *, reviewer: str, note: str) -> None:
-    states = {'approve': 'approved', 'reject': 'rejected', 'withdraw': 'withdrawn'}
-    if decision not in states or not reviewer.strip() or not note.strip():
+    if decision not in REVIEW_STATES or not reviewer.strip() or not note.strip():
         raise ValueError('Decision, reviewer and review note are required')
-    now = utc_now()
     with write_database(database) as conn:
         row = conn.execute('SELECT id FROM assembly_entries WHERE snapshot_id=?', (snapshot_id,)).fetchone()
         if not row:
@@ -210,11 +220,19 @@ def review_assembly(database: Path, snapshot_id: str, decision: str, *, reviewer
             and not conn.execute('SELECT 1 FROM assembly_dates WHERE snapshot_id=?', (snapshot_id,)).fetchone()
         ):
             raise ValueError('An official date is required to publish an Assembly item')
-        conn.execute(
-            'UPDATE assembly_entries SET review_state=?,verified_at=? WHERE id=?',
-            (states[decision], now if decision == 'approve' else None, row['id']),
-        )
-        conn.execute(
-            'INSERT INTO assembly_review_audit VALUES (NULL,?,?,?,?,?,?)',
-            (row['id'], snapshot_id, decision, reviewer, now, note),
-        )
+        record_assembly_review(conn, row['id'], snapshot_id, decision, reviewer=reviewer, note=note)
+
+
+def record_assembly_review(
+    conn: sqlite3.Connection, entry_id: str, snapshot_id: str, decision: str, *, reviewer: str, note: str
+) -> None:
+    """Record a verified decision for the current entry within the caller's write transaction."""
+    now = utc_now()
+    conn.execute(
+        'UPDATE assembly_entries SET review_state=?,verified_at=? WHERE id=?',
+        (REVIEW_STATES[decision], now if decision == 'approve' else None, entry_id),
+    )
+    conn.execute(
+        'INSERT INTO assembly_review_audit VALUES (NULL,?,?,?,?,?,?)',
+        (entry_id, snapshot_id, decision, reviewer, now, note),
+    )

@@ -167,8 +167,15 @@ CREATE TABLE assembly_notice_pages(
  PRIMARY KEY(snapshot_id,page)
 );
 """
-CURRENT_VERSION = 5
-SUPPORTED_VERSIONS = (4, CURRENT_VERSION)
+SCHEMA_V6 = """
+ALTER TABLE assembly_notice_content ADD COLUMN pdf_pending INTEGER NOT NULL DEFAULT 0 CHECK(pdf_pending IN (0,1));
+CREATE TABLE assembly_notice_attempts(
+ snapshot_id TEXT PRIMARY KEY REFERENCES assembly_snapshots(id), attempted_at TEXT NOT NULL
+);
+"""
+NOTICE_CONTENT_VERSION = 5
+CURRENT_VERSION = 6
+SUPPORTED_VERSIONS = (4, NOTICE_CONTENT_VERSION, CURRENT_VERSION)
 
 
 def migrate(path: Path) -> None:
@@ -180,7 +187,7 @@ def migrate(path: Path) -> None:
         version = conn.execute('PRAGMA user_version').fetchone()[0]
         if version == CURRENT_VERSION:
             return
-        if version not in (0, 1, 2, 3, 4) or (
+        if version not in (0, 1, 2, 3, 4, 5) or (
             version == 0 and conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchone()
         ):
             raise ValueError('Unsupported database schema; migration refused')
@@ -191,6 +198,7 @@ def migrate(path: Path) -> None:
                 2: '.pre-v3.backup',
                 3: '.pre-v4.backup',
                 4: '.pre-v5.backup',
+                5: '.pre-v6.backup',
             }
             backup = path.with_suffix(path.suffix + suffix[version])
             os.close(os.open(backup, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600))
@@ -200,7 +208,7 @@ def migrate(path: Path) -> None:
         conn.execute('PRAGMA foreign_keys=ON')
         script = ''.join(
             schema
-            for index, schema in enumerate((SCHEMA, SCHEMA_V2, SCHEMA_V3, SCHEMA_V4, SCHEMA_V5))
+            for index, schema in enumerate((SCHEMA, SCHEMA_V2, SCHEMA_V3, SCHEMA_V4, SCHEMA_V5, SCHEMA_V6))
             if version <= index
         )
         conn.executescript(f'BEGIN IMMEDIATE;\n{script}\nPRAGMA user_version={CURRENT_VERSION}; COMMIT;')

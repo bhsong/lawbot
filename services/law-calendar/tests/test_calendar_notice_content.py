@@ -8,12 +8,13 @@ import pytest
 from fastapi.testclient import TestClient
 from PIL import Image
 
-from law_calendar.assembly_ingest import import_assembly, review_assembly
-from law_calendar.db import SCHEMA, SCHEMA_V2, SCHEMA_V3, SCHEMA_V4, migrate
+from law_calendar.assembly_ingest import import_assembly, list_assembly, review_assembly
+from law_calendar.db import SCHEMA, SCHEMA_V2, SCHEMA_V3, SCHEMA_V4, SCHEMA_V5, migrate
 from law_calendar.notice_comparison import comparison_images
 from law_calendar.notice_content import NoticeContent, refresh_notice_content
 from law_calendar.notice_source import NoticeSourceError, parse_notice_detail
 from law_calendar.server import create_app
+from law_calendar.sync import synchronize
 from test_calendar_assembly import register
 from test_calendar_sync import scheduled as scheduled
 from test_calendar_workflow import workflow as workflow
@@ -170,3 +171,111 @@ def test_source_failure_does_not_replace_saved_comparison_or_approve_pending_ite
     with sqlite3.connect(path) as db:
         assert db.execute('SELECT summary FROM assembly_notice_content').fetchone() == ('보관된 주요 내용',)
         assert db.execute('SELECT png FROM assembly_notice_pages').fetchone() == (b'old image',)
+
+
+def test_daily_sync_publishes_verified_notice_and_retries_pdf_without_manual_approval(scheduled, monkeypatch):
+    (path, home, _, _), state = scheduled
+    snapshot = register(home, state)
+    register(home, state, source='assembly_bill', date='2026-11-05')
+    calls = []
+    html = detail_html('2200012', '2026-11-04~2026-11-05', '주요내용<br/>안 제10조를 신설함.')
+
+    def fetch(url, *, pdf=False):
+        calls.append((url, pdf))
+        if not pdf:
+            return html.encode()
+        if sum(is_pdf for _, is_pdf in calls) == 1:
+            raise NoticeSourceError('Temporary PDF error')
+        return b'%PDF-test'
+
+    monkeypatch.setattr('law_calendar.notice_content.fetch_official', fetch)
+    monkeypatch.setattr('law_calendar.notice_content.comparison_images', lambda _: [(5, b'png')])
+    first = synchronize(path, home)
+    assert first['notice_auto_published'] == 1 and first['notice_pdf_pending'] == 1
+    with TestClient(create_app(path)) as client:
+        items = client.get('/api/law-events?month=2026-11&type=notice').json()['items']
+        assert len(items) == 2
+        url = f'/api/law-changes/{items[0]["id"]}'
+        assert client.get(url).json()['noticeContent'] == {
+            'summary': '안 제10조를 신설함.',
+            'pdfUrl': PDF_URL,
+            'comparisonPages': [],
+        }
+        assert client.get('/api/law-events?month=2026-11&type=bill').json()['total'] == 0
+        assert synchronize(path, home)['notice_pdf_pending'] == 0
+        assert client.get(f'{url}/notice-comparison/5').content == b'png'
+    assert synchronize(path, home)['notice_auto_published'] == 0 and len(calls) == 4
+    rows = {item['snapshot_id']: item for item in list_assembly(path)}
+    assert rows[snapshot]['reviewer'] == 'notice-auto'
+    assert rows[snapshot]['review_state'] == 'approved'
+    assert list_assembly(path, notice_sample=5) == [rows[snapshot]]
+
+
+@pytest.mark.parametrize('decision', ['reject', 'withdraw'])
+def test_daily_sync_never_reopens_explicitly_hidden_notice_on_correction(scheduled, monkeypatch, decision):
+    (path, home, _, _), state = scheduled
+    snapshot = register(home, state)
+    html = detail_html('2200012', '2026-11-04~2026-11-05', '주요내용<br/>신설함.', pdf_url='')
+    monkeypatch.setattr('law_calendar.notice_content.fetch_official', lambda *_: html.encode())
+    assert synchronize(path, home)['notice_auto_published'] == 1
+    review_assembly(path, snapshot, decision, reviewer='tester', note='수동 조치')
+    correction = register(home, state, revision=2, end='2026-11-07')
+    monkeypatch.setattr('law_calendar.notice_content.fetch_official', lambda *_: pytest.fail('Hidden notice was read'))
+    assert synchronize(path, home)['notice_auto_published'] == 0
+    [notice] = list_assembly(path)
+    assert (
+        notice['snapshot_id'] == correction
+        and notice['review_state'] == {'reject': 'rejected', 'withdraw': 'withdrawn'}[decision]
+    )
+
+
+def test_daily_sync_leaves_mismatched_notice_pending_and_rechecks_after_source_recovers(scheduled, monkeypatch):
+    (path, home, _, _), state = scheduled
+    register(home, state)
+    html = detail_html('2200012', '2026-11-04~2026-11-07', '주요내용<br/>신설함.', pdf_url='')
+    monkeypatch.setattr('law_calendar.notice_content.fetch_official', lambda *_: html.encode())
+    result = synchronize(path, home)
+    assert result['failed'] == 0 and result['notice_pending'] == 1 and result['notice_auto_published'] == 0
+    with TestClient(create_app(path)) as client:
+        assert client.get('/api/law-events?month=2026-11&type=notice').json()['total'] == 0
+    html = html.replace('2026-11-07', '2026-11-05')
+    assert synchronize(path, home)['notice_auto_published'] == 1
+
+
+def test_daily_batch_checks_unattempted_notices_before_retrying_a_persistent_mismatch(scheduled, monkeypatch):
+    (path, home, _, _), state = scheduled
+    register(home, state, notice_id='PRC_A')
+    register(home, state, notice_id='PRC_Z')
+    monkeypatch.setattr('law_calendar.notice_content.DAILY_NOTICE_LIMIT', 1)
+
+    def fetch(url):
+        end = '2026-11-07' if url.endswith('PRC_A') else '2026-11-05'
+        return detail_html('2200012', f'2026-11-04~{end}', '주요내용<br/>신설함.', pdf_url='').encode()
+
+    monkeypatch.setattr('law_calendar.notice_content.fetch_official', fetch)
+    assert synchronize(path, home)['notice_pending'] == 2
+    assert synchronize(path, home)['notice_pending'] == 1
+
+
+def test_v5_notice_keeps_summary_and_images_when_migrated_for_automation(tmp_path, scheduled):
+    path = tmp_path / 'v5.db'
+    with sqlite3.connect(path) as db:
+        db.executescript(SCHEMA + SCHEMA_V2 + SCHEMA_V3 + SCHEMA_V4 + SCHEMA_V5 + 'PRAGMA user_version=5;')
+    (_, home, _, _), state = scheduled
+    snapshot = register(home, state)
+    notice = json.loads((home / f'{snapshot}.json').read_text())
+    import_assembly(path, 'assembly_notice', notice['detected_at'], [notice])
+    review_assembly(path, snapshot, 'approve', reviewer='reviewer', note='날짜 확인')
+    with sqlite3.connect(path) as db:
+        db.execute('INSERT INTO assembly_notice_content VALUES (?,?,?)', (snapshot, '주요 변경 내용', PDF_URL))
+        db.execute('INSERT INTO assembly_notice_pages VALUES (?,?,?)', (snapshot, 2, b'png'))
+    with TestClient(create_app(path)) as client:
+        items = client.get('/api/law-events?month=2026-11&type=notice').json()['items']
+        url = f'/api/law-changes/{items[0]["id"]}'
+        before = client.get(url).json()
+        assert before['noticeContent']['comparisonPages'] == [2]
+        migrate(path)
+        assert path.with_suffix('.db.pre-v6.backup').exists()
+        assert client.get(url).json() == before
+        assert client.get(f'{url}/notice-comparison/2').content == b'png'
+    assert synchronize(path, home)['notice_content_stored'] == 0

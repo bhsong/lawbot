@@ -18,7 +18,7 @@ from fastapi.responses import JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 
 from law_calendar.automation import REASONS
-from law_calendar.db import CURRENT_VERSION, read_database
+from law_calendar.db import NOTICE_CONTENT_VERSION, read_database
 from law_calendar.models import CalendarMonth, CalendarStatus, ChangePage, HoldPage, PublicDetail
 
 KST = timezone(timedelta(hours=9))
@@ -86,7 +86,7 @@ def change_data(row) -> dict:
 
 
 def notice_snapshot(conn: sqlite3.Connection, change_id: str) -> str | None:
-    if conn.execute('PRAGMA user_version').fetchone()[0] < CURRENT_VERSION:
+    if conn.execute('PRAGMA user_version').fetchone()[0] < NOTICE_CONTENT_VERSION:
         return None
     row = conn.execute(
         "SELECT id FROM public_assembly WHERE kind='notice' AND event_id || ':' || date_role=?",

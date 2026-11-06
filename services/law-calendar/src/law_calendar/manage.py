@@ -27,7 +27,8 @@ def main():
     reviewer = sub.add_parser('review')
     reviewer.add_argument('manifest', type=Path)
     reviewer.add_argument('--reviewer', required=True)
-    sub.add_parser('assembly-list')
+    assembly_list = sub.add_parser('assembly-list')
+    assembly_list.add_argument('--notice-sample', type=int, help='Show this many recently auto-published notices')
     assembly_show = sub.add_parser('assembly-show')
     assembly_show.add_argument('snapshot_id')
     assembly_review = sub.add_parser('assembly-review')
@@ -58,7 +59,7 @@ def main():
             if args.template:
                 result = review_template(result)
         elif args.command == 'assembly-list':
-            result = list_assembly(args.database)
+            result = list_assembly(args.database, notice_sample=args.notice_sample)
         elif args.command == 'assembly-show':
             result = inspect_assembly(args.database, args.snapshot_id)
         elif args.command == 'assembly-review':

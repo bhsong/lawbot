@@ -8,6 +8,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from law_calendar.db import migrate
+from law_calendar.notice_source import NoticeSourceError
 from law_calendar.server import create_app
 from law_calendar.sync import synchronize
 from test_calendar_sync import scheduled as scheduled
@@ -16,12 +17,24 @@ from test_calendar_workflow import workflow as workflow
 NOW = '2026-11-05T06:31:00+09:00'
 
 
-def register(home, state, *, revision=1, start='2026-11-04', end='2026-11-05', source='assembly_notice', date=None):
+def register(
+    home,
+    state,
+    *,
+    revision=1,
+    start='2026-11-04',
+    end='2026-11-05',
+    source='assembly_notice',
+    date=None,
+    notice_id=None,
+):
     notice = source == 'assembly_notice'
-    item = 'PRC_NOTICE' if notice else 'PRC_BILL'
+    item = (notice_id or 'PRC_NOTICE') if notice else 'PRC_BILL'
     event_id = f'{source}-{revision}'
+    if notice_id:
+        event_id += f'-{notice_id}'
     link = (
-        'https://pal.assembly.go.kr/napal/lgsltpa/lgsltpaOngoing/view.do?lgsltPaId=PRC_NOTICE'
+        f'https://pal.assembly.go.kr/napal/lgsltpa/lgsltpaOngoing/view.do?lgsltPaId={item}'
         if notice
         else 'https://likms.assembly.go.kr/bill/billDetail.do?billId=PRC_BILL'
     )
@@ -64,7 +77,15 @@ def register(home, state, *, revision=1, start='2026-11-04', end='2026-11-05', s
     return event_id
 
 
-def test_approved_notice_dates_correction_and_failed_source(scheduled):
+@pytest.fixture
+def unavailable_notice_source(monkeypatch):
+    def unavailable(_url):
+        raise NoticeSourceError('Official detail unavailable')
+
+    monkeypatch.setattr('law_calendar.notice_content.fetch_official', unavailable)
+
+
+def test_approved_notice_dates_correction_and_failed_source(scheduled, unavailable_notice_source):
     (database, home, _, _), state = scheduled
     event_id = register(home, state)
     assert synchronize(database, home)['assembly_notice_imported'] == 1
@@ -114,7 +135,7 @@ def test_bill_dates_are_separate_from_notices(scheduled):
         assert client.get('/api/law-calendar?month=2026-11').json()['days'][0]['bill_count'] == 1
 
 
-def test_same_day_notice_counts_once_and_undated_bill_is_not_publishable(scheduled):
+def test_same_day_notice_counts_once_and_undated_bill_is_not_publishable(scheduled, unavailable_notice_source):
     (database, home, _, _), state = scheduled
     notice = register(home, state, start='2026-11-05')
     bill = register(home, state, source='assembly_bill')
@@ -157,7 +178,7 @@ def test_v3_upgrade_keeps_existing_records_and_backup(tmp_path):
     migrate(path)
     migrate(path)
     with sqlite3.connect(path) as conn:
-        assert conn.execute('PRAGMA user_version').fetchone() == (5,)
+        assert conn.execute('PRAGMA user_version').fetchone() == (6,)
         assert conn.execute('SELECT name FROM laws').fetchone() == ('기존',)
         assert conn.execute('PRAGMA foreign_key_check').fetchall() == []
     backup = path.with_suffix('.db.pre-v4.backup')

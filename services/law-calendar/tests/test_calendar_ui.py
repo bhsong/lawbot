@@ -12,10 +12,10 @@ from playwright.sync_api import expect
 
 import calendar_ui_support as support
 from law_calendar.assembly_ingest import review_assembly
-from law_calendar.notice_content import NoticeContent, refresh_notice_content
 from law_calendar.sync import synchronize
 from test_calendar_api import dataset as dataset
 from test_calendar_assembly import register
+from test_calendar_notice_content import detail_html
 from test_calendar_sync import scheduled as scheduled
 from test_calendar_workflow import approval, import_one
 from test_calendar_workflow import workflow as workflow
@@ -163,27 +163,20 @@ def test_database_to_public_calendar_and_comparison(dataset, tmp_path, calendar_
 
 
 @pytest.mark.parametrize('width', [390, 1280])
-def test_assembly_notice_and_bill_dates_remain_separate(scheduled, tmp_path, calendar_page, width):
+def test_assembly_notice_and_bill_dates_remain_separate(scheduled, tmp_path, calendar_page, width, monkeypatch):
     (database, home, _, _), state = scheduled
-    notice = register(home, state)
+    register(home, state)
     bill = register(home, state, source='assembly_bill', date='2026-11-05')
-    assert synchronize(database, home)['failed'] == 0
-    for item in (notice, bill):
-        review_assembly(database, item, 'approve', reviewer='tester', note='공식 날짜 확인')
     with BytesIO() as buffer:
         Image.new('RGB', (600, 800), 'white').save(buffer, format='PNG')
         png = buffer.getvalue()
-    assert (
-        refresh_notice_content(
-            database,
-            read=lambda *_: NoticeContent(
-                '정식 적용 범위를 확대하는 안입니다.',
-                'https://likms.assembly.go.kr/filegate/servlet/FileGate?bookId=example&type=1',
-                [(5, png)],
-            ),
-        )['stored']
-        == 1
+    html = detail_html('2200012', '2026-11-04~2026-11-05', '정식 적용 범위를 확대하는 안입니다.')
+    monkeypatch.setattr(
+        'law_calendar.notice_content.fetch_official', lambda _url, *, pdf=False: b'%PDF-test' if pdf else html.encode()
     )
+    monkeypatch.setattr('law_calendar.notice_content.comparison_images', lambda _: [(5, png)])
+    assert synchronize(database, home)['notice_auto_published'] == 1
+    review_assembly(database, bill, 'approve', reviewer='tester', note='공식 날짜 확인')
     page = calendar_page
     page.set_viewport_size({'width': width, 'height': 900})
     page.clock.install(time=datetime.datetime(2026, 11, 5, tzinfo=datetime.UTC))
