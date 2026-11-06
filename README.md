@@ -42,6 +42,32 @@ Lawbot은 대한민국 노동법 질문에 조문을 근거로 답하는 검색 
 | 웹앱 test 2,075문항 (2026-10-25) | 검색 Recall@3 0.940 · 조문 인용 정확도 0.905 · 범위 밖 거절률 0.96 · 질문당 15.1초 ([기록](docs/evals/2026-10-25-v4-webapp-test.md)) |
 | 시행령·시행규칙 첨부 val (2026-10-31) | 정답 하위법령 첨부 0.91 · 인용 0.885 ([기록](docs/evals/2026-10-31-decree-attach.md)) |
 
+#### v5b 검색 평가 (2026-11-06)
+
+개발 검증셋 3,606문항의 검색 결과입니다. 노동 지표는 기존 v4 조문을 사용한 기준선과 비교했습니다. 세금·보험 지표는 동일한 확장 조문을 v4 임베딩으로 검색한 결과를 기준으로 삼았습니다. [v4 기준선 기록](docs/evals/2026-11-04-v5-stage4a-retrieval.md)
+
+| 지표 | 문항 | v4 기준선 | v5b |
+| --- | ---: | ---: | ---: |
+| 노동 법률 리랭킹 Recall@3 | 1,110 | 94.32% | **96.04%** |
+| 노동 하위법령 정답 첨부율 (최대 2개) | 444 | 90.99% | **91.89%** |
+| 세금·보험 법률 리랭킹 Recall@3 | 867 | 94.00% | **99.08%** |
+| 세금·보험 하위법령 정답 첨부율 (최대 2개) | 1,185 | 91.73% | **95.53%** |
+
+#### v5b 답변 생성 평가 (2026-11-07, 잠정)
+
+저장한 검색 근거로 Qwen3.8-27B 4비트에서 답변 1,722건을 생성했습니다. 실행 중 개발 HEAD가 바뀌어 공식 평가 결과에서는 제외했습니다. 커밋 차이는 `AGENTS.md` 한 파일이었고, 조문·근거·프롬프트 해시는 일치했습니다.
+
+| 검증 지표 | 기본형 | 혼합형 |
+| --- | ---: | ---: |
+| 법률 정답 조문 인용 | 280/300 | 281/300 |
+| 하위법령 정답 조문 인용 | 274/300 | 273/300 |
+| 거짓 거절 | 26/600 | 24/600 |
+| 근거 부족 문항의 올바른 거절 | 170/200 | 160/200 |
+
+정답 인용 건수가 같아 거짓 거절이 적은 혼합형을 후속 평가에 사용했습니다. 범위 밖 68/74건을 거절했고, 범위 안으로 재분류한 25/28건에서 해당 법률을, 대조군 17/20건에서 정답 조문을 인용했습니다.
+
+[상세 평가 기록](docs/evals/2026-11-07-v5b-evaluation.md)
+
 ### 사용법
 
 **요구 사항**: Apple Silicon 맥(27B 모델은 32GB), [uv](https://docs.astral.sh/uv/), Node.js(화면 빌드), 학습된 모델 파일(용량이 커서 저장소에 없음, [모델 준비](docs/operations.md#모델-준비)).
@@ -119,6 +145,32 @@ Final results of the current web app setup (v4: fine-tuned embedding → reranke
 | --- | --- |
 | Web app, 2,075 test questions (2026-10-25) | Recall@3 0.940 · citation accuracy 0.905 · out-of-scope refusal 0.96 · 15.1 s per question ([record](docs/evals/2026-10-25-v4-webapp-test.md)) |
 | Decree attachment, val (2026-10-31) | correct decree attached 0.91 · cited 0.885 ([record](docs/evals/2026-10-31-decree-attach.md)) |
+
+#### v5b retrieval evaluation (2026-11-06)
+
+Retrieval results on 3,606 validation questions in the development environment. The labor baseline uses the original v4 corpus. The tax and insurance baseline uses the v4 embedding model on the same expanded corpus as v5b. [v4 baseline record](docs/evals/2026-11-04-v5-stage4a-retrieval.md)
+
+| Metric | Questions | v4 baseline | v5b |
+| --- | ---: | ---: | ---: |
+| Labor law reranked Recall@3 | 1,110 | 94.32% | **96.04%** |
+| Correct labor decree or rule attached (up to 2) | 444 | 90.99% | **91.89%** |
+| Tax and insurance law reranked Recall@3 | 867 | 94.00% | **99.08%** |
+| Correct tax and insurance decree or rule attached (up to 2) | 1,185 | 91.73% | **95.53%** |
+
+#### v5b answer generation evaluation (2026-11-07, provisional)
+
+Qwen3.8-27B 4-bit generated 1,722 responses using saved retrieval evidence. The development HEAD changed during the run, so these scores were excluded from the official evaluation results. The commit changed only `AGENTS.md`, and the corpus, evidence and prompt hashes matched.
+
+| Validation metric | Base | Mixed |
+| --- | ---: | ---: |
+| Correct law citation | 280/300 | 281/300 |
+| Correct decree or rule citation | 274/300 | 273/300 |
+| False refusals | 26/600 | 24/600 |
+| Correct refusals when evidence was insufficient | 170/200 | 160/200 |
+
+Correct citation totals tied, so the mixed prompt advanced to the follow-up evaluation because it had fewer false refusals. It refused 68/74 out-of-scope questions, cited the relevant law for 25/28 questions reclassified as in scope, and cited the correct article for 17/20 control questions.
+
+[Detailed evaluation record](docs/evals/2026-11-07-v5b-evaluation.md)
 
 ### Usage
 
