@@ -212,26 +212,34 @@ def test_error_busy(stack, ui):
         t.join(timeout=10)
 
 
-def test_v5_default_and_full_answer_use_scoped_systems(tmp_path, page, request):
+@pytest.fixture
+def v5_ui(tmp_path, page, request):
     stack = e2e.Stack(tmp_path, read_timeout=READ_TIMEOUT_S, example='.env.dev.example')
     try:
         e2e.login(page, stack.url)
-        question = '연말정산에서 어떤 소득공제를 받을 수 있나요?'
-        concise = page.get_by_role('radio', name='간결')
-        assert concise.get_attribute('aria-checked') == 'true'
-        e2e.ask(page, question)
-        e2e.wait_done(page)
-        assert '근로소득 세금, 4대보험' in e2e.answer(page).inner_text()
-        assert '설명' not in e2e.answer(page).inner_text()
-        assert len(e2e.law_cards(page)) == 3
-        page.get_by_role('radio', name='전체 (4항목)').click()
-        e2e.ask(page, question)
-        expect(page.get_by_test_id('answer')).to_have_count(2)
-        e2e.wait_done(page)
-        answer = e2e.answer(page)
-        expect(answer).to_contain_text('근로소득 세금, 4대보험')
-        expect(answer).to_contain_text('가짜 모델의 전체 설명')
-        expect(answer).to_contain_text('가짜 모델의 참고 사항')
+        yield page
     finally:
-        e2e.keep_on_failure(request, 'e2e_stub', stack.logs(), page)
-        stack.stop()
+        try:
+            e2e.keep_on_failure(request, 'e2e_stub', stack.logs(), page)
+        finally:
+            stack.stop()
+
+
+def test_v5_default_and_full_answer_use_scoped_systems(v5_ui):
+    page = v5_ui
+    question = '연말정산에서 어떤 소득공제를 받을 수 있나요?'
+    concise = page.get_by_role('radio', name='간결')
+    assert concise.get_attribute('aria-checked') == 'true'
+    e2e.ask(page, question)
+    e2e.wait_done(page)
+    assert '근로소득 세금, 4대보험' in e2e.answer(page).inner_text()
+    assert '설명' not in e2e.answer(page).inner_text()
+    assert len(e2e.law_cards(page)) == 3
+    page.get_by_role('radio', name='전체 (4항목)').click()
+    e2e.ask(page, question)
+    expect(page.get_by_test_id('answer')).to_have_count(2)
+    e2e.wait_done(page)
+    answer = e2e.answer(page)
+    expect(answer).to_contain_text('근로소득 세금, 4대보험')
+    expect(answer).to_contain_text('가짜 모델의 전체 설명')
+    expect(answer).to_contain_text('가짜 모델의 참고 사항')
