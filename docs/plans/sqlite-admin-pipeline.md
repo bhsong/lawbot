@@ -82,7 +82,7 @@
 | `data/v4/answer_key_v4.csv` | 751 | v5와 같은 열 |
 | `data/decree_exp/qa_decree_v4.csv` / `split_decree_v4.csv` | 4,096 | 하위법령 질문(D…). test 1,880 · val 444 |
 | `data/v5/qa_reasoning_val.csv` | 30 | id(ERR…), error_type, question, answer, cited_articles, article_ids (줄바꿈 `\r\n`) |
-| `data/oos_eval.csv` 102 · `data/scope_controls.csv` 20 · `data/refusal_hard_cases.csv` 86 · `data/labor_eval_keywords.csv` 650 | | 평가 전용. 앞의 셋은 id가 v4와 겹치거나 중복 |
+| `data/oos_eval.csv` 102 · `data/scope_controls.csv` 20 · `data/refusal_hard_cases.csv` 86 · `data/labor_eval_keywords.csv` 650 | | 평가 전용. `oos_eval`을 뺀 셋은 id가 v4와 겹치거나 중복 |
 | 매니페스트 | `data/v5/manifest.json`, `data/v5/manifest_law_articles_v5_decree.json`, `data/v4/manifest.json`, `data/v4/manifest_decree.json` | dataset_version, reference_date, collected_date, source{name,url,ref}, articles_file, articles_sha256, articles_total, articles_by_law, articles_by_kind, trained_on |
 | 운영 live | `lawbot-prod/data/live/v5/`(v5 CSV 2개 + 매니페스트 2개, `archive/` 아직 없음), `lawbot-prod/data/live/`(v4 live와 `archive/deploy-v5.0.0/`) | |
 | 운영 임베딩 캐시 | `lawbot-prod/cache/embeddings/*.npz` 4개 | |
@@ -95,7 +95,7 @@
 | 대상 | 계약 |
 |---|---|
 | `lawbot.retriever.doc_text` | `law + ' ' + article_id + '(' + title + ')\n' + text` (`article_no`가 있으면 그 값을 `article_id`로 씀). 바꾸지 않는다 |
-| `Retriever` | 조문 순서 = CSV 행 순서(법률 먼저, 하위법령 뒤), `deleted == 0`만. 법률·하위법령을 따로 인코딩 |
+| `Retriever` | 비삭제 행(`deleted == 0`)을 법률·하위법령으로 나누고, 각 그룹 안에서 CSV 행 순서를 유지해 법률 먼저 붙인다. 법률·하위법령을 따로 인코딩 |
 | `embed_cache.cache_key` | sha256(모델 id, max_seq, 문서 문자열 전체)[:32]. 문서 문자열이 같으면 같은 캐시 파일 |
 | `manifest.check` | CSV sha256·비삭제 조문 수·법령별·종류별 수가 매니페스트와 다르면 시작 거부 |
 | `/api/login` | JSON `{user, password}` → 쿠키 `lawbot_session`(HttpOnly, SameSite=Strict, https일 때 Secure, path `/`). 실패 401 + 1초 지연 |
@@ -161,7 +161,7 @@ packages/lawbot-ui/src/   # shared TSX/TS/CSS source (no own package.json build)
 - 마이그레이션: `migrations/NNNN_name.sql`을 번호순으로 하나씩 트랜잭션 적용, `schema_migrations(version, name, checksum, applied_at)` 기록. 이미 적용된 파일의 checksum이 다르면 실패.
 - 웹앱 시작: DB가 없으면 거부("`uv run lawbot-db init --db …`"), 스키마 버전이 코드보다 낮으면 거부("`uv run lawbot-db migrate`"), 높으면 거부. 시작할 때 생성·마이그레이션하지 않는다.
 - `lawbot-db init --db PATH`: 파일이 이미 있으면 거부. 새로 만들고 모든 마이그레이션 적용.
-- `lawbot-db backup --db PATH --out FILE`: `sqlite3.Connection.backup()`으로 임시 파일에 복사 → `PRAGMA integrity_check`가 `ok`인지 확인 → `os.replace`로 FILE. FILE이 있으면 거부. 권한 600.
+- `lawbot-db backup --db PATH --out FILE`: `sqlite3.Connection.backup()`으로 임시 파일에 복사 → `PRAGMA integrity_check`가 `ok`인지 확인 → `os.link`로 FILE 공개. 검사 후 동시에 생긴 파일도 덮어쓰지 않는다. 권한 600.
 - `lawbot-db restore --from BACKUP --to NEWPATH`: 새 경로에만 복원(덮어쓰기 없음). 무결성·스키마 버전 확인 후 경로 출력. 운영 교체는 운영 절차(7절)에서 사람이 한다.
 
 ### 3.4 DDL (`0001_init.sql`)
@@ -500,30 +500,23 @@ CREATE TABLE dataset_releases (
 
 목표: 빈 DB를 만들고 마이그레이션·백업·복원을 할 수 있다. 웹앱 동작은 바뀌지 않는다.
 
-#### 착수 전 대조 결과
-
-`main`의 `f3541c2`에서 계획서와 두 가지 차이를 확인했다. 확인을 받을 때까지 PR 2 구현과 체크리스트를 보류한다.
-
-- 2.2절의 평가 전용 세트 중 `oos_eval.csv`는 v4와 겹치는 ID도 파일 안 중복 ID도 0건이다. v4와 겹치는 고유 ID는 `scope_controls.csv` 20개, `refusal_hard_cases.csv` 77개, `labor_eval_keywords.csv` 650개다. `refusal_hard_cases.csv`는 중복 ID로 인해 고유 ID 수보다 행이 9개 더 많다.
-- 2.3절의 `Retriever` 순서 설명과 달리 `data/v5/law_articles_v5_decree.csv`에는 하위법령 뒤에 법률 행이 289개 있다. `Retriever`는 비삭제 행을 법률과 하위법령으로 나눈 후 각 그룹 안에서 CSV 순서를 유지하며 법률부터 붙인다. [Retriever 초기화](../../services/chatbot/src/lawbot/retriever.py#L28-L38)
-
-- [ ] `.gitignore`에 `data/db/` 추가(주석: 질문 원문 포함, `lawbot.db`). `git check-ignore -v data/db/lawbot.db`로 확인.
-- [ ] Red `services/chatbot/tests/test_db.py`:
-  - [ ] `init`이 새 파일을 만들고 `schema_migrations`에 0001이 있다. 파일 권한 600, 폴더 700.
-  - [ ] 이미 있는 파일에 `init`하면 실패하고 파일이 그대로다(내용 sha 비교).
-  - [ ] `connect`가 `foreign_keys=1`, `journal_mode=wal`, `busy_timeout=5000`을 돌려준다.
-  - [ ] FK 위반 INSERT가 `sqlite3.IntegrityError`.
-  - [ ] 적용된 마이그레이션 파일의 checksum이 바뀌면 `migrate`가 실패.
-  - [ ] 스키마 버전 검사: 낮음·높음·없음이 각각 다른 오류 문구.
-  - [ ] 트리거: `feedbacks` UPDATE 거부, frozen 세트 INSERT·UPDATE 거부, `qa_splits` DELETE 거부, `unassigned`→`train` 한 번만 허용, `frozen` 해제 거부, `one_active_promotion` 중복 거부.
-  - [ ] 백업: 쓰기 연결이 열린(WAL에 커밋 안 된 체크포인트가 있는) 상태에서 백업 → 복원 → 행 수·내용 sha 동일, `integrity_check == 'ok'`. 대상 파일이 있으면 거부.
-  - [ ] `restore`는 새 경로에만 쓰고 기존 파일 덮어쓰기를 거부.
-- [ ] Green: `lawbot/db/{connection,migrate,backup,cli}.py`, `migrations/0001_init.sql`(3.4 DDL).
-- [ ] `services/chatbot/pyproject.toml`에 `lawbot-db = "lawbot.db.cli:main"`.
-- [ ] `lawbot.settings`에 `LAWBOT_DB` 읽기(아직 아무도 필수로 요구하지 않음)와 `check_private`. `test_settings.py`에 경로 검사 테스트. `conftest.ENV_KEYS`에 새 변수.
-- [ ] `test_layers.py`: `lawbot.db`가 fastapi·lawbot_tools를 import하지 않음. `sqlite3` import는 `lawbot/db/`·`*_store.py`만(소스 grep 테스트).
-- [ ] `docs/operations.md`에 "데이터 DB" 절: 변수, init·migrate·backup·restore 명령, 권한, 복구는 새 경로 복원 후 사람이 교체.
-- [ ] 완료 기준: 기본 테스트·린트·타입 Green. 웹앱 시작 경로 변화 없음(`LAWBOT_DB` 미설정 시 지금과 같음).
+- [x] `.gitignore`에 `data/db/` 추가(주석: 질문 원문 포함, `lawbot.db`). `git check-ignore -v data/db/lawbot.db`로 확인.
+- [x] Red `services/chatbot/tests/test_db.py`:
+  - [x] `init`이 새 파일을 만들고 `schema_migrations`에 0001이 있다. 파일 권한 600, 폴더 700.
+  - [x] 이미 있는 파일에 `init`하면 실패하고 파일이 그대로다(내용 sha 비교).
+  - [x] `connect`가 `foreign_keys=1`, `journal_mode=wal`, `busy_timeout=5000`을 돌려준다.
+  - [x] FK 위반 INSERT가 `sqlite3.IntegrityError`.
+  - [x] 적용된 마이그레이션 파일의 checksum이 바뀌면 `migrate`가 실패.
+  - [x] 스키마 버전 검사: 낮음·높음·없음이 각각 다른 오류 문구.
+  - [x] 트리거: `feedbacks` UPDATE 거부, frozen 세트 INSERT·UPDATE 거부, `qa_splits` DELETE 거부, `unassigned`→`train` 한 번만 허용, `frozen` 해제 거부, `one_active_promotion` 중복 거부.
+  - [x] 백업: 쓰기 연결이 열린(WAL에 커밋 안 된 체크포인트가 있는) 상태에서 백업 → 복원 → 행 수·내용 sha 동일, `integrity_check == 'ok'`. 대상 파일이 있으면 거부.
+  - [x] `restore`는 새 경로에만 쓰고 기존 파일 덮어쓰기를 거부.
+- [x] Green: `lawbot/db/{connection,migrate,backup,cli}.py`, `migrations/0001_init.sql`(3.4 DDL).
+- [x] `services/chatbot/pyproject.toml`에 `lawbot-db = "lawbot.db.cli:main"`.
+- [x] `lawbot.settings`에 `LAWBOT_DB` 읽기(아직 아무도 필수로 요구하지 않음)와 `check_private`. `test_settings.py`에 경로 검사 테스트. `conftest.ENV_KEYS`에 새 변수.
+- [x] `test_layers.py`: `lawbot.db`가 fastapi·lawbot_tools를 import하지 않음. `sqlite3` import는 `lawbot/db/`·`*_store.py`만(소스 grep 테스트).
+- [x] `docs/operations.md`에 "데이터 DB" 절: 변수, init·migrate·backup·restore 명령, 권한, 복구는 새 경로 복원 후 사람이 교체.
+- [x] 완료 기준: 기본 테스트·린트·타입 Green. 웹앱 시작 경로 변화 없음(`LAWBOT_DB` 미설정 시 지금과 같음).
 
 ### PR 3 — 공통 검증 규칙 추출 + 기존 도구 v5 지원 (`fix/feedback-tools-v5`)
 

@@ -19,6 +19,7 @@ dependencies = [   # 모델 라이브러리(mlx·torch)는 쓰지 않음: 모델
 [project.scripts]
 # 레포 최상위에서 uv run lawbot-app 으로 실행 (평가 명령 lawbot-eval-v4는 tools/lawbot-tools)
 lawbot-app = "lawbot.web:main"  # 화면은 services/chatbot/frontend (npm run build → dist)
+lawbot-db = "lawbot.db.cli:main"
 
 [tool.uv.sources]
 lawbot-common = { workspace = true }

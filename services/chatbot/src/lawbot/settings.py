@@ -32,6 +32,7 @@ class Settings:
     instance: str | None = None
     chat_concurrency: int | None = None
     feedback: object = None  # feedback.Feedback 또는 None (LAWBOT_FEEDBACK=1이면 저장 폴더를 확인한 뒤)
+    db: Path | None = None
 
 
 MISSING_SERVER = (
@@ -83,6 +84,10 @@ def load(env=None, web=False):
     take('read_timeout', lambda: service.read_timeout(env))
     take('request_log', lambda: service.request_log_path(env))
     take('embed_cache', lambda: embed_cache_dir(env))
+    if db := (env.get('LAWBOT_DB') or '').strip():
+        from lawbot.db.connection import db_path
+
+        take('db', lambda: db_path(db))
     if web:
         from lawbot import view
 
