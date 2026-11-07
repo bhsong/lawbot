@@ -108,8 +108,6 @@ class Stack:
         self.request_log = tmp / 'requests.jsonl'
         self.serve = {k: v for k, v in example_env().items() if k.startswith('LAWBOT_SERVE_')}
         web_env = {k: v for k, v in example_env(example).items() if not k.startswith('LAWBOT_SERVE_')}
-        if example != '.env.example':
-            self.serve['LAWBOT_SERVE_EMBEDDING'] = f'{web_env["LAWBOT_EMB_MODEL"]}=fake-embedding'
         web_env.update(
             LAWBOT_MODEL_SERVER=self.ms_url,
             LAWBOT_MODEL_TOKEN=self.token,
