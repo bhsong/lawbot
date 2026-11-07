@@ -13,12 +13,13 @@ ENV = {
     'LAWBOT_MODEL_SERVER_PORT': '65535',
     'LAWBOT_EMB_MODEL': 'emb',
     'LAWBOT_RERANK_MODEL': 'rr',
+    'LAWBOT_RERANKER_ENABLED': '1',
     'LAWBOT_PRO_MODEL': 'chat',
 }
 NOON = datetime.time(12, 0)
 
 
-def server(ready=True, loaded=True, missing=(), error=None):
+def server(ready=True, loaded=True, missing=(), error=None, concurrency=1):
     models = [
         {'id': 'emb', 'type': 'embedding', 'loaded': True, 'revision': 'sha256:a'},
         {'id': 'rr', 'type': 'rerank', 'loaded': True, 'revision': 'sha256:b'},
@@ -28,8 +29,11 @@ def server(ready=True, loaded=True, missing=(), error=None):
     def get(self, path):
         if error:
             raise error
-        if path == '/health':
-            return {'ready': ready, 'commit': 'abc'}
+        if path in ('/health', '/health?runtime=1'):
+            result = {'ready': ready, 'commit': 'abc'}
+            if concurrency is not None and path.endswith('runtime=1'):
+                result['max_concurrent'] = concurrency
+            return result
         return {'data': [m for m in models if m['id'] not in missing]}
 
     return get
@@ -92,3 +96,15 @@ def test_comparable_ignores_loaded_but_not_revision(live):
     assert comparable(unloaded) == comparable(before)  # 운영 사용으로 상주 여부는 바뀔 수 있음
     swapped = before | {'models': [m | {'revision': 'sha256:z'} for m in before['models']]}
     assert comparable(swapped) != comparable(before)  # 같은 id로 폴더가 바뀌면 무효
+
+
+def test_legacy_health_without_concurrency_stops_before_questions(live):
+    assert live(concurrency=None).preflight(NOON) == ['서버 동시 생성 상한을 확인할 수 없음']
+
+
+@pytest.mark.parametrize('end', [2, None, True])
+def test_runtime_concurrency_change_invalidates_run(live, end):
+    before = live(concurrency=1).config()
+    after = live(concurrency=end).config()
+    assert before['server_max_concurrent'] == 1
+    assert comparable(before) != comparable(after)

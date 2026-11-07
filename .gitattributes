@@ -1,0 +1,2 @@
+# Preserve the line endings of the generated evaluation CSV originals.
+results/v5/*_v5b_transition_val_20261107.csv -text whitespace=cr-at-eol

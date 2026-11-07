@@ -118,9 +118,9 @@ v4 조문 데이터(`data/v4/articles_v4.csv` 법률 415조문, `data/v4/law_art
 
 2026-11-02부터 **자동**이다 ([계획](archives/articles-auto-update.md)). 운영 웹앱은 git 밖 `data/live/`의 조문 CSV를 읽고, `law-monitor daily`(매일 06:30)가 legalize-kr 클론을 갱신한 뒤 `lawbot-articles-update`를 부른다.
 
-1. 그날 시행 중인 법으로 조문을 만들어 `data/live`와 비교한다. 같으면 아무것도 안 한다
-2. 다르면 새 CSV·매니페스트(`live-<기준일>`, `source.ref`)를 만들고, 임베딩 캐시를 만들고, 바뀐 조문이 검색되는지 확인한다
-3. 지금 파일을 `data/live/archive/<이름>_<이전 기준일>`로 보관하고 새 파일로 바꾼 뒤 웹앱을 재시작한다. 웹앱이 응답하지 않으면 되돌린다
+1. 웹앱과 같은 프로필로 그날 시행 중인 조문을 만들어 v4는 `data/live`, v5는 `data/live/v5`와 비교한다. v5는 `scope_tax.csv`의 범위를 적용한다. 같으면 아무것도 안 한다
+2. 다르면 새 CSV·매니페스트(v4 `live-<기준일>`, v5 `v5-live-<기준일>`, `source.ref`)를 만들고, 임베딩 캐시를 만들고, 바뀐 조문이 검색되는지 확인한다
+3. 지금 파일을 해당 live 폴더의 `archive/<이름>_<이전 기준일>`로 보관하고 새 파일로 바꾼 뒤 웹앱을 재시작한다. 웹앱이 응답하지 않으면 되돌린다
 4. 결과 한 줄이 monitor 요약 md '점검' 절에, 보고서가 `services/monitor/data/articles/<날짜>.md`에 남는다 (바뀐 조문 diff, 시행 예정, 들어온 개정)
 
 - 되돌리기: `uv run lawbot-articles-update --rollback --restart` (운영 worktree에서)
@@ -130,14 +130,14 @@ v4 조문 데이터(`data/v4/articles_v4.csv` 법률 415조문, `data/v4/law_art
 
 ## 6-1. v5: 세금·보험 범위 추가 (2026-11-03, [계획](plans/v5-tax-scope.md) 2단계)
 
-ERP 소득세 계산에 필요한 조문을 답변 범위에 넣은 데이터다. 아직 웹앱 기본값이 아니다 (3단계에서 개발 웹앱으로 평가).
+ERP 소득세 계산에 필요한 조문을 답변 범위에 넣은 데이터다. 웹앱은 `LAWBOT_PROFILE=v5`에서 이 범위를 사용한다.
 
 | 파일 | 내용 |
 |---|---|
 | `data/v5/scope_tax.csv` | 범위 목록 680행 (law·kind·article_no·priority·reason). 사용자가 고른 1차 목록 689행에서 삭제 조문 6개(소득세법 제13조·제23조·제49조·제148조의3·제159조, 지방세법 제102조의8)와 부칙 1행, 아직 시행 전인 소득세법 제164조의4와 지금 삭제 상태인 소득세법 시행령 제216조의4(둘 다 가상자산 거래내역 제출, 2027-01-01 시행)를 뺐다. 부칙은 생성기 규칙으로 들어간다. 법령명은 원문 머리말 제목(사용자 목록의 폴더 이름 `고용보험및산업재해보상보험의보험료징수등에관한법률`을 띄어 씀) |
 | `data/v5/articles_v5.csv` | 법률 713행 (비삭제 705): 노동 7개 법률 424 + 세금·보험 289 |
 | `data/v5/law_articles_v5_decree.csv` | 법률 + 시행령·시행규칙 1,525행 (비삭제 1,497): 노동 841 + 세금·보험 684 |
-| `data/v5/manifest.json`, `manifest_law_articles_v5_decree.json` | `lawbot-reindex --no-cache`로 만든 매니페스트 (dataset_version v5, 기준일 2026-11-03, source.ref `bcb7aea7`). `trained_on`은 비어 있다: 임베딩·4B는 v4로 학습했다 |
+| `data/v5/manifest.json`, `manifest_law_articles_v5_decree.json` | `lawbot-reindex --no-cache`로 만든 매니페스트 (dataset_version v5, 기준일 2026-11-03, source.ref `bcb7aea7`). v5b 전환 기준의 `trained_on.embedding`은 `v5` |
 
 만든 명령 (legalize-kr `bcb7aea7782e81c21fbeb08382c442f7c2041690`, 전체 클론):
 

@@ -10,7 +10,7 @@ import sys
 
 import pandas as pd
 
-from lawbot import deploy, envfile, manifest, paths, security, service
+from lawbot import deploy, envfile, manifest, security, service
 from lawbot.deploy import get_profile
 
 EXPECTED_ARTICLES = 415  # 법률 조문 수 (매니페스트가 없을 때 기준. 있으면 매니페스트의 법률 수: lawbot-reindex로 바뀜)
@@ -90,7 +90,7 @@ def check_decree(p, out):
     missing = DECREE_COLUMNS - set(law.columns)
     if missing:
         return out.append(
-            ('FAIL', f'하위법령 CSV 열 없음 {sorted(missing)}: LAWBOT_V4_DECREE_ARTICLES가 812조문 CSV인지 확인')
+            ('FAIL', f'하위법령 CSV 열 없음 {sorted(missing)}: LAWBOT_{p.name.upper()}_DECREE_ARTICLES 확인')
         )
     live = law[law['deleted'] == 0]
     got = live.loc[live['kind'] != '법률', 'kind'].value_counts().to_dict()
@@ -106,13 +106,13 @@ def check_decree(p, out):
             'OK' if orphan.empty else 'FAIL',
             '하위법령 parent_law '
             + (
-                '모두 7개 법률 중 하나'
+                '모두 검색 범위의 법률 중 하나'
                 if orphan.empty
                 else f'법률에 없음 {len(orphan)}행: {orphan["article_id"].head().tolist()}'
             ),
         )
     )
-    base = deploy._path('LAWBOT_V4_ARTICLES', paths.V4_ARTICLES, os.environ)  # data/live로 바꿨으면 그 법률 CSV와
+    base, _ = deploy.article_paths(p.name)
     if base.is_file():
         cols = ['law', 'article_no', 'title', 'text']
         a = live.loc[live['kind'] == '법률', cols].reset_index(drop=True)
@@ -133,7 +133,7 @@ def check_manifest(p, out):
         return  # check_articles가 FAIL
     m = manifest.load(p.articles)
     if m is None:
-        return out.append(('WARN', f'매니페스트 없음: {manifest.path_for(p.articles)} (데이터 버전을 확인하지 않음)'))
+        return out.append(('FAIL' if p.name == 'v5' else 'WARN', f'매니페스트 없음: {manifest.path_for(p.articles)}'))
     out.append(('INFO', f'매니페스트: {manifest.describe(m)}'))
     out.extend(manifest.verify(p.articles, m))
 

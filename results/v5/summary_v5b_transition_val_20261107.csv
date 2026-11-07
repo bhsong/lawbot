@@ -1,0 +1,10 @@
+format,group,n,gold_retrieved,gold_cited,refused,length_finish,average_seconds,valid_configuration
+concise,all,12,12,12,0,0,32.07,True
+concise,labor_law,3,3,3,0,0,43.73,True
+concise,tax_insurance_law,3,3,3,0,0,35.14,True
+concise,labor_decree,3,3,3,0,0,16.71,True
+concise,tax_insurance_decree,3,3,3,0,0,32.73,True
+full,all,3,3,3,0,0,48.14,True
+full,labor_law,1,1,1,0,0,30.9,True
+full,tax_insurance_law,1,1,1,0,0,71.48,True
+full,tax_insurance_decree,1,1,1,0,0,42.05,True

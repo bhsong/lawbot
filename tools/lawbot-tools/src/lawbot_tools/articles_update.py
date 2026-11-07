@@ -1,32 +1,21 @@
-"""조문 데이터 자동 갱신 (계획: docs/archives/articles-auto-update.md)
+"""Refresh the configured article corpus from Legalize KR for the daily monitor.
 
-    uv run lawbot-articles-update --init                                  # 처음 한 번: data/v4 → data/live
-    uv run lawbot-articles-update --repo <legalize-kr 클론> [--asof 오늘] [--report-dir DIR] [--restart]
-    uv run lawbot-articles-update --rollback [--restart]                  # 바로 전 데이터로
-
-웹앱이 읽는 조문 CSV는 git 밖 data/live/ (운영 .env의 LAWBOT_V4_ARTICLES·LAWBOT_V4_DECREE_ARTICLES). data/v4는 학습 기준
-데이터라 그대로 둔다. law-monitor daily(06:30)가 점검(checks)으로 --restart와 함께 부른다.
-
-차례 (어디서든 실패하면 지금 데이터 그대로, 종료 코드 2):
-  1. 웹앱 설정의 조문 CSV가 data/live 안인지
-  2. 점검(articles_check): 기준일 생성 결과와 data/live가 같으면 끝 (종료 0)
-  3. data/live/.staging/에 쓰고 검사(lawbot-reindex와 같음)·매니페스트(live-<기준일>, source.ref = legalize-kr HEAD)
-  4. 웹앱이 읽을 CSV로 임베딩 캐시 (모델 서버)
-  5. 확인: 답변 근거가 바뀐 조문이 자기 제목·본문으로 상위 10개 안에 검색되는지
-  6. 지금 파일을 data/live/archive/<이름>_<이전 기준일>로 옮기고 새 파일로 전환
-  7. --restart: launchd com.lawbot.web의 작업 폴더가 이 레포일 때만 재시작, 3분 안에 응답 없으면 되돌리고 다시 재시작
-종료 코드 (monitor 점검 약속): 0 바뀐 것 없음, 1 갱신함, 2 실패. 마지막 줄 `articles updated=… `
+The v4 live directory is data/live, and v5 uses data/live/v5 with the tracked
+scope list. Build and gate the candidate before archiving and switching it.
+The monitor contract is exit 0 for no change, 1 for an update, and 2 for failure.
 """
 
 from __future__ import annotations
 
 import argparse
+import fcntl
 import json
 import os
 import re
 import shutil
 import subprocess
 import sys
+import tempfile
 import time
 from argparse import Namespace
 from pathlib import Path
@@ -34,15 +23,13 @@ from pathlib import Path
 import httpx
 import pandas as pd
 
-from lawbot import paths
+from lawbot import deploy, envfile, manifest, paths
 from lawbot_tools import articles_check as ac
 from lawbot_tools import build_articles as ba
 from lawbot_tools import reindex
 
 ROOT = paths.ROOT
-LIVE_DIR = paths.DATA / 'live'
-SOURCE_DIR = paths.V4_DECREE_ARTICLES.parent  # --init이 복사하는 학습 기준 데이터
-MANIFESTS = {ba.LAW_CSV: 'manifest.json', ba.DECREE_CSV: 'manifest_decree.json'}
+MANIFESTS = ac.V4.manifests
 READY_TIMEOUT = 180  # 초: 재시작 뒤 웹앱이 응답할 때까지
 GATE_K = 10
 LABEL = os.environ.get('LAWBOT_WEB_LAUNCHD_LABEL', 'com.lawbot.web')
@@ -52,43 +39,43 @@ class UpdateError(RuntimeError):
     pass
 
 
-def _names():
-    return [*MANIFESTS, *MANIFESTS.values()]
+def _names(dataset):
+    manifests = dataset.manifests
+    return [*manifests, *manifests.values()]
 
 
 # ── 웹앱·모델 서버·launchd (테스트에서 바꿔 끼움) ─────────────────────
 
 
 def web_csv() -> Path:
-    """웹앱이 읽는 조문 CSV (.env의 LAWBOT_V4_DECREE_ARTICLES 또는 LAWBOT_V4_ARTICLES)"""
-    from lawbot import deploy, envfile
-
-    envfile.load()
+    """Return the CSV selected by the web app settings."""
     return deploy.get_profile().articles
 
 
 def web_port() -> int:
-    from lawbot import envfile, security
+    from lawbot import security
 
-    envfile.load()
     return security.server_port()
 
 
 def make_retriever(csv: Path):
     """웹앱과 같은 방식의 검색기. 만들면서 임베딩 캐시(cache/embeddings)를 남겨 재시작한 웹앱이 그대로 쓴다"""
-    from lawbot import deploy, envfile, settings
-    from lawbot.api_client import Embedder, ModelServerClient, wait_ready
+    from lawbot import settings
+    from lawbot.api_client import Embedder, ModelServerClient, request_timeout, wait_ready
     from lawbot.embed_cache import EmbedCache
     from lawbot.retriever import Retriever
 
-    envfile.load()
     cfg = settings.load()
     client = ModelServerClient(cfg.model_server, cfg.model_token)
     wait_ready(client, cfg.server_wait)
-    decree = deploy.DECREE_MAX_SEQ if 'kind' in pd.read_csv(csv, nrows=0, encoding='utf-8-sig') else None
+    decree = cfg.decree.max_seq if cfg.decree else None
     cache = EmbedCache(cfg.embed_cache) if cfg.embed_cache is not None else None
     return Retriever(
-        Embedder(client, cfg.profile.emb_model), csv, cfg.profile.max_seq, decree_max_seq=decree, cache=cache
+        Embedder(client, cfg.profile.emb_model, query_timeout=request_timeout(cfg.read_timeout)),
+        csv,
+        cfg.profile.max_seq,
+        decree_max_seq=decree,
+        cache=cache,
     )
 
 
@@ -108,7 +95,7 @@ def restart_web() -> tuple[bool, str]:
         return False, f'{LABEL}은 다른 폴더({wd})의 웹앱'
     k = subprocess.run(['launchctl', 'kickstart', '-k', target], capture_output=True, text=True, check=False)
     if k.returncode != 0:
-        return False, f'kickstart 실패: {(k.stderr or k.stdout).strip()}'
+        raise UpdateError(f'웹앱 kickstart 실패 (종료 코드 {k.returncode})')
     return True, f'kickstart {LABEL}'
 
 
@@ -146,73 +133,89 @@ def gate(retriever, answer: list[dict], csv: Path) -> list[str]:
     return missing
 
 
-def free_tag(archive: Path, date: str) -> str:
-    tag, n = date, 1
-    while any((archive / f'{Path(x).stem}_{tag}{Path(x).suffix}').exists() for x in _names()):
-        n += 1
-        tag = f'{date}_{n}'
-    return tag
+def _archive_path(archive: Path, name: str, tag: str) -> Path:
+    path = Path(name)
+    return archive / f'{path.stem}_{tag}{path.suffix}'
 
 
-def _reference_date(live: Path) -> str:
-    return json.loads((live / MANIFESTS[ba.DECREE_CSV]).read_text(encoding='utf-8'))['reference_date']
-
-
-def archive_current(live: Path) -> tuple[str, list[tuple[Path, Path]]]:
-    """지금 파일 4개를 archive/<이름>_<기준일>로 옮긴다 → (태그, [(원래 자리, 보관 자리)])"""
+def archive_current(live: Path, dataset: ac.Dataset) -> tuple[str, list[tuple[Path, Path]]]:
+    """Copy a complete snapshot before replacing any active files."""
     archive = live / 'archive'
     archive.mkdir(exist_ok=True)
-    tag = free_tag(archive, _reference_date(live))
-    moved = []
-    for name in _names():
-        dst = archive / f'{Path(name).stem}_{tag}{Path(name).suffix}'
-        shutil.move(live / name, dst)
-        moved.append((live / name, dst))
-    return tag, moved
+    _, combined = ba.csv_names(dataset.version)
+    data = json.loads((live / dataset.manifests[combined]).read_text(encoding='utf-8'))
+    date = tag = data['reference_date']
+    names = _names(dataset)
+    n = 1
+    while any(_archive_path(archive, name, tag).exists() for name in names):
+        n += 1
+        tag = f'{date}_{n}'
+    copied = []
+    try:
+        for name in names:
+            src, dst = live / name, _archive_path(archive, name, tag)
+            copied.append((src, dst))
+            shutil.copyfile(src, dst)
+        # The combined CSV timestamps the complete snapshot, independent of its source mtime.
+        os.utime(_archive_path(archive, combined, tag), None)
+    except OSError:
+        for _, dst in copied:
+            dst.unlink(missing_ok=True)
+        raise
+    return tag, copied
 
 
 def restore(moved: list[tuple[Path, Path]]):
     for src, dst in moved:
-        if dst.exists():
-            os.replace(dst, src)
+        os.replace(dst, src)
 
 
-def switch(live: Path, stage: Path) -> tuple[str, list[tuple[Path, Path]]]:
-    tag, moved = archive_current(live)
+def switch(live: Path, stage: Path, dataset: ac.Dataset) -> tuple[str, list[tuple[Path, Path]]]:
+    tag, copied = archive_current(live, dataset)
     try:
-        for name in _names():
+        for name in _names(dataset):
             os.replace(stage / name, live / name)
     except OSError:
-        restore(moved)
+        restore(copied)
         raise
-    return tag, moved
+    return tag, copied
 
 
-def do_restart(rollback_moved=None, live: Path | None = None) -> str:
-    """재시작 → 'ok' 또는 'skipped(이유)'. 응답이 없으면 rollback_moved로 되돌리고 다시 재시작한 뒤 UpdateError"""
-    ok, why = restart_web()
-    if not ok:
-        return f'skipped({why})'
-    if wait_web(web_port()):
-        return 'ok'
-    if rollback_moved is not None and live is not None:
-        restore(rollback_moved)
-        restart_web()
-        wait_web(web_port())
-        raise UpdateError(f'웹앱이 {READY_TIMEOUT}초 안에 응답하지 않아 이전 데이터로 되돌림')
-    raise UpdateError(f'웹앱이 {READY_TIMEOUT}초 안에 응답하지 않음')
+def do_restart(previous: list[tuple[Path, Path]]) -> str:
+    """Restore the prior snapshot if the matching launchd service fails to start."""
+    try:
+        ok, why = restart_web()
+        if not ok:
+            return f'skipped({why})'
+        if wait_web(web_port()):
+            return 'ok'
+        raise UpdateError(f'웹앱이 {READY_TIMEOUT}초 안에 응답하지 않음')
+    except UpdateError as e:
+        restore(previous)
+        restarted, _ = restart_web()
+        ready = restarted and wait_web(web_port())
+        detail = '웹앱 응답 확인' if ready else '복구 뒤 웹앱 응답을 확인하지 못함'
+        raise UpdateError(f'{e}. 이전 데이터로 되돌림 ({detail})') from e
 
 
-def update(repo: str, asof: str, live: Path, report_dir: Path | None, restart: bool) -> int:
-    if not all((live / n).is_file() for n in _names()):
-        raise UpdateError(f'{live}가 비어 있습니다: 먼저 lawbot-articles-update --init')
+def update(repo: str, asof: str, live: Path, report_dir: Path | None, restart: bool, dataset: ac.Dataset) -> int:
+    if not all((live / n).is_file() for n in _names(dataset)):
+        raise UpdateError(f'{live}가 비어 있습니다. 먼저 lawbot-articles-update --init을 실행하세요.')
     web = web_csv()
-    if Path(web).resolve().parent != live.resolve():
+    if Path(web).resolve() not in [(live / name).resolve() for name in dataset.manifests]:
+        prefix = f'LAWBOT_{dataset.version.upper()}'
         raise UpdateError(
-            f'웹앱 조문 CSV가 {live} 안이 아닙니다 ({web}): .env의 LAWBOT_V4_DECREE_ARTICLES·LAWBOT_V4_ARTICLES를 {live}로'
+            f'웹앱 조문 CSV가 {live}의 갱신 대상이 아닙니다 ({web}). {prefix}_DECREE_ARTICLES와 {prefix}_ARTICLES를 확인하세요.'
         )
-    rdict, files = ac.check_with_files(repo, asof, live)
+    if dataset.scope:
+        for name, configured in zip(dataset.manifests, deploy.article_paths(dataset.version), strict=True):
+            if configured.resolve() != (live / name).resolve():
+                raise UpdateError(f'v5 웹앱의 두 조문 CSV를 모두 {live}로 설정하세요.')
+            if manifest.check(live / name) is None:
+                raise UpdateError(f'매니페스트 없음: {name}')
+    rdict, files = ac.check_with_files(repo, asof, live, dataset)
     r = ac.Result(**rdict)
+    version = f'v5-live-{asof}' if dataset.scope else f'live-{asof}'
     report = report_dir / f'{asof}.md' if report_dir else None
     if r.same:
         if report:
@@ -222,30 +225,24 @@ def update(repo: str, asof: str, live: Path, report_dir: Path | None, restart: b
         print('articles updated=no ' + ac.summary_line(r).removeprefix('articles '))
         return 0
 
-    stage = live / '.staging'
-    shutil.rmtree(stage, ignore_errors=True)
-    stage.mkdir()
-    try:
+    with tempfile.TemporaryDirectory(prefix='.staging-', dir=live) as folder:
+        stage = Path(folder)
         for name, data in files.items():
             (stage / name).write_bytes(data)
-        for name, man in MANIFESTS.items():
+        for name, man in dataset.manifests.items():
             errors, live_df = reindex.validate(stage / name)
             if errors:
                 raise UpdateError(f'{name} 검사 실패: {"; ".join(errors)}')
             old = json.loads((live / man).read_text(encoding='utf-8'))
-            args = Namespace(
-                dataset_version=f'live-{asof}', reference_date=asof, collected_date=ac.today(), source_ref=r.head
-            )
+            args = Namespace(dataset_version=version, reference_date=asof, collected_date=ac.today(), source_ref=r.head)
             m = reindex.new_manifest(stage / name, live_df, old, args)
             (stage / man).write_text(json.dumps(m, ensure_ascii=False, indent=2) + '\n', encoding='utf-8')
         missing = gate(make_retriever(stage / Path(web).name), r.diff.answer, stage / Path(web).name)
         if missing:
             raise UpdateError(f'바뀐 조문이 자기 본문으로 상위 {GATE_K}개 안에 검색되지 않음: {", ".join(missing)}')
-        tag, moved = switch(live, stage)
-    finally:
-        shutil.rmtree(stage, ignore_errors=True)
+        tag, moved = switch(live, stage, dataset)
 
-    restarted = do_restart(moved, live) if restart else 'no'
+    restarted = do_restart(moved) if restart else 'no'
     if report:
         report.parent.mkdir(parents=True, exist_ok=True)
         md = ac.render(r, next_steps=False) + '\n'.join(
@@ -253,7 +250,7 @@ def update(repo: str, asof: str, live: Path, report_dir: Path | None, restart: b
                 '',
                 '## 갱신',
                 '',
-                f'- 새 데이터: `{live}` (데이터 live-{asof} · 기준일 {asof} · 원문 {r.head[:8]})',
+                f'- 새 데이터: `{live}` (데이터 {version} · 기준일 {asof} · 원문 {r.head[:8]})',
                 '- 보관: ' + ', '.join(f'`archive/{dst.name}`' for _, dst in moved),
                 f'- 확인: 바뀐 조문이 모두 자기 본문으로 상위 {GATE_K}개 안에 검색됨',
                 f'- 재시작: {restarted}',
@@ -269,34 +266,46 @@ def update(repo: str, asof: str, live: Path, report_dir: Path | None, restart: b
     return 1
 
 
-def init(live: Path) -> int:
-    if any((live / n).exists() for n in _names()):
+def init(live: Path, dataset: ac.Dataset) -> int:
+    names = _names(dataset)
+    if any((live / n).exists() for n in names):
         raise UpdateError(f'이미 {live}에 조문 데이터가 있습니다 (되돌리려면 --rollback)')
-    live.mkdir(parents=True, exist_ok=True)
-    for n in _names():
-        shutil.copy2(SOURCE_DIR / n, live / n)
-    print(f'articles init {SOURCE_DIR} → {live}')
+    created = []
+    try:
+        for name in names:
+            dst = live / name
+            created.append(dst)
+            shutil.copy2(dataset.source_dir / name, dst)
+    except OSError:
+        for dst in created:
+            dst.unlink(missing_ok=True)
+        raise
+    print(f'articles init {dataset.source_dir} → {live}')
     return 0
 
 
-def rollback(live: Path, restart: bool) -> int:
+def rollback(live: Path, restart: bool, dataset: ac.Dataset) -> int:
     archive = live / 'archive'
-    sets = sorted(
-        archive.glob(f'{Path(ba.DECREE_CSV).stem}_*.csv') if archive.is_dir() else [], key=lambda p: p.stat().st_mtime
-    )
+    _, combined = ba.csv_names(dataset.version)
+    stem = Path(combined).stem
+    sets = list(archive.glob(f'{stem}_*.csv'))
     if not sets:
         raise UpdateError(f'되돌릴 데이터가 없습니다 ({archive})')
-    tag = sets[-1].stem.removeprefix(f'{Path(ba.DECREE_CSV).stem}_')
-    chosen = [(live / n, archive / f'{Path(n).stem}_{tag}{Path(n).suffix}') for n in _names()]
-    if not all(dst.exists() for _, dst in chosen):
-        raise UpdateError(f'보관본 {tag}의 파일이 모자랍니다')
-    current, moved = archive_current(live)
-    try:
-        restore(chosen)
-    except OSError:
-        restore(moved)
-        raise
-    restarted = do_restart() if restart else 'no'
+    latest = max(sets, key=lambda p: (p.stat().st_mtime_ns, p.name))
+    tag = latest.stem.removeprefix(f'{stem}_')
+    with tempfile.TemporaryDirectory(prefix='.staging-', dir=live) as folder:
+        stage = Path(folder)
+        for name in _names(dataset):
+            src = _archive_path(archive, name, tag)
+            if not src.is_file():
+                raise UpdateError(f'보관본 {tag}의 파일이 모자랍니다')
+            shutil.copy2(src, stage / name)
+        if dataset.scope:
+            for name in dataset.manifests:
+                if manifest.check(stage / name) is None:
+                    raise UpdateError(f'보관본 {tag}의 매니페스트가 없습니다 ({name})')
+        current, moved = switch(live, stage, dataset)
+    restarted = do_restart(moved) if restart else 'no'
     print(f'articles rollback restored={tag} archived={current} restart={restarted}')
     return 0
 
@@ -307,21 +316,30 @@ def main(argv=None):
     )
     p.add_argument('--repo', help='legalize-kr 클론 (갱신할 때)')
     p.add_argument('--asof', help='기준일 YYYY-MM-DD (기본 오늘, 한국 시간)')
-    p.add_argument('--live-dir', type=Path, default=LIVE_DIR, help='웹앱이 읽는 조문 데이터 폴더 (기본 data/live)')
+    p.add_argument('--live-dir', type=Path, help='웹앱이 읽는 조문 데이터 폴더 (v4 data/live, v5 data/live/v5)')
     p.add_argument('--report-dir', type=Path, help='보고서 <기준일>.md를 쓸 폴더')
     p.add_argument('--restart', action='store_true', help='전환 뒤 웹앱(launchd com.lawbot.web) 재시작')
     g = p.add_mutually_exclusive_group()
-    g.add_argument('--init', action='store_true', help='data/v4 → data/live (처음 한 번)')
+    g.add_argument('--init', action='store_true', help='프로필 기본 조문과 매니페스트로 live 데이터 초기화')
     g.add_argument('--rollback', action='store_true', help='바로 전 보관본으로 되돌림')
     a = p.parse_args(argv)
     try:
-        if a.init:
-            return init(a.live_dir)
-        if a.rollback:
-            return rollback(a.live_dir, a.restart)
-        if not a.repo:
-            raise UpdateError('--repo가 필요합니다')
-        return update(a.repo, a.asof or ac.today(), a.live_dir, a.report_dir, a.restart)
+        envfile.load()
+        dataset = ac.Dataset(deploy.profile_name())
+        live = a.live_dir or dataset.live_dir
+        live.mkdir(parents=True, exist_ok=True)
+        with (live / '.update.lock').open('a') as lock:
+            try:
+                fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError as e:
+                raise UpdateError('같은 조문 폴더의 갱신 또는 복구가 진행 중입니다') from e
+            if a.init:
+                return init(live, dataset)
+            if a.rollback:
+                return rollback(live, a.restart, dataset)
+            if not a.repo:
+                raise UpdateError('--repo가 필요합니다')
+            return update(a.repo, a.asof or ac.today(), live, a.report_dir, a.restart, dataset)
     except Exception as e:  # 생성기·검사·모델 서버·파일 오류: 한 줄로, 지금 데이터 그대로
         print(f'articles updated=no error={" ".join(str(e).split())}')
         return 2

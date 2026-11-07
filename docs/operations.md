@@ -126,17 +126,20 @@ LAWBOT_PW="$(security find-generic-password -a lawbot -s lawbot -w)" uv run lawb
 | `LAWBOT_MODEL_TOKEN` | 예 | 모델 서버 토큰 (16자 이상, `openssl rand -hex 32`). 웹앱과 모델 서버가 같은 값 |
 | `LAWBOT_MODEL_SERVER_WAIT` | 아니요 | 시작할 때 모델 서버 준비를 기다리는 최대 초 (기본 `300`) |
 | `LAWBOT_MODEL_READ_TIMEOUT` | 아니요 | 질문 처리 중(질문 임베딩·리랭크·생성) 응답 조각 사이 최대 대기 초 (기본 `300`). 넘으면 "모델 서버 응답이 없습니다", 요청 로그 `model_server_timeout`. 시작할 때 조문 인덱스 인코딩에는 걸지 않음 |
-| `LAWBOT_PROFILE` | 아니요 | 적지 않음. 예전 `.env`의 `v4`는 그대로 통과하고, 다른 값(`v1` 등)이면 시작을 거부 (v1 구성은 삭제됨, 기록은 [evals/2026-10-18-v1.md](evals/2026-10-18-v1.md)) |
-| `LAWBOT_EMB_MODEL` | 아니요 | 검색 임베딩 모델 id (기본 `lawbot-emb-v4`) |
+| `LAWBOT_PROFILE` | 아니요 | `v4` (생략 시 기본값) 또는 `v5` (노동·근로소득 세금·4대보험 범위, Pro 전용) |
+| `LAWBOT_EMB_MODEL` | 아니요 | 검색 임베딩 모델 id (v4 기본 `lawbot-emb-v4`, v5 기본 `lawbot-emb-v5b`) |
 | `LAWBOT_FAST_MODEL` / `LAWBOT_PRO_MODEL` | 아니요 | 답변 모델 id (기본 `lawbot-fast-v4` / `qwen3.8-27b-4bit`). 외부 API면 그쪽 모델 이름 |
-| `LAWBOT_MODELS` | 아니요 | 쓸 답변 모델 key를 쉼표로 (`pro`, `fast`, `fast,pro`). 첫 번째가 기본 선택. 비우면 프로필의 Fast·Pro 모두 |
+| `LAWBOT_MODELS` | 아니요 | 쓸 답변 모델 key를 쉼표로 (`pro`, `fast`, `fast,pro`). 첫 번째가 기본 선택. 비우면 프로필이 지원하는 모델 모두 |
 | `LAWBOT_ENV_FILE` | 아니요 | 읽을 설정 파일 (기본 레포 최상위 `.env`, 없으면 안 읽음). 빈 값이면 읽지 않음. 셸에서만 지정 |
-| `LAWBOT_PRO_SYSTEM` | 아니요 | Pro 간결형 system 파일. 기본 `data/v4/system_v4_concise.txt` |
+| `LAWBOT_PRO_SYSTEM` | 아니요 | Pro 간결형 system 파일. v4 기본 `data/v4/system_v4_concise.txt`, v5 기본 `data/v5/system_v5_concise.txt` |
 | `LAWBOT_V4_ARTICLES` / `LAWBOT_V4_SYSTEM` | 아니요 | v4 조문 CSV / 4B system 파일 (기본 `data/v4/articles_v4.csv`, `data/v4/system_v4.txt`) |
-| `LAWBOT_RERANKER_ENABLED` | 아니요 | `1`이면 임베딩 상위 후보를 Qwen3-Reranker-4B로 다시 정렬해 상위 3개를 씀 (기본 `0`: 기존 임베딩 상위 3개). v4 프로필 전용 |
+| `LAWBOT_V5_ARTICLES` / `LAWBOT_V5_DECREE_ARTICLES` | 아니요 | v5 법률 / 법률·하위법령 CSV (기본 `data/v5/articles_v5.csv`, `data/v5/law_articles_v5_decree.csv`). 각 매니페스트 필수 |
+| `LAWBOT_V5_SYSTEM` | 아니요 | v5 전체 답변 system (기본 `data/v5/system_v5.txt`) |
+| `LAWBOT_MAX_SEQ` / `LAWBOT_DECREE_MAX_SEQ` | 아니요 | 법률 / 하위법령의 인코딩 최대 토큰 (v4 2,304 / 3,072, v5 4,352 / 5,120) |
+| `LAWBOT_RERANKER_ENABLED` | 아니요 | `1`이면 임베딩 상위 후보를 Qwen3-Reranker-4B로 다시 정렬해 상위 3개를 씀 (기본 `0`: 기존 임베딩 상위 3개). |
 | `LAWBOT_RERANK_MODEL` | 아니요 | 리랭커 모델 id (기본 `qwen3-reranker-4b`) |
 | `LAWBOT_RERANKER_CANDIDATES` | 아니요 | 리랭커에 넘길 임베딩 후보 수 (기본 `10`, 실험값. 3 이상) |
-| `LAWBOT_DECREE_ENABLED` | 아니요 | `1`이면 시행령·시행규칙을 따로 찾아 법률 3개 뒤에 붙임 (기본 `0`: 법률 3개만). 리랭커 필요, v4 프로필 전용 |
+| `LAWBOT_DECREE_ENABLED` | 아니요 | `1`이면 시행령·시행규칙을 따로 찾아 법률 3개 뒤에 붙임 (기본 `0`: 법률 3개만). 리랭커 필요 |
 | `LAWBOT_DECREE_TAU` | 아니요 | 법률 1위와 다른 법의 하위법령이 붙을 리랭커 점수 (기본 `0.9`, val로 고른 값) |
 | `LAWBOT_DECREE_K` | 아니요 | 붙일 하위법령 최대 수 (기본 `2`) |
 | `LAWBOT_DECREE_MODELS` | 아니요 | 하위법령을 붙일 답변 모델 key (기본 `pro`. Fast는 참고 조문 3개로 학습했고 첨부를 평가하지 않음) |
@@ -308,7 +311,7 @@ client.chat.completions.create(
 
 조문 CSV 옆의 `manifest.json`(`data/v4/manifest.json`)에 데이터 버전·기준일·수집일·출처·조문 수(법령별·종류별)·sha256과, 임베딩·4B LoRA가 학습한 데이터 버전을 적어 둡니다. 검색 인덱스는 파일이 아니라 웹앱이 시작할 때 만들므로, 대신 이 값으로 데이터와 모델이 맞는지 확인합니다. 조문 데이터는 웹앱에만 있습니다(모델 서버는 모름).
 
-- 웹앱은 시작할 때 CSV를 검사해, 조문 수나 sha256이 다르면 모델 서버에 접속하기 전에 실행을 거부합니다. 매니페스트가 없으면 경고만 합니다.
+- 웹앱은 시작할 때 CSV를 검사해, 조문 수나 sha256이 다르면 모델 서버에 접속하기 전에 실행을 거부합니다. 매니페스트가 없으면 v5는 시작을 거부하고 v4는 경고합니다.
 - `uv run python -m lawbot.check_deploy`가 같은 검사를 OK/FAIL로 보여 줍니다. 시행일이 수집일보다 늦은 조문은 WARN입니다.
 - 조문 CSV는 `lawbot-build-articles`가 Legalize KR 원문과 기준일로 만듭니다. 같은 원문 커밋과 기준일이면 바이트 단위로 같은 파일이 나옵니다(규칙: [data-provenance.md](data-provenance.md) 5절).
 
@@ -339,6 +342,20 @@ client.chat.completions.create(
 
   검사(열·중복·조문 번호 형식·빈 본문·종류)에 실패하면 아무것도 쓰지 않습니다. 이전 매니페스트는 `<이름>.json.prev`로 남깁니다. 조문 수는 바뀌어도 되고(`check_deploy`는 매니페스트의 법률 조문 수를 기준으로 봄), 임베딩·4B가 학습한 데이터 버전(`trained_on`)과 달라지면 경고합니다. 조문 CSV를 만드는 일은 위 `lawbot-build-articles`가 합니다.
 - 한 폴더에 조문 CSV가 여럿이면 `manifest_<이름>.json`을 더 둡니다. `articles_file`이 그 CSV인 매니페스트를 고릅니다(812조문: `data/v4/manifest_decree.json`).
+
+## v5 프로필 전환
+
+개발에서는 [.env.dev.example](../.env.dev.example)의 v5 설정을 적용합니다. 기본 조문은 `data/v5`의 두 CSV와 각 매니페스트입니다. 기존 설정에서 `LAWBOT_EMB_MODEL`은 `lawbot-emb-v5b`로 바꾸고, 이전 `LAWBOT_PRO_SYSTEM`과 인코딩 길이 재지정을 비우면 v5의 기본 간결형과 인코딩 설정을 씁니다. 전체 답변 형식은 별도의 `data/v5/system_v5.txt`를 씁니다.
+
+운영 반영 승인 후 운영 worktree에서 기존 `.env`와 HEAD를 보관합니다. 공유 모델 서버의 모델 목록에서 `lawbot-emb-v5b`, `qwen3-reranker-4b`, `qwen3.8-27b-4bit`의 id와 revision을 확인합니다. 조문 전환과 별개로 현재 운영 HEAD에서 반영할 커밋까지의 변경과 필요한 배포 단계를 확인합니다.
+
+```zsh
+LAWBOT_PROFILE=v5 uv run lawbot-articles-update --init
+```
+
+운영 `.env`에는 `LAWBOT_PROFILE=v5`, `LAWBOT_V5_ARTICLES=data/live/v5/articles_v5.csv`, `LAWBOT_V5_DECREE_ARTICLES=data/live/v5/law_articles_v5_decree.csv`를 설정합니다. 웹앱은 Pro와 기존 리랭커를 선택하고, 간결형은 v5 기본 파일을 사용합니다. `uv run python -m lawbot.check_deploy`에서 매니페스트와 모델 설정을 확인한 뒤 운영 웹앱을 재시작합니다. 첫 시작에서 법률·하위법령 인덱스 캐시가 생성됩니다.
+
+06:30 `law-monitor daily`는 같은 웹앱 프로필을 읽습니다. v5에서는 `data/v5/scope_tax.csv`와 기존 생성기로 `data/live/v5/`를 갱신합니다. 다음 실행 뒤 조문 보고서의 데이터 경로, 갱신 상태와 웹앱 응답을 확인합니다. v5 내에서 직전 조문 세트로 되돌리려면 `uv run lawbot-articles-update --rollback --restart`를 실행합니다. v4로 전환을 되돌리는 경우에는 보관한 운영 설정과 이전 운영 커밋을 복구하고 `data/live/`의 v4 조문을 사용합니다.
 
 ## 요청 로그와 오류 안내
 
@@ -392,8 +409,8 @@ uv run pyright             # 타입 검사 (웹앱 런타임·모델 서버·mon
 uv run pytest -m e2e_live services/chatbot/tests/test_e2e_live.py   # 레포 .env의 모델 서버로 질문 3개 (순서대로, 재시도 없음)
 ```
 
-- 실행 전에 확인합니다. 06:20–06:50(조문 자동 갱신)이 아닌지, 서버가 ready인지, 필요한 모델이 있는지, **Pro chat 모델이 이미 올라 있는지**. 하나라도 아니면 질문을 보내지 않고 실패로 끝납니다(모델 교체로 운영 응답이 느려지지 않게).
+- 실행 전에 확인합니다. 06:20–06:50(조문 자동 갱신)이 아닌지, 서버가 ready인지, 필요한 모델이 있는지, **Pro chat 모델이 이미 올라 있는지**, 인증된 `/health?runtime=1`에서 실행 중인 서버의 동시 생성 상한을 확인할 수 있는지 봅니다. 확인 항목 하나라도 실패하면 질문을 보내기 전에 중단합니다(모델 교체로 운영 응답이 느려지지 않게).
 - 웹앱은 이 worktree 코드로 빈 포트에 띄우고, 요청 로그·피드백은 임시 폴더로 보냅니다(운영 기록에 섞이지 않음).
-- 실행 구성(웹앱·모델 서버 커밋, 모델 `revision`, 조문 `dataset_version`·sha256, system sha256, temperature·max_tokens, `.env` 설정. 비밀값·모델 서버 주소·포트 제외)을 시작 전·후에 읽어 `results/e2e_live/<시각>.json`에 남깁니다. 둘이 다르면 결과는 무효입니다. 결과는 `docs/evals/`에 옮겨 적고 JSON은 지웁니다.
+- 실행 구성(웹앱·모델 서버 커밋, 모델 `revision`, 조문 `dataset_version`·sha256, system sha256, temperature·max_tokens, 검색 설정, 서버가 보고한 동시 생성 상한. 비밀값·모델 서버 주소·포트 제외)을 시작 전·후에 읽어 `results/e2e_live/<시각>.json`에 남깁니다. 둘이 다르면 결과는 무효입니다. 결과는 `docs/evals/`에 옮겨 적고 JSON은 지웁니다.
 
 GitHub Actions(`.github/workflows/ci.yml`)가 `main` 푸시와 모든 pull request에서 macOS(Apple Silicon) 러너로 `uv sync --locked`, 문법 검사(`compileall`), 린트·포맷 검사(`ruff check`·`ruff format --check`), 타입 검사(`pyright`), Chromium 설치, `uv run pytest`를 실행합니다. 비밀정보는 쓰지 않으며, `-m models` 테스트와 평가 스크립트는 CI에서 실행하지 않습니다. 결과는 PR의 체크와 Actions 로그, `pytest-report` 아티팩트(e2e_stub가 실패하면 `results/e2e_stub/` 포함)에서 볼 수 있습니다.

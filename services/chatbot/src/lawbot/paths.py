@@ -13,3 +13,6 @@ V4_QA = DATA / 'v4' / 'qa_full_v4.csv'  # v4 문항 7,618개 (Drive labor_law/v4
 V4_SPLIT = DATA / 'v4' / 'split_v4.csv'  # 문항별 train/val/test (split_emb). test 2,075문항은 평가 전용
 V4_SYSTEM = DATA / 'v4' / 'system_v4.txt'  # v4 4B 학습 때 쓴 system 원문 (글자 그대로, 4섹션)
 V4_SYSTEM_CONCISE = DATA / 'v4' / 'system_v4_concise.txt'  # v4 Pro 간결형 system (튜닝 전 27B용 초안, 학습 system 아님)
+
+V5_SYSTEM = DATA / 'v5' / 'system_v5.txt'
+V5_SYSTEM_CONCISE = DATA / 'v5' / 'system_v5_concise.txt'
