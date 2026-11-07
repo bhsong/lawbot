@@ -12,6 +12,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 import lawbot.service as service
+from conftest import ADMIN_PW, ADMIN_USER, set_auth
 from fakes import HITS, FakeLLM, FakeRetriever
 from lawbot import feedback, feedback_store, settings, view, web
 from lawbot.api_client import ModelServerTimeout
@@ -143,6 +144,134 @@ def test_session_cookie_from_other_app_is_rejected(lawbot):
         login(a)
         b.cookies.update(a.cookies)
         assert b.get('/api/me').status_code == 401
+
+
+@pytest.fixture
+def admin_app(lawbot, env, tmp_path, admin_hash):
+    path = tmp_path / 'private' / 'lawbot.db'
+    migrate.init(path)
+    set_auth(env, USER, PW)
+    env.setenv('LAWBOT_DB', str(path))
+    env.setenv('LAWBOT_ADMIN_USER', ADMIN_USER)
+    env.setenv('LAWBOT_ADMIN_PW_HASH', admin_hash)
+    env.setattr(web, 'load_app', lambda _: lawbot)
+    env.setattr(web, 'require_build', lambda _: None)
+    apps = []
+    env.setattr(web.uvicorn, 'run', lambda app, **_: apps.append(app))
+    web.main([])
+    return apps[0], path
+
+
+def test_roles_are_assigned_from_credentials(admin_app, env):
+    from lawbot import auth
+
+    app, _ = admin_app
+    verify = auth.verify_password
+    calls = []
+
+    def record_verify(password, encoded):
+        calls.append(encoded)
+        return verify(password, encoded)
+
+    env.setattr(auth, 'verify_password', record_verify)
+    with TestClient(app) as c:
+        regular = c.post('/api/login', json={'user': USER, 'password': PW, 'role': 'admin'})
+        assert regular.json() == {'user': USER}
+        assert c.get('/api/me').json() == {'user': USER, 'role': 'user'}
+        admin = c.post('/api/login', json={'user': ADMIN_USER, 'password': ADMIN_PW, 'role': 'user'})
+        assert admin.json() == {'user': ADMIN_USER}
+        assert c.get('/api/me').json() == {'user': ADMIN_USER, 'role': 'admin'}
+        unknown = login(c, 'fixture-unknown', ADMIN_PW)
+        assert unknown.status_code == 401
+        assert len(calls) == 3 and calls[0] == calls[2] != calls[1]
+        cookie = admin.headers['set-cookie'].lower()
+        assert all(value in cookie for value in ('httponly', 'samesite=strict', 'path=/')) and 'secure' not in cookie
+
+
+def test_login_limit_expires_and_counts_by_user(admin_app, env):
+    app, _ = admin_app
+    original_time = web.time
+    now = [0.0]
+    env.setattr(web, 'time', SimpleNamespace(monotonic=lambda: now[0], strftime=original_time.strftime))
+    with TestClient(app) as c:
+        for _ in range(5):
+            assert login(c, ADMIN_USER, 'bad-test-password').status_code == 401
+        assert login(c, ADMIN_USER, ADMIN_PW).status_code == 429
+        assert login(c).status_code == 200
+        now[0] = 899
+        assert login(c, ADMIN_USER, ADMIN_PW).status_code == 429
+        now[0] = 900
+        assert login(c, ADMIN_USER, ADMIN_PW).status_code == 200
+
+
+def test_admin_login_audit_records_only_safe_fields(admin_app, admin_hash, env):
+    app, path = admin_app
+
+    def unexpected_check(*args, **kwargs):
+        pytest.fail('Audit write revalidated the DB path')
+
+    env.setattr(connection, 'check_private', unexpected_check)
+    with TestClient(app) as c:
+        bad = c.post('/api/login', json={'user': ADMIN_USER, 'password': 'bad-test-password', 'session_id': 'fake-sid'})
+        assert bad.status_code == 401
+        assert login(c).status_code == 200
+        good = login(c, ADMIN_USER, ADMIN_PW)
+        assert good.status_code == 200
+        token = c.cookies[web.COOKIE]
+        sid = app.state.sessions.get(token)[1]
+    with connection.connect(path) as conn:
+        rows = conn.execute(
+            'SELECT actor, role, action, target_type, target_id, summary FROM audit_events ORDER BY event_id'
+        ).fetchall()
+    assert [row[:3] for row in rows] == [(ADMIN_USER, 'admin', 'login_fail'), (ADMIN_USER, 'admin', 'login_ok')]
+    serialized = str(rows)
+    assert all(
+        secret not in serialized for secret in (ADMIN_PW, admin_hash, 'bad-test-password', 'fake-sid', token, sid)
+    )
+
+
+def test_admin_audit_failure_does_not_block_login(admin_app, admin_hash, caplog):
+    app, path = admin_app
+    with connection.connect(path, write=True) as conn:
+        conn.execute("CREATE TRIGGER fail_audit BEFORE INSERT ON audit_events BEGIN SELECT RAISE(ABORT, 'test'); END")
+    with TestClient(app) as c:
+        assert login(c, ADMIN_USER, 'bad-test-password').status_code == 401
+        assert login(c, ADMIN_USER, ADMIN_PW).status_code == 200
+        assert c.get('/api/me').json() == {'user': ADMIN_USER, 'role': 'admin'}
+    assert '감사 기록' in caplog.text and all(secret not in caplog.text for secret in (ADMIN_PW, admin_hash))
+
+
+def test_admin_scrypt_does_not_block_other_users_chat(admin_app, env):
+    from lawbot import auth
+
+    app, _ = admin_app
+    started, release = Event(), Event()
+    verify = auth.verify_password
+
+    def pause_verify(password, encoded):
+        started.set()
+        assert release.wait(5), 'Chat could not finish during password verification'
+        return verify(password, encoded)
+
+    async def exercise():
+        transport = httpx.ASGITransport(app=app)
+        async with (
+            httpx.AsyncClient(transport=transport, base_url='http://testserver') as regular,
+            httpx.AsyncClient(transport=transport, base_url='http://testserver') as administrator,
+        ):
+            assert (await login(regular)).status_code == 200
+            env.setattr(auth, 'verify_password', pause_verify)
+            pending = asyncio.create_task(login(administrator, ADMIN_USER, ADMIN_PW))
+            try:
+                assert await asyncio.to_thread(started.wait, 2)
+                result = await asyncio.wait_for(chat(regular), timeout=2)
+                assert events(result)[-1][0] == 'done' and not pending.done()
+            finally:
+                release.set()
+                response = await asyncio.wait_for(pending, timeout=5)
+            assert response.status_code == 200
+
+    asyncio.run(exercise())
 
 
 # ---- 설정 ----

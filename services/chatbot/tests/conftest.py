@@ -40,6 +40,8 @@ ENV_KEYS = (
     'LAWBOT_FEEDBACK',
     'LAWBOT_FEEDBACK_DIR',
     'LAWBOT_DB',
+    'LAWBOT_ADMIN_USER',
+    'LAWBOT_ADMIN_PW_HASH',
 )
 
 
@@ -99,6 +101,20 @@ def free_port():
 def set_auth(env, user='tester', pw='test-only-pw'):  # 테스트 전용 가짜 값
     env.setenv('LAWBOT_USER', user)
     env.setenv('LAWBOT_PW', pw)
+
+
+ADMIN_USER, ADMIN_PW = 'admin-fixture', 'admin-fixture-only'
+
+
+@pytest.fixture(scope='session')
+def admin_hash():
+    import base64
+    import hashlib
+
+    salt = bytes(range(16))
+    digest = hashlib.scrypt(ADMIN_PW.encode(), salt=salt, n=2**14, r=8, p=1, dklen=32)
+    salt64, digest64 = (base64.b64encode(value).decode() for value in (salt, digest))
+    return f'scrypt$16384$8$1${salt64}${digest64}'
 
 
 TEST_TOKEN = 'test-only-model-token-0123'  # 테스트 전용 가짜 값

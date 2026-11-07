@@ -99,7 +99,7 @@
 | `embed_cache.cache_key` | sha256(모델 id, max_seq, 문서 문자열 전체)[:32]. 문서 문자열이 같으면 같은 캐시 파일 |
 | `manifest.check` | CSV sha256·비삭제 조문 수·법령별·종류별 수가 매니페스트와 다르면 시작 거부 |
 | `/api/login` | JSON `{user, password}` → 쿠키 `lawbot_session`(HttpOnly, SameSite=Strict, https일 때 Secure, path `/`). 실패 401 + 1초 지연 |
-| `/api/me` | 지금 `{user}` → `{user, role}`로 확장 |
+| `/api/me` | 관리자 설정이 있을 때 `{user, role}`로 확장. 미설정이면 기존 `{user}` |
 | `/api/feedback` | JSON `{turn_id, label, reason}` → `{saved}`. label `like`·`flag`·`cleared`, flag reason `retrieval`·`answer`·`false_refusal`·`other`. 2초 안 같은 버튼은 저장 안 함 |
 | 피드백 줄 | `feedback_id, turn_id, ts('%Y-%m-%dT%H:%M:%S%z'), label, reason` + 턴 기록(question, hits[], system, answer_raw, answer_shown, model, fmt, refused, n_cited, citations, timing, decree, n_decree, instance, mode, profile, dataset_version, commit, request_id) |
 | 최신 상태 규칙 | `feedback_review.latest`: `ts` 문자열 오름차순 정렬 뒤 turn_id마다 마지막 줄, `cleared`면 제외 |
@@ -455,7 +455,7 @@ CREATE TABLE dataset_releases (
 - 해시 만들기: `uv run python -m lawbot.auth hash` → `getpass`로 두 번 입력받아 한 줄 출력. 사용자가 `.env`에 붙여 넣는다. `$`가 있으므로 값을 작은따옴표로 감싸라고 안내한다(envfile의 `$` 처리는 PR 6에서 테스트로 확인).
 - 로그인: 기존 `/api/login` 하나. 일반 계정(기존 평문 비교, 바꾸지 않음) 또는 관리자 계정(사용자명 비교 + scrypt). 사용자명이 관리자와 다르면 가짜 해시로 scrypt를 한 번 돌려 시간 차이를 줄인다.
 - 세션: `Sessions` 값에 role 추가 `(user, sid, created, role)`. 쿠키·TTL·최대 수는 그대로. 클라이언트 입력의 role은 읽지 않는다.
-- 로그인 제한: 사용자명마다 15분에 실패 5회면 15분 동안 429(메모리). 기존 1초 지연 유지. 관리자 로그인 성공·실패는 `audit_events`(DB가 있을 때).
+- 관리자 설정이 있을 때 사용자명마다 15분에 실패 5회면 15분 동안 429를 반환한다. 기록에는 만료와 개수 상한을 둔다. 기존 1초 지연을 유지하고 관리자 로그인 성공·실패는 `audit_events`에 남긴다. 관리자 설정이 없으면 기존 로그인·화면과 `/api/me` 응답을 유지한다.
 - Origin 검사(관리자 POST): `Origin` 헤더가 있어야 하고 `f'{request.url.scheme}://{request.headers["host"]}'`와 같아야 한다. 없거나 다르면 403 `bad_origin`. Tailscale 경유 실제 값은 운영 반영 때 확인(7절).
 - 일반 사용자 비밀번호 해시 전환은 이번 범위 밖(명세서도 별도 마이그레이션).
 
@@ -587,20 +587,21 @@ CREATE TABLE dataset_releases (
 
 ### PR 6 — 관리자 인증 (`feat/admin-auth`)
 
-- [ ] Red `services/chatbot/tests/test_auth.py`:
-  - [ ] `hash_password` → `verify_password` 참, 다른 비밀번호 거짓, 형식 틀린 해시는 `ValueError`.
-  - [ ] 설정: 관리자 변수 하나만 있음·사용자명이 일반 계정과 같음·`LAWBOT_DB` 없음 → 각각 설정 오류(값은 출력 안 함).
-  - [ ] `.env`에 작은따옴표로 감싼 해시(`$` 포함)가 그대로 읽힌다(`lawbot_common.envfile`).
-- [ ] Red `test_web.py` 확장:
-  - [ ] 일반 로그인 → `/api/me` = `{user, role: 'user'}`. 관리자 로그인 → `role: 'admin'`.
-  - [ ] 요청 본문에 `role: 'admin'`을 넣어도 일반 계정은 `user`.
-  - [ ] 로그인 실패 5회 → 6번째는 비밀번호가 맞아도 429, 시간이 지나면(시계 주입) 풀림.
-  - [ ] 관리자 로그인 성공·실패가 `audit_events`에 남고 비밀번호·해시가 없다.
-  - [ ] 쿠키 속성(HttpOnly, SameSite=Strict, http에서 Secure 없음) 그대로.
-- [ ] Green: `lawbot/auth.py`, `web.create_app`에 관리자 계정·DB 경로 전달, `Sessions` role, `/api/me` 확장. `require_admin`, `require_same_origin`, 본문 크기·분당 제한 의존성(아직 쓰는 라우트 없음 → 테스트용 더미 라우트로 검증하지 말고 PR 7과 함께 쓰이도록 함수 단위 테스트).
-- [ ] 프론트 `api.me` 타입을 `{user, role}`로(화면 변화 없음), `App.test.tsx` 갱신.
-- [ ] `operations.md`: 관리자 계정 만들기(`python -m lawbot.auth hash`), 변수 표.
-- [ ] 완료 기준: 기본 테스트 Green, 기존 로그인 E2E 그대로 통과.
+- [x] Red `services/chatbot/tests/test_auth.py`:
+  - [x] `hash_password` → `verify_password` 참, 다른 비밀번호 거짓, 형식 틀린 해시는 `ValueError`.
+  - [x] 관리자 변수 하나만 있음·사용자명이 일반 계정과 같음·`LAWBOT_DB` 없음 → 각각 설정 오류. 값은 오류에 포함하지 않는다.
+  - [x] `.env`에 작은따옴표로 감싼 해시(`$` 포함)가 그대로 읽힌다(`lawbot_common.envfile`).
+- [x] Red `test_web.py` 확장:
+  - [x] 관리자 설정 시 일반 로그인 → `/api/me` = `{user, role: 'user'}`. 관리자 로그인 → `role: 'admin'`. 관리자 미설정 시 기존 `{user}`.
+  - [x] 요청 본문에 `role: 'admin'`을 넣어도 일반 계정은 `user`.
+  - [x] 로그인 실패 5회 → 6번째는 비밀번호가 맞아도 429, 시간이 지나면(시계 주입) 풀림. 실패 기록의 크기와 만료를 검증한다.
+  - [x] 관리자 로그인 성공·실패가 `audit_events`에 남는다. 비밀번호·해시·쿠키·세션 ID를 기록하지 않고 감사 기록 실패에도 로그인 응답을 유지한다.
+  - [x] 쿠키 속성(HttpOnly, SameSite=Strict, http에서 Secure 없음) 그대로.
+  - [x] scrypt가 실행 중이어도 다른 사용자의 채팅 스트림이 완료된다.
+- [x] Green `lawbot/auth.py`, 관리자 계정·DB 경로 전달, `Sessions` role, `/api/me` 확장. `require_admin`, `require_same_origin`, 본문 크기·분당 제한 의존성을 함수 단위로 검증한다. 라우트 연결은 PR 7에서 한다.
+- [x] 프론트 `api.me` 타입에 선택 필드 `role`을 추가하고 `App.test.tsx`를 갱신한다. 화면은 기존대로 유지한다.
+- [x] `operations.md`에 관리자 계정 만들기(`python -m lawbot.auth hash`)와 변수 표를 추가한다.
+- [x] 기본 테스트 Green. 기존 로그인과 관리자 로그인이 같은 화면에서 통과한다. [검증 기록](../evals/2026-11-08-admin-auth.md)
 
 ### PR 7 — 관리자 API (`feat/admin-feedback-api`)
 

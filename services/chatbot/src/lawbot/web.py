@@ -21,7 +21,8 @@ from fastapi import Depends, FastAPI, HTTPException, Request, Response
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
-from lawbot import envfile, feedback, security, settings, view
+from lawbot import audit_store, envfile, feedback, security, settings, view
+from lawbot import auth as auth_logic
 from lawbot.answer_format import answer_citations, render
 from lawbot.decree import is_decree
 from lawbot.paths import ROOT
@@ -46,6 +47,8 @@ COOKIE = 'lawbot_session'
 SESSION_TTL = 7 * 24 * 3600  # 초. 서버를 다시 띄워도 세션이 사라진다 (메모리)
 MAX_SESSIONS = 200
 LOGIN_FAIL_DELAY = 1.0  # 초. 비밀번호 대입을 느리게
+LOGIN_ATTEMPT_CAPACITY = 1024
+ADMIN_BODY_LIMIT = 64 * 1024
 MAX_QUESTION = 2000  # 글자. 모델 서버에 보내는 입력 길이 상한
 WAITING = '⏳ 앞 질문을 기다리는 중…'
 CONFIG_ERROR = '웹앱 설정 오류로 답하지 못했습니다. 서버 로그를 확인하세요.'
@@ -54,22 +57,22 @@ NO_BUILD = '화면 파일이 없습니다. services/chatbot/frontend에서 npm c
 
 
 class Sessions:
-    """로그인 세션: 쿠키 값 → (사용자, 세션 id, 만든 시각). 세션 id는 피드백 턴을 묶는 데만 쓴다 (쿠키 값과 별개)"""
+    """Store (user, session ID, creation time, role) under the cookie token."""
 
     def __init__(self):
         self.items = OrderedDict()
         self.lock = threading.Lock()
 
-    def create(self, user):
+    def create(self, user, role: auth_logic.Role = 'user'):
         token = secrets.token_urlsafe(32)
         with self.lock:
-            self.items[token] = (user, secrets.token_hex(8), time.monotonic())
+            self.items[token] = (user, secrets.token_hex(8), time.monotonic(), role)
             while len(self.items) > MAX_SESSIONS:
                 self.items.popitem(last=False)
         return token
 
     def get(self, token):
-        """(사용자, 세션 id) 또는 None (없음·만료)"""
+        """Return (user, session ID, role) for a live session."""
         with self.lock:
             found = self.items.get(token)
             if found is None:
@@ -77,7 +80,7 @@ class Sessions:
             if time.monotonic() - found[2] > SESSION_TTL:
                 del self.items[token]
                 return None
-            return found[:2]
+            return found[0], found[1], found[3]
 
     def drop(self, token):
         with self.lock:
@@ -182,16 +185,62 @@ def chat_events(app, question, model_key, fmt, remember=None):
         yield 'error', {'kind': err.kind, 'message': CONFIG_ERROR if msg is None else msg}
 
 
-def current(request: Request):
-    """로그인한 요청의 (사용자, 세션 id). 아니면 401"""
+def _session(request: Request):
     token = request.cookies.get(COOKIE)
-    found = request.app.state.sessions.get(token) if token else None
+    return request.app.state.sessions.get(token) if token else None
+
+
+def current(request: Request):
+    """Return the current session or raise 401."""
+    found = _session(request)
     if found is None:
         raise HTTPException(401, '로그인이 필요합니다.')
     return found
 
 
 Who = Annotated[tuple, Depends(current)]
+
+
+class AdminError(HTTPException):
+    def __init__(self, status: int, detail: str, code: str):
+        super().__init__(status, detail)
+        self.code = code
+
+
+def require_admin(request: Request):
+    found = _session(request)
+    if found is None:
+        raise AdminError(401, '로그인이 필요합니다.', 'login_required')
+    if found[2] != 'admin':
+        raise AdminError(403, '관리자 권한이 필요합니다.', 'admin_required')
+    return found
+
+
+AdminWho = Annotated[tuple, Depends(require_admin)]
+
+
+def require_same_origin(request: Request):
+    host = request.headers.get('host')
+    if not host or request.headers.getlist('origin') != [f'{request.url.scheme}://{host}']:
+        raise AdminError(403, '관리자 요청의 출처가 올바르지 않습니다.', 'bad_origin')
+
+
+async def read_admin_body(request: Request) -> bytes:
+    """Return the raw body for an admin POST, enforcing the limit while streaming."""
+    body = bytearray()
+    async for chunk in request.stream():
+        if len(body) + len(chunk) > ADMIN_BODY_LIMIT:
+            raise AdminError(413, '관리자 요청 본문이 너무 큽니다.', 'body_too_large')
+        body.extend(chunk)
+    return bytes(body)
+
+
+async def require_admin_post_rate(request: Request, who: AdminWho):
+    limit = request.app.state.admin_post_limit
+    sid = who[1]
+    if not limit.allowed(sid):
+        raise AdminError(429, '관리자 요청이 너무 많습니다.', 'rate_limited')
+    limit.record(sid)
 
 
 def require_json(request: Request):
@@ -246,28 +295,84 @@ def config_data(app, fb):
     }
 
 
-def create_app(app, auth: tuple[str, str], concurrency: int = 1, fb=None, dist=DIST):
+def create_app(
+    app,
+    auth: tuple[str, str],
+    concurrency: int = 1,
+    fb=None,
+    dist=DIST,
+    *,
+    admin: auth_logic.AdminCredentials | None = None,
+    db: Path | None = None,
+):
     """app: service.load_app() 결과, auth: (사용자, 비밀번호), fb: feedback.Feedback 또는 None, dist: SPA 빌드 폴더"""
+    if admin is not None and db is None:
+        raise RuntimeError('관리자 계정을 쓰려면 LAWBOT_DB를 설정하세요.')
     api = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
     sessions, slots = Sessions(), asyncio.Semaphore(concurrency)
     feedback_writes = asyncio.Lock()
     api.state.sessions = sessions
+    api.state.admin_post_limit = auth_logic.AttemptWindow(30, 60, MAX_SESSIONS)
     user_b, pw_b = auth[0].encode(), auth[1].encode()
+    admin_b = admin.user.encode() if admin is not None else None
+    reserved = (hashlib.sha256(name).hexdigest() for name in (user_b, admin_b) if name is not None)
+    failures = auth_logic.AttemptWindow(
+        5, 15 * 60, LOGIN_ATTEMPT_CAPACITY, cooldown=True, reserved=reserved, clock=lambda: time.monotonic()
+    )
+    login_lock, audit_lock = asyncio.Lock(), asyncio.Lock()
+
+    @api.exception_handler(AdminError)
+    async def admin_error(_: Request, exc: AdminError):
+        return JSONResponse({'detail': exc.detail, 'code': exc.code}, status_code=exc.status_code)
 
     def matches(user: str, pw: str):
         """둘 다 비교한다 (어느 쪽이 틀렸는지 시간으로 드러나지 않게)"""
         return hmac.compare_digest(user.encode(), user_b) & hmac.compare_digest(pw.encode(), pw_b)
 
+    async def verify_login(user: str, pw: object, role: auth_logic.Role | None):
+        assert admin is not None and admin_b is not None
+        encoded_user = user.encode()
+        is_admin = hmac.compare_digest(encoded_user, admin_b)
+        key = hashlib.sha256(encoded_user).hexdigest()
+        async with login_lock:
+            blocked = not failures.allowed(key)
+            if blocked:
+                role = None
+            else:
+                if isinstance(pw, str):
+                    stored = admin.password_hash if is_admin else auth_logic.DUMMY_HASH
+                    verified = await anyio.to_thread.run_sync(auth_logic.verify_password, pw, stored)
+                    if is_admin and verified:
+                        role = 'admin'
+                if role is None:
+                    failures.record(key)
+                else:
+                    failures.clear(key)
+        if is_admin and db is not None:
+            async with audit_lock:
+                await anyio.to_thread.run_sync(audit_store.record_login, db, admin.user, role == 'admin')
+        return role, blocked
+
     @api.post('/api/login', dependencies=[Depends(require_json)])
     async def login(request: Request, response: Response):
         body = await read_json(request)
         user, pw = (body.get('user'), body.get('password')) if isinstance(body, dict) else (None, None)
-        if not (isinstance(user, str) and isinstance(pw, str) and matches(user, pw)):
+        role: auth_logic.Role | None = (
+            'user' if isinstance(user, str) and isinstance(pw, str) and matches(user, pw) else None
+        )
+        blocked = False
+        if admin is not None and isinstance(user, str):
+            role, blocked = await verify_login(user, pw, role)
+        if role is None:
             await asyncio.sleep(LOGIN_FAIL_DELAY)
+            if blocked:
+                raise HTTPException(429, '로그인 시도가 너무 많습니다. 잠시 후 다시 시도하세요.')
             raise HTTPException(401, '사용자명 또는 비밀번호가 틀렸습니다.')
         # https(Tailscale 등 프록시의 X-Forwarded-Proto, uvicorn이 127.0.0.1에서 온 것만 믿음)일 때만 Secure
         secure = request.url.scheme == 'https'
-        response.set_cookie(COOKIE, sessions.create(user), httponly=True, samesite='strict', path='/', secure=secure)
+        response.set_cookie(
+            COOKIE, sessions.create(user, role), httponly=True, samesite='strict', path='/', secure=secure
+        )
         return {'user': user}
 
     @api.post('/api/logout', dependencies=[Depends(require_json)])
@@ -278,7 +383,7 @@ def create_app(app, auth: tuple[str, str], concurrency: int = 1, fb=None, dist=D
 
     @api.get('/api/me')
     def me(who: Who):
-        return {'user': who[0]}
+        return {'user': who[0]} if admin is None else {'user': who[0], 'role': who[2]}
 
     @api.get('/api/config')
     def config(who: Who):
@@ -363,7 +468,7 @@ def main(argv=None):
     port = security.server_port(dict(os.environ, LAWBOT_PORT=args.port)) if args.port else cfg.port
     if cfg.auth is None or port is None or cfg.chat_concurrency is None:  # load(web=True)가 채운다
         raise RuntimeError('웹 설정(로그인·포트·동시 처리 수)을 읽지 못했습니다.')
-    api = create_app(load_app(cfg), cfg.auth, cfg.chat_concurrency, cfg.feedback)
+    api = create_app(load_app(cfg), cfg.auth, cfg.chat_concurrency, cfg.feedback, admin=cfg.admin, db=cfg.db)
     log.info(f'웹앱: http://{security.SERVER_NAME}:{port}')
     uvicorn.run(api, host=security.SERVER_NAME, port=port, log_level='warning')
 

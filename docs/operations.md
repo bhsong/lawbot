@@ -125,6 +125,8 @@ v5 Pro는 간결형에 `data/v5/system_v5_concise.txt`를 쓰고, 화면에서 "
 | --- | --- | --- |
 | `LAWBOT_USER` | 예 | 로그인 사용자명 (앞뒤 공백 제거 후 비어 있으면 안 됨) |
 | `LAWBOT_PW` | 예 | 로그인 비밀번호 (빈 값·공백만 있는 값은 안 됨) |
+| `LAWBOT_ADMIN_USER` | 관리자 사용 시 | 관리자 사용자명. `LAWBOT_USER`와 달라야 함 |
+| `LAWBOT_ADMIN_PW_HASH` | 관리자 사용 시 | `python -m lawbot.auth hash`가 출력한 scrypt 해시. `.env`에서 작은따옴표로 감쌈 |
 | `LAWBOT_MODEL_SERVER` | 예 | 모델 서버 주소 `http://127.0.0.1:<모델 서버 포트>` (이 맥만 허용) |
 | `LAWBOT_MODEL_TOKEN` | 예 | 모델 서버 토큰 (16자 이상, `openssl rand -hex 32`). 웹앱과 모델 서버가 같은 값 |
 | `LAWBOT_MODEL_SERVER_WAIT` | 아니요 | 시작할 때 모델 서버 준비를 기다리는 최대 초 (기본 `300`) |
@@ -156,7 +158,7 @@ v5 Pro는 간결형에 `data/v5/system_v5_concise.txt`를 쓰고, 화면에서 "
 | `LAWBOT_EMBED_CACHE` | 아니요 | `1`(기본)이면 조문 임베딩을 `cache/embeddings/`(Git 제외)에 저장해 다음 시작 때 다시 쓴다. 시작할 때 조문 1개만 다시 임베딩해 확인하고, 다르면(모델 폴더가 바뀜) 전체를 다시 임베딩. `0`이면 매번 임베딩 |
 | `LAWBOT_REQUEST_LOG` | 아니요 | 요청 로그 파일 하나로 정함 (기본: 레포 최상위 `logs/requests-YYYY-MM.jsonl`, 달마다 새 파일). 빈 값이면 기록하지 않음 |
 | `LAWBOT_FEEDBACK` | 아니요 | `1`이면 답변마다 👍·깃발 버튼을 달고 누른 답을 저장 (기본 `0`, `0`·`1`만) |
-| `LAWBOT_DB` | 아니요 | 미리 초기화한 SQLite 경로. 지정하면 피드백을 이 DB에 저장. 레포 안에서는 Git 제외 경로만 허용 |
+| `LAWBOT_DB` | 관리자 사용 시 | 미리 초기화한 SQLite 경로. 지정하면 피드백과 관리자 로그인 감사 기록을 이 DB에 저장. 레포 안에서는 Git 제외 경로만 허용 |
 | `LAWBOT_FEEDBACK_DIR` | 아니요 | `LAWBOT_DB`가 비어 있을 때 쓰는 JSONL 폴더. 기본 레포 최상위 `feedback/`. 레포 안에서는 Git 제외 경로만 허용 |
 
 모델 서버(`lawbot-model-server`, `lawbot_model_server.check`):
@@ -371,6 +373,18 @@ uv run python -m lawbot_tools.log_summary --caller lawbot-app  # 평가 실행 �
 ```
 
 오류 유형은 화면 안내와 같습니다. `model_server`(서버 연결 실패·토큰 불일치·로딩 중)는 "모델 서버가 준비되지 않았습니다", `model_load`(모델 서버의 모델 폴더 없음·형식 오류, 웹앱의 system 파일 없음)는 "모델을 불러오지 못했습니다"로 안내합니다. `model_server_timeout`(질문 처리 중 응답 조각 사이가 `LAWBOT_MODEL_READ_TIMEOUT`을 넘음)은 "모델 서버 응답이 없습니다", `model_server_busy`(모델 서버 대기열이 `LAWBOT_MAX_QUEUED`개로 가득 참)는 "모델 서버가 바쁩니다"로 안내합니다. 요청 로그의 `mode`는 `api`(모델 서버에서 생성) 또는 `external`(외부 생성 API)입니다. `search`·`rerank`·`generation`(검색·리랭킹·생성 중 오류)은 "조문을 검색하지 못했습니다"·"조문 순위를 매기지 못했습니다"·"답변을 생성하지 못했습니다"로 안내하고, 임베딩 순위로 되돌리지 않습니다.
+
+## 관리자 계정 (선택)
+
+관리자 계정을 쓰려면 먼저 `lawbot-db init`으로 DB를 준비합니다. `LAWBOT_DB`를 그 파일로 지정하고, 일반 계정과 다른 `LAWBOT_ADMIN_USER`를 설정합니다. 관리자 비밀번호 해시는 터미널에서 만듭니다.
+
+```sh
+uv run python -m lawbot.auth hash
+```
+
+비밀번호를 두 번 입력한 뒤 출력된 한 줄을 `.env`의 `LAWBOT_ADMIN_PW_HASH`에 작은따옴표로 감싸 붙여 넣습니다. 해시에는 `$`가 포함됩니다. `.env`는 Git에서 제외하고 권한을 600으로 제한합니다. 관리자도 기존 로그인 화면을 사용합니다. 두 관리자 변수를 모두 비우면 기존 일반 로그인만 사용합니다.
+
+관리자 계정을 사용하면 사용자명별로 15분 안에 로그인에 5번 실패했을 때 15분 동안 추가 로그인이 제한됩니다. 관리자 로그인 결과는 `audit_events`에 기록되며, 비밀번호·해시·쿠키·세션 ID는 기록하지 않습니다.
 
 ## 답변 피드백 (선택, `LAWBOT_FEEDBACK=1`)
 
