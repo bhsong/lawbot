@@ -382,8 +382,9 @@ uv run python -m lawbot_tools.feedback_review <운영 피드백 폴더> feedback
 uv run python -m lawbot_tools.feedback_export feedback_review_<날짜>.csv --out data/feedback/
 ```
 
-- `feedback_review`: 같은 답은 마지막 선택만 남기고 해제는 뺍니다. 평가 데이터(v4 test 2,075·val 1,110문항, 하위법령 질문 val 444·test 1,880문항, `oos_eval`, `scope_controls`, `refusal_hard_cases`, `labor_eval_keywords`)와 같은 질문(공백·문장부호 무시)과 유사도 0.9 이상인 질문을 빼고, 뺀 id를 출력합니다. 엑셀·Numbers에서 `h_ok`(맞음/틀림/모름), `h_gold`(`법령명 제N조`, 여러 개면 `;`), `h_scope`(범위 안/범위 밖), `h_note`를 채웁니다. `--keep 이전 CSV`로 채운 칸을 이어받습니다
-- `feedback_export`(맥에서 실행): `fb_questions.csv`(dev 질문), `fb_emb_pairs.csv`(정답 조문 positive, 검색 오류는 검색 1위를 hard negative), `fb_sft.csv`(맞음 + 👍), `fb_kto.csv`(맞음/틀림 라벨). 프롬프트는 저장한 조문(첨부된 시행령·시행규칙 포함)으로 `llm.build_prompt_v4`를 다시 불러 만들고, `h_gold`에는 법률과 하위법령 조문(`근로기준법 시행령 제2조`)을 모두 쓸 수 있으며, 피드백 안에서 `random_state=42`로 val을 뗍니다. 평가는 계속 기존 test로만 합니다
+- `feedback_review`는 같은 답의 마지막 선택만 남기고 해제는 뺍니다. 평가 문항과 공백·문장부호를 제외하고 같거나 유사도가 0.9 이상인 질문은 빼고 ID를 출력합니다. 대조 대상에는 v4 test 2,075·val 1,110문항, v5 test 3,420·val 2,052문항, v5 추론 검증 30문항, 하위법령 test 1,880·val 444문항과 `oos_eval`, `scope_controls`, `refusal_hard_cases`, `labor_eval_keywords`가 포함됩니다. 엑셀·Numbers에서 `h_ok`(맞음/틀림/모름), `h_gold`(`법령명 제N조`, 여러 조문은 `;`로 구분), `h_scope`(범위 안/범위 밖), `h_note`를 채웁니다. `--keep 이전 CSV`로 채운 칸을 이어받습니다.
+- `feedback_export`는 v4·v5 기록을 함께 처리합니다. 정답 조문과 저장된 참고 조문을 각 기록의 프로필에 맞는 법률·하위법령 CSV로 대조합니다. 셸의 `LAWBOT_V4_*`·`LAWBOT_V5_*` 조문 경로 설정을 따르며, `--articles`로 지정한 CSV는 모든 기록에 적용합니다. 지원 범위를 벗어난 프로필은 제외하고 건수를 표시합니다.
+- 출력은 `fb_questions.csv`(검수 질문), `fb_emb_pairs.csv`(정답 조문 positive, 검색 오류는 검색 1위를 hard negative), `fb_sft.csv`(맞음 + 👍), `fb_kto.csv`(맞음/틀림 라벨)입니다. 프롬프트는 저장된 참고 조문으로 `llm.build_prompt`를 호출해 재구성합니다. 피드백에서 `random_state=42`로 val을 떼고, 평가는 기존 test로만 합니다.
 
 > 주의: 비밀번호를 소스 코드, 셸 설정 파일, 스크립트, `.env.example` 등 Git에 올라가는 파일에 적지 마세요. 파일에 둘 때는 Git에서 제외된 `.env`(권한 600)에만 두고, 더 안전하게는 실행할 때 입력하거나 macOS 키체인을 쓰세요.
 
