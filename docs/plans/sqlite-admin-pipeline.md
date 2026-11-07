@@ -494,7 +494,7 @@ CREATE TABLE dataset_releases (
 
 - [x] 명세서 원문 `docs/plans/sqlite-admin-pipeline-spec.md`
 - [x] 이 계획서
-- [ ] 사용자 결정 D1–D7(8절) 답변 반영
+- [x] 사용자 결정 D1–D7(8절) 답변 반영: 2026-11-07 전부 권장안
 
 ### PR 2 — DB 기반 (`feat/sqlite-db-foundation`)
 
@@ -652,21 +652,28 @@ CREATE TABLE dataset_releases (
 ### PR 10 — 스냅샷 내보내기와 분할 배정 (`feat/dataset-snapshot`)
 
 - [ ] `lawbot_tools/assign_splits.py --db PATH --split-set feedback --val-frac 0.1 --seed 42`:
-  - 그룹: 활성 피드백 문항을 `Overlap`(0.9)으로 묶는다(합집합-찾기, 그룹 키 = 그룹 안 가장 작은 `qa_uid`). 그룹이 기존 v4·v5 **train** 문항과 겹치면 기록만(분할은 피드백 세트 안에서만 정함).
-  - 배정: `unassigned` 그룹만. `sha256(f'{seed}:{group_key}')`를 [0,1)로 바꿔 `< val_frac`이면 val, 아니면 train. emb·sllm 같은 규칙(목적별 frac은 옵션).
-  - 이미 배정된 줄은 바꾸지 않는다(트리거가 막음). 결과·정책을 `split_sets.policy`에 추가 기록.
+  - 그룹: 활성 피드백 문항(이미 배정된 문항 포함)을 `Overlap`(0.9)으로 묶는다(합집합-찾기). 그룹이 기존 v4·v5 **train** 문항과 겹치면 기록만(분할은 피드백 세트 안에서만 정함).
+  - 그룹 키는 **한 번 정하면 바뀌지 않는다**. 목적(emb·sllm)마다 따로 판단:
+    - 그룹에 이미 배정된 문항이 있고 그 분할이 모두 같으면: 새 문항은 그 분할과 그 문항들의 `group_key`를 **상속**한다(해시를 다시 계산하지 않음).
+    - 그룹에 배정된 문항의 분할이 서로 다르면(새 문항이 train 그룹과 val 그룹을 이어 붙인 경우): 그 그룹의 새 문항은 배정하지 않고 `unassigned`로 남긴 뒤 충돌로 보고하고 종료 코드 1. 기존 배정은 바꾸지 않는다(사람이 해당 피드백 승격을 취소하거나 보류).
+    - 그룹 전체가 `unassigned`일 때만 새 키 = 그룹 안 가장 작은 `qa_uid`, `sha256(f'{seed}:{group_key}')`를 [0,1)로 바꿔 `< val_frac`이면 val, 아니면 train. 목적별 frac은 옵션.
+  - 이미 배정된 줄은 바꾸지 않는다(트리거가 막음). 결과(배정·상속·충돌 수)와 정책을 `split_sets.policy`에 추가 기록.
+  - 같은 이유로 PR 7의 승격 단계에서도, 새 문항이 이미 배정된 피드백 문항과 유사하면 상세의 `checks.overlap`에 그 문항과 분할을 경고로 보여 준다(차단은 하지 않음, 배정은 위 규칙이 정함).
 - [ ] `lawbot_tools/export_dataset_snapshot.py --db PATH --version v6 --corpus-release ID --out data/v6/`:
   - [ ] 한 읽기 트랜잭션(`BEGIN` … 읽기만)에서 모두 읽는다.
-  - [ ] 출력(이름은 기존 도구 계약에 맞춤): `articles_v6.csv`·`law_articles_v6_decree.csv`+매니페스트 2개(릴리스 바이트 그대로, 이름만 버전), `qa_<name>.csv`, `split_<name>.csv`(`id, eval_cat, split_emb, split_sllm`), `answer_key_<name>.csv`(기존 열), 피드백 산출물 `fb_questions.csv`·`fb_emb_pairs.csv`·`fb_sft.csv`·`fb_kto.csv`(기존 `feedback_export` 열과 같음) + `fb_preferences.jsonl`(`prompt, chosen, rejected`).
+  - [ ] 출력(이름은 기존 도구 계약에 맞춤): `articles_v6.csv`·`law_articles_v6_decree.csv`(릴리스 CSV 바이트 그대로, 이름만 버전) + 매니페스트 2개(`manifest.json`·`manifest_law_articles_v6_decree.json`). 매니페스트는 릴리스의 JSON에서 **`articles_file`만 새 CSV 이름으로 바꾸고** 나머지 값(dataset_version·sha256·조문 수 등)은 그대로, 기존 `reindex`와 같은 형식(`json.dumps(ensure_ascii=False, indent=2) + '\n'`)으로 쓴다. 원래 매니페스트의 sha256은 스냅샷 `manifest.json`에 기록. 이름을 바꾸지 않는 `lawbot-db export-release`는 매니페스트도 바이트 그대로, `qa_<name>.csv`, `split_<name>.csv`(`id, eval_cat, split_emb, split_sllm`), `answer_key_<name>.csv`(기존 열), 피드백 산출물 `fb_questions.csv`·`fb_emb_pairs.csv`·`fb_sft.csv`·`fb_kto.csv`(기존 `feedback_export` 열과 같음) + `fb_preferences.jsonl`(`prompt, chosen, rejected`).
   - [ ] `fb_emb_pairs.negative`는 검수자가 지정한 오답 조문만(이번 범위에는 지정 UI가 없으므로 빈 값). **`rejected` 답변을 negative로 쓰지 않는다.**
   - [ ] test·평가 전용 문항은 학습 산출물(`fb_*`, split의 train/val)에 나오지 않는다.
   - [ ] `manifest.json`: DB 경로 이름(전체 경로 아님), 스키마 버전, 코퍼스 릴리스 id·sha, 분할 정책·시드, 그룹 수, 모델 id·system sha(피드백 기록에서), 생성 시각, 파일마다 행 수·sha256.
   - [ ] 출력 폴더가 있으면: 같은 버전이 `dataset_releases`에 있고 새로 만든 파일 해시가 모두 같으면 "같음"으로 끝(0), 다르면 실패(덮어쓰지 않음). `--new-version`은 만들지 않는다(사용자가 다른 버전 이름을 준다).
-  - [ ] 출력 폴더가 레포 안이면 `check_private`(질문 원문). `data/v6/`는 `.gitignore`에 넣을지 결정 D5.
+  - [ ] 출력 폴더가 레포 안이면 `check_private`(질문 원문). `data/v6/`는 `.gitignore`에 추가(결정 D5).
 - [ ] Red `test_export_dataset_snapshot.py`:
   - [ ] DB에 이관한 v5 세트를 v5 이름으로 내보내면 `qa_tax_v5.csv`·`split_tax_v5.csv`·`answer_key_tax_v5.csv`가 원본과 바이트가 같다(기존 도구 입력 계약 증명).
   - [ ] `eval_v4.load_tax`·`keywords('v5')`·`score_answers`가 내보낸 파일을 그대로 읽는다(모델 없이, 함수 호출만).
   - [ ] 같은 그룹이 train·val에 동시에 없음(합성 유사 질문 3개 → 같은 그룹).
+  - [ ] 증분 배정: 1차 실행 뒤 기존 그룹에 더 작은 `qa_uid`의 유사 문항을 추가하고 2차 실행 → 새 문항은 기존 분할·`group_key`를 상속(해시가 다른 분할을 가리키는 경우를 골라 만든다).
+  - [ ] 증분 배정 충돌: train 그룹과 val 그룹 둘 다와 유사한 새 문항 → 배정 안 됨(`unassigned`), 충돌 보고, 종료 코드 1, 기존 배정 불변.
+  - [ ] 이름을 바꾼 스냅샷: `manifest.load(out/'articles_v6.csv')`·`manifest.load(out/'law_articles_v6_decree.csv')`가 각각 매니페스트를 찾고 `manifest.check`가 통과(sha·조문 수 일치).
   - [ ] 재실행 해시 동일, DB에 피드백 하나 추가 후 같은 버전 → 실패.
   - [ ] revoked/retired 문항 제외, 선호 쌍은 `verdict=incorrect`만.
 - [ ] 완료 기준: 명세서 Phase 4 완료 조건. 기존 고정 Test 불변은 frozen 트리거 + 바이트 동일 테스트로 증명.
@@ -763,9 +770,9 @@ CREATE TABLE dataset_releases (
 
 ---
 
-## 8. 사용자 결정이 필요한 것 (권장안으로 계획을 썼음)
+## 8. 사용자 결정 (2026-11-07 확정: 모두 권장안)
 
-| # | 질문 | 권장 | 다른 선택 |
+| # | 질문 | 확정 (권장안) | 고르지 않은 선택 |
 |---|---|---|---|
 | D1 | 피드백 저장을 JSONL에서 DB로 **바꿀지**(이중 저장 안 함) | DB로 교체. 쓰기 실패는 지금처럼 경고 로그만(답변·응답 형식 그대로) | JSONL과 DB 둘 다 쓰기(명세서 "이중 관리 금지"와 충돌) |
 | D2 | 공유 UI 연결 방식 | 소스 공유(Vite alias), npm workspace 안 씀 | 루트 npm workspace(lockfile·CI 개편) |
