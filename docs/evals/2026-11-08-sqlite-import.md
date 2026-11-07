@@ -1,0 +1,20 @@
+# CSV·JSONL SQLite 이관 검증 (2026-11-08)
+
+PR 4에서 개발 원본은 읽기만 하고 `tmp_path`의 DB에 이관했다. 피드백은 합성 JSONL을 사용했다. 첫 테스트는 이관 모듈과 CLI가 없어 실패했고, 구현 뒤 신규 이관 테스트 17개와 기존 계층 테스트 4개를 확인했다. [계획서](../plans/sqlite-admin-pipeline.md)
+
+- CLI의 `verify`를 별도 프로세스로 호출해 v4·v5 조문 릴리스와 QA 8종에서 모두 `OK`를 확인했다. 조문 CSV 4개, 매니페스트 4개, QA·분할·정답 키 CSV 13개의 바이트를 대조했다. 원본 사본을 변경하면 `FAIL`을 반환했다.
+- 두 릴리스의 동일 조문 버전 공유, 비삭제 조문의 검색 문서 동일성, 원본 test ID 집합과 동결 상태를 확인했다. `decree_v4`의 원본 키 문자열은 JSON과 복원 CSV에 유지했고 관계형 두 열은 모두 NULL이었다.
+- 동일 입력 재실행에서 변경 0건을 확인했다. 피드백 배치에서 새 줄을 삽입한 뒤 기존 ID 충돌이 발생하는 경우에도 롤백했다. 합성 질문과 답변은 이관 요약과 보고서에 나타나지 않았다.
+- 승인받은 분할 교차 비교는 3.37초, 사용자 CPU 시간 3.35초로 끝났다. `nice` 적용이 권한 오류로 거부됐고 명령이 계속 실행돼 낮은 우선순위는 적용되지 않았다. 결과에는 쌍 수와 문항 ID를 기록했다. [교차 비교](2026-11-08-split-similarity.md)
+
+| 검증 | 결과 |
+|---|---|
+| `uv run pytest` | 981개 통과, 기본 선택에서 13개 제외 |
+| 단위·기타 기본 / 계약 / 통합 / 대역 E2E | 각각 945 / 5 / 7 / 24개 통과 |
+| `uv run ruff check`, `uv run ruff format --check` | 통과 |
+| `uv run pyright`, `uv run pyright services/law-calendar/src` | 각각 오류 0개 |
+| 챗봇·캘린더 `npm run typecheck && npm test && npm run build` | 통과, Vitest 각각 19개 |
+| 캘린더 스키마 및 Python 문법 검사 | 통과 |
+| `git status --short -- data/` | 변경 없음 |
+| 실제 모델 E2E·모델 스모크·품질 평가 | 실행 안 함 |
+| 운영 DB 이관·운영 확인 | 실행 안 함 |
