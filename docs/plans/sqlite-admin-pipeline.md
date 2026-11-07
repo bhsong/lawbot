@@ -525,14 +525,14 @@ CREATE TABLE dataset_releases (
 
 목표: 관리자 API와 검수 도구가 같은 규칙을 쓰고, v5 피드백이 빠지지 않는다. DB는 아직 안 씀.
 
-- [ ] Red `services/chatbot/tests/test_qa_rules.py`: 기존 `feedback_review`의 `norm`, `Overlap.match`, `latest` 테스트를 `lawbot.qa_rules`로 옮겨 같은 기대값으로 통과(동작 불변).
-- [ ] Red `test_feedback.py`(또는 기존 도구 테스트 파일): 
-  - [ ] `eval_sets()`가 v5 test 3,420 + v5 val 2,052 + `qa_reasoning_val` 30을 포함한다(개수 단언).
-  - [ ] v5 test 질문과 같은 합성 피드백이 `review()`에서 빠진다.
-  - [ ] `feedback_export`가 `profile='v5'` 기록을 내보내고, 조문은 v5 CSV(기본: 기록의 profile에 맞는 `deploy.article_paths`)에서 찾는다. `profile`이 v4·v5가 아니면 빼고 건수 출력.
-- [ ] Green: `lawbot/qa_rules.py`(`norm`, `Overlap`, `latest_rows`, `OK_TO_VERDICT` 매핑, `LEAK_SPLITS=('val','test')`). `feedback_review`·`feedback_export`는 여기서 import(복붙 금지). `eval_sets`에 v5 세트 추가, `feedback_export`의 v4 고정 제거.
-- [ ] `docs/` 의 피드백 검수 안내(있으면 `operations.md`)에 v5 반영.
-- [ ] 완료 기준: 기존 피드백 도구 테스트 기대값 불변 + 새 테스트 Green.
+- [x] Red `services/chatbot/tests/test_qa_rules.py`: 기존 `feedback_review`의 `norm`, `Overlap.match`, `latest` 테스트를 `lawbot.qa_rules`로 옮겨 같은 기대값으로 통과(동작 불변).
+- [x] Red `test_feedback.py`(또는 기존 도구 테스트 파일):
+  - [x] `eval_sets()`가 v5 test 3,420 + v5 val 2,052 + `qa_reasoning_val` 30을 포함한다(개수 단언).
+  - [x] v5 test 질문과 같은 합성 피드백이 `review()`에서 빠진다.
+  - [x] `feedback_export`가 `profile='v5'` 기록을 내보내고, 조문은 v5 CSV(기본: 기록의 profile에 맞는 `deploy.article_paths`)에서 찾는다. `profile`이 v4·v5가 아니면 빼고 건수 출력.
+- [x] Green: `lawbot/qa_rules.py`(`norm`, `Overlap`, `latest_rows`, `OK_TO_VERDICT` 매핑, `LEAK_SPLITS=('val','test')`). `feedback_review`·`feedback_export`는 여기서 import(복붙 금지). `eval_sets`에 v5 세트 추가, `feedback_export`의 v4 고정 제거.
+- [x] `docs/` 의 피드백 검수 안내(있으면 `operations.md`)에 v5 반영.
+- [x] 완료 기준: 기존 피드백 도구 테스트 기대값 불변 + 새 테스트 Green.
 
 ### PR 4 — CSV·JSONL → SQLite 이관 도구 (`feat/migrate-csv-to-sqlite`)
 

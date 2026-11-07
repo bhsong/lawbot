@@ -331,6 +331,27 @@ def test_review_excludes_val_and_decree_sets():
     assert not ids & set(qa.loc[qa.split_emb == 'train', 'id'])
 
 
+def test_review_eval_sets_include_v5_and_reasoning():
+    evals = feedback_review.eval_sets()
+    assert {source: sum(s == source for s, _, _ in evals) for source in ('v5_test', 'v5_val', 'reasoning_v5')} == {
+        'v5_test': 3420,
+        'v5_val': 2052,
+        'reasoning_v5': 30,
+    }
+
+
+def test_review_excludes_feedback_matching_v5_test(tmp_path):
+    from lawbot_tools.eval_v4 import load_tax
+
+    question = load_tax('test').iloc[0]
+    write_rows(tmp_path / 'fb', [fb_row('v5-leak', question.question, profile='v5')])
+    out = tmp_path / 'review.csv'
+    summary = '\n'.join(feedback_review.review([tmp_path / 'fb'], out))
+    assert f'v5-leak ↔ v5_test:{question.id} (exact)' in summary
+    assert pd.read_csv(out, encoding='utf-8-sig').empty
+    assert feedback_review.companion(out).read_text(encoding='utf-8') == ''
+
+
 # ---- 내보내기 ----
 def test_export(env, tmp_path):
     hits = [
@@ -506,3 +527,61 @@ def test_export_default_articles_include_decrees():
     assert feedback_export.ARTICLES == (V4_ARTICLES, V4_DECREE_ARTICLES)
     docs = feedback_export.article_docs(feedback_export.ARTICLES)
     assert ('근로기준법', '제26조') in docs and ('근로기준법 시행령', '제2조') in docs
+
+
+def test_export_cli_accepts_v5_gold_and_counts_unsupported_profiles(tmp_path, capsys):
+    tax_key = ('소득세법 시행령', '제38조')
+    tax_doc = feedback_export.article_docs(ROOT / 'data/v5/law_articles_v5_decree.csv')[tax_key]
+    write_rows(
+        tmp_path / 'fb',
+        [fb_row('v4', '질문A'), fb_row('v5', '질문B', profile='v5'), fb_row('legacy', '질문C', profile='v1')],
+    )
+    review = tmp_path / 'review.csv'
+    feedback_review.review([tmp_path / 'fb'], review, evals=[])
+    d = pd.read_csv(review, encoding='utf-8-sig', keep_default_na=False)
+    d['h_ok'] = '맞음'
+    d['h_gold'] = ['근로기준법 제26조', ' '.join(tax_key), '알 수 없는 조문']
+    d.to_csv(review, index=False, encoding='utf-8-sig')
+
+    out = tmp_path / 'out'
+    feedback_export.main([str(review), '--out', str(out)])
+    summary = capsys.readouterr().out
+    assert '프로필이 아니어서 뺌 1' in summary and 'legacy' in summary
+    pairs = pd.read_csv(out / 'fb_emb_pairs.csv', encoding='utf-8-sig').set_index('feedback_id')
+    assert list(pairs.index) == ['v4', 'v5']
+    assert pairs.loc['v5', 'positive'] == tax_doc
+    for name in ('fb_questions', 'fb_sft', 'fb_kto'):
+        assert list(pd.read_csv(out / f'{name}.csv', encoding='utf-8-sig').feedback_id) == ['v4', 'v5']
+
+
+def test_export_uses_configured_corpus_of_each_record(env, tmp_path):
+    gold = '근로기준법 제26조'
+    hits = {}
+    for profile in ('v4', 'v5'):
+        csv = tmp_path / f'{profile}.csv'
+        pd.DataFrame(
+            [dict(law='근로기준법', article_id='제26조', title='해고의 예고', deleted=0, text=f'{profile} 본문')]
+        ).to_csv(csv, index=False, encoding='utf-8-sig')
+        env.setenv(f'LAWBOT_{profile.upper()}_ARTICLES', str(csv))
+        env.setenv(f'LAWBOT_{profile.upper()}_DECREE_ARTICLES', str(csv))
+        hits[profile] = [
+            dict(
+                law='근로기준법',
+                article_id='제26조',
+                title='해고의 예고',
+                score=0.9,
+                doc=f'{gold}(해고의 예고)\n{profile} 본문',
+            )
+        ]
+    write_rows(tmp_path / 'fb', [fb_row(p, f'{p} 질문', profile=p, hits=hs) for p, hs in hits.items()])
+    review = tmp_path / 'review.csv'
+    feedback_review.review([tmp_path / 'fb'], review, evals=[])
+    d = pd.read_csv(review, encoding='utf-8-sig', keep_default_na=False)
+    d['h_gold'] = gold
+    d.to_csv(review, index=False, encoding='utf-8-sig')
+
+    out = tmp_path / 'out'
+    summary = '\n'.join(feedback_export.export(review, out))
+    assert '다른 기록' not in summary
+    pairs = pd.read_csv(out / 'fb_emb_pairs.csv', encoding='utf-8-sig').set_index('feedback_id')
+    assert pairs.positive.to_dict() == {p: hs[0]['doc'] for p, hs in hits.items()}
