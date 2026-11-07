@@ -9,7 +9,7 @@ import lawbot.retriever as retriever_mod
 import lawbot.service as service
 from chat_support import run
 from fakes import HITS, FakeLLM, FakeRetriever
-from lawbot import check_deploy, deploy, paths, view, web
+from lawbot import check_deploy, deploy, manifest, paths, view, web
 from lawbot.answer_format import cited_hits, concise
 from lawbot.llm import build_prompt
 
@@ -389,13 +389,16 @@ def test_env_example_is_complete_without_secrets(env):
     for k, v in values.items():
         env.setenv(k, v)
     p = deploy.get_profile()
-    assert p.name == 'v4' and [m.key for m in p.models] == ['pro']
-    assert p.models[0].model == 'qwen3.8-27b-4bit' and p.models[0].system_file == paths.V4_SYSTEM_CONCISE
-    assert p.emb_model == 'lawbot-emb-v4' and values['LAWBOT_V4_ARTICLES'] == 'data/v4/articles_v4.csv'
-    assert p.articles == paths.V4_DECREE_ARTICLES  # 맥미니 32GB: 시행령·시행규칙 첨부 켜짐 (812조문)
+    assert p.name == 'v5' and [m.key for m in p.models] == ['pro']
+    assert p.models[0].model == 'qwen3.8-27b-4bit' and p.models[0].system_file == paths.V5_SYSTEM_CONCISE
+    assert p.emb_model == 'lawbot-emb-v5b' and p.max_seq == 4352
+    law, combined = deploy.article_paths(p.name)
+    assert law.name == 'articles_v5.csv' and p.articles == combined == paths.DATA / 'v5/law_articles_v5_decree.csv'
+    assert p.system_file == paths.V5_SYSTEM
+    assert all(manifest.check(csv)['dataset_version'] == 'v5' for csv in (law, combined))
     assert deploy.reranker(p) == deploy.RerankerConfig('qwen3-reranker-4b', 10)
-    assert deploy.decree(p) == deploy.DecreeConfig(0.9, 2, ('pro',))
-    assert paths.V4_SYSTEM_CONCISE.is_file()  # Pro 간결형 system은 저장소에 있음
+    assert deploy.decree(p) == deploy.DecreeConfig(0.9, 2, ('pro',), max_seq=5120)
+    assert paths.V5_SYSTEM_CONCISE.is_file()  # Pro 간결형 system은 저장소에 있음
     from lawbot_model_server.config import parse_models
 
     served = {
