@@ -13,6 +13,7 @@ ENV = {
     'LAWBOT_MODEL_SERVER_PORT': '65535',
     'LAWBOT_EMB_MODEL': 'emb',
     'LAWBOT_RERANK_MODEL': 'rr',
+    'LAWBOT_RERANKER_ENABLED': '1',
     'LAWBOT_PRO_MODEL': 'chat',
 }
 NOON = datetime.time(12, 0)

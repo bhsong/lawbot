@@ -7,18 +7,19 @@ import csv
 import datetime
 import hashlib
 import json
+import os
 import re
 import time
+from zoneinfo import ZoneInfo
 
 import httpx
 import pytest
 
 import e2e_support as e2e
 from conftest import free_port
-from lawbot import llm, manifest
+from lawbot import deploy, envfile, llm, manifest
 from lawbot.paths import ROOT
 from lawbot.view import EXAMPLES
-from lawbot_common import envfile
 from lawbot_model_server import revision
 
 pytestmark = pytest.mark.e2e_live
@@ -26,13 +27,6 @@ pytestmark = pytest.mark.e2e_live
 ANSWER_TIMEOUT = 180_000  # ms, 27B 한 질문 (모델 교체는 preflight에서 막음)
 UPDATE_WINDOW = (datetime.time(6, 20), datetime.time(6, 50))  # 조문 자동 갱신(06:30) 앞뒤
 CITATION = re.compile(r'\S+ 제\d+조')  # 근거 조문 형식 '법령명 제N조'
-PRIVATE = (
-    'LAWBOT_USER',
-    'LAWBOT_PW',
-    'LAWBOT_MODEL_TOKEN',
-    'LAWBOT_MODEL_SERVER',
-    'LAWBOT_MODEL_SERVER_PORT',
-)  # 구성 기록에 남기지 않음 (비밀값·주소·포트)
 LOCAL = ('LAWBOT_PORT', 'LAWBOT_REQUEST_LOG', 'LAWBOT_FEEDBACK', 'LAWBOT_FEEDBACK_DIR', 'LAWBOT_INSTANCE')
 
 
@@ -59,7 +53,10 @@ class Live:
     def __init__(self, tmp, env=None):
         """env: .env 값 (없으면 레포 .env를 읽음. 단위 테스트는 직접 넘김)"""
         self.tmp = tmp
-        self.env = env if env is not None else (envfile.read(ROOT / '.env', envfile.lawbot_keys) or {})
+        if env is None:
+            envfile.load()
+            env = {k: v for k, v in os.environ.items() if k.startswith('LAWBOT_') and k != 'LAWBOT_ENV_FILE'}
+        self.env = env | {'LAWBOT_MODELS': 'pro'}
         self.server = self.env.get('LAWBOT_MODEL_SERVER')
         self.token = self.env.get('LAWBOT_MODEL_TOKEN')
         self.request_log = tmp / 'requests.jsonl'
@@ -67,13 +64,15 @@ class Live:
         self.chat_model = self.env.get('LAWBOT_PRO_MODEL') or 'qwen3.8-27b-4bit'
 
     def get(self, path):
-        r = httpx.get(self.server + path, headers={'Authorization': f'Bearer {self.token}'}, timeout=10)
+        r = httpx.get(
+            self.server + path, headers={'Authorization': f'Bearer {self.token}'}, timeout=10, trust_env=False
+        )
         r.raise_for_status()
         return r.json()
 
     def preflight(self, now=None):
         """질문을 보내기 전 확인. 문제가 있으면 이유 목록 (비어 있으면 통과)"""
-        now = now or datetime.datetime.now().time()
+        now = now or datetime.datetime.now(ZoneInfo('Asia/Seoul')).time()
         if UPDATE_WINDOW[0] <= now <= UPDATE_WINDOW[1]:
             return [f'조문 자동 갱신 시간대({UPDATE_WINDOW[0]:%H:%M}–{UPDATE_WINDOW[1]:%H:%M})']
         if not (self.server and self.token):
@@ -84,7 +83,11 @@ class Live:
             models = {m['id']: m for m in self.get('/v1/models')['data']}
         except httpx.HTTPError as e:
             return [f'서버 미준비: {type(e).__name__}']
-        need = [self.env.get('LAWBOT_EMB_MODEL'), self.env.get('LAWBOT_RERANK_MODEL'), self.chat_model]
+        profile = deploy.get_profile(self.env)
+        rr = deploy.reranker(profile, self.env)
+        need = [profile.emb_model, self.chat_model]
+        if rr:
+            need.append(rr.model)
         reasons = [f'모델 없음: {m}' for m in need if m and m not in models]
         if self.chat_model in models and not models[self.chat_model]['loaded']:
             reasons.append(f'{self.chat_model}가 올라 있지 않음: 모델 교체로 운영 응답이 느려지므로 중단')
@@ -93,19 +96,27 @@ class Live:
     def config(self):
         """실행 구성 (비밀값 제외). 시작 전·후를 비교해 다르면 결과 무효"""
         health, models = self.get('/health'), self.get('/v1/models')['data']
-        settings = {k: v for k, v in sorted(self.env.items()) if k not in PRIVATE + LOCAL}
-        articles = settings.get('LAWBOT_V4_ARTICLES', 'data/v4/articles_v4.csv')
-        m = manifest.load(ROOT / articles) or {}
+        profile = deploy.get_profile(self.env)
+        rr, dc = deploy.reranker(profile, self.env), deploy.decree(profile, self.env)
+        m = manifest.load(profile.articles) or {}
         return {
             'webapp_commit': revision.git_commit(ROOT),
             'model_server_commit': health.get('commit'),
             'models': [{k: x.get(k) for k in ('id', 'type', 'loaded', 'revision')} for x in models],
             'dataset_version': m.get('dataset_version'),
-            'articles_sha256': sha256(articles),
-            'system_sha256': sha256(settings.get('LAWBOT_PRO_SYSTEM')),
+            'articles_sha256': sha256(profile.articles),
+            'system_sha256': sha256(profile.models[0].system_file),
+            'full_system_sha256': sha256(profile.system_file),
             'temperature': llm.TEMPERATURE,
-            'max_tokens': 1024,  # llm.LLM.stream 기본값 (웹앱이 바꾸지 않음)
-            'settings': settings,  # 후보 수·리랭커·하위법령·LAWBOT_MAX_CONCURRENT 등 .env 그대로
+            'max_tokens': 1024,
+            'settings': {
+                'profile': profile.name,
+                'embedding': profile.emb_model,
+                'max_seq': profile.max_seq,
+                'chat': profile.models[0].model,
+                'reranker': None if rr is None else vars(rr),
+                'decree': None if dc is None else vars(dc),
+            },
         }
 
     def logs(self):
@@ -173,6 +184,7 @@ def run_scenario(live, page, name):
     assert len(logs) == 1, logs
     log = logs[0]
     row.update({k: log.get(k) for k in ('status', 'error_type', 'total_ms', 'ttft_ms', 'n_decree', 'refused')})
+    row.update(answer=text, sources=[c.inner_text() for c in e2e.sources(page).get_by_test_id('source-card').all()])
     assert text.strip() and not text.startswith('⏳'), text  # 스트리밍이 끝나고 비어 있지 않은 답
     assert (log['mode'], log['status'], log['error_type']) == ('api', 'ok', None), log
     assert len(e2e.law_cards(page)) == 3, src  # 법률 조문 카드 3개

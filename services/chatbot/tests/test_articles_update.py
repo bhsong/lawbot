@@ -1,5 +1,6 @@
 # tests/test_articles_update.py  →  조문 데이터 자동 갱신 (lawbot_tools.articles_update, 계획 docs/archives/articles-auto-update.md)
 # 점검 → 생성 → 검사·매니페스트 → 임베딩 → 확인 → 아카이브·전환 → 재시작. 생성기·검색기·재시작·포트 확인은 가짜
+import fcntl
 import json
 import shutil
 
@@ -88,7 +89,7 @@ class World:
         return files_of(self.new_df), [], {'head': HEAD, 'paths': {}}
 
     def retriever(self, csv):
-        self.calls.append(f'embed {csv.parent.name}/{csv.name}')
+        self.calls.append(f'embed {csv.name}')
         df = pd.read_csv(csv, encoding='utf-8-sig')
         hits = [{'law': r.law, 'article_id': r.article_no} for r in df.itertuples()] if self.found else []
 
@@ -148,10 +149,10 @@ def test_init_copies_v4_and_refuses_twice(tmp_path, capsys):
 
 def test_same_data_exit_0_and_nothing_written(live, tmp_path, monkeypatch, capsys):
     w = World(monkeypatch, live, OLD)
-    before = {p.name: p.read_bytes() for p in live.iterdir()}
+    before = {p.name: p.read_bytes() for p in live.iterdir() if not p.name.startswith('.')}
     assert run(live, tmp_path, '--restart') == 0
     assert last_line(capsys).startswith('articles updated=no same=yes')
-    assert {p.name: p.read_bytes() for p in live.iterdir()} == before
+    assert {p.name: p.read_bytes() for p in live.iterdir() if not p.name.startswith('.')} == before
     assert w.calls == ['build']
 
 
@@ -162,7 +163,7 @@ def test_update_archives_switches_embeds_and_restarts(live, tmp_path, monkeypatc
     line = last_line(capsys)
     assert line.startswith('articles updated=yes asof=2026-11-27 changed=1 archive=2026-10-20 restart=ok')
     assert line.endswith(str(tmp_path / 'reports' / '2026-11-27.md'))
-    assert w.calls == ['build', f'embed .staging/{ba.DECREE_CSV}', 'restart', 'wait 12345']
+    assert w.calls == ['build', f'embed {ba.DECREE_CSV}', 'restart', 'wait 12345']
     arch = live / 'archive'
     assert sorted(p.name for p in arch.iterdir()) == [
         'articles_v4_2026-10-20.csv',
@@ -175,7 +176,7 @@ def test_update_archives_switches_embeds_and_restarts(live, tmp_path, monkeypatc
     m = manifest.check(live / ba.DECREE_CSV)  # 웹앱과 같은 검사 통과
     assert (m['dataset_version'], m['reference_date'], m['source']['ref']) == ('live-2026-11-27', '2026-11-27', HEAD)
     assert m['trained_on'] == {'embedding': 'v4'}  # 모델이 학습한 데이터는 그대로
-    assert not (live / '.staging').exists()
+    assert not list(live.glob('.staging-*'))
     md = (tmp_path / 'reports' / '2026-11-27.md').read_text(encoding='utf-8')
     assert '## 갱신' in md and 'law_articles_v4_decree_2026-10-20.csv' in md and '재시작: ok' in md
 
@@ -196,7 +197,7 @@ def test_gate_failure_keeps_current_data(live, tmp_path, monkeypatch, capsys):
     line = last_line(capsys)
     assert '검색되지 않음' in line and '근로기준법 제1조' in line
     assert (live / ba.DECREE_CSV).read_bytes() == before and not (live / 'archive').exists()
-    assert 'restart' not in w.calls and not (live / '.staging').exists()
+    assert 'restart' not in w.calls and not list(live.glob('.staging-*'))
 
 
 def test_web_not_ready_rolls_back_and_restarts_again(live, tmp_path, monkeypatch, capsys):
@@ -263,5 +264,68 @@ def test_staging_is_removed_after_validation_error(live, tmp_path, monkeypatch, 
     bad = NEW.assign(text=['', '처음 정의', '영 목적'])  # 빈 본문
     World(monkeypatch, live, bad)
     assert run(live, tmp_path) == 2
-    assert '본문이 빈' in last_line(capsys) and not (live / '.staging').exists()
+    assert '본문이 빈' in last_line(capsys) and not list(live.glob('.staging-*'))
     shutil.rmtree(live)
+
+
+def test_v5_daily_update_uses_scope_and_restores_all_files(tmp_path, env, capsys):
+    env.setenv('LAWBOT_PROFILE', 'v5')
+    live = tmp_path / 'live-v5'
+    v5_law, v5_decree = ba.csv_names('v5')
+    env.setenv('LAWBOT_V5_ARTICLES', str(live / v5_law))
+    env.setenv('LAWBOT_V5_DECREE_ARTICLES', str(live / v5_decree))
+    env.setenv('LAWBOT_DECREE_ENABLED', '1')
+    env.setenv('LAWBOT_RERANKER_ENABLED', '1')
+    assert au.main(['--init', '--live-dir', str(live)]) == 0
+    names = (v5_law, v5_decree, 'manifest.json', 'manifest_law_articles_v5_decree.json')
+    before = {name: (live / name).read_bytes() for name in names}
+    baseline = pd.read_csv(live / v5_decree, encoding='utf-8-sig', dtype=str, keep_default_na=False)
+    modified = baseline.copy()
+    changed = '소득세법 제1조'
+    assert changed in set(modified['article_id'])
+    modified.loc[modified['article_id'] == changed, 'text'] = '갱신 시험용 개정 본문'
+    (tmp_path / 'HEAD').write_text('ref: refs/heads/main\n')
+
+    def build(repo, asof, *, scope, version):
+        assert version == 'v5'
+        assert scope == ba.load_scope(V4_ARTICLES.parent.parent / 'v5' / 'scope_tax.csv')
+        return (
+            {
+                v5_law: ba.to_csv_bytes(modified.loc[modified['kind'] == '법률', ba.LAW_COLS]),
+                v5_decree: ba.to_csv_bytes(modified),
+            },
+            [],
+            {'head': HEAD, 'paths': {}},
+        )
+
+    class Search:
+        def search(self, query, k):
+            return [{'law': '소득세법', 'article_id': '제1조'}] if found else []
+
+    def make_retriever(csv):
+        assert csv.name == v5_decree
+        assert au.web_csv() == live / v5_decree
+        return Search()
+
+    env.setattr(ba, 'build', build)
+    env.setattr(au.ac, 'commits_since', lambda *args: [])
+    env.setattr(au, 'make_retriever', make_retriever)
+    found = False
+    assert run(live, tmp_path) == 2
+    assert '검색되지 않음' in last_line(capsys)
+    assert {name: (live / name).read_bytes() for name in names} == before
+    found = True
+    assert run(live, tmp_path) == 1
+    assert manifest.check(live / v5_decree)['reference_date'] == '2026-11-27'
+    assert manifest.check(live / v5_law)['source']['ref'] == HEAD
+    assert au.main(['--rollback', '--live-dir', str(live)]) == 0
+    assert {name: (live / name).read_bytes() for name in names} == before
+
+
+def test_update_rejects_overlapping_rollback(live, capsys):
+    before = {name: (live / name).read_bytes() for name in (*au.MANIFESTS, *au.MANIFESTS.values())}
+    with (live / '.update.lock').open('a') as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        assert au.main(['--rollback', '--live-dir', str(live)]) == 2
+    assert '갱신 또는 복구가 진행 중' in last_line(capsys)
+    assert {name: (live / name).read_bytes() for name in before} == before

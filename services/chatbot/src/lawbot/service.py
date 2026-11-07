@@ -106,7 +106,8 @@ def check_profile_files(p):
             f'프로필 {p.name}에 필요한 파일이 없습니다: {", ".join(missing)}. '
             'uv run python -m lawbot.check_deploy로 확인하세요.'
         )
-    manifest.check(p.articles)
+    if manifest.check(p.articles) is None and p.name == 'v5':
+        raise RuntimeError(f'매니페스트 없음: {p.articles.name}')
 
 
 def server_wait(env=None):

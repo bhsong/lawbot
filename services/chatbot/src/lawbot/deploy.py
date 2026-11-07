@@ -1,4 +1,4 @@
-# lawbot/deploy.py  →  웹앱 배포 설정: 검색 프로필(v4)과 답변 모델(Fast/Pro) 레지스트리
+# lawbot/deploy.py  →  웹앱 배포 설정: 검색 프로필(v4/v5)과 답변 모델(Fast/Pro) 레지스트리
 # 모델은 API 모델 id로 고른다 (모델 서버 .env의 LAWBOT_SERVE_* 또는 OpenAI 호환 클라우드의 모델 이름)
 import os
 from dataclasses import dataclass, replace
@@ -21,7 +21,7 @@ class ModelSpec:
 
 @dataclass(frozen=True)
 class Profile:
-    name: str  # 'v4' (요청 로그·피드백 기록에 남김)
+    name: str  # 'v4' / 'v5' (요청 로그·피드백 기록에 남김)
     title: str  # 웹앱 제목
     articles: Path  # 조문 CSV
     emb_model: str  # 검색 임베딩 모델 id (모델 서버 /v1/embeddings)
@@ -49,15 +49,29 @@ def _path(name, default, env):
     return p if p.is_absolute() else paths.ROOT / p
 
 
-def get_profile(env=None):
-    """v4 프로필 + LAWBOT_MODELS로 고른 답변 모델 (예: 'pro'면 Pro만, 'fast,pro'면 둘 다. 첫 번째가 기본 선택)
-    고르지 않은 모델은 disabled로 옮겨 화면에 비활성으로 남긴다
-    LAWBOT_PROFILE은 없거나 'v4'만 허용한다 (예전 .env의 LAWBOT_PROFILE=v4는 그대로 통과, 다른 값은 조용히 무시하지 않음)"""
+def profile_name(env=None) -> str:
     env = os.environ if env is None else env
-    name = (env.get('LAWBOT_PROFILE') or '').strip()
-    if name not in ('', 'v4'):
-        raise ValueError(f'LAWBOT_PROFILE은 v4만 지원합니다 (v1은 삭제됨): {name!r}. .env에서 이 줄을 지우세요')
-    p = _v4(env)
+    name = (env.get('LAWBOT_PROFILE') or '').strip() or 'v4'
+    if name not in ('v4', 'v5'):
+        raise ValueError(f'LAWBOT_PROFILE은 v4 또는 v5여야 합니다: {name!r}')
+    return name
+
+
+def article_paths(name: str, env=None) -> tuple[Path, Path]:
+    """Return the law-only and combined CSV paths for the selected profile."""
+    env = os.environ if env is None else env
+    data = paths.DATA / name
+    prefix = f'LAWBOT_{name.upper()}'
+    return (
+        _path(f'{prefix}_ARTICLES', data / f'articles_{name}.csv', env),
+        _path(f'{prefix}_DECREE_ARTICLES', data / f'law_articles_{name}_decree.csv', env),
+    )
+
+
+def get_profile(env=None):
+    """Select a corpus and its supported chat models. An unset profile keeps v4 defaults."""
+    env = os.environ if env is None else env
+    p = _profile(profile_name(env), env)
     keys = [k.strip() for k in env.get('LAWBOT_MODELS', '').split(',') if k.strip()]
     if not keys:
         return p
@@ -68,39 +82,28 @@ def get_profile(env=None):
     return replace(p, models=tuple(specs[k] for k in keys), disabled=tuple(m for m in p.models if m.key not in keys))
 
 
-def _v4(env):
-    """7개 법률 415조문, v4 검색 (MAX_SEQ 2304). Fast(4B LoRA)는 학습한 4섹션 그대로, Pro는 튜닝 전 Qwen3.8-27B 4비트를
-    간결형 system으로 처음부터 짧게 생성
-    하위법령을 켜면(LAWBOT_DECREE_ENABLED=1) 법률 415 + 시행령·시행규칙 397 = 812조문 CSV. 법률 415행은 같음"""
-    articles = (
-        _path('LAWBOT_V4_DECREE_ARTICLES', paths.V4_DECREE_ARTICLES, env)
-        if decree_enabled(env)
-        else _path('LAWBOT_V4_ARTICLES', paths.V4_ARTICLES, env)
+def _profile(name, env):
+    law, combined = article_paths(name, env)
+    v5 = name == 'v5'
+    pro = ModelSpec(
+        'pro',
+        'Lawbot Pro',
+        '27B · 큰 모델(튜닝 전), 간결한 답변, 응답이 더 느림',
+        _model('LAWBOT_PRO_MODEL', 'qwen3.8-27b-4bit', env),
+        'concise',
+        _path('LAWBOT_PRO_SYSTEM', paths.V5_SYSTEM_CONCISE if v5 else paths.V4_SYSTEM_CONCISE, env),
+    )
+    fast = ModelSpec(
+        'fast', 'Lawbot Fast', '4B · 빠른 응답, 4항목 답변', _model('LAWBOT_FAST_MODEL', 'lawbot-fast-v4', env), 'full'
     )
     return Profile(
-        'v4',
+        name,
         'Lawbot',
-        articles,
-        _model('LAWBOT_EMB_MODEL', 'lawbot-emb-v4', env),
-        _positive_int('LAWBOT_MAX_SEQ', MAX_SEQ, env),
-        _path('LAWBOT_V4_SYSTEM', paths.V4_SYSTEM, env),
-        (
-            ModelSpec(
-                'fast',
-                'Lawbot Fast',
-                '4B · 빠른 응답, 4항목 답변',
-                _model('LAWBOT_FAST_MODEL', 'lawbot-fast-v4', env),
-                'full',
-            ),
-            ModelSpec(
-                'pro',
-                'Lawbot Pro',
-                '27B · 큰 모델(튜닝 전), 간결한 답변, 응답이 더 느림',
-                _model('LAWBOT_PRO_MODEL', 'qwen3.8-27b-4bit', env),
-                'concise',
-                _path('LAWBOT_PRO_SYSTEM', paths.V4_SYSTEM_CONCISE, env),
-            ),
-        ),
+        combined if decree_enabled(env) else law,
+        _model('LAWBOT_EMB_MODEL', 'lawbot-emb-v5b' if v5 else 'lawbot-emb-v4', env),
+        _positive_int('LAWBOT_MAX_SEQ', 4352 if v5 else MAX_SEQ, env),
+        _path('LAWBOT_V5_SYSTEM', paths.V5_SYSTEM, env) if v5 else _path('LAWBOT_V4_SYSTEM', paths.V4_SYSTEM, env),
+        (pro,) if v5 else (fast, pro),
     )
 
 
@@ -144,7 +147,9 @@ class DecreeConfig:
 
 def decree_max_seq(env=None):
     """하위법령 인코딩 최대 토큰 (LAWBOT_DECREE_MAX_SEQ, 없으면 DECREE_MAX_SEQ). 웹앱과 캐시(lawbot-reindex)가 같이 쓴다"""
-    return _positive_int('LAWBOT_DECREE_MAX_SEQ', DECREE_MAX_SEQ, os.environ if env is None else env)
+    env = os.environ if env is None else env
+    default = 5120 if profile_name(env) == 'v5' else DECREE_MAX_SEQ
+    return _positive_int('LAWBOT_DECREE_MAX_SEQ', default, env)
 
 
 def decree_enabled(env=None):

@@ -36,6 +36,11 @@ class E2EChat(ms_fakes.FakeChat):
 
     def stream(self, messages, **kw):
         chunks = answer_chunks(messages[-1]['content'])
+        system = messages[0]['content']
+        if '근로소득 세금, 4대보험' in system:
+            chunks[3:3] = [' 근로소득 세금, 4대보험']
+            if '【설명】' in system:
+                chunks += ['\n【설명】\n가짜 모델의 전체 설명', '\n【참고】\n가짜 모델의 참고 사항']
         if self.mode == 'chat_error':
             chunks = [chunks[0], RuntimeError('가짜 생성 오류')]
         elif self.mode == 'busy':

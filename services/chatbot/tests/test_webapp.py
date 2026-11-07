@@ -55,7 +55,7 @@ def test_profile_env_v4_or_empty_passes(env, value):
 @pytest.mark.parametrize('value', ['v1', 'v9'])
 def test_profile_env_other_refused(env, value):
     env.setenv('LAWBOT_PROFILE', value)  # v1은 삭제됨: 조용히 v4로 바꾸지 않고 거부
-    with pytest.raises(ValueError, match='LAWBOT_PROFILE은 v4만'):
+    with pytest.raises(ValueError, match='LAWBOT_PROFILE은 v4 또는 v5'):
         deploy.get_profile()
 
 
@@ -417,9 +417,10 @@ def test_env_dev_example_is_valid(env):
     for k, v in values.items():
         env.setenv(k, v)
     p = deploy.get_profile()
+    assert (p.name, p.emb_model, p.max_seq) == ('v5', 'lawbot-emb-v5b', 4352)
     assert deploy.reranker(p) == deploy.RerankerConfig('qwen3-reranker-4b', 10)
-    assert deploy.decree(p) == deploy.DecreeConfig(0.9, 2, ('pro',))
-    assert [m.model for m in p.models] == ['qwen3.8-27b-4bit'] and p.emb_model == 'lawbot-emb-v4'
+    assert deploy.decree(p) == deploy.DecreeConfig(0.9, 2, ('pro',), max_seq=5120)
+    assert [m.model for m in p.models] == ['qwen3.8-27b-4bit']
 
 
 def test_env_file_loading(env, tmp_path, capsys):
@@ -619,3 +620,33 @@ def test_data_notice(env):
     a = make_app(env)  # data/v4/manifest.json
     assert view.data_notice(a) == '법령 기준일 2026-10-20 (데이터 v4)'
     assert web.config_data(a, None)['notice'] == view.data_notice(a)  # 화면 맨 위 줄
+
+
+def test_v5_profile_uses_v5b_and_v5_systems(env):
+    env.setenv('LAWBOT_PROFILE', 'v5')
+    env.setenv('LAWBOT_RERANKER_ENABLED', '1')
+    env.setenv('LAWBOT_DECREE_ENABLED', '1')
+    p = deploy.get_profile()
+    assert p.articles.name == 'law_articles_v5_decree.csv'
+    assert p.emb_model == 'lawbot-emb-v5b'
+    assert p.max_seq == 4352 and deploy.decree(p).max_seq == 5120
+    assert [(m.key, m.model, m.fmt) for m in p.models] == [('pro', 'qwen3.8-27b-4bit', 'concise')]
+    concise_system = service.system_text(p, p.models[0])
+    full = p.system_file.read_text(encoding='utf-8')
+    assert concise_system.splitlines()[0] == full.splitlines()[0]
+    assert '근로소득 세금, 4대보험' in full
+    assert all(section in full for section in ('【결론】', '【근거 조문】', '【설명】', '【참고】'))
+    service.check_profile_files(p)
+    checks = []
+    check_deploy.check_decree(p, checks)
+    assert all(status != 'FAIL' for status, _ in checks)
+    assert any('articles_v5.csv와 같음' in message for _, message in checks)
+
+
+def test_v5_requires_manifest_before_contacting_server(env, tmp_path):
+    env.setenv('LAWBOT_PROFILE', 'v5')
+    csv = tmp_path / 'articles_v5.csv'
+    csv.write_bytes((paths.DATA / 'v5' / csv.name).read_bytes())
+    env.setenv('LAWBOT_V5_ARTICLES', str(csv))
+    with pytest.raises(RuntimeError, match='매니페스트 없음'):
+        service.check_profile_files(deploy.get_profile())

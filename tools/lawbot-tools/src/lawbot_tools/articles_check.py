@@ -23,13 +23,39 @@ from zoneinfo import ZoneInfo
 
 import pandas as pd
 
-from lawbot import manifest
-from lawbot.paths import V4_DECREE_ARTICLES
+from lawbot import deploy, envfile, manifest, paths
 from lawbot_tools import build_articles as ba
 from lawbot_tools.build_articles import commits_since
 
 ANSWER_COLS = ('title', 'text', 'deleted')  # 런타임(검색·프롬프트·화면)이 쓰는 열 (law·article_id는 키)
 DIFF_LINES = 8
+
+
+@dataclass(frozen=True)
+class Dataset:
+    version: str = 'v4'
+
+    @property
+    def source_dir(self) -> Path:
+        return paths.DATA / self.version
+
+    @property
+    def live_dir(self) -> Path:
+        live = paths.DATA / 'live'
+        return live / self.version if self.version == 'v5' else live
+
+    @property
+    def scope(self) -> Path | None:
+        return self.source_dir / 'scope_tax.csv' if self.version == 'v5' else None
+
+    @property
+    def manifests(self) -> dict[str, str]:
+        law, combined = ba.csv_names(self.version)
+        decree_manifest = f'manifest_{Path(combined).stem}.json' if self.scope else 'manifest_decree.json'
+        return {law: 'manifest.json', combined: decree_manifest}
+
+
+V4 = Dataset()
 
 
 def today() -> str:
@@ -105,31 +131,36 @@ class Result:
     pending: list[dict]
     new: list[dict] | None
     report: Path | None = None
+    dataset: Dataset = V4
 
     @property
     def same(self) -> bool:
         return not self.diff.answer
 
 
-def check(repo, asof, data_dir=V4_DECREE_ARTICLES.parent) -> dict:
+def check(repo, asof, data_dir=V4.source_dir, dataset=V4) -> dict:
     """비교 결과 (Result의 필드). 파일을 쓰지 않는다"""
-    return check_with_files(repo, asof, data_dir)[0]
+    return check_with_files(repo, asof, data_dir, dataset)[0]
 
 
-def check_with_files(repo, asof, data_dir=V4_DECREE_ARTICLES.parent) -> tuple[dict, dict[str, bytes]]:
+def check_with_files(repo, asof, data_dir=V4.source_dir, dataset=V4) -> tuple[dict, dict[str, bytes]]:
     """(비교 결과, 생성한 파일 {이름: 바이트}). lawbot-articles-update가 같은 생성 결과로 갱신한다"""
     if not (Path(repo) / 'HEAD').exists() and not (Path(repo) / '.git').exists():
         raise FileNotFoundError(
             f'legalize-kr 클론이 없습니다: {repo} (git clone --filter=blob:none --no-checkout https://github.com/legalize-kr/legalize-kr)'
         )
-    csv = Path(data_dir) / ba.DECREE_CSV
+    _, combined = ba.csv_names(dataset.version)
+    csv = Path(data_dir) / combined
     m = manifest.load(csv) or {}
-    files, versions, stats = ba.build(repo, asof)
-    new_df = pd.read_csv(io.BytesIO(files[ba.DECREE_CSV]), encoding='utf-8-sig', dtype=str, keep_default_na=False)
+    scope = dataset.scope
+    options = {'scope': ba.load_scope(scope), 'version': dataset.version} if scope else {}
+    files, versions, stats = ba.build(repo, asof, **options)
+    new_df = pd.read_csv(io.BytesIO(files[combined]), encoding='utf-8-sig', dtype=str, keep_default_na=False)
     old_df = pd.read_csv(csv, encoding='utf-8-sig', dtype=str, keep_default_na=False)
     ref = (m.get('source') or {}).get('ref')
     result = {
         'repo': str(repo),
+        'dataset': dataset,
         'asof': asof,
         'head': stats['head'],
         'data': {
@@ -208,6 +239,8 @@ def render(r: Result, next_steps: bool = True) -> str:
             for c in r.new
         ]
     if not r.same and next_steps:
+        _, combined = ba.csv_names(r.dataset.version)
+        scope = f' --scope {r.dataset.scope} --version {r.dataset.version}' if r.dataset.scope else ''
         md += [
             '',
             '## 다음 할 일',
@@ -215,8 +248,8 @@ def render(r: Result, next_steps: bool = True) -> str:
             '새 폴더에 만들고, 매니페스트를 쓰고, 본문이 바뀌었으니 val로 검색·답변을 확인한 뒤 웹앱 설정을 바꿔 재시작합니다.',
             '',
             '```zsh',
-            f'uv run lawbot-build-articles --repo {r.repo} --asof {r.asof} --out-dir data/<새 버전>',
-            f'uv run lawbot-reindex data/<새 버전>/{ba.DECREE_CSV} --dataset-version <새 버전> '
+            f'uv run lawbot-build-articles --repo {r.repo} --asof {r.asof} --out-dir data/<새 버전>{scope}',
+            f'uv run lawbot-reindex data/<새 버전>/{combined} --dataset-version <새 버전> '
             f'--reference-date {r.asof} --source-ref {r.head}',
             '```',
         ]
@@ -227,13 +260,15 @@ def main(argv=None):
     p = argparse.ArgumentParser(description='조문 데이터 점검: 오늘 시행 중인 법과 지금 데이터 비교')
     p.add_argument('--repo', required=True, help='legalize-kr 클론 (git clone --filter=blob:none, bare도 됨)')
     p.add_argument('--asof', help='기준일 YYYY-MM-DD (기본 오늘, 한국 시간)')
-    p.add_argument('--data-dir', type=Path, default=V4_DECREE_ARTICLES.parent, help='지금 데이터 폴더 (기본 data/v4)')
+    p.add_argument('--data-dir', type=Path, help='지금 데이터 폴더 (기본 data/<프로필>)')
     p.add_argument('--report-dir', type=Path, help='보고서 <기준일>.md를 쓸 폴더')
     a = p.parse_args(argv)
     asof = a.asof or today()
     try:
         dt.date.fromisoformat(asof)
-        r = Result(**check(a.repo, asof, a.data_dir))
+        envfile.load()
+        dataset = Dataset(deploy.profile_name())
+        r = Result(**check(a.repo, asof, a.data_dir or dataset.source_dir, dataset))
     except Exception as e:  # 생성기 실패(부칙을 못 읽음 등)·git·파일 오류: 한 줄로 알리고 종료 코드 2
         print(f'articles error={" ".join(str(e).split())}')
         return 2
