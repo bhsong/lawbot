@@ -32,7 +32,7 @@ function post(path: string, body: unknown, signal?: AbortSignal) {
 }
 
 export const api = {
-  me: async () => (await (await call('/api/me')).json()) as { user: string },
+  me: async () => (await (await call('/api/me')).json()) as { user: string; role?: 'user' | 'admin' },
   login: (user: string, password: string) => post('/api/login', { user, password }),
   logout: () => post('/api/logout', {}),
   config: async () => (await (await call('/api/config')).json()) as Config,

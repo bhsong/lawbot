@@ -33,7 +33,7 @@ function sse(answer: string, title: string) {
 }
 
 /** Fake lawbot-web: login state + one queued chat answer per question. */
-function server({ loggedIn = true } = {}) {
+function server({ loggedIn = true, role }: { loggedIn?: boolean; role?: 'user' | 'admin' } = {}) {
   let session = loggedIn
   const answers: [string, string][] = []
   const chats: unknown[] = []
@@ -46,7 +46,7 @@ function server({ loggedIn = true } = {}) {
       return json(200, { user: 'u' })
     }
     if (!session) return json(401, { detail: '로그인이 필요합니다.' })
-    if (url === '/api/me') return json(200, { user: 'u' })
+    if (url === '/api/me') return json(200, { user: 'u', role })
     if (url === '/api/config') return json(200, config)
     if (url === '/api/chat') {
       chats.push(JSON.parse(String(init!.body)))
@@ -80,6 +80,12 @@ test('login: wrong password shows the error, right one opens the chat', async ()
   expect(await screen.findByRole('heading', { name: config.title })).toBeInTheDocument()
   expect(screen.getByRole('radio', { name: 'Lawbot Pro' })).toHaveAttribute('aria-checked', 'true')
   expect(screen.getByRole('radio', { name: '간결' })).toHaveAttribute('aria-checked', 'true')
+})
+
+test('a session with an admin role still opens the chat', async () => {
+  server({ role: 'admin' })
+  render(<App />)
+  expect(await screen.findByRole('textbox', { name: '질문' })).toBeInTheDocument()
 })
 
 test('choosing a model switches the format to its default; the request carries both', async () => {

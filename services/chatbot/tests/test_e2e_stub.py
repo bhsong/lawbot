@@ -10,6 +10,7 @@ import pytest
 from playwright.sync_api import expect
 
 import e2e_support as e2e
+from conftest import ADMIN_PW, ADMIN_USER
 from lawbot.db import cli
 from lawbot.db.connection import connect
 from lawbot.view import EXAMPLES
@@ -95,6 +96,38 @@ def test_login_required(stack, fresh):
     assert e2e.textbox(fresh).count() == 0
     e2e.login(fresh, stack.url)
     e2e.textbox(fresh).wait_for()
+
+
+@pytest.fixture
+def admin_stack(tmp_path, page, request, admin_hash):
+    db = tmp_path / 'private' / 'lawbot.db'
+    cli.main(['init', '--db', str(db)])
+    s = e2e.Stack(
+        tmp_path,
+        read_timeout=READ_TIMEOUT_S,
+        LAWBOT_DB=str(db),
+        LAWBOT_ADMIN_USER=ADMIN_USER,
+        LAWBOT_ADMIN_PW_HASH=admin_hash,
+    )
+    try:
+        yield s, db
+        e2e.keep_on_failure(request, 'e2e_stub', s.logs(), page)
+    finally:
+        s.stop()
+
+
+def test_admin_can_log_in_on_existing_screen(admin_stack, page):
+    s, db = admin_stack
+    e2e.login(page, s.url, user=ADMIN_USER, pw=ADMIN_PW)
+    e2e.textbox(page).wait_for(timeout=e2e.ANSWER_TIMEOUT)
+    assert page.request.get(f'{s.url}/api/me', timeout=e2e.ANSWER_TIMEOUT).json() == {
+        'user': ADMIN_USER,
+        'role': 'admin',
+    }
+    with connect(db) as conn:
+        assert conn.execute('SELECT actor, role, action FROM audit_events').fetchall() == [
+            (ADMIN_USER, 'admin', 'login_ok')
+        ]
 
 
 # ---- 정상 질문 ----

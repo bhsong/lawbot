@@ -5,6 +5,7 @@ import os
 from dataclasses import dataclass
 from pathlib import Path
 
+from lawbot.auth import AdminCredentials, admin_credentials
 from lawbot.deploy import DecreeConfig, Profile, RerankerConfig
 from lawbot.feedback import Feedback
 
@@ -34,6 +35,7 @@ class Settings:
     chat_concurrency: int | None = None
     feedback: Feedback | None = None
     db: Path | None = None
+    admin: AdminCredentials | None = None
 
 
 MISSING_SERVER = (
@@ -94,6 +96,7 @@ def load(env=None, web=False):
         from lawbot import view
 
         take('auth', lambda: security.auth(env))
+        take('admin', lambda: admin_credentials(env, db_configured=bool(db)))
         take('port', lambda: security.server_port(env))
         take('instance', lambda: security.instance_name(env))
         take('chat_concurrency', lambda: view.chat_concurrency(env))

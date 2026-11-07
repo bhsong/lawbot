@@ -338,7 +338,7 @@ def test_app_loads_models_via_service(web, env):
     env.setattr(web, 'require_build', lambda dist: None)
     env.setenv('LAWBOT_FAST_MODEL', 'lawbot-fast-8bit')
     create, apps = web.create_app, []
-    env.setattr(web, 'create_app', lambda a, *rest: apps.append(a) or create(a, *rest))
+    env.setattr(web, 'create_app', lambda a, *rest, **kwargs: apps.append(a) or create(a, *rest, **kwargs))
     web.main([])
     [a] = apps
     assert isinstance(a.retriever, FakeRetriever)
