@@ -1,6 +1,7 @@
 # tests/test_build_articles.py  →  조문 CSV 생성기 (lawbot_tools.build_articles, 계획 docs/archives/article-generator.md)
 # 단위 테스트는 작은 git 저장소를 임시로 만들어 쓴다. 실제 legalize-kr로 레포 CSV와 비교는 -m network (LEGALIZE_KR)
 import io
+import json
 import os
 import re
 import subprocess
@@ -589,6 +590,128 @@ def commit(repo, files, date, subject):
     }
     subprocess.run(['git', '-C', str(repo), 'add', '-A'], check=True)
     subprocess.run(['git', '-C', str(repo), 'commit', '-qm', subject], check=True, env=env)
+
+
+@pytest.fixture
+def blob_clones(tmp_path, monkeypatch):
+    source, remote = tmp_path / 'source', tmp_path / 'remote.git'
+    subprocess.run(['git', 'init', '-q', str(source)], check=True)
+    laws = ['시험법', '검증법']
+    monkeypatch.setattr(b, 'LAWS', laws)
+    paths = {b.doc_name(law, kind): f'kr/{law}/{kind} 원문.md' for law in laws for kind in b.KINDS}
+    for i, change in enumerate(('제정', '일부개정', '전부개정', '일부개정', '전부개정')):
+        date = f'{2020 + i}-01-01'
+        effective = date if i < 4 else '2027-01-01'
+        commit(
+            source,
+            {
+                path: md(str(100 + i), date, effective, article('제1조', '목적', f'{doc} 본문 {i}')).replace(
+                    '시험법', doc
+                )
+                for doc, path in paths.items()
+            },
+            date,
+            f'법령 묶음 ({change})',
+        )
+    subprocess.run(['git', 'clone', '-q', '--bare', str(source), str(remote)], check=True)
+    origin = b.Repo(remote)
+    origin.git('config', 'uploadpack.allowFilter', 'true')
+    origin.git('config', 'uploadpack.allowAnySHA1InWant', 'true')
+    partial, full = tmp_path / 'partial.git', tmp_path / 'full.git'
+    for target, options in ((partial, ['--filter=blob:none']), (full, [])):
+        subprocess.run(['git', 'clone', '-q', '--bare', *options, remote.as_uri(), str(target)], check=True)
+    monkeypatch.setenv('GIT_TRACE2_EVENT', str(tmp_path / 'trace.jsonl'))
+    monkeypatch.setenv('GIT_TRACE_PACKET', str(tmp_path / 'packet.log'))
+    monkeypatch.setenv('LC_ALL', 'C')
+    return b.Repo(partial), b.Repo(full), paths
+
+
+def traced_fetches(tmp_path):
+    trace = tmp_path / 'trace.jsonl'
+    if not trace.exists():
+        return []
+    events = (json.loads(line) for line in trace.read_text().splitlines())
+    return [event['argv'] for event in events if event['event'] == 'start' and 'fetch' in event['argv']]
+
+
+def test_show_many_batches_twenty_missing_blobs(blob_clones, tmp_path):
+    partial, full, paths = blob_clones
+    items = [(sha, path) for sha in full.git('rev-list', 'HEAD').splitlines() for path in paths.values()][:20]
+    expected = full.show_many(items)
+    assert len(set(expected)) == 20 and traced_fetches(tmp_path) == []
+    assert partial.show_many(items) == expected
+    assert len(traced_fetches(tmp_path)) == 1
+    assert partial.show_many(items[::-1]) == expected[::-1]
+    assert b.Repo(partial.path).show_many(items) == expected
+    assert len(traced_fetches(tmp_path)) == 1
+
+
+def test_prefetch_requests_only_missing_oids_once(blob_clones, tmp_path):
+    partial, full, paths = blob_clones
+    first, second, third = list(paths.values())[:3]
+    partial.show('HEAD', first)
+    fetch_count = len(traced_fetches(tmp_path))
+    packet = tmp_path / 'packet.log'
+    offset = packet.stat().st_size
+    items = [('HEAD', first), ('HEAD', second), (full.head(), second), ('HEAD', third)]
+    assert b.Repo(partial.path).show_many(items) == full.show_many(items)
+    assert len(traced_fetches(tmp_path)) - fetch_count == 1
+    wants = re.findall(rb'fetch> want ([0-9a-f]+)', packet.read_bytes()[offset:])
+    assert wants == [full.git('rev-parse', f'HEAD:{path}').strip().encode() for path in (second, third)]
+
+
+def test_prefetch_failure_keeps_cause_without_fallback(blob_clones, tmp_path):
+    partial, _, paths = blob_clones
+    partial.git('remote', 'set-url', 'origin', (tmp_path / 'missing-origin.git').as_uri())
+    with pytest.raises(RuntimeError, match='blob 사전 수신 실패') as error:
+        partial.show_many([('HEAD', path) for path in paths.values()])
+    assert 'missing-origin.git' in str(error.value)
+    assert isinstance(error.value.__cause__, subprocess.CalledProcessError)
+    assert len(traced_fetches(tmp_path)) == 1
+
+
+def test_prefetch_reports_a_missing_path_without_fetching(blob_clones, tmp_path):
+    partial, _, paths = blob_clones
+    with pytest.raises(FileNotFoundError, match=r'HEAD:absent\.md'):
+        partial.show_many([('HEAD', next(iter(paths.values()))), ('HEAD', 'absent.md')])
+    assert traced_fetches(tmp_path) == []
+
+
+def test_cat_file_does_not_lazy_fetch_if_prefetch_did_not_fill_objects(blob_clones, tmp_path, monkeypatch):
+    partial, _, paths = blob_clones
+    run = subprocess.run
+    calls = []
+
+    def empty_fetch(args, **kwargs):
+        if 'fetch' in args:
+            calls.append(args)
+            return subprocess.CompletedProcess(args, 0, '', '')
+        return run(args, **kwargs)
+
+    monkeypatch.setattr(subprocess, 'run', empty_fetch)
+    with pytest.raises(FileNotFoundError, match='HEAD:kr/'):
+        partial.show_many([('HEAD', path) for path in paths.values()])
+    assert len(calls) == 1 and traced_fetches(tmp_path) == []
+
+
+def test_build_batches_relevant_history_and_keeps_bytes(blob_clones, tmp_path):
+    partial, full, paths = blob_clones
+    asof = '2026-11-08'
+    expected = b.build(full.path, asof)
+    assert traced_fetches(tmp_path) == []
+    assert b.build(partial.path, asof) == expected
+    assert len(traced_fetches(tmp_path)) == 3
+    old_oid = full.git('rev-parse', f'HEAD~3:{next(iter(paths.values()))}').strip()
+    assert old_oid.encode() not in (tmp_path / 'packet.log').read_bytes()
+
+
+def test_commits_since_batches_and_keeps_report(blob_clones, tmp_path):
+    partial, full, paths = blob_clones
+    ref = full.git('rev-parse', 'HEAD~4').strip()
+    expected = b.commits_since(full, ref, paths)
+    assert len(expected) == 24 and traced_fetches(tmp_path) == []
+    assert b.commits_since(partial, ref, paths) == expected
+    assert len(traced_fetches(tmp_path)) == 1
 
 
 def test_find_files_skips_repealed_file_with_the_same_title(tmp_path, monkeypatch):

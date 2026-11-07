@@ -1,6 +1,6 @@
 """Legalize KR 원문과 기준일로 조문 CSV 두 개를 만든다 (계획: docs/archives/article-generator.md, docs/plans/v5-tax-scope.md)
 
-    git clone --bare https://github.com/legalize-kr/legalize-kr ../legalize-kr   # 옛 버전을 모두 읽으므로 전체 클론
+    git clone --bare --filter=blob:none https://github.com/legalize-kr/legalize-kr ../legalize-kr
     uv run lawbot-build-articles --repo ../legalize-kr --asof 2026-10-20 --out-dir data/v4 [--check] [--scope 목록.csv]
 
 출력 (UTF-8 BOM, 행 끝 LF)
@@ -38,10 +38,13 @@ import argparse
 import calendar
 import datetime as dt
 import io
+import os
 import re
 import subprocess
 import sys
 from dataclasses import dataclass, field
+from functools import cached_property
+from itertools import batched
 from pathlib import Path
 
 import pandas as pd
@@ -75,6 +78,9 @@ SECTION = re.compile(r'^(#{2,4}) (제\d+(?:장|절)(?:의\d+)?.*?)\s*(?:<(?:개�
 # ── git ──────────────────────────────────────────────────────────────
 
 
+BLOB_BATCH_SIZE = 128
+
+
 class Repo:
     """legalize-kr 저장소 읽기. 파일 이력은 git log 한 번으로, 본문은 cat-file --batch로 (파일·버전마다 부르면 느림)"""
 
@@ -82,10 +88,14 @@ class Repo:
         self.path = Path(path)
         self.history: dict[str, list[tuple[str, str, str]]] = {}  # 경로 → [(sha, 공포일, 제목)] 최신순
         self._blobs: dict[tuple[str, str], str] = {}
+        self._oids: dict[tuple[str, str], str] = {}
+
+    def _command(self, *args):
+        return ['git', '-C', str(self.path), '-c', 'core.quotepath=off', *args]
 
     def git(self, *args):
         return subprocess.run(
-            ['git', '-C', str(self.path), '-c', 'core.quotepath=off', *args],
+            self._command(*args),
             check=True,
             capture_output=True,
             text=True,
@@ -107,15 +117,103 @@ class Repo:
     def show(self, sha, path):
         return self.show_many([(sha, path)])[0]
 
-    def show_many(self, items):
-        missing = [i for i in dict.fromkeys(items) if i not in self._blobs]
+    def _config(self, *args):
+        try:
+            return self.git('config', *args)
+        except subprocess.CalledProcessError as exc:
+            if exc.returncode != 1:
+                raise
+            return ''
+
+    @cached_property
+    def _promisor_remote(self):
+        config = self._config('--type=bool', '--get-regexp', r'^remote\..*\.promisor$')
+        entries = dict(line.split(maxsplit=1) for line in config.splitlines())
+        remotes = [
+            key.removeprefix('remote.').removesuffix('.promisor') for key, value in entries.items() if value == 'true'
+        ]
+        remote = 'origin' if 'origin' in remotes else next(iter(remotes), None)
+        if remote is None:
+            remote = self._config('--get', 'extensions.partialClone').strip() or None
+        if remote is not None:
+            version = re.search(r'git version (\d+)\.(\d+)', self.git('--version'))
+            if version is None or tuple(map(int, version.groups())) < (2, 44):
+                raise RuntimeError('부분 클론의 blob 사전 수신에는 Git 2.44 이상이 필요합니다.')
+        return remote
+
+    def _cat_file(self, mode, inputs):
+        return subprocess.run(
+            self._command('cat-file', mode),
+            input=''.join(f'{item}\n' for item in inputs).encode(),
+            env=os.environ | {'GIT_NO_LAZY_FETCH': '1'},
+            check=True,
+            capture_output=True,
+        ).stdout
+
+    def prefetch(self, items):
+        """Fetch only locally missing blobs from the promisor in a single request."""
+        remote = self._promisor_remote
+        if remote is None:
+            return
+        refs = [item for item in dict.fromkeys(items) if item not in self._oids and item not in self._blobs]
+        if not refs:
+            return
+        env = os.environ | {'GIT_NO_LAZY_FETCH': '1'}
+        oids = []
+        for batch in batched(refs, BLOB_BATCH_SIZE, strict=False):
+            specs = [f'{sha}:{path}' for sha, path in batch]
+            try:
+                result = subprocess.run(
+                    self._command('rev-parse', '--revs-only', '--end-of-options', *specs, '--'),
+                    env=env,
+                    check=True,
+                    capture_output=True,
+                    text=True,
+                )
+            except subprocess.CalledProcessError as exc:
+                resolved = len(exc.stdout.splitlines())
+                if exc.returncode == 128 and resolved < len(batch):
+                    sha, path = batch[resolved]
+                    raise FileNotFoundError(f'{sha[:10]}:{path}') from exc
+                raise
+            oids.extend(result.stdout.splitlines())
+        unique = list(dict.fromkeys(oids))
+        types = self._cat_file('--batch-check=%(objecttype)', unique).splitlines()
+        missing = [oid for oid, kind in zip(unique, types, strict=True) if kind.endswith(b' missing')]
         if missing:
-            req = ''.join(f'{sha}:{path}\n' for sha, path in missing).encode()
-            out = subprocess.run(
-                ['git', '-C', str(self.path), 'cat-file', '--batch'], input=req, check=True, capture_output=True
-            ).stdout
+            try:
+                subprocess.run(
+                    self._command(
+                        '-c',
+                        'fetch.negotiationAlgorithm=noop',
+                        'fetch',
+                        remote,
+                        '--no-tags',
+                        '--no-write-fetch-head',
+                        '--recurse-submodules=no',
+                        '--filter=blob:none',
+                        '--stdin',
+                    ),
+                    input='\n'.join(missing) + '\n',
+                    env=env | {'GIT_TERMINAL_PROMPT': '0'},
+                    check=True,
+                    capture_output=True,
+                    text=True,
+                )
+            except subprocess.CalledProcessError as exc:
+                raise RuntimeError(f'blob 사전 수신 실패 ({remote}, {len(missing)}개): {exc.stderr.strip()}') from exc
+        self._oids.update(zip(refs, oids, strict=True))
+
+    def show_many(self, items):
+        items = list(items)
+        missing = [i for i in dict.fromkeys(items) if i not in self._blobs]
+        if not missing:
+            return [self._blobs[i] for i in items]
+        self.prefetch(missing)
+        for batch in batched(missing, BLOB_BATCH_SIZE, strict=False):
+            out = self._cat_file('--batch', (self._oids.get((sha, path), f'{sha}:{path}') for sha, path in batch))
             pos = 0
-            for key in missing:
+            for key in batch:
                 header_end = out.index(b'\n', pos)
                 header = out[pos:header_end].split()
                 if header[-1] == b'missing':
@@ -423,13 +521,25 @@ FOLLOWS_PENDING = re.compile(
 FULL_REVISION = re.compile(r'\((?:전부개정|제정|폐지제정)\)$')
 
 
-def last_full_revision(repo: Repo, path, hist, asof):
-    """조합을 시작할 버전: 기준일에 시행 중인 마지막 전부개정(제정). 전부개정은 본문 전체를 새로 써서 앞 버전과 이어지지 않는다.
-    그 앞 버전은 읽지 않는다 (부분 클론에서 옛 원문을 받지 않음)"""
-    for i in range(len(hist) - 1, -1, -1):
-        if FULL_REVISION.search(hist[i][2]) and front(repo.show(hist[i][0], path))['시행일자'] <= asof:
-            return i
-    return 0
+def _full_revisions(history):
+    return (i for i in reversed(range(len(history))) if FULL_REVISION.search(history[i][2]))
+
+
+def _effective_histories(repo: Repo, paths, asof):
+    """Check one full-revision candidate per document at a time, newest first."""
+    histories = {path: [h for h in reversed(repo.history[path]) if h[1] <= asof] for path in dict.fromkeys(paths)}
+    waiting = {path: _full_revisions(hist) for path, hist in histories.items()}
+    while waiting:
+        candidates = [(path, i) for path, revisions in waiting.items() if (i := next(revisions, None)) is not None]
+        items = [(histories[path][i][0], path) for path, i in candidates]
+        next_round = {}
+        for (path, i), md in zip(candidates, repo.show_many(items), strict=True):
+            if front(md)['시행일자'] <= asof:
+                histories[path] = histories[path][i:]
+            else:
+                next_round[path] = waiting[path]
+        waiting = next_round
+    return histories
 
 
 def in_force(repo: Repo, path, asof):
@@ -439,9 +549,11 @@ def in_force(repo: Repo, path, asof):
     시행 전 개정이 남은 조문에 그 뒤 시행된 개정이 내용을 바꾸면 조문 단위로 나눌 수 없다: 최신 본문을 쓰고 끝에
     시행 전 내용이 섞였다고 적는다(mixed, 2026-11-03 사용자 결정). 다만 지금 삭제된 조문을 시행 전 개정이 다시 만들고 있고
     그것을 '시행일이 도래하지 아니한 법률을 개정한 부분은 해당 법률의 시행일부터'인 타법개정이 고치면 함께 시행 전으로 둔다"""
-    hist = [h for h in reversed(repo.history[path]) if h[1] <= asof]  # 오래된 것부터
-    hist = hist[last_full_revision(repo, path, hist, asof) :]
-    mds = repo.show_many([(sha, path) for sha, _, _ in hist])
+    hist = _effective_histories(repo, [path], asof)[path]
+    return _compose_history(path, asof, hist, repo.show_many([(sha, path) for sha, _, _ in hist]))
+
+
+def _compose_history(path, asof, hist, mds):
     state: dict[str, dict] = {}
     prev: dict[str, dict] = {}
     pending: dict[str, list[str]] = {}  # 시행 전 개정이 남은 조문 → 그 시행일들
@@ -642,23 +754,27 @@ def commits_since(repo: Repo, ref, paths):
     out = repo.git(
         'log', '--reverse', '--format=@%H %ad %s', '--date=short', '--name-only', f'{ref}..HEAD', '--', *docs
     )
-    found, cur = [], None
+    changes, cur = [], None
     for line in out.splitlines():
         if line.startswith('@'):
             sha, date, subject = line[1:].split(' ', 2)
             cur = (sha, date, subject)
         elif line.strip() in docs and cur:
-            fm = front(repo.show(cur[0], line.strip()))
-            found.append(
-                {
-                    'doc': docs[line.strip()],
-                    'sha': cur[0],
-                    'date': cur[1],
-                    'subject': cur[2],
-                    '공포번호': str(int(fm.get('공포번호', '0'))),
-                    '시행일자': fm.get('시행일자'),
-                }
-            )
+            changes.append((line.strip(), *cur))
+    found = []
+    mds = repo.show_many([(sha, path) for path, sha, _, _ in changes])
+    for (path, sha, date, subject), md in zip(changes, mds, strict=True):
+        fm = front(md)
+        found.append(
+            {
+                'doc': docs[path],
+                'sha': sha,
+                'date': date,
+                'subject': subject,
+                '공포번호': str(int(fm.get('공포번호', '0'))),
+                '시행일자': fm.get('시행일자'),
+            }
+        )
     return found
 
 
@@ -762,20 +878,27 @@ def find_files(repo: Repo, asof, doc_list=None):
     kinds_of: dict[str, list[str]] = {}
     for law, kind, _ in doc_list or docs(None):
         kinds_of.setdefault(law, []).append(kind)
+    candidates = {}
+    for law in kinds_of:
+        folder = f'kr/{law.replace(" ", "")}/'
+        files = [f for f in repo.git('ls-tree', '--name-only', 'HEAD', folder).splitlines() if f.endswith('.md')]
+        if files:
+            repo.load_history(files)
+        candidates[law] = []
+        for path in files:
+            latest = next((h for h in repo.history.get(path, []) if h[1] <= asof), None)
+            if latest and not latest[2].endswith('(폐지)'):
+                candidates[law].append((latest[0], path))
+    items = list(dict.fromkeys(item for matches in candidates.values() for item in matches))
+    titles = {
+        item: front(md).get('제목', '').replace(' ', '') for item, md in zip(items, repo.show_many(items), strict=True)
+    }
     paths = {}
     for law, kinds in kinds_of.items():
         folder = f'kr/{law.replace(" ", "")}/'
-        files = [f for f in repo.git('ls-tree', '--name-only', 'HEAD', folder).splitlines() if f.endswith('.md')]
-        repo.load_history(files)
         for kind in kinds:
-            doc, found = doc_name(law, kind), []
-            for f in files:
-                hist = [h for h in repo.history.get(f, []) if h[1] <= asof]
-                if not hist or hist[0][2].endswith('(폐지)'):
-                    continue
-                fm = front(repo.show(hist[0][0], f))
-                if fm.get('제목', '').replace(' ', '') == doc.replace(' ', ''):
-                    found.append(f)
+            doc = doc_name(law, kind)
+            found = [path for sha, path in candidates[law] if titles[(sha, path)] == doc.replace(' ', '')]
             if len(found) != 1:
                 raise ValueError(f'{doc}: 시행 중인 파일이 하나가 아닙니다 ({found or "없음"}, 폴더 {folder})')
             paths[doc] = found[0]
@@ -816,16 +939,21 @@ def build_rows(repo: Repo, paths, asof, doc_list=None):
     """조문 행과 버전 기록. 문서마다 본칙 조문 뒤에 그 조문을 대신하는 부칙 특례 조문(addendum_overrides).
     범위가 있는 문서는 범위 안 조문과 그 조문의 부칙 특례만"""
     rows, versions = [], []
-    for law, kind, scope in doc_list or docs(None):
+    doc_list = list(doc_list or docs(None))
+    histories = _effective_histories(repo, (paths[doc_name(law, kind)] for law, kind, _ in doc_list), asof)
+    repo.prefetch((sha, path) for path, hist in histories.items() for sha, _, _ in hist)
+    for law, kind, scope in doc_list:
         doc = doc_name(law, kind)
-        arts, used = in_force(repo, paths[doc], asof)
+        path = paths[doc]
+        hist = histories[path]
+        mds = repo.show_many([(sha, path) for sha, _, _ in hist])
+        arts, used = _compose_history(path, asof, hist, mds)
         if scope is not None:
             missing = scope - {a['no'] for a in arts}
             if missing:
                 raise ValueError(f'{doc}: 범위 목록의 조문이 없습니다 {sorted(missing)}')
             arts = [a for a in arts if a['no'] in scope]
-        last = repo.show(next(h[0] for h in repo.history[paths[doc]] if h[1] <= asof), paths[doc])
-        arts += addendum_overrides(last, used, asof, {a['no'] for a in arts})
+        arts += addendum_overrides(mds[-1], used, asof, {a['no'] for a in arts})
         for a in arts:
             text = a['text']
             deleted = a.get('expired') or (a['title'] is None and (text is None or text.startswith('삭제')))
@@ -920,7 +1048,7 @@ def first_diff(a: bytes, b: bytes):
 
 def main(argv=None):
     p = argparse.ArgumentParser(description='Legalize KR → 조문 CSV (법률, 법률+하위법령)')
-    p.add_argument('--repo', required=True, help='legalize-kr 저장소 (전체 클론: 옛 버전을 모두 읽음)')
+    p.add_argument('--repo', required=True, help='legalize-kr 저장소 (부분 클론은 Git 2.44 이상 필요)')
     p.add_argument('--asof', required=True, help='기준일 YYYY-MM-DD: 이 날 시행 중인 조문')
     p.add_argument('--out-dir', required=True, type=Path)
     p.add_argument('--check', action='store_true', help='쓰지 않고 out-dir의 기존 파일과 바이트 비교')
