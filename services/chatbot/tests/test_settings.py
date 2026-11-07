@@ -3,6 +3,7 @@ import pytest
 
 from conftest import TEST_TOKEN
 from lawbot import settings
+from lawbot.paths import ROOT
 
 BASE = {
     'LAWBOT_USER': 'tester',
@@ -54,6 +55,27 @@ def test_web_only_values_not_required_for_tools(env):
     tool = {k: v for k, v in BASE.items() if k not in ('LAWBOT_USER', 'LAWBOT_PW', 'LAWBOT_PORT')}
     s = settings.load(tool)  # 평가·점검 명령: 로그인·포트·동시 처리 수는 보지 않음
     assert s.auth is None and s.port is None
+
+
+@pytest.mark.parametrize('extra', [{}, {'LAWBOT_DB': '  '}])
+def test_db_path_is_optional(extra):
+    assert settings.load(BASE | extra, web=True).db is None
+
+
+def test_db_path_accepts_ignored_relative_path():
+    path = 'data/db/lawbot.db'
+    assert settings.load(BASE | {'LAWBOT_DB': path}, web=True).db == ROOT / path
+
+
+def test_db_path_accepts_new_external_file(tmp_path):
+    path = tmp_path / 'not-created.db'
+    assert settings.load(BASE | {'LAWBOT_DB': str(path)}, web=True).db == path
+    assert not path.exists()
+
+
+def test_db_path_rejects_unignored_repo_file():
+    with pytest.raises(settings.SettingsError, match=r'LAWBOT_DB.*\.gitignore'):
+        settings.load(BASE | {'LAWBOT_DB': 'data/not-ignored.db'}, web=True)
 
 
 def test_missing_model_server_is_reported(env):

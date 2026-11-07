@@ -387,6 +387,25 @@ uv run python -m lawbot_tools.feedback_export feedback_review_<날짜>.csv --out
 
 > 주의: 비밀번호를 소스 코드, 셸 설정 파일, 스크립트, `.env.example` 등 Git에 올라가는 파일에 적지 마세요. 파일에 둘 때는 Git에서 제외된 `.env`(권한 600)에만 두고, 더 안전하게는 실행할 때 입력하거나 macOS 키체인을 쓰세요.
 
+## 데이터 DB
+
+`LAWBOT_DB`는 챗봇 데이터 DB의 선택 설정입니다. 환경 변수와 `lawbot-db` 옵션(`--db`·`--out`·`--from`·`--to`)의 상대 경로는 모두 레포 최상위 기준입니다. `--db`를 생략하면 셸·`.env`의 `LAWBOT_DB`를 읽고, 값이 비어 있으면 `data/db/lawbot.db`를 사용합니다. 현재 웹앱은 이 설정의 경로만 검사합니다.
+
+```bash
+uv run lawbot-db init --db data/db/lawbot.db
+uv run lawbot-db status --db data/db/lawbot.db
+backup="data/db/backups/lawbot-$(date +%Y%m%d-%H%M%S).db"
+uv run lawbot-db backup --db data/db/lawbot.db --out "$backup"
+uv run lawbot-db migrate --db data/db/lawbot.db
+uv run lawbot-db restore --from "$backup" --to data/db/restore/lawbot.db
+```
+
+`init`은 새 DB를 만들고 `migrate`는 기존 DB에 미적용 마이그레이션을 적용합니다. `status`는 스키마 버전과 적용된 마이그레이션의 체크섬을 검사합니다. 마이그레이션 전에 온라인 백업을 남기세요. 백업은 커밋된 데이터를 복사한 뒤 무결성을 검사합니다.
+
+DB와 백업에는 질문 원문이 들어갈 수 있습니다. 레포 밖의 절대 경로나 Git에서 제외되는 `data/db/` 아래에 보관하세요. DB 폴더 권한은 700, DB·WAL·SHM·백업 파일 권한은 600입니다. 권한이 넓으면 프로세스에서 경로별 한 번 경고합니다. 초기화·백업·복원 대상은 하드 링크를 지원하는 파일시스템에 두세요. 외장 디스크가 하드 링크를 지원하지 않으면 로컬 파일시스템에 백업한 뒤 복사하세요.
+
+복구할 때는 `restore`로 새 경로에 복원한 뒤 `status`로 확인하세요. 무결성과 스키마를 확인한 복원본은 담당자가 DB를 쓰는 프로세스를 중지한 상태에서 교체합니다. 초기화·백업·복원은 이미 존재하는 대상 경로를 거부합니다.
+
 ## 테스트 실행
 
 기본 테스트는 모델 파일, 네트워크, 실제 비밀번호 없이 돌아갑니다. `uv sync`, 화면 빌드(`npm ci && npm run build`, 브라우저 E2E가 씀), 브라우저 E2E용 Chromium 설치(`uv run playwright install chromium`, 한 번)만 하면 됩니다. 두 서비스의 테스트(`services/*/tests`)를 함께 돌리고, 실제 모델 대신 가짜 모델·가짜 모델 서버를 넣으며, 테스트 중 외부 네트워크 접속은 막습니다. 챗봇 클라이언트와 실제 모델 서버 앱(가짜 모델)이 OpenAI SDK로 통하는지 보는 계약 테스트도 들어 있습니다. `data/`·`results/`는 읽기만 합니다.
