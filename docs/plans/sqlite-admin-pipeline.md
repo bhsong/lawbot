@@ -538,12 +538,21 @@ CREATE TABLE dataset_releases (
 
 목표: 원본과 바이트 단위로 같은 내용을 DB에 넣고 되돌려 만들 수 있다. 운영 데이터는 건드리지 않는다.
 
+#### 착수 전 대조 결과
+
+`main`의 `247bf33`에서 아래 차이를 확인했다. 원본 보존과 참조 검사의 기준을 확인할 때까지 이관 구현은 보류한다.
+
+- 입력 검사 예시와 달리 `data/v5/qa_reasoning_val.csv`의 30행 파일에는 UTF-8 BOM이 있다. 줄바꿈은 CRLF다. BOM은 파일마다 실제 바이트에서 읽어 보존해야 한다.
+- `data/decree_exp/qa_decree_v4.csv`의 4,096행 모두에 `answer_key`가 있으며 고유 값은 567개다. 저장소의 두 정답 키 CSV(v4, v5)는 이 키를 하나도 포함하지 않는다. 원본 행 JSON에 키 문자열을 보존하고, 대응 정답 키 CSV가 없는 세트에서는 관계형 FK 두 열을 NULL로 두는 처리의 확인이 필요하다.
+- 3.4절의 외래 키 예시는 순환 참조라고 적혀 있으나 세 테이블 사이의 참조는 `feedback_promotions`에서 `qa_items`와 `qa_preferences`로 향하는 단방향이다. SQL과 계획서의 DDL은 일치한다.
+
 - [ ] 도구 `lawbot_tools/migrate_csv_to_sqlite.py`, 하위 명령:
   - `corpus --db PATH --dir <CSV·매니페스트 폴더> --profile v4|v5 --release-id ID [--activate]`
   - `qa --db PATH --set v4|v5|decree_v4|reasoning_v5|oos|scope|refusal_hard|labor_eval` (파일 경로는 세트별 상수, `--file`로 덮어쓰기)
   - `feedback --db PATH <폴더·파일>...`
   - `verify --db PATH` (DB에 있는 모든 세트·릴리스를 원본 파일과 다시 대조)
   - 공통: `--report <md 경로>`(질문 원문 없음: 행 수·키·sha만), `--dry-run`(DB 열지 않고 검사만)
+  - CLI는 인자 처리와 보고를 맡긴다. SQL은 `lawbot/db/` 또는 `lawbot/*_store.py`에 두고 `lawbot_tools`의 `sqlite3` import를 막는 `test_layers.py` 규칙을 유지한다.
 - [ ] 동작 규칙:
   - [ ] 입력 검사: 파일 존재, UTF-8 BOM(`qa_reasoning_val`처럼 없으면 그대로 기록), 기대 열, 행 수, id 유일성(세트별: 유일하지 않으면 `#row_no` 규칙), `answer_key` 참조 무결성, 분할 값(`train`·`val`·`test`).
   - [ ] 원본 줄바꿈(`\n`/`\r\n`)·BOM 여부·열 순서를 세트 정책 JSON(`split_sets.policy` 또는 릴리스 열)에 저장해 왕복 바이트를 만들 수 있게 한다.
@@ -557,7 +566,7 @@ CREATE TABLE dataset_releases (
   - [ ] v4 릴리스(`data/v4`, 매니페스트 `manifest.json`·`manifest_decree.json`)도 같다.
   - [ ] 두 릴리스에 같은 내용 조문은 `article_versions`를 공유한다(버전 수 < 두 릴리스 조문 수 합).
   - [ ] 모든 비삭제 조문의 `doc_text`가 CSV에서 만든 것과 DB에서 만든 것이 같다.
-  - [ ] QA 세트 9종: 원본 바이트 왕복 동일, 행 수, id·answer_key 참조, 분할 집계(2.2 표의 숫자) 일치.
+  - [ ] QA 세트 8종(`v4`, `v5`, `decree_v4`, `reasoning_v5`, `oos`, `scope`, `refusal_hard`, `labor_eval`)과 각 세트에 딸린 split·answer_key CSV: 원본 바이트 왕복 동일, 행 수, id·answer_key 참조, 분할 집계(2.2 표의 숫자) 일치.
   - [ ] frozen 세트 test id 집합이 원본 split CSV의 test id 집합과 같다(v4 2,075 · v5 3,420 · decree 1,880).
   - [ ] 두 번 실행해도 행 수 변화 없음. 원본 한 칸을 바꾼 사본을 넣으면 실패하고 DB 그대로.
   - [ ] 합성 피드백 JSONL(like·flag 4종·cleared·깨진 줄·같은 turn 두 번): 모든 키 손실 없음(`record` JSON == 원본 dict), `latest_rows` 결과가 JSONL 기준과 DB 기준이 같다.
