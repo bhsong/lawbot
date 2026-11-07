@@ -318,7 +318,9 @@ def create_app(app, auth: tuple[str, str], concurrency: int = 1, fb=None, dist=D
         if not isinstance(body, dict) or not isinstance(body.get('turn_id'), str):
             raise HTTPException(400, '요청 형식이 틀렸습니다.')
         try:
-            row = fb.save(who[1], body['turn_id'], body.get('label'), body.get('reason'))
+            row = await anyio.to_thread.run_sync(
+                fb.save, who[1], body['turn_id'], body.get('label'), body.get('reason')
+            )
         except ValueError as e:
             raise HTTPException(400, '알 수 없는 피드백입니다.') from e
         except LookupError as e:

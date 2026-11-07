@@ -44,10 +44,10 @@ class FakeLLM:
     def __init__(self, path, client=None, **kw):  # path: API 모델 id (service가 LLM(spec.model, client=…)로 만든다)
         FakeLLM.created += 1
         self.path, self.client, self.kw = path, client, kw
+        self.system = kw.get('system')
 
     def stream(self, question, hits, system=None):
         self.args = (question, hits)
-        self.system = system
         for c in FakeLLM.chunks:
             if isinstance(c, Exception):
                 raise c

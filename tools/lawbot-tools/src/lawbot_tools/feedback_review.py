@@ -1,5 +1,5 @@
 # src/lawbot_tools/feedback_review.py  →  uv run python -m lawbot_tools.feedback_review <피드백 폴더·파일>... [--out 검수.csv] [--keep 이전 검수.csv]
-# 피드백 JSONL(lawbot.feedback)을 모아 사람이 검수할 CSV를 만든다 (B6 저장 → 검수 → 내보내기의 두 번째 단계)
+# Build a human review CSV from SQLite feedback or legacy JSONL records.
 # 1. 같은 turn_id는 마지막 줄만, 'cleared'(선택 해제)는 뺀다
 # 2. Compare with eval questions after lowercasing and removing non-word characters and underscores.
 #    Drop exact matches and scores at or above the similarity threshold (default 0.9).
@@ -16,7 +16,9 @@ from pathlib import Path
 
 import pandas as pd
 
+from lawbot.db.migrate import startup_path
 from lawbot.feedback import check_private
+from lawbot.feedback_store import read_records
 from lawbot.paths import DATA, EVAL, V4_QA, V4_SPLIT
 from lawbot.qa_rules import LEAK_SPLITS, THRESHOLD, Overlap
 from lawbot.qa_rules import latest_rows as latest
@@ -141,12 +143,12 @@ def companion(csv_path):
     return Path(csv_path).with_suffix('.jsonl')
 
 
-def review(paths, out, keep=None, threshold=THRESHOLD, evals=None):
+def review(paths, out, keep=None, threshold=THRESHOLD, evals=None, *, db=None):
     """요약 줄 목록을 돌려주고 out(CSV)·companion(out)(JSONL)을 쓴다"""
     out = Path(out)
     check_private(out, 'feedback_review 출력', folder=False)
     check_private(companion(out), 'feedback_review 출력', folder=False)
-    rows, bad = load(paths)
+    rows, bad = (read_records(db), 0) if db is not None else load(paths)
     kept, cleared = latest(rows)
     ov = Overlap(eval_sets() if evals is None else evals, threshold)
     final, dropped = [], []
@@ -177,13 +179,20 @@ def review(paths, out, keep=None, threshold=THRESHOLD, evals=None):
 
 
 def main(argv=None):
-    ap = argparse.ArgumentParser(description='피드백 JSONL → 검수 CSV (평가 데이터와 겹치는 질문 제외)')
-    ap.add_argument('paths', nargs='+', help='피드백 폴더(feedback_*.jsonl) 또는 파일. 여러 개면 함께 읽음')
+    ap = argparse.ArgumentParser(description='피드백 DB 또는 JSONL → 검수 CSV (평가 데이터와 겹치는 질문 제외)')
+    ap.add_argument('paths', nargs='*', help='피드백 폴더(feedback_*.jsonl) 또는 파일. 여러 개면 함께 읽음')
+    ap.add_argument('--db', help='피드백 DB 경로 (상대 경로는 레포 최상위 기준)')
     ap.add_argument('--out', default=f'feedback_review_{datetime.date.today():%Y-%m-%d}.csv')
     ap.add_argument('--keep', help='이전 검수 CSV: 같은 feedback_id의 h_* 열을 이어받음')
     ap.add_argument('--threshold', type=float, default=THRESHOLD, help='difflib 유사도 기준 (이상이면 뺌)')
     a = ap.parse_args(argv)
-    for line in review(a.paths, a.out, a.keep, a.threshold):
+    if bool(a.paths) == bool(a.db):
+        ap.error('피드백 폴더·파일 또는 --db 중 하나를 지정하세요.')
+    try:
+        db = startup_path(a.db) if a.db else None
+    except RuntimeError as exc:
+        ap.exit(2, f'feedback_review: {exc}\n')
+    for line in review(a.paths, a.out, a.keep, a.threshold, db=db):
         print(line)
 
 

@@ -156,7 +156,8 @@ v5 Pro는 간결형에 `data/v5/system_v5_concise.txt`를 쓰고, 화면에서 "
 | `LAWBOT_EMBED_CACHE` | 아니요 | `1`(기본)이면 조문 임베딩을 `cache/embeddings/`(Git 제외)에 저장해 다음 시작 때 다시 쓴다. 시작할 때 조문 1개만 다시 임베딩해 확인하고, 다르면(모델 폴더가 바뀜) 전체를 다시 임베딩. `0`이면 매번 임베딩 |
 | `LAWBOT_REQUEST_LOG` | 아니요 | 요청 로그 파일 하나로 정함 (기본: 레포 최상위 `logs/requests-YYYY-MM.jsonl`, 달마다 새 파일). 빈 값이면 기록하지 않음 |
 | `LAWBOT_FEEDBACK` | 아니요 | `1`이면 답변마다 👍·깃발 버튼을 달고 누른 답을 저장 (기본 `0`, `0`·`1`만) |
-| `LAWBOT_FEEDBACK_DIR` | 아니요 | 피드백 저장 폴더 (기본 레포 최상위 `feedback/`). 레포 안이면 `.gitignore`에 걸리는 경로만 허용. 운영은 레포 밖 절대 경로 권장 |
+| `LAWBOT_DB` | 아니요 | 미리 초기화한 SQLite 경로. 지정하면 피드백을 이 DB에 저장. 레포 안에서는 Git 제외 경로만 허용 |
+| `LAWBOT_FEEDBACK_DIR` | 아니요 | `LAWBOT_DB`가 비어 있을 때 쓰는 JSONL 폴더. 기본 레포 최상위 `feedback/`. 레포 안에서는 Git 제외 경로만 허용 |
 
 모델 서버(`lawbot-model-server`, `lawbot_model_server.check`):
 
@@ -373,16 +374,18 @@ uv run python -m lawbot_tools.log_summary --caller lawbot-app  # 평가 실행 �
 
 ## 답변 피드백 (선택, `LAWBOT_FEEDBACK=1`)
 
-답변마다 👍과 깃발(이유: 검색 오류·답변 오류·불필요한 거절·기타)이 붙습니다. 깃발을 누르면(휴대폰은 탭) 이유 목록이 열립니다. 누르면 그 답을 만든 입력 전체(질문, 참고 조문(첨부된 시행령·시행규칙 포함)과 첨부 설정, system, 답변 원문·화면 글, 인용 판정, 측정값, 데이터 버전, 커밋, `request_id`)를 `feedback/feedback_YYYY-MM.jsonl`(Git 제외, 권한 600)에 한 줄씩 덧붙입니다. 질문 원문은 이 파일에만, 버튼을 누른 답에만 남습니다. 앱을 다시 시작하기 전의 답이나 다른 로그인 세션의 답에는 저장하지 않습니다.
+답변마다 👍과 깃발(이유: 검색 오류·답변 오류·불필요한 거절·기타)이 붙습니다. 버튼을 누르면 질문, 참고 조문과 첨부 설정, system, 답변 원문·화면 글, 인용 판정, 측정값, 데이터 버전, 커밋, `request_id`를 저장합니다. 실제로 읽은 조문 CSV와 사용한 system의 SHA-256, 임베딩·리랭킹·생성 모델 ID도 기록합니다. 리랭커가 꺼져 있으면 `rerank_model`은 `null`이고, CSV 코퍼스의 `corpus_release_id`도 `null`입니다. 앱을 다시 시작하기 전의 답이나 다른 로그인 세션의 답에는 저장하지 않습니다.
+
+`LAWBOT_DB`를 지정하면 피드백을 SQLite에만 씁니다. 이 설정을 켜기 전에 `lawbot-db init`으로 DB를 준비하고 `LAWBOT_FEEDBACK_DIR`를 비우세요. 기존 JSONL은 `migrate_csv_to_sqlite feedback`으로 이관할 수 있습니다. `LAWBOT_DB`가 비어 있으면 기존 JSONL(`feedback/feedback_YYYY-MM.jsonl`, 권한 600)을 사용합니다. `/api/feedback`의 `saved`는 2초 안에 같은 선택을 반복했는지 구분합니다. 저장 오류는 경고 로그에 기록합니다.
 
 저장한 줄은 바로 학습에 쓰지 않고 검수를 거칩니다.
 
 ```zsh
-uv run python -m lawbot_tools.feedback_review <운영 피드백 폴더> feedback/          # → feedback_review_<날짜>.csv (+ .jsonl)
+uv run python -m lawbot_tools.feedback_review --db data/db/lawbot.db --out feedback_review_<날짜>.csv
 uv run python -m lawbot_tools.feedback_export feedback_review_<날짜>.csv --out data/feedback/
 ```
 
-- `feedback_review`는 같은 답의 마지막 선택만 남기고 해제는 뺍니다. 평가 문항과 공백·문장부호를 제외하고 같거나 유사도가 0.9 이상인 질문은 빼고 ID를 출력합니다. 대조 대상에는 v4 test 2,075·val 1,110문항, v5 test 3,420·val 2,052문항, v5 추론 검증 30문항, 하위법령 test 1,880·val 444문항과 `oos_eval`, `scope_controls`, `refusal_hard_cases`, `labor_eval_keywords`가 포함됩니다. 엑셀·Numbers에서 `h_ok`(맞음/틀림/모름), `h_gold`(`법령명 제N조`, 여러 조문은 `;`로 구분), `h_scope`(범위 안/범위 밖), `h_note`를 채웁니다. `--keep 이전 CSV`로 채운 칸을 이어받습니다.
+- `feedback_review`는 `--db` 또는 기존 JSONL 폴더·파일을 받습니다. 같은 답의 마지막 선택만 남기고 해제는 뺍니다. 평가 문항과 공백·문장부호를 제외하고 같거나 유사도가 0.9 이상인 질문은 빼고 ID를 출력합니다. 대조 대상에는 v4 test 2,075·val 1,110문항, v5 test 3,420·val 2,052문항, v5 추론 검증 30문항, 하위법령 test 1,880·val 444문항과 `oos_eval`, `scope_controls`, `refusal_hard_cases`, `labor_eval_keywords`가 포함됩니다. 엑셀·Numbers에서 `h_ok`(맞음/틀림/모름), `h_gold`(`법령명 제N조`, 여러 조문은 `;`로 구분), `h_scope`(범위 안/범위 밖), `h_note`를 채웁니다. `--keep 이전 CSV`로 채운 칸을 이어받습니다.
 - `feedback_export`는 v4·v5 기록을 함께 처리합니다. 정답 조문과 저장된 참고 조문을 각 기록의 프로필에 맞는 법률·하위법령 CSV로 대조합니다. 셸의 `LAWBOT_V4_*`·`LAWBOT_V5_*` 조문 경로 설정을 따르며, `--articles`로 지정한 CSV는 모든 기록에 적용합니다. 지원 범위를 벗어난 프로필은 제외하고 건수를 표시합니다.
 - 출력은 `fb_questions.csv`(검수 질문), `fb_emb_pairs.csv`(정답 조문 positive, 검색 오류는 검색 1위를 hard negative), `fb_sft.csv`(맞음 + 👍), `fb_kto.csv`(맞음/틀림 라벨)입니다. 프롬프트는 저장된 참고 조문으로 `llm.build_prompt`를 호출해 재구성합니다. 피드백에서 `random_state=42`로 val을 떼고, 평가는 기존 test로만 합니다.
 
@@ -390,7 +393,7 @@ uv run python -m lawbot_tools.feedback_export feedback_review_<날짜>.csv --out
 
 ## 데이터 DB
 
-`LAWBOT_DB`는 챗봇 데이터 DB의 선택 설정입니다. 환경 변수와 `lawbot-db` 옵션(`--db`·`--out`·`--from`·`--to`)의 상대 경로는 모두 레포 최상위 기준입니다. `--db`를 생략하면 셸·`.env`의 `LAWBOT_DB`를 읽고, 값이 비어 있으면 `data/db/lawbot.db`를 사용합니다. 현재 웹앱은 이 설정의 경로만 검사합니다.
+`LAWBOT_DB`는 챗봇 데이터 DB의 선택 설정입니다. 환경 변수와 `lawbot-db` 옵션(`--db`·`--out`·`--from`·`--to`)의 상대 경로는 모두 레포 최상위 기준입니다. 관리 명령에서 `--db`를 생략하면 셸·`.env`의 `LAWBOT_DB`를 읽고, 값이 비어 있으면 `data/db/lawbot.db`를 사용합니다. 웹앱은 지정한 DB의 경로와 마이그레이션 이력을 시작할 때 검사하며, 파일 생성과 마이그레이션은 관리 명령에서 수행합니다.
 
 ```bash
 uv run lawbot-db init --db data/db/lawbot.db

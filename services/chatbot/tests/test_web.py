@@ -9,8 +9,9 @@ from fastapi.testclient import TestClient
 
 import lawbot.service as service
 from fakes import HITS, FakeLLM, FakeRetriever
-from lawbot import feedback, view, web
+from lawbot import feedback, settings, view, web
 from lawbot.api_client import ModelServerTimeout
+from lawbot.db import connection, migrate
 
 USER, PW = 'tester', 'test-only-pw'  # 테스트 전용 가짜 값
 QUESTION = view.EXAMPLES[0]
@@ -335,6 +336,46 @@ def test_feedback_other_session_cannot_label(lawbot, tmp_path):
 
 def test_feedback_disabled(authed):
     assert authed.post('/api/feedback', json={'turn_id': 'x', 'label': 'like'}).status_code == 404
+
+
+@pytest.mark.parametrize('db_failure', [False, True])
+def test_feedback_http_sqlite_contract(lawbot, env, tmp_path, caplog, db_failure):
+    from conftest import set_auth
+
+    path = tmp_path / 'private' / 'lawbot.db'
+    migrate.init(path)
+    set_auth(env)
+    env.setenv('LAWBOT_FEEDBACK', '1')
+    env.setenv('LAWBOT_DB', str(path))
+    env.setattr(feedback, 'DEFAULT_DIR', tmp_path / 'fallback')
+    cfg = settings.load(web=True)
+
+    def unexpected_check(*args, **kwargs):
+        pytest.fail('The request revalidated the DB path')
+
+    env.setattr(connection, 'check_private', unexpected_check)
+    if db_failure:
+        with connection.connect(path, write=True) as conn:
+            conn.execute(
+                "CREATE TRIGGER fail_feedback BEFORE INSERT ON feedbacks BEGIN SELECT RAISE(ABORT, 'test'); END"
+            )
+    with make_client(lawbot, fb=cfg.feedback) as c:
+        assert login(c).status_code == 200
+        done = events(chat(c))[-1][1]
+        payload = {'turn_id': done['turn_id'], 'label': 'like'}
+        assert done['text'] and done['turn_id']
+        assert c.post('/api/feedback', json=payload | {'label': 'unknown'}).status_code == 400
+        assert c.post('/api/feedback', json=payload | {'turn_id': 'unknown'}).status_code == 404
+        response = c.post('/api/feedback', json=payload)
+        assert response.status_code == 200 and response.json() == {'saved': True}
+        assert c.post('/api/feedback', json=payload).json() == {'saved': False}
+
+    with connection.connect(path) as conn:
+        rows = conn.execute('SELECT turn_id, label FROM feedbacks').fetchall()
+    assert rows == ([] if db_failure else [(done['turn_id'], 'like')])
+    assert not (tmp_path / 'fallback').exists()
+    assert ('피드백을 쓰지 못했습니다' in caplog.text) is db_failure
+    assert QUESTION not in caplog.text
 
 
 # ---- 정적 파일 (SPA) ----

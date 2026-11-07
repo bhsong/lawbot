@@ -1,7 +1,7 @@
 # src/lawbot/feedback.py  →  답변 피드백(👍·깃발) 저장 (웹앱 쪽, B6)
 # 답변이 끝난 턴의 입력 전체(질문·참고 조문·system·답변 원문·판정·측정값)를 메모리에 두었다가,
-# 사용자가 그 답에 버튼을 누르면 LAWBOT_FEEDBACK_DIR/feedback_YYYY-MM.jsonl에 한 줄을 덧붙인다
-# 질문 원문은 이 파일에만, 버튼을 누른 답에만 남는다 (요청 로그·콘솔 로그에는 남기지 않음)
+# Persist selected turns to the configured SQLite DB or legacy JSONL file.
+# Keep question text out of request and console logs.
 # 이 모듈은 웹 서버(fastapi)·모델 라이브러리(mlx·torch)를 import하지 않는다 (tests/test_feedback.py가 검사)
 import fcntl
 import hashlib
@@ -110,10 +110,18 @@ def commit():
     return _commit or None
 
 
-def from_env(env=None):
-    """LAWBOT_FEEDBACK=1이면 Feedback (저장 폴더를 모델 로딩 전에 확인), 아니면 None"""
+def from_env(env=None, *, db: Path | None = None):
+    """Build the enabled feedback sink, using the already validated DB when present."""
+    env = os.environ if env is None else env
+    if db is not None and (env.get('LAWBOT_FEEDBACK_DIR') or '').strip():
+        raise ValueError(
+            'LAWBOT_DB를 쓰려면 LAWBOT_FEEDBACK_DIR를 비우세요. '
+            '기존 JSONL은 uv run python -m lawbot_tools.migrate_csv_to_sqlite feedback으로 옮기세요.'
+        )
     if not enabled(env):
         return None
+    if db is not None:
+        return Feedback(db=db)
     d = feedback_dir(env)
     check_private(d)
     return Feedback(d)
@@ -160,10 +168,14 @@ def decree_settings(app, model_key):
 def turn_record(app, question, hits, raw, shown, model_key, fmt, st):
     """저장할 한 턴 (label·reason·feedback_id·ts·turn_id는 저장할 때 붙인다)"""
     m = manifest.load(app.profile.articles)
+    system = st.get('_system')
+    if system is None:
+        system = model_system(app, model_key, fmt)
+    articles_sha = getattr(app.retriever, 'articles_sha256', None) or manifest.sha256(app.profile.articles)
     return {
         'question': question,
         'hits': [{k: jsonable(h[k]) for k in HIT_FIELDS if k in h} for h in hits],
-        'system': model_system(app, model_key, fmt),
+        'system': system,
         'answer_raw': raw,
         'answer_shown': shown,
         'model': model_key,
@@ -180,14 +192,21 @@ def turn_record(app, question, hits, raw, shown, model_key, fmt, st):
         'dataset_version': m.get('dataset_version') if m else None,
         'commit': commit(),
         'request_id': st.get('request_id'),
+        'articles_sha256': articles_sha,
+        'emb_model': app.profile.emb_model,
+        'rerank_model': getattr(app.reranker, 'model', None),
+        'chat_model': app.models.specs[model_key].model,
+        'system_sha256': hashlib.sha256(system.encode()).hexdigest(),
+        'corpus_release_id': None,
     }
 
 
 class Feedback:
-    """웹앱 하나의 피드백 저장소: 메모리의 턴 기록 + JSONL 파일 (web.py의 채팅·피드백 API가 부른다)"""
+    """Keep recent turns in memory and persist feedback to one configured sink."""
 
-    def __init__(self, folder):
+    def __init__(self, folder=DEFAULT_DIR, *, db: Path | None = None):
         self.folder = Path(folder)
+        self.db = db
         self.turns = OrderedDict()  # session → OrderedDict(assistant 순번 → (turn_id, 기록))
         self.recent = {}  # (turn_id, liked) → 마지막으로 받은 시각
         self.counts = OrderedDict()  # session → 다음 순번
@@ -256,7 +275,12 @@ class Feedback:
         return self.folder / f'feedback_{time.strftime("%Y-%m")}.jsonl'
 
     def write(self, row):
-        """한 줄 덧붙이기 (파일 잠금, 권한 600). 실패는 답변을 막지 않고 콘솔에 경고만"""
+        """Append to the configured sink, warning on storage failure."""
+        if self.db is not None:
+            from lawbot import feedback_store
+
+            feedback_store.write(self.db, row)
+            return
         path = self.path()
         line = (json.dumps(row, ensure_ascii=False, default=str) + '\n').encode('utf-8')
         try:

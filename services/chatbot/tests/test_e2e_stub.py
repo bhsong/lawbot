@@ -1,6 +1,7 @@
 # tests/test_e2e_stub.py  →  브라우저 E2E (대역): Playwright → 실제 웹앱(lawbot-app, 빌드한 화면) → 실제 모델 서버 앱 + 가짜 모델
 # 세 추론 호출(임베딩·리랭크·chat) 모두 가짜. 이 결과를 "실제 모델 E2E 통과"로 보고하지 않는다
 # 화면 요소는 역할·라벨·테스트 id로 찾는다 (e2e_support). 접속은 127.0.0.1만
+import json
 import threading
 import time
 
@@ -9,6 +10,8 @@ import pytest
 from playwright.sync_api import expect
 
 import e2e_support as e2e
+from lawbot.db import cli
+from lawbot.db.connection import connect
 from lawbot.view import EXAMPLES
 
 pytestmark = pytest.mark.e2e_stub
@@ -20,8 +23,20 @@ PHONE = {'viewport': {'width': 390, 'height': 844}, 'is_mobile': True, 'has_touc
 
 
 @pytest.fixture(scope='module')
-def stack(tmp_path_factory):
-    s = e2e.Stack(tmp_path_factory.mktemp('e2e_stub'), read_timeout=READ_TIMEOUT_S)
+def feedback_db(tmp_path_factory):
+    path = tmp_path_factory.mktemp('e2e_feedback') / 'private' / 'lawbot.db'
+    cli.main(['init', '--db', str(path)])
+    return path
+
+
+@pytest.fixture(scope='module')
+def stack(tmp_path_factory, feedback_db):
+    s = e2e.Stack(
+        tmp_path_factory.mktemp('e2e_stub'),
+        read_timeout=READ_TIMEOUT_S,
+        LAWBOT_FEEDBACK='1',
+        LAWBOT_DB=str(feedback_db),
+    )
     yield s
     s.stop()
 
@@ -48,6 +63,26 @@ def fresh(stack, page, request):
 
 def new_log_rows(stack, before):
     return e2e.request_log(stack.request_log)[before:]
+
+
+def test_feedback_button_saves_turn(stack, ui, feedback_db):
+    e2e.ask(ui, QUESTION)
+    e2e.wait_done(ui)
+    expect(e2e.answer(ui)).to_contain_text(FAKE_ANSWER)
+    like = ui.get_by_role('button', name='좋아요')
+    with ui.expect_response(f'{stack.url}/api/feedback', timeout=e2e.ANSWER_TIMEOUT) as response:
+        like.click()
+    assert response.value.ok and response.value.json() == {'saved': True}
+    expect(like).to_have_attribute('aria-pressed', 'true')
+
+    with connect(feedback_db) as conn:
+        rows = conn.execute('SELECT record, origin FROM feedbacks').fetchall()
+    assert len(rows) == 1
+    raw, origin = rows[0]
+    record = json.loads(raw)
+    assert origin == 'web' and record['question'] == QUESTION and record['label'] == 'like'
+    assert FAKE_ANSWER in record['answer_shown']
+    assert record['request_id'] == e2e.request_log(stack.request_log)[-1]['request_id']
 
 
 # ---- 로그인 ----

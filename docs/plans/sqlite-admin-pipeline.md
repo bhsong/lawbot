@@ -144,13 +144,13 @@ packages/lawbot-ui/src/   # shared TSX/TS/CSS source (no own package.json build)
 
 | 변수 | 필수 | 용도 |
 |---|---|---|
-| `LAWBOT_DB` | 피드백·관리자·DB 코퍼스를 쓸 때 | SQLite 파일 경로. 상대 경로는 레포 최상위 기준. 레포 안이면 `.gitignore`에 걸려야 함(`check_private(path, folder=False)`). 없으면 시작 거부(자동 생성 안 함) |
+| `LAWBOT_DB` | 피드백은 선택. 관리자·DB 코퍼스는 필수 | SQLite 파일 경로. 상대 경로는 레포 최상위 기준. 레포 안이면 `.gitignore`에 걸려야 함(`check_private(path, folder=False)`). 지정한 파일이 없으면 시작 거부(자동 생성 안 함) |
 | `LAWBOT_CORPUS` | 아니요 | `csv`(기본, 지금과 같음) / `db`(활성 릴리스에서 조문을 읽음, PR 11) |
 | `LAWBOT_ADMIN_USER` | 아니요 | 관리자 사용자명. `LAWBOT_USER`와 같으면 설정 오류 |
 | `LAWBOT_ADMIN_PW_HASH` | 관리자 사용 시 | `scrypt$<n>$<r>$<p>$<salt b64>$<hash b64>`. 평문 비밀번호 변수는 만들지 않음. 둘 중 하나만 있으면 설정 오류 |
 | `LAWBOT_CALENDAR_API_URL` | 아니요 | 캘린더 API 주소. `http://127.0.0.1:<포트>`만(`security.model_server_url`과 같은 검사). 없으면 관리자 화면에 "캘린더 연결 안 됨" |
 
-- 모든 설정은 `lawbot.settings.load`에서 한꺼번에 검사한다(기존 방식). `LAWBOT_FEEDBACK=1`이면 `LAWBOT_DB` 필수(결정 D1). `LAWBOT_FEEDBACK_DIR`는 웹앱에서 더 쓰지 않는다: 값이 비어 있지 않으면 설정 오류로 "JSONL 피드백은 `migrate_csv_to_sqlite --feedback`으로 옮기세요"라고 안내한다(운영 `.env`는 빈 값이라 영향 없음).
+- 모든 설정은 `lawbot.settings.load`에서 한꺼번에 검사한다. PR 5 착수 요청에 따라 `LAWBOT_DB`가 비어 있으면 기존 `LAWBOT_FEEDBACK_DIR`와 JSONL 저장 동작을 유지한다. `LAWBOT_DB`를 지정하면 JSONL에 이중 저장하지 않는다. 두 경로를 모두 지정하면 설정 오류로 `migrate_csv_to_sqlite feedback` 이관 명령을 안내한다.
 - 파일 권한: DB 폴더 700, DB·`-wal`·`-shm`·백업 600. `connect`가 처음 만들 때(`init`만) 설정하고, 시작할 때 권한이 넓으면 경고한다.
 - `conftest.py`의 `ENV_KEYS`에 새 변수를 추가해 테스트 간 누수를 막는다.
 
@@ -160,7 +160,7 @@ packages/lawbot-ui/src/   # shared TSX/TS/CSS source (no own package.json build)
 - DB와 보조 파일의 Git 제외 여부는 설정을 읽거나 관리 명령을 실행할 때 확인한다. `connect()`에는 확인한 경로를 넘긴다. 권한 경고는 프로세스에서 경로별 한 번 표시한다.
 - 쓰기: `BEGIN IMMEDIATE` … `COMMIT`. 트랜잭션 안에서 HTTP·모델 서버·파일 대량 I/O 금지(리뷰 체크 항목).
 - 마이그레이션: `migrations/NNNN_name.sql`을 번호순으로 하나씩 트랜잭션 적용, `schema_migrations(version, name, checksum, applied_at)` 기록. 이미 적용된 파일의 checksum이 다르면 실패.
-- 웹앱 시작: DB가 없으면 거부("`uv run lawbot-db init --db …`"), 스키마 버전이 코드보다 낮으면 거부("`uv run lawbot-db migrate`"), 높으면 거부. 시작할 때 생성·마이그레이션하지 않는다.
+- 웹앱 시작: `LAWBOT_DB`를 지정했을 때 파일이 없으면 거부("`uv run lawbot-db init --db …`"), 스키마 버전이 코드보다 낮으면 거부("`uv run lawbot-db migrate`"), 높으면 거부. 시작할 때 생성·마이그레이션하지 않는다.
 - `lawbot-db init --db PATH`: 파일이 이미 있으면 거부. 새로 만들고 모든 마이그레이션 적용.
 - `lawbot-db backup --db PATH --out FILE`: `sqlite3.Connection.backup()`으로 임시 파일에 복사 → `PRAGMA integrity_check`가 `ok`인지 확인 → `os.link`로 FILE 공개. 검사 후 동시에 생긴 파일도 덮어쓰지 않는다. 권한 600.
 - `lawbot-db restore --from BACKUP --to NEWPATH`: 새 경로에만 복원(덮어쓰기 없음). 무결성·스키마 버전 확인 후 경로 출력. 운영 교체는 운영 절차(7절)에서 사람이 한다.
@@ -572,18 +572,18 @@ CREATE TABLE dataset_releases (
 
 ### PR 5 — 피드백 저장을 SQLite로 + 턴 기록 보강 (`feat/feedback-sqlite`)
 
-- [ ] Red `test_feedback.py`(기존 테스트를 DB 기준으로 바꾸되 **관찰 동작은 그대로**):
-  - [ ] `/api/feedback` 계약(요청·응답·400·404·2초 중복 무시) 그대로.
-  - [ ] 저장된 줄의 키 집합이 기존 JSONL 줄의 키 집합 ⊇ (새 키 포함). `record` JSON이 기존 형식과 같은 키를 가진다.
-  - [ ] 새 턴 기록 필드: `articles_sha256`(웹앱이 읽은 조문 CSV의 sha), `emb_model`, `rerank_model`, `chat_model`(모델 id), `system_sha256`, `corpus_release_id`(CSV 모드면 null).
-  - [ ] DB 쓰기 실패(파일 권한 제거 등)는 답변을 막지 않고 경고 로그만 남긴다(기존 `write`와 같은 정책). 응답 `saved`는 지금처럼 중복 여부만 뜻한다(결정 D1).
-  - [ ] `LAWBOT_FEEDBACK=1` + `LAWBOT_DB` 없음 → 설정 오류. `LAWBOT_FEEDBACK_DIR`에 값 → 설정 오류(안내 문구).
-  - [ ] 피드백 모듈이 fastapi를 import하지 않음(기존 테스트 유지).
-- [ ] Green: `feedback_store.append(conn, row)`, `Feedback.write`가 DB에 쓰도록. 메모리 턴 기록·turn_id 규칙은 그대로.
-- [ ] `feedback_review`에 `--db PATH` 입력 추가(폴더·파일 대신 DB에서 최신 줄을 읽음). 출력 CSV 형식 그대로.
-- [ ] e2e_stub: 기존 피드백 E2E가 있으면 tmp DB로 돌게 고친다(`e2e_support`의 환경에 `LAWBOT_DB`를 tmp 경로로, 테스트 시작 때 `lawbot-db init`).
-- [ ] `.env.example`·`.env.dev.example`·`operations.md`: `LAWBOT_DB` 설명, `LAWBOT_FEEDBACK_DIR` 제거 안내.
-- [ ] 완료 기준: 기본 테스트 Green. 운영 반영 시 DB 생성이 먼저 필요하다는 점을 PR 설명의 "병합 전 확인"에 적는다.
+- [x] Red `test_feedback.py`·`test_web.py`·`test_settings.py`(DB 저장을 확인하고 기존 관찰 동작을 유지):
+  - [x] `/api/feedback` 계약(요청·응답·400·404·2초 중복 무시) 그대로.
+  - [x] `record` JSON에 기존 JSONL의 모든 키와 새 키를 저장한다.
+  - [x] 새 턴 기록 필드 `articles_sha256`(웹앱이 읽은 조문 CSV의 SHA-256), `emb_model`, `rerank_model`, `chat_model`(모델 ID), `system_sha256`, `corpus_release_id`(CSV 모드면 null).
+  - [x] DB 쓰기 실패는 답변을 막지 않고 경고 로그만 남긴다. 응답 `saved`는 중복 여부를 뜻한다(결정 D1).
+  - [x] `LAWBOT_DB`가 비어 있으면 기존 JSONL 설정과 저장을 유지한다. 지정한 DB가 없거나 스키마가 맞지 않으면 시작 오류, `LAWBOT_FEEDBACK_DIR`를 함께 지정하면 이관 안내를 반환한다.
+  - [x] 피드백 모듈이 fastapi를 import하지 않음(기존 테스트 유지).
+- [x] Green `feedback_store.append(conn, row)`를 추가하고 `Feedback.write`가 DB에 쓰도록 한다. 메모리 턴 기록·turn_id 규칙은 유지한다.
+- [x] `feedback_review`에 `--db PATH` 입력을 추가한다. JSONL과 동일한 최신 상태 규칙과 CSV 형식을 사용한다.
+- [x] e2e_stub에서 로그인 → 질문 → 피드백 버튼 → tmp DB 저장을 확인한다(`e2e_support`의 환경에 `LAWBOT_DB`를 tmp 경로로, 테스트 시작 때 `lawbot-db init`).
+- [x] `.env.example`·`.env.dev.example`·`operations.md`에 `LAWBOT_DB` 설명과 DB를 쓸 때 `LAWBOT_FEEDBACK_DIR`를 비우도록 안내한다.
+- [x] 기본 테스트 Green. 운영 반영 시 DB 생성이 먼저 필요하다는 점을 PR 설명의 "병합 전 확인"에 적었다. [검증 기록](../evals/2026-11-08-feedback-sqlite.md)
 
 ### PR 6 — 관리자 인증 (`feat/admin-auth`)
 
@@ -781,7 +781,7 @@ CREATE TABLE dataset_releases (
 
 | # | 질문 | 확정 (권장안) | 고르지 않은 선택 |
 |---|---|---|---|
-| D1 | 피드백 저장을 JSONL에서 DB로 **바꿀지**(이중 저장 안 함) | DB로 교체. 쓰기 실패는 지금처럼 경고 로그만(답변·응답 형식 그대로) | JSONL과 DB 둘 다 쓰기(명세서 "이중 관리 금지"와 충돌) |
+| D1 | 피드백 저장을 JSONL에서 DB로 **바꿀지**(이중 저장 안 함) | `LAWBOT_DB`를 지정하면 DB로 교체. 미설정이면 JSONL 유지(PR 5 착수 요청). 쓰기 실패는 경고 로그만 남기고 답변·응답 형식을 유지 | JSONL과 DB 둘 다 쓰기(명세서 "이중 관리 금지"와 충돌) |
 | D2 | 공유 UI 연결 방식 | 소스 공유(Vite alias), npm workspace 안 씀 | 루트 npm workspace(lockfile·CI 개편) |
 | D3 | 질문 원문 보존 기간과 삭제 | 이번 범위는 권한·Git 제외만, 기간은 나중에 정함 | 기간(예: N개월)을 정하고 삭제 명령까지 이번에 |
 | D4 | DB 파일 위치 | 운영 트리 `data/db/lawbot.db`(gitignore) | 레포 밖 경로(예: `~/Library/Application Support/lawbot/`) |
