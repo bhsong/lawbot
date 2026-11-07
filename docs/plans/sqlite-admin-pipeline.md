@@ -80,8 +80,8 @@
 | `data/v5/answer_key_tax_v5.csv` | 1,745 (answer_key 유일) | answer_key, law, article_id, answer, must_include(JSON 목록의 목록), must_not_include, must_not_in_conclusion |
 | `data/v4/qa_full_v4.csv` / `split_v4.csv` | 7,618 | qa: id(Q…), question, law, article_id, title, question_type, confusable_with, eval_cat(A_lsa 2,602 · B_newlaw 5,016), answer_key. split_emb test 2,075 · val 1,110 · train 4,433 |
 | `data/v4/answer_key_v4.csv` | 751 | v5와 같은 열 |
-| `data/decree_exp/qa_decree_v4.csv` / `split_decree_v4.csv` | 4,096 | 하위법령 질문(D…). test 1,880 · val 444 |
-| `data/v5/qa_reasoning_val.csv` | 30 | id(ERR…), error_type, question, answer, cited_articles, article_ids (줄바꿈 `\r\n`) |
+| `data/decree_exp/qa_decree_v4.csv` / `split_decree_v4.csv` | 4,096 | 하위법령 질문(D…). test 1,880 · val 444. 원본 `answer_key` 고유 값은 567개이며 별도 정답 키 CSV는 없다. |
+| `data/v5/qa_reasoning_val.csv` | 30 | id(ERR…), error_type, question, answer, cited_articles, article_ids (UTF-8 BOM, 줄바꿈 `\r\n`) |
 | `data/oos_eval.csv` 102 · `data/scope_controls.csv` 20 · `data/refusal_hard_cases.csv` 86 · `data/labor_eval_keywords.csv` 650 | | 평가 전용. `oos_eval`을 뺀 셋은 id가 v4와 겹치거나 중복 |
 | 매니페스트 | `data/v5/manifest.json`, `data/v5/manifest_law_articles_v5_decree.json`, `data/v4/manifest.json`, `data/v4/manifest_decree.json` | dataset_version, reference_date, collected_date, source{name,url,ref}, articles_file, articles_sha256, articles_total, articles_by_law, articles_by_kind, trained_on |
 | 운영 live | `lawbot-prod/data/live/v5/`(v5 CSV 2개 + 매니페스트 2개, `archive/` 아직 없음), `lawbot-prod/data/live/`(v4 live와 `archive/deploy-v5.0.0/`) | |
@@ -388,7 +388,8 @@ CREATE TABLE dataset_releases (
 );
 ```
 
-- 순환 참조(`feedback_promotions` ↔ `qa_items`/`qa_preferences`)는 SQLite가 선언 순서와 무관하게 허용한다. 테스트로 FK가 실제 동작하는지 확인한다.
+- `0002_corpus_csv_format.sql`은 `ALTER TABLE corpus_releases ADD COLUMN csv_format TEXT`로 복원 형식 전용 열을 추가한다. CSV별 BOM·줄바꿈·마지막 줄바꿈과 매니페스트 해시를 기록한다. 이전 이관 코드가 `note`에 저장한 형식은 전용 열로 옮기고 나머지 메모는 보존한다.
+- `feedback_promotions`는 뒤에 선언된 `qa_items`와 `qa_preferences`를 참조한다. 테스트로 FK가 실제 동작하는지 확인한다.
 - 기존 분할의 `test`는 `split_sets.frozen=1`로 넣은 뒤 바꿀 수 없다(트리거). 피드백 분할 세트 `feedback`은 `frozen=0`, `unassigned`에서 한 번만 `train`/`val`로 바뀐다.
 - 기존 데이터셋 분할: `v4`·`v5`·`decree_v4`는 purpose `emb`·`sllm` 두 줄씩. 평가 전용 세트(`reasoning_v5`, `oos`, `scope`, `refusal_hard`, `labor_eval`)는 purpose `eval`, split `test`(누출 검사에서 test와 같이 취급).
 - `group_key` 규칙(모든 문항에 같은 규칙): 기존 세트는 `question_norm`. 피드백 문항은 PR 10의 그룹 규칙.
@@ -538,33 +539,36 @@ CREATE TABLE dataset_releases (
 
 목표: 원본과 바이트 단위로 같은 내용을 DB에 넣고 되돌려 만들 수 있다. 운영 데이터는 건드리지 않는다.
 
-- [ ] 도구 `lawbot_tools/migrate_csv_to_sqlite.py`, 하위 명령:
+- [x] 도구 `lawbot_tools/migrate_csv_to_sqlite.py`, 하위 명령:
   - `corpus --db PATH --dir <CSV·매니페스트 폴더> --profile v4|v5 --release-id ID [--activate]`
   - `qa --db PATH --set v4|v5|decree_v4|reasoning_v5|oos|scope|refusal_hard|labor_eval` (파일 경로는 세트별 상수, `--file`로 덮어쓰기)
   - `feedback --db PATH <폴더·파일>...`
-  - `verify --db PATH` (DB에 있는 모든 세트·릴리스를 원본 파일과 다시 대조)
+  - `verify --db PATH` (DB의 복원 해시와 기록된 원본 파일 상태를 각각 확인)
   - 공통: `--report <md 경로>`(질문 원문 없음: 행 수·키·sha만), `--dry-run`(DB 열지 않고 검사만)
-- [ ] 동작 규칙:
-  - [ ] 입력 검사: 파일 존재, UTF-8 BOM(`qa_reasoning_val`처럼 없으면 그대로 기록), 기대 열, 행 수, id 유일성(세트별: 유일하지 않으면 `#row_no` 규칙), `answer_key` 참조 무결성, 분할 값(`train`·`val`·`test`).
-  - [ ] 원본 줄바꿈(`\n`/`\r\n`)·BOM 여부·열 순서를 세트 정책 JSON(`split_sets.policy` 또는 릴리스 열)에 저장해 왕복 바이트를 만들 수 있게 한다.
-  - [ ] 한 세트·한 릴리스 = 한 트랜잭션. 실패하면 롤백해 DB가 전과 같다.
-  - [ ] 멱등: 같은 입력을 다시 넣으면 변경 0건으로 끝난다. 같은 id에 다른 내용이면 실패(덮어쓰지 않음).
-  - [ ] 분할 세트 `v4`·`v5`·`decree_v4`와 평가 전용 세트는 넣은 직후 `frozen=1`.
-  - [ ] 피드백: `json.loads` 실패 줄은 건수·줄 번호만 보고하고 건너뜀(기존 `feedback_review.load`와 같은 규칙). `record`에 원본 줄의 dict 전체를 그대로(키 순서 유지). 알 수 없는 label·reason이면 그 줄 실패로 보고.
-  - [ ] `--db`는 필수이고 기본값이 없다. 쓰기 전에 대상 DB 경로와 넣을 행 수를 출력한다. 운영 DB 이관은 7절 절차로만 한다(`--dry-run` 먼저).
-- [ ] Red `services/chatbot/tests/test_migrate_csv_to_sqlite.py` (레포의 실제 `data/` 파일을 읽고 `tmp_path` DB에 쓴다):
-  - [ ] v5 릴리스(`data/v5`): 법률·조합 CSV를 DB에서 다시 만든 바이트가 원본과 같다(sha256). 매니페스트 텍스트도 같다.
-  - [ ] v4 릴리스(`data/v4`, 매니페스트 `manifest.json`·`manifest_decree.json`)도 같다.
-  - [ ] 두 릴리스에 같은 내용 조문은 `article_versions`를 공유한다(버전 수 < 두 릴리스 조문 수 합).
-  - [ ] 모든 비삭제 조문의 `doc_text`가 CSV에서 만든 것과 DB에서 만든 것이 같다.
-  - [ ] QA 세트 9종: 원본 바이트 왕복 동일, 행 수, id·answer_key 참조, 분할 집계(2.2 표의 숫자) 일치.
-  - [ ] frozen 세트 test id 집합이 원본 split CSV의 test id 집합과 같다(v4 2,075 · v5 3,420 · decree 1,880).
-  - [ ] 두 번 실행해도 행 수 변화 없음. 원본 한 칸을 바꾼 사본을 넣으면 실패하고 DB 그대로.
-  - [ ] 합성 피드백 JSONL(like·flag 4종·cleared·깨진 줄·같은 turn 두 번): 모든 키 손실 없음(`record` JSON == 원본 dict), `latest_rows` 결과가 JSONL 기준과 DB 기준이 같다.
-  - [ ] 보고서에 질문 원문이 없다(합성 질문 문자열이 보고서에 없음을 단언).
-- [ ] 유사도 교차 보고(테스트 아님, 1회 실행): v4·v5 기존 분할에서 train↔val↔test 사이 `Overlap` 0.9 이상 쌍 수를 세어 `docs/evals/YYYY-MM-DD-split-similarity.md`에 기록. 기존 분할은 고치지 않는다. 13,680문항 전체 쌍 비교가 1시간을 넘으면 정규화 문자열 길이 차이로 먼저 거르는 등 `Overlap`의 기존 빠른 필터만 쓰고, 그래도 오래 걸리면 멈추고 보고한다.
-- [ ] `docs/operations.md`: 이관 명령과 검증 명령.
-- [ ] 완료 기준: 위 테스트 Green, `verify`가 모든 세트 OK. 운영 트리·`data/` 원본 변경 없음(`git status`).
+  - CLI는 인자 처리와 보고를 맡긴다. SQL은 `lawbot/db/` 또는 `lawbot/*_store.py`에 두고 `lawbot_tools`의 `sqlite3` import를 막는 `test_layers.py` 규칙을 유지한다.
+- [x] 동작 규칙:
+  - [x] 입력 검사: 파일 존재, UTF-8 인코딩, 기대 열, 행 수, id 유일성(세트별: 유일하지 않으면 `#row_no` 규칙), 정답 키 CSV가 있는 세트의 참조 무결성, 분할 값(`train`·`val`·`test`).
+  - [x] 파일의 실제 바이트에서 LF·CRLF와 BOM 여부를 검출한다. 열 순서와 함께 `split_sets.policy` 또는 릴리스의 메타데이터에 기록한다.
+  - [x] 정답 키 CSV가 있는 `v4`·`v5`는 `qa_items.key_set`·`answer_key`를 모두 채워 FK를 강제한다. 원본의 모든 키가 정답 키 CSV에 있어야 한다. `decree_v4`와 평가 전용 세트는 두 열을 모두 NULL로 두고 원본 행 JSON에 값을 보존한다. 이 규칙을 세트 정책에 기록한다.
+  - [x] 한 세트·한 릴리스 = 한 트랜잭션. 실패하면 롤백해 DB가 전과 같다.
+  - [x] 멱등: 같은 입력을 다시 넣으면 변경 0건으로 끝난다. 같은 id에 다른 내용이면 실패(덮어쓰지 않음).
+  - [x] 분할 세트 `v4`·`v5`·`decree_v4`와 평가 전용 세트는 넣은 직후 `frozen=1`.
+  - [x] 피드백: 깨진 JSON이나 유효하지 않은 줄은 건수·줄 번호만 보고하고 건너뛴다. `record`에 원본 줄의 dict 전체를 보존한다. 건너뛴 줄이 있으면 유효한 줄을 저장하고 종료 코드 1을 반환한다. 배치 전체 실패는 2다.
+  - [x] `--db`는 필수이고 기본값이 없다. 쓰기 전에 대상 DB 경로와 넣을 행 수를 출력한다. 운영 DB 이관은 7절 절차로만 한다(`--dry-run` 먼저).
+- [x] Red `services/chatbot/tests/test_migrate_csv_to_sqlite.py` (레포의 실제 `data/` 파일을 읽고 `tmp_path` DB에 쓴다):
+  - [x] v5 릴리스(`data/v5`): 법률·조합 CSV를 DB에서 다시 만든 바이트가 원본과 같다(sha256). 매니페스트 텍스트도 같다.
+  - [x] v4 릴리스(`data/v4`, 매니페스트 `manifest.json`·`manifest_decree.json`)도 같다.
+  - [x] 두 릴리스에 같은 내용 조문은 `article_versions`를 공유한다(버전 수 < 두 릴리스 조문 수 합).
+  - [x] 모든 비삭제 조문의 `doc_text`가 CSV에서 만든 것과 DB에서 만든 것이 같다.
+  - [x] QA 세트 8종(`v4`, `v5`, `decree_v4`, `reasoning_v5`, `oos`, `scope`, `refusal_hard`, `labor_eval`)과 각 세트에 딸린 split·answer_key CSV: 원본 바이트 왕복 동일, 행 수, id·answer_key 참조, 분할 집계(2.2 표의 숫자) 일치.
+  - [x] `decree_v4`의 관계형 정답 키 두 열은 NULL이며 원본 키 문자열은 `row` JSON과 복원 CSV에 그대로 남는다.
+  - [x] frozen 세트 test id 집합이 원본 split CSV의 test id 집합과 같다(v4 2,075 · v5 3,420 · decree 1,880).
+  - [x] 두 번 실행해도 행 수 변화 없음. 원본 한 칸을 바꾼 사본을 넣으면 실패하고 DB 그대로.
+  - [x] 합성 피드백 JSONL(like·flag 4종·cleared·깨진 줄·같은 turn 두 번): 모든 키 손실 없음(`record` JSON == 원본 dict), `latest_rows` 결과가 JSONL 기준과 DB 기준이 같다.
+  - [x] 보고서에 질문 원문이 없다(합성 질문 문자열이 보고서에 없음을 단언).
+- [x] 유사도 교차 보고(테스트 아님, 1회 실행). 승인 후 10분 상한으로 v4·v5의 기존 분할을 비교했다. [쌍 수와 ID 기록](../evals/2026-11-08-split-similarity.md)
+- [x] `docs/operations.md`: 이관 명령과 검증 명령.
+- [x] 완료 기준: 위 테스트 Green, `verify`가 모든 세트 OK. 운영 트리·`data/` 원본 변경 없음(`git status`).
 
 ### PR 5 — 피드백 저장을 SQLite로 + 턴 기록 보강 (`feat/feedback-sqlite`)
 
