@@ -48,7 +48,7 @@ models/v5/
 └── emb_v5b_fp16/                       # v5b Qwen3-Embedding-0.6B, sentence-transformers fp16
 models/v4/
 ├── reranker_4b_mlx_4bit/               # Qwen3-Reranker-4B, MLX 4비트
-└── qwen3.8_27b_mlx_4bit/               # Qwen3.8-27B, MLX 4비트
+└── qwen_27b_mlx_4bit/                  # Qwen3.8-27B, MLX 4비트
 ```
 
 `article_id`에 법령명이 들어 있으면(`근로기준법 제26조`) 번호만 담은 `article_no` 열(`제26조`)을 함께 둡니다. 앱은 `article_no`가 있으면 그 값을 조문 번호로 씁니다.
@@ -62,7 +62,7 @@ uv run mlx_lm.convert --hf-path <병합한 4B 폴더> --mlx-path models/v4/sllm_
 Pro(27B)는 이미 4비트로 변환된 MLX 모델을 그대로 내려받고, 리랭커는 원본을 4비트로 변환합니다.
 
 ```bash
-uv run hf download mlx-community/Qwen3.8-27B-4bit --local-dir models/v4/qwen3.8_27b_mlx_4bit
+uv run hf download mlx-community/Qwen3.8-27B-4bit --local-dir models/v4/qwen_27b_mlx_4bit
 uv run mlx_lm.convert --hf-path Qwen/Qwen3-Reranker-4B --mlx-path models/v4/reranker_4b_mlx_4bit -q --q-bits 4 --q-group-size 64 --dtype float16
 ```
 
@@ -111,7 +111,7 @@ v5 Pro는 간결형에 `data/v5/system_v5_concise.txt`를 쓰고, 화면에서 "
 | 모델 | 구성 (모델 id · v4 기본 폴더) | 기본 답변 형식 |
 | --- | --- | --- |
 | Lawbot Fast | Qwen3-4B + LoRA (`lawbot-fast-v4` · `models/v4/sllm_4b_lora_mlx_4bit`) | 전체: `【결론】【근거 조문】【설명】【참고】` 4항목 |
-| Lawbot Pro | Qwen3.8-27B 4비트, 튜닝 전 (`qwen3.8-27b-4bit` · `models/v4/qwen3.8_27b_mlx_4bit`), 간결형 system(`data/v5/system_v5_concise.txt`) | 간결: 결론 + `근거: 실제 인용 조문`. 답변이 더 느림 |
+| Lawbot Pro | Qwen3.8-27B 4비트, 튜닝 전 (`qwen3.8-27b-4bit` · `models/v4/qwen_27b_mlx_4bit`), 간결형 system(`data/v5/system_v5_concise.txt`) | 간결: 결론 + `근거: 실제 인용 조문`. 답변이 더 느림 |
 
 모델을 바꾸면 답변 형식도 그 모델의 기본값으로 바뀌고, 형식은 직접 다시 고를 수 있습니다. 화면 아래 측정 줄에 검색·첫 토큰·첫 글자·생성 속도·완료 시간이 표시됩니다. 모델 서버에 아직 올라 있지 않은 모델을 고르면 "불러오는 중"을 먼저 보여 주고, 불러오는 시간은 첫 토큰 시간에 들어갑니다. 웹앱이 고른 모델 id가 모델 서버에 없으면 시작을 거부합니다.
 
@@ -164,7 +164,7 @@ v5 Pro는 간결형에 `data/v5/system_v5_concise.txt`를 쓰고, 화면에서 "
 | --- | --- | --- |
 | `LAWBOT_MODEL_SERVER_PORT` | 예 | 모델 서버 포트 (1024–65535, 기본값 없음). 주소는 127.0.0.1 고정 |
 | `LAWBOT_MODEL_TOKEN` | 예 | 위와 같은 토큰 (16자 이상) |
-| `LAWBOT_SERVE_CHAT` / `LAWBOT_SERVE_EMBEDDING` / `LAWBOT_SERVE_RERANK` | 하나 이상 | 제공할 모델 `id=폴더`를 쉼표로 (예: `qwen3.8-27b-4bit=models/v4/qwen3.8_27b_mlx_4bit`) |
+| `LAWBOT_SERVE_CHAT` / `LAWBOT_SERVE_EMBEDDING` / `LAWBOT_SERVE_RERANK` | 하나 이상 | 제공할 모델 `id=폴더`를 쉼표로 (예: `qwen3.8-27b-4bit=models/v4/qwen_27b_mlx_4bit`) |
 | `LAWBOT_SERVE_PRELOAD` | 아니요 | 시작할 때 올릴 chat 모델 id (기본: chat 목록 앞에서부터 상주 수만큼). 임베딩·리랭커는 항상 시작할 때 |
 | `LAWBOT_MAX_RESIDENT` | 아니요 | 동시에 올려 둘 chat 모델 수 (기본 `2`, LRU로 교체). 32GB에서 27B를 쓰면 `1` |
 | `LAWBOT_MAX_CONCURRENT` | 아니요 | 동시에 생성하는 chat 요청 수 (1–16, 기본 `1`). 생성은 mlx_lm `BatchGenerator`로 하고, 이 값이 배치 크기. `1`이면 이전 순차 생성과 같은 답, `2` 이상은 처리량이 늘지만 요청마다 느려지고 답 표현이 조금 달라질 수 있음([기록](evals/2026-11-01-batch-generation.md)). 넘는 요청은 받은 순서대로 기다림 |
