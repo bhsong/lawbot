@@ -407,6 +407,29 @@ DB와 백업에는 질문 원문이 들어갈 수 있습니다. 레포 밖의 �
 
 복구할 때는 `restore`로 새 경로에 복원한 뒤 `status`로 확인하세요. 무결성과 스키마를 확인한 복원본은 담당자가 DB를 쓰는 프로세스를 중지한 상태에서 교체합니다. 초기화·백업·복원은 이미 존재하는 대상 경로를 거부합니다.
 
+### CSV·JSONL 이관과 대조
+
+개발 확인은 임시 DB에서 실행합니다. 이관 명령의 `--db`는 필수이며 상대 경로는 레포 최상위 기준입니다. 이관 전에 `--dry-run`으로 원본을 검사할 수 있습니다. `verify --dry-run`은 경로만 검사합니다. 실제 대조는 `verify`가 DB를 읽기 전용으로 열어 수행합니다.
+
+```bash
+migration_dir="$(mktemp -d)"
+migration_db="$migration_dir/lawbot.db"
+uv run lawbot-db init --db "$migration_db"
+uv run python -m lawbot_tools.migrate_csv_to_sqlite corpus --db "$migration_db" --dir data/v5 --profile v5 --release-id v5 --dry-run
+uv run python -m lawbot_tools.migrate_csv_to_sqlite corpus --db "$migration_db" --dir data/v5 --profile v5 --release-id v5
+uv run python -m lawbot_tools.migrate_csv_to_sqlite corpus --db "$migration_db" --dir data/v4 --profile v4 --release-id v4
+for dataset in v4 v5 decree_v4 reasoning_v5 oos scope refusal_hard labor_eval; do
+  uv run python -m lawbot_tools.migrate_csv_to_sqlite qa --db "$migration_db" --set "$dataset" || break
+done
+uv run python -m lawbot_tools.migrate_csv_to_sqlite verify --db "$migration_db" --report "$migration_dir/verify.md"
+```
+
+`corpus`는 두 CSV와 매니페스트를 대조합니다. `--activate`를 지정하면 검증한 릴리스를 DB의 해당 프로필 활성 대상으로 기록합니다. `qa --file PATH`는 해당 세트의 질문 CSV를 바꿉니다. 분할과 정답 키는 세트에 정의된 원본을 사용합니다. `decree_v4`의 정답 키 문자열은 원본 행에 보존하고, 연결된 정답 키 CSV가 있는 세트에는 외래 키를 채웁니다.
+
+피드백은 `uv run python -m lawbot_tools.migrate_csv_to_sqlite feedback --db "$migration_db" <JSONL 파일 또는 폴더>`로 이관합니다. 깨진 JSON과 유효하지 않은 레코드는 파일명과 줄 번호로 보고하고 유효한 줄을 가져옵니다. 같은 ID에 서로 다른 내용이 들어오면 배치를 롤백합니다.
+
+`verify`는 DB에서 조문·매니페스트와 QA 원본을 복원해 기록된 경로의 바이트와 대조합니다. 전체 확인에서는 조문 릴리스 2개와 QA 세트 8개가 모두 `OK`여야 합니다. 보고서는 새 파일로 쓰며 대조 결과와 파일별 해시를 포함합니다. 바이트 복원이 가능한 UTF-8 CSV만 이관하며, 지원하는 줄바꿈은 LF와 CRLF입니다.
+
 ## 테스트 실행
 
 기본 테스트는 모델 파일, 네트워크, 실제 비밀번호 없이 돌아갑니다. `uv sync`, 화면 빌드(`npm ci && npm run build`, 브라우저 E2E가 씀), 브라우저 E2E용 Chromium 설치(`uv run playwright install chromium`, 한 번)만 하면 됩니다. 두 서비스의 테스트(`services/*/tests`)를 함께 돌리고, 실제 모델 대신 가짜 모델·가짜 모델 서버를 넣으며, 테스트 중 외부 네트워크 접속은 막습니다. 챗봇 클라이언트와 실제 모델 서버 앱(가짜 모델)이 OpenAI SDK로 통하는지 보는 계약 테스트도 들어 있습니다. `data/`·`results/`는 읽기만 합니다.
