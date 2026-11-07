@@ -8,6 +8,8 @@ import json
 import logging
 import os
 import subprocess
+import sys
+import traceback
 from collections import Counter, defaultdict
 from contextlib import closing
 from dataclasses import asdict, replace
@@ -18,7 +20,7 @@ from zoneinfo import ZoneInfo
 import httpx
 
 from lawbot import deploy, envfile, llm, manifest, service, settings
-from lawbot.api_client import REQUEST_ID, ModelServerError
+from lawbot.api_client import REQUEST_ID
 from lawbot.citation import citations, hit_key, refused
 from lawbot.paths import DATA, ROOT
 
@@ -47,7 +49,12 @@ def run_questions(app, model, fmt, rows, output):
                         error = None if raw.strip() else 'empty_answer'
                         break
         except service.AskError as exc:
-            error = exc.kind
+            print(
+                json.dumps(result | {'error': exc.kind, 'stage': exc.stage}, ensure_ascii=False),
+                file=output,
+                flush=True,
+            )
+            raise
         if error:
             print(json.dumps(result | {'error': error}, ensure_ascii=False), file=output, flush=True)
             print(f'{row["id"]} 실패 ({error})', flush=True)
@@ -83,12 +90,12 @@ def run_questions(app, model, fmt, rows, output):
 def snapshot(cfg, client, *, preflight=False):
     """Read runtime metadata without issuing an inference request."""
     if preflight and time(6, 20) <= datetime.now(ZoneInfo('Asia/Seoul')).time() <= time(6, 50):
-        raise SystemExit('조문 자동 갱신 시간대입니다.')
+        raise RuntimeError('조문 자동 갱신 시간대입니다.')
     health = client.get('/health?runtime=1')
     health.raise_for_status()
     health = health.json()
     if not health.get('ready') or not health.get('commit') or health.get('max_concurrent') != 1:
-        raise SystemExit('모델 서버 준비 상태, 커밋, 동시 생성 상한 1을 확인하세요.')
+        raise RuntimeError('모델 서버 준비 상태, 커밋, 동시 생성 상한 1을 확인하세요.')
     listing = client.get('/v1/models')
     listing.raise_for_status()
     models = {model['id']: model for model in listing.json()['data']}
@@ -96,17 +103,17 @@ def snapshot(cfg, client, *, preflight=False):
     spec = profile.models[0]
     missing = service.missing_models(models.values(), profile, rr, False)
     if missing:
-        raise SystemExit('평가에 필요한 모델 id와 종류를 확인하세요.')
+        raise RuntimeError('평가에 필요한 모델 id와 종류를 확인하세요.')
     models = [
         {k: models[mid][k] for k in ('id', 'type', 'loaded', 'revision')}
         for mid in (profile.emb_model, rr.model, spec.model)
     ]
     if any(not model['revision'] or (preflight and not model['loaded']) for model in models):
-        raise SystemExit('필요한 모델의 revision과 상주 상태를 확인하세요.')
+        raise RuntimeError('필요한 모델의 revision과 상주 상태를 확인하세요.')
     law, combined = deploy.article_paths('v5', {})
     data = manifest.load(combined)
     if not data or not data.get('dataset_version'):
-        raise SystemExit('v5 조문 매니페스트를 확인하세요.')
+        raise RuntimeError('v5 조문 매니페스트를 확인하세요.')
     files = (law, combined, spec.system_file or profile.system_file, QUESTIONS, Path(__file__))
     return {
         'webapp_commit': subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=ROOT, text=True).strip(),
@@ -131,6 +138,19 @@ def comparable(snapshot):
     return snapshot | {'models': [{k: v for k, v in model.items() if k != 'loaded'} for model in snapshot['models']]}
 
 
+def report_failure(stage, exc, output, sensitive):
+    """Render the original exception chain without locals or configured secrets."""
+    details = f'평가 중단 · {stage}\n' + ''.join(traceback.format_exception(exc))
+    for value in sorted({value.strip() for value in sensitive if value.strip()}, key=len, reverse=True):
+        details = details.replace(value, '<비공개>')
+    print(details, file=sys.stderr, end='')
+    if output is not None:
+        try:
+            (output / 'failure.txt').write_text(details, encoding='utf-8')
+        except OSError as write_error:
+            print(f'진단 파일 저장 실패 ({type(write_error).__name__})', file=sys.stderr)
+
+
 def main():
     parser = argparse.ArgumentParser(description='v5 법률 추론 회귀 검증 val (공유 모델 서버, 사전 승인 필요)')
     parser.add_argument('--output', type=Path, required=True, help='결과를 쓸 새 디렉터리 (부모 디렉터리 필요)')
@@ -142,16 +162,23 @@ def main():
     envfile.load()
     example = ROOT / '.env.dev.example'
     env = envfile.parse(example.read_text(encoding='utf-8'), example.name)
-    env.update({key: os.environ.get(key, '') for key in ('LAWBOT_MODEL_SERVER', 'LAWBOT_MODEL_TOKEN')})
+    connection = {key: os.environ.get(key, '') for key in ('LAWBOT_MODEL_SERVER', 'LAWBOT_MODEL_TOKEN')}
+    env.update(connection)
     env.update(LAWBOT_REQUEST_LOG=str(args.output / 'requests.jsonl'), LAWBOT_MODEL_READ_TIMEOUT='300')
-    cfg = replace(settings.load(env), embed_cache=args.output / 'embeddings', server_wait=0)
-    spec = cfg.profile.models[0]
-    if cfg.profile.name != 'v5' or cfg.reranker is None or cfg.decree is None or spec.key not in cfg.decree.models:
-        raise SystemExit('개발 설정 예시의 v5 프로필, 리랭커, 하위법령 첨부를 확인하세요.')
+    sensitive = tuple(connection.values())
 
     # The web app startup log includes the model server address.
-    logging.getLogger('lawbot').setLevel(logging.WARNING)
+    log = logging.getLogger('lawbot')
+    original_level = log.level
+    log.setLevel(logging.WARNING)
+    stage, output = '평가 설정 확인', None
     try:
+        cfg = replace(settings.load(env), embed_cache=args.output / 'embeddings', server_wait=0)
+        sensitive += (cfg.model_server, cfg.model_token, cfg.llm_key)
+        spec = cfg.profile.models[0]
+        if cfg.profile.name != 'v5' or cfg.reranker is None or cfg.decree is None or spec.key not in cfg.decree.models:
+            raise RuntimeError('개발 설정 예시의 v5 프로필, 리랭커, 하위법령 첨부를 확인하세요.')
+        stage = '실행 폴더 준비'
         with (
             QUESTIONS.open('rb') as lock,
             httpx.Client(
@@ -163,19 +190,35 @@ def main():
         ):
             fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
             args.output.mkdir()
+            output = args.output
+            stage = '실행 전 구성 확인'
             before = snapshot(cfg, client, preflight=True)
             (args.output / 'before.json').write_text(json.dumps(before, indent=2), encoding='utf-8')
             print('실행 전 확인 통과 · 30문항 · 동시 1', flush=True)
             try:
+                stage = '웹앱 초기화'
                 REQUEST_ID.set('reasoning-val-index')
                 app = service.load_app(cfg)
-                with (args.output / 'answers.jsonl').open('x', encoding='utf-8') as output:
-                    summary = run_questions(app, spec.key, spec.fmt, rows, output)
+                stage = '질문 평가'
+                with (args.output / 'answers.jsonl').open('x', encoding='utf-8') as answers:
+                    summary = run_questions(app, spec.key, spec.fmt, rows, answers)
             finally:
+                previous_stage, stage = stage, '실행 후 구성 확인'
                 after = snapshot(cfg, client)
                 (args.output / 'after.json').write_text(json.dumps(after, indent=2), encoding='utf-8')
-    except (httpx.HTTPError, ModelServerError, RuntimeError, OSError) as exc:
-        raise SystemExit(f'평가 중단 ({type(exc).__name__})') from None
+                stage = previous_stage
+    except (
+        httpx.HTTPError,
+        RuntimeError,
+        OSError,
+        subprocess.CalledProcessError,
+        json.JSONDecodeError,
+        service.AskError,
+    ) as exc:
+        report_failure(stage, exc, output, sensitive)
+        return 1
+    finally:
+        log.setLevel(original_level)
     if comparable(before) != comparable(after):
         raise SystemExit('실행 구성이 바뀌어 결과가 무효입니다.')
     if summary is None:
@@ -186,4 +229,4 @@ def main():
 
 
 if __name__ == '__main__':
-    main()
+    raise SystemExit(main())
