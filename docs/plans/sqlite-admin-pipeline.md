@@ -157,6 +157,7 @@ packages/lawbot-ui/src/   # shared TSX/TS/CSS source (no own package.json build)
 ### 3.3 연결·마이그레이션·백업
 
 - PRAGMA: `foreign_keys=ON`, `journal_mode=WAL`, `busy_timeout=5000`, `synchronous=NORMAL`. 연결마다 `foreign_keys`를 켜고 꺼져 있으면 예외.
+- DB와 보조 파일의 Git 제외 여부는 설정을 읽거나 관리 명령을 실행할 때 확인한다. `connect()`에는 확인한 경로를 넘긴다. 권한 경고는 프로세스에서 경로별 한 번 표시한다.
 - 쓰기: `BEGIN IMMEDIATE` … `COMMIT`. 트랜잭션 안에서 HTTP·모델 서버·파일 대량 I/O 금지(리뷰 체크 항목).
 - 마이그레이션: `migrations/NNNN_name.sql`을 번호순으로 하나씩 트랜잭션 적용, `schema_migrations(version, name, checksum, applied_at)` 기록. 이미 적용된 파일의 checksum이 다르면 실패.
 - 웹앱 시작: DB가 없으면 거부("`uv run lawbot-db init --db …`"), 스키마 버전이 코드보다 낮으면 거부("`uv run lawbot-db migrate`"), 높으면 거부. 시작할 때 생성·마이그레이션하지 않는다.
@@ -359,7 +360,9 @@ CREATE TRIGGER qa_splits_frozen_insert BEFORE INSERT ON qa_splits
 WHEN (SELECT frozen FROM split_sets WHERE split_set = NEW.split_set) = 1
 BEGIN SELECT RAISE(ABORT, 'split set is frozen'); END;
 CREATE TRIGGER qa_splits_frozen_update BEFORE UPDATE ON qa_splits
-WHEN (SELECT frozen FROM split_sets WHERE split_set = OLD.split_set) = 1 OR OLD.split <> 'unassigned'
+WHEN OLD.split <> 'unassigned' OR EXISTS (
+  SELECT 1 FROM split_sets WHERE frozen = 1 AND split_set IN (OLD.split_set, NEW.split_set)
+)
 BEGIN SELECT RAISE(ABORT, 'assigned or frozen split cannot change'); END;
 CREATE TRIGGER qa_splits_no_delete BEFORE DELETE ON qa_splits
 BEGIN SELECT RAISE(ABORT, 'splits are never deleted'); END;

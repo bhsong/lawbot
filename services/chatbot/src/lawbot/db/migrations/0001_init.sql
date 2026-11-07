@@ -188,7 +188,9 @@ CREATE TRIGGER qa_splits_frozen_insert BEFORE INSERT ON qa_splits
 WHEN (SELECT frozen FROM split_sets WHERE split_set = NEW.split_set) = 1
 BEGIN SELECT RAISE(ABORT, 'split set is frozen'); END;
 CREATE TRIGGER qa_splits_frozen_update BEFORE UPDATE ON qa_splits
-WHEN (SELECT frozen FROM split_sets WHERE split_set = OLD.split_set) = 1 OR OLD.split <> 'unassigned'
+WHEN OLD.split <> 'unassigned' OR EXISTS (
+  SELECT 1 FROM split_sets WHERE frozen = 1 AND split_set IN (OLD.split_set, NEW.split_set)
+)
 BEGIN SELECT RAISE(ABORT, 'assigned or frozen split cannot change'); END;
 CREATE TRIGGER qa_splits_no_delete BEFORE DELETE ON qa_splits
 BEGIN SELECT RAISE(ABORT, 'splits are never deleted'); END;

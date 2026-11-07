@@ -5,6 +5,7 @@ from collections.abc import Iterator
 from contextlib import closing, contextmanager
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from threading import Lock
 
 from lawbot.feedback import check_private
 from lawbot.paths import ROOT
@@ -12,24 +13,33 @@ from lawbot_common.logs import logger
 
 DEFAULT_DB = ROOT / 'data' / 'db' / 'lawbot.db'
 log = logger('lawbot', 'lawbot')
+_warned_paths: set[Path] = set()
+_warning_lock = Lock()
 
 
-def db_path(value: str) -> Path:
-    """Resolve a configured database path relative to the repository root."""
-    path = ROOT / Path(value).expanduser()
-    check_private(path, 'LAWBOT_DB', folder=False)
-    return path
+def repo_path(value: str) -> Path:
+    """Interpret a user-supplied relative path from the repository root."""
+    return ROOT / Path(value).expanduser()
 
 
 def _sidecars(path: Path) -> tuple[Path, ...]:
     return tuple(path.with_name(path.name + suffix) for suffix in ('-wal', '-shm', '-journal'))
 
 
-def _private_files(path: Path) -> tuple[Path, ...]:
-    files = (path, *_sidecars(path))
-    for file in files:
-        check_private(file, 'DB', folder=False)
-    return files
+def _check_private_files(path: Path, what: str = 'DB') -> None:
+    for file in (path, *_sidecars(path)):
+        check_private(file, what, folder=False)
+
+
+def check_db_path(path: str | Path, what: str = 'DB') -> Path:
+    """Validate the DB and sidecars before handing a path to connect()."""
+    path = Path(path).expanduser().resolve()
+    _check_private_files(path, what)
+    return path
+
+
+def db_path(value: str) -> Path:
+    return check_db_path(repo_path(value), 'LAWBOT_DB')
 
 
 def _warn_permissions(path: Path, allowed: int) -> None:
@@ -38,17 +48,21 @@ def _warn_permissions(path: Path, allowed: int) -> None:
     except FileNotFoundError:
         return
     if mode & ~allowed:
+        with _warning_lock:
+            if path in _warned_paths:
+                return
+            _warned_paths.add(path)
         log.warning(f'DB 권한이 넓습니다. chmod {allowed:o} {path}')
 
 
 @contextmanager
 def connect(path: str | Path, write: bool = False) -> Iterator[sqlite3.Connection]:
-    """Open an existing DB for one task. Use transaction() for writes."""
+    """Open a previously validated DB path for one task. Use transaction() for writes."""
     path = Path(path).expanduser().resolve()
     if not path.is_file():
         raise FileNotFoundError(f'DB 파일이 없습니다. uv run lawbot-db init --db {path}')
     _warn_permissions(path.parent, 0o700)
-    for file in _private_files(path):
+    for file in (path, *_sidecars(path)):
         _warn_permissions(file, 0o600)
 
     mode = 'rw' if write else 'ro'
@@ -85,12 +99,13 @@ def _require_new(path: Path) -> None:
 def new_database(path: str | Path) -> Iterator[Path]:
     """Publish a closed, validated SQLite file at a new path."""
     path = Path(path).expanduser()
-    _private_files(path)
+    _check_private_files(path)
     _require_new(path)
     path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
-    _warn_permissions(path.parent, 0o700)
+    _warn_permissions(path.parent.resolve(), 0o700)
     with TemporaryDirectory(dir=path.parent, prefix='.lawbot-db-') as directory:
         staged = Path(directory) / path.name
+        _check_private_files(staged)
         staged.touch(mode=0o600, exist_ok=False)
         yield staged
         _require_new(path)

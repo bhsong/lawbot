@@ -6,7 +6,7 @@ from datetime import UTC, datetime
 from importlib.resources import files
 from pathlib import Path
 
-from lawbot.db.connection import connect, new_database, transaction
+from lawbot.db.connection import check_db_path, connect, new_database, transaction
 
 MIGRATIONS = files('lawbot.db') / 'migrations'
 
@@ -52,7 +52,7 @@ def check_schema(path: str | Path) -> int:
     """Require the complete schema version and migration history known to this code."""
     migrations = _migrations()
     latest = migrations[-1].version
-    with connect(path) as conn:
+    with connect(check_db_path(path)) as conn:
         version = _current_version(conn, migrations)
     if version < latest:
         raise RuntimeError(f'DB 스키마 버전 {version}이 코드의 버전 {latest}보다 낮습니다. uv run lawbot-db migrate')
@@ -62,7 +62,7 @@ def check_schema(path: str | Path) -> int:
 def migrate(path: str | Path) -> int:
     """Apply each pending migration with its history row in one transaction."""
     migrations = _migrations()
-    with connect(path, write=True) as conn:
+    with connect(check_db_path(path), write=True) as conn:
         for migration in migrations:
             with transaction(conn):
                 if migration.version <= _current_version(conn, migrations):

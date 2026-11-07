@@ -8,8 +8,9 @@ from contextlib import closing
 
 import pytest
 
+from lawbot import feedback
 from lawbot.db import backup as backups
-from lawbot.db import connection
+from lawbot.db import cli, connection
 from lawbot.db import migrate as migrations
 
 
@@ -54,6 +55,20 @@ def test_init_refuses_existing_file(tmp_path):
     assert digest(path) == before
 
 
+def test_cli_paths_are_relative_to_repo_from_a_subdirectory(tmp_path, monkeypatch):
+    workdir = tmp_path / 'subdir'
+    workdir.mkdir()
+    monkeypatch.chdir(workdir)
+    monkeypatch.setattr(connection, 'ROOT', tmp_path)
+    db, copied, restored = 'private/lawbot.db', 'private/backups/copy.db', 'private/restore/restored.db'
+    cli.main(['init', '--db', db])
+    cli.main(['backup', '--db', db, '--out', copied])
+    assert (tmp_path / copied).is_file()
+    cli.main(['restore', '--from', copied, '--to', restored])
+    assert migrations.check_schema(tmp_path / restored) == 1
+    assert not list(workdir.iterdir())
+
+
 @pytest.mark.parametrize('write', [False, True])
 def test_connect_configures_sqlite(db_path, write):
     with connection.connect(db_path, write=write) as conn:
@@ -69,6 +84,37 @@ def test_connect_configures_sqlite(db_path, write):
                 conn.execute('CREATE TABLE forbidden (id INTEGER)')
     with pytest.raises(sqlite3.ProgrammingError, match='closed'):
         conn.execute('SELECT 1')
+
+
+def test_connect_does_not_start_subprocesses(db_path, tmp_path, monkeypatch):
+    monkeypatch.setattr(feedback, 'ROOT', tmp_path)
+
+    def reject_subprocess(*args, **kwargs):
+        pytest.fail('Opening a validated DB must not start a subprocess')
+
+    monkeypatch.setattr(subprocess, 'run', reject_subprocess)
+    with connection.connect(db_path) as conn:
+        assert conn.execute('PRAGMA foreign_keys').fetchone() == (1,)
+
+
+def test_connect_warns_about_broad_permissions_once(db_path, monkeypatch):
+    warnings = []
+    monkeypatch.setattr(connection.log, 'warning', warnings.append)
+    db_path.parent.chmod(0o755)
+    for _ in range(2):
+        with connection.connect(db_path):
+            pass
+    assert len(warnings) == 1
+    assert str(db_path.parent) in warnings[0]
+
+
+def test_configured_db_path_requires_ignored_sidecars(tmp_path, monkeypatch):
+    subprocess.run(['git', 'init', '-q', str(tmp_path)], check=True, timeout=10)
+    (tmp_path / '.gitignore').write_text('private/lawbot.db\n', encoding='utf-8')
+    monkeypatch.setattr(connection, 'ROOT', tmp_path)
+    monkeypatch.setattr(feedback, 'ROOT', tmp_path)
+    with pytest.raises(RuntimeError, match=r'LAWBOT_DB.*lawbot\.db-wal'):
+        connection.db_path('private/lawbot.db')
 
 
 def test_foreign_key_violation_rolls_back_write(db_path):
@@ -165,6 +211,16 @@ def test_split_triggers(db_path):
         with pytest.raises(sqlite3.IntegrityError, match='cannot unfreeze'):
             conn.execute("UPDATE split_sets SET frozen = 0 WHERE split_set = 'v5'")
         assert conn.execute("SELECT split FROM qa_splits WHERE split_set = 'feedback'").fetchone() == ('train',)
+
+
+def test_unassigned_split_cannot_move_into_frozen_set(db_path):
+    with connection.connect(db_path, write=True) as conn, connection.transaction(conn):
+        add_item(conn)
+        conn.execute("INSERT INTO split_sets VALUES ('feedback', 0, '{}'), ('v5', 1, '{}')")
+        conn.execute("INSERT INTO qa_splits VALUES ('feedback:1', 'feedback', 'emb', 'unassigned', 'q', NULL, 'now')")
+        with pytest.raises(sqlite3.IntegrityError, match='assigned or frozen'):
+            conn.execute("UPDATE qa_splits SET split_set = 'v5', split = 'test' WHERE qa_uid = 'feedback:1'")
+        assert conn.execute('SELECT split_set, split FROM qa_splits').fetchall() == [('feedback', 'unassigned')]
 
 
 def test_only_one_active_promotion(db_path):
