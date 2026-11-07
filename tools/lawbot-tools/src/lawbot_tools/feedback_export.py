@@ -149,8 +149,8 @@ def export(review_csv, out, articles=None, frac=VAL_FRAC):
         f'(hard negative {sum(bool(p["negative"]) for p in pairs)}) · SFT {len(sft)} · KTO {len(kto)} → {out}'
     ]
     if skipped:
-        names = '·'.join(profiles or SUPPORTED_PROFILES)
-        lines.append(f'{names} 프로필이 아니어서 뺌 {len(skipped)}: {skipped[:5]} (지원 범위 v4·v5)')
+        supported = '·'.join(SUPPORTED_PROFILES)
+        lines.append(f'지원하지 않는 프로필이라 뺌 {len(skipped)}: {skipped[:5]} (지원 범위 {supported})')
     no_gold = [f for f, g in golds.items() if not g and records[f].get('reason') == 'retrieval']
     if no_gold:  # 검색 오류는 정답 조문이 있어야 임베딩 쌍이 된다
         lines.append(f'⚠ 검색 오류인데 h_gold가 빈 행 {len(no_gold)}: {no_gold[:5]}')

@@ -1,7 +1,10 @@
 # src/lawbot_tools/feedback_review.py  →  uv run python -m lawbot_tools.feedback_review <피드백 폴더·파일>... [--out 검수.csv] [--keep 이전 검수.csv]
 # 피드백 JSONL(lawbot.feedback)을 모아 사람이 검수할 CSV를 만든다 (B6 저장 → 검수 → 내보내기의 두 번째 단계)
 # 1. 같은 turn_id는 마지막 줄만, 'cleared'(선택 해제)는 뺀다
-# 2. Exclude overlap with evaluation sets, including v5 and reasoning validation.
+# 2. Compare with eval questions after lowercasing and removing non-word characters and underscores.
+#    Drop exact matches and scores at or above the similarity threshold (default 0.9).
+#    Exclude val overlaps because val guides tuning and selection of models trained on feedback.
+#    Report IDs without printing question text.
 # 3. 검수 CSV(엑셀·Numbers용 utf-8-sig) + 같은 이름의 .jsonl(내보내기가 읽는 전체 기록)을 쓴다. 둘 다 권한 600
 #    사람이 채울 열: h_ok(맞음/틀림/모름), h_gold(정답 조문 '법령명 제N조', 여러 개면 ;), h_scope(범위 안/범위 밖), h_note
 # 출력 파일에는 질문 원문이 있다: 레포 안이면 .gitignore에 걸리는 경로만 허용 (feedback_review_*는 gitignore)

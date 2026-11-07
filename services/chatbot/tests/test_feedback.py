@@ -410,7 +410,8 @@ def test_export(env, tmp_path):
     from lawbot.llm import build_prompt
 
     assert sft.prompt.iloc[0] == build_prompt(hits, '질문A') and sft.completion.iloc[0] == '【결론】\n답'
-    assert set(q.split) <= {'train', 'val'} and 'v4 프로필이 아니어서 뺌 1' in '\n'.join(lines_)
+    assert set(q.split) <= {'train', 'val'}
+    assert "지원하지 않는 프로필이라 뺌 1: ['v1'] (지원 범위 v4·v5)" in lines_
     assert all(stat.S_IMODE(f.stat().st_mode) == 0o600 for f in (tmp_path / 'out').iterdir())
     d.loc['c', 'h_gold'] = '제26조'  # 법령명 없는 정답 조문
     d.reset_index().to_csv(out, index=False, encoding='utf-8-sig')
@@ -529,29 +530,34 @@ def test_export_default_articles_include_decrees():
     assert ('근로기준법', '제26조') in docs and ('근로기준법 시행령', '제2조') in docs
 
 
-def test_export_cli_accepts_v5_gold_and_counts_unsupported_profiles(tmp_path, capsys):
+@pytest.mark.parametrize('include_v4', [True, False], ids=['mixed', 'v5-only'])
+def test_export_cli_accepts_v5_gold_and_counts_unsupported_profiles(tmp_path, capsys, include_v4):
     tax_key = ('소득세법 시행령', '제38조')
     tax_doc = feedback_export.article_docs(ROOT / 'data/v5/law_articles_v5_decree.csv')[tax_key]
-    write_rows(
-        tmp_path / 'fb',
-        [fb_row('v4', '질문A'), fb_row('v5', '질문B', profile='v5'), fb_row('legacy', '질문C', profile='v1')],
-    )
+    entries = [
+        (fb_row('v5', '질문B', profile='v5'), ' '.join(tax_key)),
+        (fb_row('legacy', '질문C', profile='v1'), '알 수 없는 조문'),
+    ]
+    if include_v4:
+        entries.insert(0, (fb_row('v4', '질문A'), '근로기준법 제26조'))
+    write_rows(tmp_path / 'fb', [record for record, _ in entries])
     review = tmp_path / 'review.csv'
     feedback_review.review([tmp_path / 'fb'], review, evals=[])
     d = pd.read_csv(review, encoding='utf-8-sig', keep_default_na=False)
     d['h_ok'] = '맞음'
-    d['h_gold'] = ['근로기준법 제26조', ' '.join(tax_key), '알 수 없는 조문']
+    d['h_gold'] = [gold for _, gold in entries]
     d.to_csv(review, index=False, encoding='utf-8-sig')
 
     out = tmp_path / 'out'
     feedback_export.main([str(review), '--out', str(out)])
     summary = capsys.readouterr().out
-    assert '프로필이 아니어서 뺌 1' in summary and 'legacy' in summary
+    assert "지원하지 않는 프로필이라 뺌 1: ['legacy'] (지원 범위 v4·v5)" in summary.splitlines()
     pairs = pd.read_csv(out / 'fb_emb_pairs.csv', encoding='utf-8-sig').set_index('feedback_id')
-    assert list(pairs.index) == ['v4', 'v5']
+    expected_ids = ['v4', 'v5'] if include_v4 else ['v5']
+    assert list(pairs.index) == expected_ids
     assert pairs.loc['v5', 'positive'] == tax_doc
     for name in ('fb_questions', 'fb_sft', 'fb_kto'):
-        assert list(pd.read_csv(out / f'{name}.csv', encoding='utf-8-sig').feedback_id) == ['v4', 'v5']
+        assert list(pd.read_csv(out / f'{name}.csv', encoding='utf-8-sig').feedback_id) == expected_ids
 
 
 def test_export_uses_configured_corpus_of_each_record(env, tmp_path):
