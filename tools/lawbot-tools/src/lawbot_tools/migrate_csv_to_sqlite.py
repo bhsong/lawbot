@@ -32,8 +32,9 @@ def _parser() -> argparse.ArgumentParser:
     return parser
 
 
-def _import(args, db: Path) -> list[str]:
+def _import(args, db: Path) -> tuple[int, list[str]]:
     lines = []
+    status = 0
     if args.command == 'corpus':
         corpus = prepare_corpus(repo_path(args.dir), args.profile, args.release_id)
         count = corpus.row_count
@@ -52,6 +53,7 @@ def _import(args, db: Path) -> list[str]:
     else:
         feedback = prepare_feedback(files([repo_path(path) for path in args.paths]))
         count = feedback.row_count
+        status = int(bool(feedback.malformed or feedback.invalid))
         lines.extend(
             (
                 f'깨진 JSON {len(feedback.malformed)}행',
@@ -64,9 +66,9 @@ def _import(args, db: Path) -> list[str]:
 
     print(f'대상 DB {db} · 입력 {count}행', flush=True)
     if args.dry_run:
-        return [*lines, '입력 검사 완료 · DB 미접근']
+        return status, [*lines, '입력 검사 완료 · DB 미접근']
     changed = apply_import(db, write)
-    return [*lines, f'변경 {changed}건']
+    return status, [*lines, f'변경 {changed}건']
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -79,13 +81,13 @@ def main(argv: list[str] | None = None) -> int:
                 raise FileExistsError(f'보고서 경로가 이미 있습니다: {report}')
             if not report.parent.is_dir():
                 raise FileNotFoundError(f'보고서 폴더가 없습니다: {report.parent}')
-        ok = True
+        status = 0
         if args.command != 'verify':
-            lines = _import(args, db)
+            status, lines = _import(args, db)
         elif args.dry_run:
             lines = ['대조 경로 검사 완료 · DB 미접근']
         else:
-            ok, lines = verify_imports(db)
+            status, lines = verify_imports(db)
         print('\n'.join(lines))
         if report is not None:
             with report.open('x', encoding='utf-8') as target:
@@ -93,7 +95,7 @@ def main(argv: list[str] | None = None) -> int:
     except (OSError, RuntimeError, ValueError, DatabaseError) as exc:
         print(f'FAIL {exc}')
         return 2
-    return 0 if ok else 2
+    return status
 
 
 if __name__ == '__main__':

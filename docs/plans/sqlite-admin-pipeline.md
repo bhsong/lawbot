@@ -388,6 +388,7 @@ CREATE TABLE dataset_releases (
 );
 ```
 
+- `0002_corpus_csv_format.sql`은 `ALTER TABLE corpus_releases ADD COLUMN csv_format TEXT`로 복원 형식 전용 열을 추가한다. CSV별 BOM·줄바꿈·마지막 줄바꿈과 매니페스트 해시를 기록한다. 이전 이관 코드가 `note`에 저장한 형식은 전용 열로 옮기고 나머지 메모는 보존한다.
 - `feedback_promotions`는 뒤에 선언된 `qa_items`와 `qa_preferences`를 참조한다. 테스트로 FK가 실제 동작하는지 확인한다.
 - 기존 분할의 `test`는 `split_sets.frozen=1`로 넣은 뒤 바꿀 수 없다(트리거). 피드백 분할 세트 `feedback`은 `frozen=0`, `unassigned`에서 한 번만 `train`/`val`로 바뀐다.
 - 기존 데이터셋 분할: `v4`·`v5`·`decree_v4`는 purpose `emb`·`sllm` 두 줄씩. 평가 전용 세트(`reasoning_v5`, `oos`, `scope`, `refusal_hard`, `labor_eval`)는 purpose `eval`, split `test`(누출 검사에서 test와 같이 취급).
@@ -542,7 +543,7 @@ CREATE TABLE dataset_releases (
   - `corpus --db PATH --dir <CSV·매니페스트 폴더> --profile v4|v5 --release-id ID [--activate]`
   - `qa --db PATH --set v4|v5|decree_v4|reasoning_v5|oos|scope|refusal_hard|labor_eval` (파일 경로는 세트별 상수, `--file`로 덮어쓰기)
   - `feedback --db PATH <폴더·파일>...`
-  - `verify --db PATH` (DB에 있는 모든 세트·릴리스를 원본 파일과 다시 대조)
+  - `verify --db PATH` (DB의 복원 해시와 기록된 원본 파일 상태를 각각 확인)
   - 공통: `--report <md 경로>`(질문 원문 없음: 행 수·키·sha만), `--dry-run`(DB 열지 않고 검사만)
   - CLI는 인자 처리와 보고를 맡긴다. SQL은 `lawbot/db/` 또는 `lawbot/*_store.py`에 두고 `lawbot_tools`의 `sqlite3` import를 막는 `test_layers.py` 규칙을 유지한다.
 - [x] 동작 규칙:
@@ -552,7 +553,7 @@ CREATE TABLE dataset_releases (
   - [x] 한 세트·한 릴리스 = 한 트랜잭션. 실패하면 롤백해 DB가 전과 같다.
   - [x] 멱등: 같은 입력을 다시 넣으면 변경 0건으로 끝난다. 같은 id에 다른 내용이면 실패(덮어쓰지 않음).
   - [x] 분할 세트 `v4`·`v5`·`decree_v4`와 평가 전용 세트는 넣은 직후 `frozen=1`.
-  - [x] 피드백: `json.loads` 실패 줄은 건수·줄 번호만 보고하고 건너뜀(기존 `feedback_review.load`와 같은 규칙). `record`에 원본 줄의 dict 전체를 그대로(키 순서 유지). 알 수 없는 label·reason이면 그 줄 실패로 보고.
+  - [x] 피드백: 깨진 JSON이나 유효하지 않은 줄은 건수·줄 번호만 보고하고 건너뛴다. `record`에 원본 줄의 dict 전체를 보존한다. 건너뛴 줄이 있으면 유효한 줄을 저장하고 종료 코드 1을 반환한다. 배치 전체 실패는 2다.
   - [x] `--db`는 필수이고 기본값이 없다. 쓰기 전에 대상 DB 경로와 넣을 행 수를 출력한다. 운영 DB 이관은 7절 절차로만 한다(`--dry-run` 먼저).
 - [x] Red `services/chatbot/tests/test_migrate_csv_to_sqlite.py` (레포의 실제 `data/` 파일을 읽고 `tmp_path` DB에 쓴다):
   - [x] v5 릴리스(`data/v5`): 법률·조합 CSV를 DB에서 다시 만든 바이트가 원본과 같다(sha256). 매니페스트 텍스트도 같다.

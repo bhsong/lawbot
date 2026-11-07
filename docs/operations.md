@@ -409,7 +409,7 @@ DB와 백업에는 질문 원문이 들어갈 수 있습니다. 레포 밖의 �
 
 ### CSV·JSONL 이관과 대조
 
-개발 확인은 임시 DB에서 실행합니다. 이관 명령의 `--db`는 필수이며 상대 경로는 레포 최상위 기준입니다. 이관 전에 `--dry-run`으로 원본을 검사할 수 있습니다. `verify --dry-run`은 경로만 검사합니다. 실제 대조는 `verify`가 DB를 읽기 전용으로 열어 수행합니다.
+개발 확인은 임시 DB에서 실행합니다. 이관 명령의 `--db`는 필수이며 상대 경로는 레포 최상위 기준입니다. 기존 스키마 버전 1의 DB에는 백업 후 `lawbot-db migrate --db PATH`로 CSV 복원 형식 열을 추가합니다. 이관 전에 `--dry-run`으로 원본을 검사할 수 있습니다. `verify --dry-run`은 경로만 검사합니다. 실제 대조는 `verify`가 DB를 읽기 전용으로 열어 수행합니다.
 
 ```bash
 migration_dir="$(mktemp -d)"
@@ -426,9 +426,9 @@ uv run python -m lawbot_tools.migrate_csv_to_sqlite verify --db "$migration_db" 
 
 `corpus`는 두 CSV와 매니페스트를 대조합니다. `--activate`를 지정하면 검증한 릴리스를 DB의 해당 프로필 활성 대상으로 기록합니다. `qa --file PATH`는 해당 세트의 질문 CSV를 바꿉니다. 분할과 정답 키는 세트에 정의된 원본을 사용합니다. `decree_v4`의 정답 키 문자열은 원본 행에 보존하고, 연결된 정답 키 CSV가 있는 세트에는 외래 키를 채웁니다.
 
-피드백은 `uv run python -m lawbot_tools.migrate_csv_to_sqlite feedback --db "$migration_db" <JSONL 파일 또는 폴더>`로 이관합니다. 깨진 JSON과 유효하지 않은 레코드는 파일명과 줄 번호로 보고하고 유효한 줄을 가져옵니다. 같은 ID에 서로 다른 내용이 들어오면 배치를 롤백합니다.
+피드백은 `uv run python -m lawbot_tools.migrate_csv_to_sqlite feedback --db "$migration_db" <JSONL 파일 또는 폴더>`로 이관합니다. 깨진 JSON과 유효하지 않은 레코드는 파일명과 줄 번호로 보고합니다. 건너뛴 줄이 있으면 유효한 줄은 저장하고 종료 코드 1을 반환합니다. 같은 ID에 서로 다른 내용이 들어오면 배치를 롤백하고 2를 반환합니다.
 
-`verify`는 DB에서 조문·매니페스트와 QA 원본을 복원해 기록된 경로의 바이트와 대조합니다. 전체 확인에서는 조문 릴리스 2개와 QA 세트 8개가 모두 `OK`여야 합니다. 보고서는 새 파일로 쓰며 대조 결과와 파일별 해시를 포함합니다. 바이트 복원이 가능한 UTF-8 CSV만 이관하며, 지원하는 줄바꿈은 LF와 CRLF입니다.
+`verify`는 DB에서 조문·매니페스트와 QA 원본을 복원하고 저장된 해시를 확인한 뒤 기록된 원본 경로와 대조합니다. 전체 확인에서는 조문 릴리스 2개와 QA 세트 8개가 모두 `OK`이고 종료 코드가 0이어야 합니다. DB가 정상이면 원본 파일의 변경·누락·읽기 실패는 `SOURCE CHANGED`·`SOURCE MISSING`·`SOURCE UNREADABLE`로 표시하고 1을 반환합니다. DB 검증 실패는 `FAIL`과 2로 표시합니다. 보고서는 새 파일로 쓰며 대조 결과와 파일별 해시를 포함합니다. 바이트 복원이 가능한 UTF-8 CSV만 이관하며, 지원하는 줄바꿈은 LF와 CRLF입니다.
 
 ## 테스트 실행
 

@@ -18,43 +18,55 @@ def apply_import(path: Path, write: Callable[[Connection], int]) -> int:
         return write(conn)
 
 
-def _compare(restored: dict[str, bytes], sources: dict[str, Path]) -> list[str]:
+def _compare(restored: dict[str, bytes], sources: dict[str, Path]) -> tuple[int, list[str]]:
     if restored.keys() != sources.keys():
         raise ValueError('원본과 복원 파일 이름이 다릅니다.')
-    lines = []
+    status, lines = 0, []
     for name, raw in restored.items():
-        if (ROOT / sources[name]).read_bytes() != raw:
-            raise ValueError(f'{name}의 원본과 복원 바이트가 다릅니다.')
         lines.append(f'  {name} sha256 {sha256(raw)}')
-    return lines
+        try:
+            source = (ROOT / sources[name]).read_bytes()
+        except FileNotFoundError:
+            source_status = 'MISSING'
+        except OSError:
+            source_status = 'UNREADABLE'
+        else:
+            if source == raw:
+                continue
+            source_status = 'CHANGED'
+        status = 1
+        lines.append(f'  SOURCE {source_status} {name}')
+    return status, lines
 
 
-def verify_imports(path: Path) -> tuple[bool, list[str]]:
-    """Compare reconstructed corpora and QA datasets with their recorded sources."""
+def verify_imports(path: Path) -> tuple[int, list[str]]:
+    """Verify restored data, reporting source drift separately from DB failure."""
     check_schema(path)
     lines = []
-    ok = True
+    status = 0
     with connect(path) as conn:
         conn.execute('BEGIN')
         if conn.execute('PRAGMA foreign_key_check').fetchone() is not None:
-            return False, ['FAIL 외래 키 검사']
+            return 2, ['FAIL 외래 키 검사']
         for name, directory in conn.execute('SELECT release_id, origin FROM corpus_releases ORDER BY release_id'):
             try:
                 restored = release_bytes(conn, name)
-                details = _compare(restored, {file: Path(directory) / file for file in restored})
-            except (OSError, ValueError, TypeError, KeyError, DatabaseError) as exc:
-                ok = False
+                source_status, details = _compare(restored, {file: Path(directory) / file for file in restored})
+            except (ValueError, TypeError, KeyError, DatabaseError) as exc:
+                status = 2
                 lines.append(f'FAIL corpus {name} · {exc}')
             else:
+                status = max(status, source_status)
                 lines.extend((f'OK corpus {name}', *details))
         for (name,) in conn.execute('SELECT split_set FROM split_sets ORDER BY split_set'):
             if name not in DATASETS:
                 continue
             try:
-                details = _compare(dataset_bytes(conn, name), dataset_sources(conn, name))
-            except (OSError, ValueError, TypeError, KeyError, DatabaseError) as exc:
-                ok = False
+                source_status, details = _compare(dataset_bytes(conn, name), dataset_sources(conn, name))
+            except (ValueError, TypeError, KeyError, DatabaseError) as exc:
+                status = 2
                 lines.append(f'FAIL qa {name} · {exc}')
             else:
+                status = max(status, source_status)
                 lines.extend((f'OK qa {name}', *details))
-    return (ok, lines) if lines else (False, ['FAIL 대조할 조문 릴리스 또는 QA 세트가 없습니다.'])
+    return (status, lines) if lines else (2, ['FAIL 대조할 조문 릴리스 또는 QA 세트가 없습니다.'])

@@ -9,7 +9,8 @@ from collections import Counter
 import pandas as pd
 import pytest
 
-from lawbot.db.connection import connect
+from lawbot.db import migrate
+from lawbot.db.connection import connect, transaction
 from lawbot.db.migrate import init
 from lawbot.paths import DATA
 from lawbot.qa_rules import latest_rows
@@ -95,6 +96,55 @@ def test_corpus_reuses_versions_and_activates_idempotently(db_path, capsys):
         assert conn.execute('SELECT count(*) FROM article_versions').fetchone()[0] < 840 + 1525
     assert run(db_path, 'corpus', '--dir', DATA / 'v4', '--profile', 'v4', '--release-id', 'v5') != 0
     assert db_state(db_path) == before
+
+
+def test_release_bytes_and_verify_allow_a_human_note(db_path):
+    from lawbot.db.corpus_import import release_bytes
+
+    assert import_corpus(db_path, 'v5') == 0
+    with connect(db_path, write=True) as conn:
+        assert conn.execute("SELECT note FROM corpus_releases WHERE release_id='v5'").fetchone() == (None,)
+        before = release_bytes(conn, 'v5')
+        with transaction(conn):
+            conn.execute("UPDATE corpus_releases SET note='Human release note' WHERE release_id='v5'")
+        assert release_bytes(conn, 'v5') == before
+    assert run(db_path, 'verify') == 0
+
+
+def test_migrate_legacy_csv_format_and_preserve_human_notes(tmp_path, monkeypatch):
+    migration_files = migrate.MIGRATIONS
+    old_migrations = tmp_path / 'v1'
+    old_migrations.mkdir()
+    (old_migrations / '0001_init.sql').write_bytes((migration_files / '0001_init.sql').read_bytes())
+    legacy = tmp_path / 'legacy.db'
+    with monkeypatch.context() as patch:
+        patch.setattr(migrate, 'MIGRATIONS', old_migrations)
+        assert init(legacy) == 1
+    format_metadata = {part: dict(bom=True, newline='\n', final_newline=True) for part in ('law', 'combined')}
+    with connect(legacy, write=True) as conn, transaction(conn):
+        conn.executemany(
+            'INSERT INTO corpus_releases (release_id, profile, dataset_version, reference_date, law_csv_name, '
+            'combined_csv_name, law_columns, combined_columns, law_csv_sha256, combined_csv_sha256, '
+            'law_manifest, combined_manifest, law_manifest_name, combined_manifest_name, origin, status, created_at, note) '
+            "VALUES (?,'v5','v5','2026-11-08','law.csv','combined.csv','[]','[]','','','{}','{}',"
+            "'law.json','combined.json','data/v5','validated','now',?)",
+            [
+                ('legacy', json.dumps({'csv_format': format_metadata})),
+                ('mixed', json.dumps({'csv_format': format_metadata, 'note': 'Keep me'})),
+                ('plain', 'Human release note'),
+            ],
+        )
+    assert migrate.migrate(legacy) == 2
+    with connect(legacy) as conn:
+        rows = {
+            key: (json.loads(fmt) if fmt else None, note)
+            for key, fmt, note in conn.execute('SELECT release_id, csv_format, note FROM corpus_releases')
+        }
+    assert rows == {
+        'legacy': (format_metadata, None),
+        'mixed': (format_metadata, '{"note":"Keep me"}'),
+        'plain': (None, 'Human release note'),
+    }
 
 
 @pytest.mark.parametrize('dataset', QA_FILES)
@@ -208,7 +258,7 @@ def test_feedback_preserves_records_and_only_reports_line_locations(db_path, tmp
         + '\n'
     )
     report = tmp_path / 'report.md'
-    assert run(db_path, 'feedback', source, '--report', report) == 0
+    assert run(db_path, 'feedback', source, '--report', report) == 1
     summary = capsys.readouterr().out + report.read_text()
     assert question not in summary and 'Synthetic answer' not in summary
     assert all(f'{source.name}:{line}' in summary for line in (7, 8, 9))
@@ -217,7 +267,7 @@ def test_feedback_preserves_records_and_only_reports_line_locations(db_path, tmp
     assert stored == rows and [list(r) for r in stored] == [list(r) for r in rows]
     assert latest_rows(stored) == latest_rows(rows)
     before = db_state(db_path)
-    assert run(db_path, 'feedback', source) == 0
+    assert run(db_path, 'feedback', source) == 1
     assert db_state(db_path) == before
     source.write_text(
         json.dumps(rows[0] | {'feedback_id': 'new'})
@@ -227,6 +277,20 @@ def test_feedback_preserves_records_and_only_reports_line_locations(db_path, tmp
     )
     assert run(db_path, 'feedback', source) != 0
     assert db_state(db_path) == before
+
+
+@pytest.mark.parametrize('bad_kind', ['malformed', 'invalid'])
+def test_feedback_partial_status_in_dry_run_and_import(db_path, tmp_path, bad_kind):
+    valid = dict(feedback_id='ok', turn_id='turn', ts='now', label='like', question='Synthetic question')
+    bad = '{broken' if bad_kind == 'malformed' else json.dumps(valid | {'label': 'flag', 'reason': 'bad'})
+    source = tmp_path / 'feedback.jsonl'
+    source.write_text(json.dumps(valid) + '\n' + bad + '\n')
+    assert run(db_path, 'feedback', source, '--dry-run') == 1
+    with connect(db_path) as conn:
+        assert conn.execute('SELECT count(*) FROM feedbacks').fetchone() == (0,)
+    assert run(db_path, 'feedback', source) == 1
+    with connect(db_path) as conn:
+        assert conn.execute('SELECT feedback_id FROM feedbacks').fetchall() == [('ok',)]
 
 
 def test_cli_dry_run_validates_inputs_without_creating_database(tmp_path):
@@ -271,7 +335,38 @@ def test_verify_all_imports_and_detects_changed_source(db_path, tmp_path, capsys
         assert f'OK qa {name}' in result.stdout
     for profile in ('v4', 'v5'):
         assert f'OK corpus {profile}' in result.stdout
-    with source.open('ab') as stream:
-        stream.write(b'\n')
-    assert run(db_path, 'verify') != 0
-    assert 'FAIL qa scope' in capsys.readouterr().out
+    original = source.read_bytes()
+    first_question = csv_rows(original)[0]['question'].encode()
+    source.write_bytes(original.replace(first_question, b'synthetic changed question', 1))
+    assert run(db_path, 'verify') == 1
+    changed = capsys.readouterr().out
+    assert 'OK qa scope' in changed and 'SOURCE CHANGED scope.csv' in changed and 'FAIL qa scope' not in changed
+    source.unlink()
+    assert run(db_path, 'verify') == 1
+    missing = capsys.readouterr().out
+    assert 'OK qa scope' in missing and 'SOURCE MISSING scope.csv' in missing and 'FAIL qa scope' not in missing
+
+
+def test_verify_distinguishes_a_changed_corpus_source_from_corrupt_db(db_path, tmp_path, capsys):
+    source = tmp_path / 'source'
+    source.mkdir()
+    for name in (
+        'articles_v5.csv',
+        'law_articles_v5_decree.csv',
+        'manifest.json',
+        'manifest_law_articles_v5_decree.json',
+    ):
+        (source / name).write_bytes((DATA / 'v5' / name).read_bytes())
+    assert run(db_path, 'corpus', '--dir', source, '--profile', 'v5', '--release-id', 'local') == 0
+    law = source / 'articles_v5.csv'
+    original = law.read_bytes()
+    title = csv_rows(original)[0]['title'].encode()
+    law.write_bytes(original.replace(title, b'changed synthetic title', 1))
+    capsys.readouterr()
+    assert run(db_path, 'verify') == 1
+    changed = capsys.readouterr().out
+    assert 'OK corpus local' in changed and 'SOURCE CHANGED articles_v5.csv' in changed
+    with connect(db_path, write=True) as conn, transaction(conn):
+        conn.execute("UPDATE corpus_releases SET law_manifest=law_manifest || ' ' WHERE release_id='local'")
+    assert run(db_path, 'verify') == 2
+    assert 'FAIL corpus local' in capsys.readouterr().out

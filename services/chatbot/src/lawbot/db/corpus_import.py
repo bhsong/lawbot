@@ -118,13 +118,15 @@ def release_bytes(conn: sqlite3.Connection, release_id: str) -> dict[str, bytes]
     """Reconstruct a release's two CSVs and original manifests from SQLite."""
     release = conn.execute(
         'SELECT law_csv_name, combined_csv_name, law_columns, combined_columns, law_csv_sha256, combined_csv_sha256, '
-        'law_manifest_name, combined_manifest_name, law_manifest, combined_manifest, note '
+        'law_manifest_name, combined_manifest_name, law_manifest, combined_manifest, csv_format '
         'FROM corpus_releases WHERE release_id=?',
         (release_id,),
     ).fetchone()
     if release is None:
         raise ValueError(f'조문 릴리스를 찾을 수 없습니다: {release_id}')
-    law_name, combined_name, law_cols, combined_cols, law_sha, combined_sha, lm, cm, ltext, ctext, note = release
+    law_name, combined_name, law_cols, combined_cols, law_sha, combined_sha, lm, cm, ltext, ctext, csv_format = release
+    if csv_format is None:
+        raise ValueError(f'{release_id} 조문 CSV의 복원 형식이 없습니다.')
     fields = ', '.join(f'av.{col}' for col in VERSION_COLUMNS)
     records = [
         dict(zip(COMBINED_COLUMNS, row, strict=True))
@@ -135,12 +137,23 @@ def release_bytes(conn: sqlite3.Connection, release_id: str) -> dict[str, bytes]
             (release_id,),
         )
     ]
-    formats = json.loads(note)['csv_format']
+    formats = json.loads(csv_format)
     law_bytes = CsvLayout(json.loads(law_cols), **formats['law']).render(r for r in records if r['kind'] == LAW_KIND)
     combined_bytes = CsvLayout(json.loads(combined_cols), **formats['combined']).render(records)
     if (sha256(law_bytes), sha256(combined_bytes)) != (law_sha, combined_sha):
         raise ValueError(f'{release_id} 조문 CSV의 복원 해시가 저장된 해시와 다릅니다.')
-    return {law_name: law_bytes, combined_name: combined_bytes, lm: ltext.encode(), cm: ctext.encode()}
+    manifests = {lm: ltext.encode(), cm: ctext.encode()}
+    for manifest_name, csv_name, checksum in ((lm, law_name, law_sha), (cm, combined_name, combined_sha)):
+        metadata = json.loads(manifests[manifest_name])
+        if not isinstance(metadata, dict) or (metadata.get('articles_file'), metadata.get('articles_sha256')) != (
+            csv_name,
+            checksum,
+        ):
+            raise ValueError(f'{release_id}의 저장된 매니페스트가 복원 CSV와 다릅니다: {manifest_name}')
+    manifest_sha = formats.get('manifest_sha256')
+    if manifest_sha is not None and manifest_sha != {name: sha256(raw) for name, raw in manifests.items()}:
+        raise ValueError(f'{release_id} 매니페스트의 복원 해시가 저장된 해시와 다릅니다.')
+    return {law_name: law_bytes, combined_name: combined_bytes, **manifests}
 
 
 def _record_release(conn: sqlite3.Connection, corpus: CorpusImport, now: str) -> None:
@@ -150,11 +163,12 @@ def _record_release(conn: sqlite3.Connection, corpus: CorpusImport, now: str) ->
     formats = {name: asdict(part.csv.layout) for name, part in (('law', law), ('combined', combined))}
     for layout in formats.values():
         del layout['columns']
+    formats['manifest_sha256'] = {part.manifest_name: sha256(part.manifest_text.encode()) for part in (law, combined)}
     conn.execute(
         'INSERT INTO corpus_releases (release_id, profile, dataset_version, reference_date, collected_date, '
         'source_name, source_url, source_ref, law_csv_name, combined_csv_name, law_columns, combined_columns, '
         'law_csv_sha256, combined_csv_sha256, law_manifest, combined_manifest, law_manifest_name, combined_manifest_name, '
-        'origin, status, created_at, validated_at, note) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
+        'origin, status, created_at, validated_at, csv_format) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
         (
             corpus.release_id,
             corpus.profile,
@@ -178,7 +192,7 @@ def _record_release(conn: sqlite3.Connection, corpus: CorpusImport, now: str) ->
             'validated',
             now,
             now,
-            json.dumps({'csv_format': formats}),
+            json.dumps(formats),
         ),
     )
     law_ids = {}
