@@ -332,9 +332,12 @@ def create_app(token, registry=None, max_body=MAX_BODY, max_concurrent=1, max_qu
         return JSONResponse(body, status_code=status)
 
     @app.get(contract.HEALTH_PATH)
-    async def health(request: Request):
+    async def health(request: Request, runtime: bool = False):
         state = request.app.state
-        return contract.HealthResponse(ready=state.registry is not None, commit=state.commit).model_dump()
+        data = contract.HealthResponse(ready=state.registry is not None, commit=state.commit).model_dump()
+        if runtime and state.scheduler is not None:
+            data['max_concurrent'] = state.scheduler.max_concurrent
+        return data
 
     @app.get(contract.MODELS_PATH)
     async def models(request: Request):

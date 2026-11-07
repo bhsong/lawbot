@@ -393,3 +393,15 @@ def test_package_does_not_import_chatbot_or_ui():
     )
     out = subprocess.run([sys.executable, '-c', code], capture_output=True, text=True, check=True)
     assert out.stdout.strip() == '[]'
+
+
+def test_health_runtime_reports_effective_generation_limit(reg):
+    app = api.create_app(TOKEN, reg, max_concurrent=3)
+    with TestClient(app) as client:
+        assert client.get('/health', headers=AUTH).json() == {'ready': True, 'commit': None}
+        assert client.get('/health?runtime=1').status_code == 401
+        assert client.get('/health?runtime=1', headers=AUTH).json() == {
+            'ready': True,
+            'commit': None,
+            'max_concurrent': 3,
+        }

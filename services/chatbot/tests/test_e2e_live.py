@@ -27,6 +27,7 @@ pytestmark = pytest.mark.e2e_live
 ANSWER_TIMEOUT = 180_000  # ms, 27B 한 질문 (모델 교체는 preflight에서 막음)
 UPDATE_WINDOW = (datetime.time(6, 20), datetime.time(6, 50))  # 조문 자동 갱신(06:30) 앞뒤
 CITATION = re.compile(r'\S+ 제\d+조')  # 근거 조문 형식 '법령명 제N조'
+RUNTIME_HEALTH = '/health?runtime=1'
 LOCAL = ('LAWBOT_PORT', 'LAWBOT_REQUEST_LOG', 'LAWBOT_FEEDBACK', 'LAWBOT_FEEDBACK_DIR', 'LAWBOT_INSTANCE')
 
 
@@ -45,6 +46,11 @@ SCENARIOS = {
 
 def sha256(path):
     return hashlib.sha256((ROOT / path).read_bytes()).hexdigest() if path and (ROOT / path).is_file() else None
+
+
+def server_max_concurrent(health):
+    value = health.get('max_concurrent')
+    return value if type(value) is int and value > 0 else None
 
 
 class Live:
@@ -78,8 +84,11 @@ class Live:
         if not (self.server and self.token):
             return ['레포 .env에 LAWBOT_MODEL_SERVER·LAWBOT_MODEL_TOKEN이 없음']
         try:
-            if not self.get('/health').get('ready'):
+            health = self.get(RUNTIME_HEALTH)
+            if not health.get('ready'):
                 return ['서버 미준비: /health ready가 아님']
+            if server_max_concurrent(health) is None:
+                return ['서버 동시 생성 상한을 확인할 수 없음']
             models = {m['id']: m for m in self.get('/v1/models')['data']}
         except httpx.HTTPError as e:
             return [f'서버 미준비: {type(e).__name__}']
@@ -95,13 +104,14 @@ class Live:
 
     def config(self):
         """실행 구성 (비밀값 제외). 시작 전·후를 비교해 다르면 결과 무효"""
-        health, models = self.get('/health'), self.get('/v1/models')['data']
+        health, models = self.get(RUNTIME_HEALTH), self.get('/v1/models')['data']
         profile = deploy.get_profile(self.env)
         rr, dc = deploy.reranker(profile, self.env), deploy.decree(profile, self.env)
         m = manifest.load(profile.articles) or {}
         return {
             'webapp_commit': revision.git_commit(ROOT),
             'model_server_commit': health.get('commit'),
+            'server_max_concurrent': server_max_concurrent(health),
             'models': [{k: x.get(k) for k in ('id', 'type', 'loaded', 'revision')} for x in models],
             'dataset_version': m.get('dataset_version'),
             'articles_sha256': sha256(profile.articles),
@@ -136,6 +146,8 @@ def live(tmp_path_factory):
     if reasons:
         pytest.fail('실행 전 확인 실패 (질문을 보내지 않음): ' + '; '.join(reasons))
     s.before = s.config()
+    if s.before['server_max_concurrent'] is None:
+        pytest.fail('실행 시작 구성에서 서버 동시 생성 상한을 확인할 수 없음 (질문을 보내지 않음)')
     port = free_port()
     env = {k: v for k, v in s.env.items() if k not in LOCAL}
     env.update(LAWBOT_REQUEST_LOG=str(s.request_log), LAWBOT_FEEDBACK='0', LAWBOT_MODELS='pro')
