@@ -2,6 +2,9 @@
 # 인코딩 호출은 모델 서버로 옮기기 전과 같다: 법률·하위법령 문서 목록을 각각 한 번에, 질문은 query 프롬프트로
 # pyright: reportAttributeAccessIssue=false, reportCallIssue=false, reportArgumentType=false, reportOptionalMemberAccess=false
 # ↑ pandas 필터 결과를 ndarray로 잘못 추론 (pandas 타입 선언 한계). 이 파일의 다른 검사는 그대로
+import hashlib
+from io import BytesIO
+from pathlib import Path
 from typing import cast
 
 import numpy as np
@@ -26,7 +29,9 @@ class Retriever:
     encoder: encode(texts, input_type, max_seq_length) → float32 배열 (api_client.Embedder, 테스트는 가짜)"""
 
     def __init__(self, encoder, law_csv, max_seq_length, decree_max_seq=None, cache=None):
-        law = pd.read_csv(law_csv, encoding='utf-8-sig')
+        raw = Path(law_csv).read_bytes()
+        self.articles_sha256 = hashlib.sha256(raw).hexdigest()
+        law = pd.read_csv(BytesIO(raw), encoding='utf-8-sig')
         law = law[law['deleted'] == 0].reset_index(drop=True)  # 415개 조문 (+ 하위법령 397개)
         if 'article_no' in law:  # article_id에 법령명이 들어 있으면('근로기준법 제26조') 번호만 쓴다
             law['article_id'] = law['article_no']

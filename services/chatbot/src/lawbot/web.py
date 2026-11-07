@@ -250,6 +250,7 @@ def create_app(app, auth: tuple[str, str], concurrency: int = 1, fb=None, dist=D
     """app: service.load_app() 결과, auth: (사용자, 비밀번호), fb: feedback.Feedback 또는 None, dist: SPA 빌드 폴더"""
     api = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
     sessions, slots = Sessions(), asyncio.Semaphore(concurrency)
+    feedback_writes = asyncio.Lock()
     api.state.sessions = sessions
     user_b, pw_b = auth[0].encode(), auth[1].encode()
 
@@ -317,8 +318,13 @@ def create_app(app, auth: tuple[str, str], concurrency: int = 1, fb=None, dist=D
         body = await read_json(request)
         if not isinstance(body, dict) or not isinstance(body.get('turn_id'), str):
             raise HTTPException(400, '요청 형식이 틀렸습니다.')
+        received_at = time.monotonic()
         try:
-            row = fb.save(who[1], body['turn_id'], body.get('label'), body.get('reason'))
+            # Equal-timestamp records are reviewed in append order.
+            async with feedback_writes:
+                row = await anyio.to_thread.run_sync(
+                    fb.save, who[1], body['turn_id'], body.get('label'), body.get('reason'), received_at
+                )
         except ValueError as e:
             raise HTTPException(400, '알 수 없는 피드백입니다.') from e
         except LookupError as e:

@@ -6,7 +6,7 @@ from datetime import UTC, datetime
 from importlib.resources import files
 from pathlib import Path
 
-from lawbot.db.connection import check_db_path, connect, new_database, transaction
+from lawbot.db.connection import check_db_path, connect, db_path, new_database, transaction
 
 MIGRATIONS = files('lawbot.db') / 'migrations'
 
@@ -50,13 +50,29 @@ def _current_version(conn: sqlite3.Connection, migrations: list[Migration]) -> i
 
 def check_schema(path: str | Path) -> int:
     """Require the complete schema version and migration history known to this code."""
+    return _check_schema(check_db_path(path))
+
+
+def _check_schema(path: Path) -> int:
     migrations = _migrations()
     latest = migrations[-1].version
-    with connect(check_db_path(path)) as conn:
+    with connect(path) as conn:
         version = _current_version(conn, migrations)
     if version < latest:
         raise RuntimeError(f'DB 스키마 버전 {version}이 코드의 버전 {latest}보다 낮습니다. uv run lawbot-db migrate')
     return version
+
+
+def startup_path(value: str) -> Path:
+    """Validate a configured web DB path and schema without creating or migrating it."""
+    path = db_path(value)
+    try:
+        _check_schema(path)
+    except FileNotFoundError as exc:
+        raise RuntimeError(str(exc)) from exc
+    except (OSError, sqlite3.Error) as exc:
+        raise RuntimeError(f'LAWBOT_DB 스키마를 확인할 수 없습니다 ({type(exc).__name__}).') from exc
+    return path
 
 
 def migrate(path: str | Path) -> int:

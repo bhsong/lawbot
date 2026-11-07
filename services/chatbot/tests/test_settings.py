@@ -3,6 +3,7 @@ import pytest
 
 from conftest import TEST_TOKEN
 from lawbot import settings
+from lawbot.db import connection, migrate
 from lawbot.paths import ROOT
 
 BASE = {
@@ -64,18 +65,51 @@ def test_db_path_is_optional(extra):
 
 def test_db_path_accepts_ignored_relative_path():
     path = 'data/db/lawbot.db'
-    assert settings.load(BASE | {'LAWBOT_DB': path}, web=True).db == ROOT / path
+    assert settings.load(BASE | {'LAWBOT_DB': path}).db == ROOT / path
 
 
 def test_db_path_accepts_new_external_file(tmp_path):
     path = tmp_path / 'not-created.db'
-    assert settings.load(BASE | {'LAWBOT_DB': str(path)}, web=True).db == path
+    assert settings.load(BASE | {'LAWBOT_DB': str(path)}).db == path
     assert not path.exists()
 
 
 def test_db_path_rejects_unignored_repo_file():
     with pytest.raises(settings.SettingsError, match=r'LAWBOT_DB.*\.gitignore'):
         settings.load(BASE | {'LAWBOT_DB': 'data/not-ignored.db'}, web=True)
+
+
+@pytest.mark.parametrize('problem', ['missing', 'older', 'newer', 'corrupt'])
+def test_web_rejects_db_without_current_schema(tmp_path, problem):
+    path = tmp_path / 'private' / 'lawbot.db'
+    hints = {
+        'missing': 'lawbot-db init',
+        'older': 'lawbot-db migrate',
+        'newer': '보다 높습니다',
+        'corrupt': 'LAWBOT_DB',
+    }
+    if problem != 'missing':
+        migrate.init(path)
+    if problem == 'older':
+        with connection.connect(path, write=True) as conn:
+            conn.execute('DELETE FROM schema_migrations WHERE version=2')
+    elif problem == 'newer':
+        with connection.connect(path, write=True) as conn:
+            conn.execute("INSERT INTO schema_migrations VALUES (3, 'newer', 'checksum', 'time')")
+    elif problem == 'corrupt':
+        path.write_text('not SQLite')
+    before = path.read_bytes() if path.exists() else None
+    with pytest.raises(settings.SettingsError, match=hints[problem]):
+        settings.load(BASE | {'LAWBOT_DB': str(path)}, web=True)
+    assert (path.read_bytes() if path.exists() else None) == before
+
+
+def test_web_db_rejects_legacy_feedback_directory(tmp_path):
+    path = tmp_path / 'private' / 'lawbot.db'
+    migrate.init(path)
+    config = {'LAWBOT_DB': str(path), 'LAWBOT_FEEDBACK_DIR': str(tmp_path / 'old'), 'LAWBOT_FEEDBACK': '1'}
+    with pytest.raises(settings.SettingsError, match='migrate_csv_to_sqlite feedback'):
+        settings.load(BASE | config, web=True)
 
 
 def test_missing_model_server_is_reported(env):

@@ -5,25 +5,8 @@ from pathlib import Path
 
 from lawbot.db.connection import transaction
 from lawbot.feedback import REASONS
+from lawbot.feedback_store import insert, record_values
 
-FIELDS = (
-    'feedback_id',
-    'turn_id',
-    'ts',
-    'label',
-    'reason',
-    'question',
-    'answer_raw',
-    'answer_shown',
-    'model',
-    'profile',
-    'dataset_version',
-    'corpus_release_id',
-    'articles_sha256',
-    'commit_sha',
-    'request_id',
-    'instance',
-)
 REQUIRED = ('feedback_id', 'turn_id', 'ts', 'label', 'question')
 
 
@@ -55,8 +38,7 @@ def _parse_row(record: object, location: str) -> FeedbackRow | None:
         return None
     if reason not in (REASONS.values() if label == 'flag' else (None, '')):
         return None
-    mapped = record | {'reason': reason or None, 'commit_sha': record.get('commit_sha', record.get('commit'))}
-    values = tuple(mapped.get(key) for key in FIELDS)
+    values = record_values(record)
     if any(value is not None and not isinstance(value, str) for value in values):
         return None
     return FeedbackRow(location, values, json.dumps(record, ensure_ascii=False))
@@ -86,8 +68,6 @@ def prepare_feedback(paths: list[Path]) -> FeedbackImport:
 
 def write_feedback(conn: sqlite3.Connection, feedback: FeedbackImport) -> int:
     """Append valid records atomically. A conflicting feedback ID rolls back the batch."""
-    columns = ', '.join(FIELDS)
-    placeholders = ','.join('?' for _ in range(len(FIELDS) + 2))
     changed = 0
     with transaction(conn):
         for row in feedback.rows:
@@ -96,9 +76,6 @@ def write_feedback(conn: sqlite3.Connection, feedback: FeedbackImport) -> int:
                 if previous != (row.record,):
                     raise ValueError(f'같은 피드백 ID의 원본 내용이 다릅니다: {row.location}')
                 continue
-            conn.execute(
-                f'INSERT INTO feedbacks ({columns}, record, origin) VALUES ({placeholders})',
-                (*row.values, row.record, f'import:{row.location}'),
-            )
+            insert(conn, row.values, row.record, f'import:{row.location}')
             changed += 1
     return changed

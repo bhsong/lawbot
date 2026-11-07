@@ -1,5 +1,6 @@
 # tests/test_feedback.py  →  답변 피드백(B6): 턴 기록·저장 줄·검수·내보내기 (가짜 모델, 피드백 파일은 tmp_path에만)
 # 화면 버튼과 HTTP 경로는 test_web.py, 화면 표시는 frontend의 Vitest
+import hashlib
 import json
 import stat
 import subprocess
@@ -12,12 +13,32 @@ import pytest
 import lawbot.service as service
 from chat_support import run
 from fakes import FakeLLM, FakeRetriever
-from lawbot import feedback, web
+from lawbot import feedback, settings, web
+from lawbot.db import migrate
+from lawbot.db.connection import connect
+from lawbot.db.feedback_import import prepare_feedback, write_feedback
 from lawbot.paths import ROOT
 from lawbot_tools import feedback_export, feedback_review
 
 QUESTION = '해고 예고 없이 해고되면 어떻게 하나요 고유문구XYZ'
 CHUNKS = ['【결론】\n예고해야', ' 합니다.\n\n【근거 조문】\n근로기준법 제26조\n\n【설명】\n- 설명']
+LEGACY_KEYS = set(
+    'feedback_id turn_id ts label reason question hits system answer_raw answer_shown model fmt refused '
+    'n_cited citations timing decree n_decree instance mode profile dataset_version commit request_id'.split()
+)
+
+
+@pytest.fixture
+def feedback_db(env, tmp_path):
+    from conftest import set_auth
+
+    path = tmp_path / 'private' / 'lawbot.db'
+    migrate.init(path)
+    set_auth(env)
+    env.setenv('LAWBOT_FEEDBACK', '1')
+    env.setenv('LAWBOT_DB', str(path))
+    env.setattr(feedback, 'DEFAULT_DIR', tmp_path / 'fallback')
+    return path, settings.load(web=True).feedback
 
 
 def local_app(env):
@@ -62,13 +83,28 @@ def test_reasons_offered_to_screen(env, tmp_path):
 
 
 # ---- T4·T5: 저장 기록 ----
-def test_like_saves_full_turn(env, tmp_path):
+def test_like_saves_full_turn(env, feedback_db):
     a = local_app(env)
-    fb = feedback.Feedback(tmp_path)
+    path, fb = feedback_db
     tid, shown = turn(a, fb, fmt='concise', model='pro')
     expected = list(service.ask(a, QUESTION, 'pro', fmt='concise'))[-1]
     row = fb.save('s1', tid, 'like')
-    assert row is not None and lines(tmp_path) == [row]
+    assert row is not None
+    with connect(path) as conn:
+        stored = conn.execute(
+            'SELECT record, origin, question, articles_sha256, corpus_release_id, commit_sha FROM feedbacks'
+        ).fetchall()
+    assert len(stored) == 1
+    record, origin, question, digest, release, commit_sha = stored[0]
+    assert json.loads(record) == row and LEGACY_KEYS <= row.keys()
+    assert (origin, question, digest, release, commit_sha) == (
+        'web',
+        QUESTION,
+        row['articles_sha256'],
+        None,
+        row['commit'],
+    )
+    assert not (path.parent.parent / 'fallback').exists()
     assert (row['label'], row['reason'], row['question'], row['model'], row['fmt'], row['turn_id']) == (
         'like',
         None,
@@ -85,6 +121,10 @@ def test_like_saves_full_turn(env, tmp_path):
     ]
     assert (row['mode'], row['profile'], row['dataset_version']) == ('api', 'v4', 'v4')
     assert row['request_id'] and row['timing']['total'] is not None and row['commit']
+    assert row['articles_sha256'] == hashlib.sha256(a.profile.articles.read_bytes()).hexdigest()
+    assert row['emb_model'] == a.profile.emb_model and row['rerank_model'] is None
+    assert row['chat_model'] == a.models.specs['pro'].model and row['corpus_release_id'] is None
+    assert row['system_sha256'] == hashlib.sha256(row['system'].encode()).hexdigest()
 
 
 def test_full_format_system_and_default(env, tmp_path):
@@ -94,6 +134,26 @@ def test_full_format_system_and_default(env, tmp_path):
     t2, _ = turn(a, fb, model='fast', fmt='full')  # Fast: 모델 기본 system (프로필 4항목 system 파일)
     r1, r2 = fb.save('s1', t1, 'like'), fb.save('s1', t2, 'like')
     assert r1['system'] == a.full_system and r2['system'] == service.system_text(a.profile, a.models.specs['fast'])
+
+
+def test_turn_provenance_matches_loaded_csv_and_system(env, tmp_path):
+    csv_path, system_path = tmp_path / 'articles.csv', tmp_path / 'system.md'
+    csv = (ROOT / 'data/v4/articles_v4.csv').read_bytes()
+    csv_path.write_bytes(csv)
+    system_path.write_text('initial system')
+    env.setenv('LAWBOT_V4_ARTICLES', str(csv_path))
+    env.setenv('LAWBOT_PRO_SYSTEM', str(system_path))
+    env.setattr(service, 'LLM', FakeLLM)
+    a = service.load_app()
+    a.models.get('pro')
+    csv_path.write_bytes(csv + b'\n')
+    system_path.write_text('edited system')
+    fb = feedback.Feedback(tmp_path / 'fb')
+    tid, _ = turn(a, fb, model='pro', fmt='concise')
+    row = fb.save('s1', tid, 'like')
+    assert row['system'] == 'initial system'
+    assert row['system_sha256'] == hashlib.sha256(b'initial system').hexdigest()
+    assert row['articles_sha256'] == hashlib.sha256(csv).hexdigest()
 
 
 def test_labels_reasons_and_dedup(env, tmp_path):
@@ -135,6 +195,18 @@ def test_folder_made_only_when_saving(env, tmp_path):
     env.setattr(web.uvicorn, 'run', lambda *a, **kw: None)
     web.main([])
     assert not (tmp_path / 'fb').exists()
+
+
+def test_unconfigured_db_keeps_legacy_jsonl(env, tmp_path):
+    from conftest import set_auth
+
+    set_auth(env)
+    env.setenv('LAWBOT_FEEDBACK', '1')
+    env.setenv('LAWBOT_FEEDBACK_DIR', str(tmp_path))
+    cfg = settings.load(web=True)
+    tid, _ = turn(local_app(env), cfg.feedback)
+    row = cfg.feedback.save('s1', tid, 'like')
+    assert cfg.db is None and lines(tmp_path) == [row]
 
 
 # ---- T6: 기록이 없는 답 ----
@@ -257,6 +329,30 @@ def write_rows(folder, rows, name='feedback_2026-11.jsonl'):
     (folder / name).write_text(
         ''.join(json.dumps(r, ensure_ascii=False) + '\n' for r in rows) + '{"깨진', encoding='utf-8'
     )
+
+
+def test_review_db_keeps_legacy_csv_and_latest_rules(env, tmp_path):
+    rows = [
+        fb_row('first', '첫 질문', turn='one'),
+        fb_row('cleared', '두 번째 질문', 'cleared', ts='2026-11-01T10:00:01', turn='two'),
+        fb_row('tie-winner', '첫 질문', 'flag', 'answer', turn='one'),
+        fb_row('earlier', '두 번째 질문', turn='two'),
+        fb_row('third', '세 번째 질문', turn='three'),
+    ]
+    source = tmp_path / 'source'
+    write_rows(source, rows)
+    path = tmp_path / 'private' / 'lawbot.db'
+    migrate.init(path)
+    with connect(path, write=True) as conn:
+        write_feedback(conn, prepare_feedback(list(source.glob('*.jsonl'))))
+
+    env.setattr(feedback_review, 'eval_sets', lambda: [])
+    from_jsonl, from_db = tmp_path / 'jsonl.csv', tmp_path / 'db.csv'
+    feedback_review.main([str(source), '--out', str(from_jsonl)])
+    feedback_review.main(['--db', str(path), '--out', str(from_db)])
+    assert from_db.read_bytes() == from_jsonl.read_bytes()
+    assert from_db.with_suffix('.jsonl').read_bytes() == from_jsonl.with_suffix('.jsonl').read_bytes()
+    assert pd.read_csv(from_db).feedback_id.tolist() == ['tie-winner', 'third']
 
 
 EVALS = [
@@ -436,6 +532,7 @@ def test_decree_turn_record(env, tmp_path):
 
     env.setattr(td.RR, 'SCORES', {})
     env.setattr(td.RR, 'ERROR', None)
+    env.setattr(td.RR, 'model', 'test-reranker', raising=False)
     a = td.make()
     fb = feedback.Feedback(tmp_path)
     q = '해고 예고?'
@@ -444,6 +541,7 @@ def test_decree_turn_record(env, tmp_path):
     assert len(hits) > 3 and st['n_decree'] == len(hits) - 3
     row = fb.save('s1', tid, 'like')
     assert row['hits'] == json.loads(json.dumps(hits, default=feedback.jsonable, ensure_ascii=False))
+    assert row['rerank_model'] == a.reranker.model
     assert [x.get('kind') for x in row['hits'][3:]] and all(
         x['kind'] in ('시행령', '시행규칙') for x in row['hits'][3:]
     )

@@ -402,6 +402,7 @@ def ask(app, question, model_key, k=TOP_K, fmt=None):
         llm, st['load'] = app.models.get(model_key)
         stage = 'generation'
         system = format_system(app, model_key, fmt)
+        st['_system'] = system or getattr(llm, 'system', None)
         raw, last, t_gen = '', None, time.perf_counter()
         REQUEST_ID.set(st['request_id'])
         for r in llm.stream(question, hits, **({'system': system} if system else {})):

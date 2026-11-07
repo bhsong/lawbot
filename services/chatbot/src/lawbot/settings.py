@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from lawbot.deploy import DecreeConfig, Profile, RerankerConfig
+from lawbot.feedback import Feedback
 
 
 class SettingsError(ValueError, RuntimeError):
@@ -31,7 +32,7 @@ class Settings:
     port: int | None = None
     instance: str | None = None
     chat_concurrency: int | None = None
-    feedback: object = None  # feedback.Feedback 또는 None (LAWBOT_FEEDBACK=1이면 저장 폴더를 확인한 뒤)
+    feedback: Feedback | None = None
     db: Path | None = None
 
 
@@ -86,8 +87,9 @@ def load(env=None, web=False):
     take('embed_cache', lambda: embed_cache_dir(env))
     if db := (env.get('LAWBOT_DB') or '').strip():
         from lawbot.db.connection import db_path
+        from lawbot.db.migrate import startup_path
 
-        take('db', lambda: db_path(db))
+        take('db', lambda: startup_path(db) if web else db_path(db))
     if web:
         from lawbot import view
 
@@ -95,7 +97,7 @@ def load(env=None, web=False):
         take('port', lambda: security.server_port(env))
         take('instance', lambda: security.instance_name(env))
         take('chat_concurrency', lambda: view.chat_concurrency(env))
-        take('feedback', lambda: feedback.from_env(env))
+        take('feedback', lambda: feedback.from_env(env, db=got.get('db')))
     if errors:
         raise SettingsError(f'설정 오류 {len(errors)}개:\n' + '\n'.join(f'- {e}' for e in errors))
     fields = Settings.__dataclass_fields__
