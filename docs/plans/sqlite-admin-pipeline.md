@@ -500,6 +500,13 @@ CREATE TABLE dataset_releases (
 
 목표: 빈 DB를 만들고 마이그레이션·백업·복원을 할 수 있다. 웹앱 동작은 바뀌지 않는다.
 
+#### 착수 전 대조 결과
+
+`main`의 `f3541c2`에서 계획서와 두 가지 차이를 확인했다. 확인을 받을 때까지 PR 2 구현과 체크리스트를 보류한다.
+
+- 2.2절의 평가 전용 세트 중 `oos_eval.csv`는 v4와 겹치는 ID도 파일 안 중복 ID도 0건이다. v4와 겹치는 고유 ID는 `scope_controls.csv` 20개, `refusal_hard_cases.csv` 77개, `labor_eval_keywords.csv` 650개다. `refusal_hard_cases.csv`는 중복 ID로 인해 고유 ID 수보다 행이 9개 더 많다.
+- 2.3절의 `Retriever` 순서 설명과 달리 `data/v5/law_articles_v5_decree.csv`에는 하위법령 뒤에 법률 행이 289개 있다. `Retriever`는 비삭제 행을 법률과 하위법령으로 나눈 후 각 그룹 안에서 CSV 순서를 유지하며 법률부터 붙인다. [Retriever 초기화](../../services/chatbot/src/lawbot/retriever.py#L28-L38)
+
 - [ ] `.gitignore`에 `data/db/` 추가(주석: 질문 원문 포함, `lawbot.db`). `git check-ignore -v data/db/lawbot.db`로 확인.
 - [ ] Red `services/chatbot/tests/test_db.py`:
   - [ ] `init`이 새 파일을 만들고 `schema_migrations`에 0001이 있다. 파일 권한 600, 폴더 700.
