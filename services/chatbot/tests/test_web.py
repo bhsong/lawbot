@@ -1,17 +1,22 @@
 # tests/test_web.py  →  새 화면 API (lawbot.web): 로그인·설정·채팅 SSE·피드백·정적 파일 (가짜 모델, 같은 프로세스 TestClient)
 # 실제 프로세스로 띄우는 검사(대기열·연결 끊김)는 test_web_integration.py
+import asyncio
 import json
 import subprocess
 import sys
+from threading import Event
+from types import SimpleNamespace
 
+import httpx
 import pytest
 from fastapi.testclient import TestClient
 
 import lawbot.service as service
 from fakes import HITS, FakeLLM, FakeRetriever
-from lawbot import feedback, settings, view, web
+from lawbot import feedback, feedback_store, settings, view, web
 from lawbot.api_client import ModelServerTimeout
 from lawbot.db import connection, migrate
+from lawbot.qa_rules import latest_rows
 
 USER, PW = 'tester', 'test-only-pw'  # 테스트 전용 가짜 값
 QUESTION = view.EXAMPLES[0]
@@ -376,6 +381,50 @@ def test_feedback_http_sqlite_contract(lawbot, env, tmp_path, caplog, db_failure
     assert not (tmp_path / 'fallback').exists()
     assert ('피드백을 쓰지 못했습니다' in caplog.text) is db_failure
     assert QUESTION not in caplog.text
+
+
+def test_feedback_requests_keep_click_order(lawbot, env, tmp_path):
+    path = tmp_path / 'private' / 'lawbot.db'
+    migrate.init(path)
+    fb = feedback.Feedback(db=migrate.startup_path(str(path)))
+    app = web.create_app(lawbot, (USER, PW), fb=fb, dist=None)
+    started, release = Event(), Event()
+    write = fb.write
+
+    def delay_like(row):
+        if row['label'] == 'like':
+            started.set()
+            assert release.wait(5), 'Timed out waiting to release the first write'
+        write(row)
+
+    env.setattr(fb, 'write', delay_like)
+    env.setattr(
+        feedback,
+        'time',
+        SimpleNamespace(monotonic=feedback.time.monotonic, strftime=lambda _: '2026-11-08T00:00:00+0000'),
+    )
+
+    async def exercise():
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url='http://testserver') as client:
+            assert (await login(client)).status_code == 200
+            turn_id = events(await chat(client))[-1][1]['turn_id']
+            first = asyncio.create_task(client.post('/api/feedback', json={'turn_id': turn_id, 'label': 'like'}))
+            try:
+                assert await asyncio.to_thread(started.wait, 5), 'The first write never started'
+                second = asyncio.create_task(
+                    client.post('/api/feedback', json={'turn_id': turn_id, 'label': 'cleared'})
+                )
+                assert (await asyncio.wait_for(client.get('/api/me'), timeout=2)).status_code == 200
+                await asyncio.wait([second], timeout=1)
+            finally:
+                release.set()
+            replies = await asyncio.wait_for(asyncio.gather(first, second), timeout=5)
+            assert [reply.json() for reply in replies] == [{'saved': True}, {'saved': True}]
+
+    asyncio.run(exercise())
+    rows = feedback_store.read_records(path)
+    assert [row['label'] for row in rows] == ['like', 'cleared']
+    assert latest_rows(rows) == ([], 1)
 
 
 # ---- 정적 파일 (SPA) ----
