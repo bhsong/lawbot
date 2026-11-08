@@ -10,7 +10,7 @@ import pytest
 from playwright.sync_api import expect
 
 import e2e_support as e2e
-from admin_test_data import seed_qa
+from admin_test_data import add_feedback, seed_qa
 from conftest import ADMIN_PW, ADMIN_USER
 from lawbot.db import cli
 from lawbot.db.connection import connect
@@ -130,6 +130,52 @@ def test_admin_can_log_in_on_existing_screen(admin_stack, page):
         assert conn.execute('SELECT actor, role, action FROM audit_events').fetchall() == [
             (ADMIN_USER, 'admin', 'login_ok')
         ]
+
+
+@pytest.mark.parametrize('width', [390, 1280])
+def test_admin_reviews_and_promotes_a_like(admin_stack, page, width):
+    s, db = admin_stack
+    add_feedback(db, 'admin-like')
+    page.set_viewport_size({'width': width, 'height': 844})
+    e2e.login(page, s.url, user=ADMIN_USER, pw=ADMIN_PW)
+    page.get_by_role('radio', name='피드백 & 법령 관리').click(timeout=3000)
+    calendar = page.get_by_role('region', name='법령 캘린더')
+    likes = page.get_by_role('region', name='좋아요')
+    flags = page.get_by_role('region', name='문제 신고')
+    expect(calendar.get_by_text('캘린더 연결 안 됨')).to_be_visible(timeout=e2e.ANSWER_TIMEOUT)
+    expect(likes.get_by_role('button', name='해고 예고가 필요한가요?')).to_be_visible()
+    top, left, right = (panel.bounding_box() for panel in (calendar, likes, flags))
+    assert top and left and right and top['y'] < left['y']
+    if width == 390:
+        assert left['y'] < right['y']
+    else:
+        assert left['y'] == right['y'] and left['x'] < right['x']
+    assert page.evaluate('document.documentElement.scrollWidth <= document.documentElement.clientWidth')
+
+    likes.get_by_role('button', name='해고 예고가 필요한가요?').click()
+    dialog = page.get_by_role('dialog', name='좋아요 검수')
+    expect(dialog.get_by_label('교정 질문')).to_be_focused()
+    dialog.get_by_role('radio', name='정답', exact=True).check()
+    dialog.get_by_label('근거 조문 검색').fill('근로기준법 제26조')
+    dialog.get_by_role('button', name='근로기준법 제26조', exact=True).click()
+    assert page.evaluate('document.documentElement.scrollWidth <= document.documentElement.clientWidth')
+    with page.expect_response(f'{s.url}/api/admin/feedbacks/admin-like/review', timeout=e2e.ANSWER_TIMEOUT) as review:
+        dialog.get_by_role('button', name='검수 저장', exact=True).click()
+    assert review.value.status == 201 and review.value.json()['status'] == 'reviewed'
+    likes.get_by_label('상태').select_option('reviewed')
+    likes.get_by_role('checkbox', name='해고 예고가 필요한가요? 선택').check()
+    with page.expect_response(f'{s.url}/api/admin/feedbacks/promote-up', timeout=e2e.ANSWER_TIMEOUT) as promotion:
+        likes.get_by_role('button', name='선택 승격 (1)').click()
+    assert promotion.value.ok and promotion.value.json()['results'][0]['ok']
+    likes.get_by_label('상태').select_option('promoted')
+    expect(likes.get_by_role('list', name='피드백 목록').get_by_text('승격됨', exact=True)).to_be_visible()
+
+    page.context.clear_cookies()
+    e2e.login(page, s.url)
+    expect(e2e.textbox(page)).to_be_visible()
+    expect(page.get_by_role('radio', name='피드백 & 법령 관리')).to_have_count(0)
+    denied = page.request.get(f'{s.url}/api/admin/feedbacks', timeout=e2e.ANSWER_TIMEOUT)
+    assert denied.status == 403 and denied.json()['code'] == 'admin_required'
 
 
 # ---- 정상 질문 ----
