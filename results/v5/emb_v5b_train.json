@@ -1,0 +1,28 @@
+{
+  "init": "/content/drive/MyDrive/labor_law/v4/emb_final_v4_fp16",
+  "base_tokenizer": "Qwen/Qwen3-Embedding-0.6B",
+  "best_checkpoint": "/content/emb_v5b/checkpoint-5406",
+  "best_label": "3에폭",
+  "condition_labor_mrr_ge_v4": true,
+  "v4_labor_mrr": 0.8111515086515086,
+  "epochs": 3,
+  "lr": 1e-05,
+  "batch": 8,
+  "mini_batch": 1,
+  "max_seq": {
+    "law": 4352,
+    "decree": 5120
+  },
+  "train": 14413,
+  "val": 3606,
+  "negatives": {
+    "triplets": 14413,
+    "neg1_confusable": 8825,
+    "neg1_base_search": 5588,
+    "labor_neg2_tax_article": 657,
+    "labor_questions": 6205
+  },
+  "train_minutes": 668.3,
+  "cuda_max_gib": 20.7,
+  "gpu": "NVIDIA L4"
+}
