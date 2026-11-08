@@ -151,7 +151,7 @@ class Bot:
             )
 
 
-def fake_app(rerank=True):
+def fake_app(rerank=True, *, settings=None):
     p = deploy.get_profile()
     models = service.ChatModels(p.models, Bot)
     return service.LawbotApp(p, Ret(), models, RR() if rerank else None, 'FULL SYSTEM')
@@ -237,6 +237,21 @@ def test_default_stage_is_all(env, monkeypatch, tmp_path):
     monkeypatch.setattr('sys.argv', ['lawbot-eval-v4'])
     ev.main()
     assert calls == ['run_retrieval', 'run_answers', 'run_oos', 'run_refusal', ('summary', 'pro_concise_rr')]
+
+
+def test_evaluation_keeps_csv_source_when_web_uses_db(env, tmp_path):
+    env.setenv('LAWBOT_CORPUS', 'db')
+    env.setenv('LAWBOT_DB', str(tmp_path / 'web.db'))
+    env.setattr(ev, 'OUT', tmp_path)
+    env.setattr(ev, 'run_retrieval', lambda *args, **kwargs: None)
+    env.setattr('sys.argv', ['lawbot-eval-v4', 'retrieval'])
+
+    def load_app(settings=None):
+        assert settings is not None and settings.corpus == 'csv'
+        return fake_app()
+
+    env.setattr(service, 'load_app', load_app)
+    ev.main()
 
 
 def test_rescore_updates_only_scores(tmp_path, env):

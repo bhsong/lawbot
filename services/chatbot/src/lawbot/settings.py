@@ -37,6 +37,7 @@ class Settings:
     db: Path | None = None
     admin: AdminCredentials | None = None
     calendar_api_url: str | None = None
+    corpus: str = 'csv'
 
 
 MISSING_SERVER = (
@@ -53,6 +54,16 @@ def embed_cache_dir(env):
     if value not in ('0', '1'):
         raise ValueError(f'LAWBOT_EMBED_CACHE는 0 또는 1: {value!r}')
     return CACHE_DIR if value == '1' else None
+
+
+def corpus_mode(env):
+    """Read the corpus source and require a configured DB for DB mode."""
+    mode = env.get('LAWBOT_CORPUS', 'csv').strip()
+    if mode not in ('csv', 'db'):
+        raise ValueError('LAWBOT_CORPUS는 csv 또는 db여야 합니다.')
+    if mode == 'db' and not (env.get('LAWBOT_DB') or '').strip():
+        raise ValueError('LAWBOT_CORPUS=db에는 LAWBOT_DB가 필요합니다.')
+    return mode
 
 
 def load(env=None, web=False):
@@ -88,11 +99,12 @@ def load(env=None, web=False):
     take('read_timeout', lambda: service.read_timeout(env))
     take('request_log', lambda: service.request_log_path(env))
     take('embed_cache', lambda: embed_cache_dir(env))
+    corpus = take('corpus', lambda: corpus_mode(env))
     if db := (env.get('LAWBOT_DB') or '').strip():
         from lawbot.db.connection import db_path
         from lawbot.db.migrate import startup_path
 
-        take('db', lambda: startup_path(db) if web else db_path(db))
+        take('db', lambda: startup_path(db) if web or corpus == 'db' else db_path(db))
     if web:
         from lawbot import view
 

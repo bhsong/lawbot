@@ -29,7 +29,7 @@ class Retriever:
     encoder: encode(texts, input_type, max_seq_length) → float32 배열 (api_client.Embedder, 테스트는 가짜)"""
 
     def __init__(self, encoder, law_csv, max_seq_length, decree_max_seq=None, cache=None):
-        raw = Path(law_csv).read_bytes()
+        raw = law_csv if isinstance(law_csv, bytes) else Path(law_csv).read_bytes()
         self.articles_sha256 = hashlib.sha256(raw).hexdigest()
         law = pd.read_csv(BytesIO(raw), encoding='utf-8-sig')
         law = law[law['deleted'] == 0].reset_index(drop=True)  # 415개 조문 (+ 하위법령 397개)
@@ -39,7 +39,8 @@ class Retriever:
         dec = law[kind != LAW_KIND].reset_index(drop=True) if decree_max_seq else law.iloc[:0]
         law = law[kind == LAW_KIND].reset_index(drop=True)
         if decree_max_seq and not len(dec):
-            raise ValueError(f'하위법령(kind 시행령·시행규칙) 조문이 없습니다: {law_csv}')
+            source = 'DB 코퍼스' if isinstance(law_csv, bytes) else law_csv
+            raise ValueError(f'하위법령(kind 시행령·시행규칙) 조문이 없습니다: {source}')
         both = pd.concat([law, dec], ignore_index=True)
         self.n_law = len(law)
         self.ids = both['article_id'].to_numpy()

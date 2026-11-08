@@ -696,19 +696,22 @@ CREATE TABLE dataset_releases (
 
 ### PR 11 — 웹앱 코퍼스를 DB 활성 릴리스에서 읽기 (`feat/corpus-from-db`)
 
-- [ ] Red:
-  - [ ] `LAWBOT_CORPUS=db` + v5 릴리스 활성 → `load_app`(가짜 모델 서버)의 `Retriever.docs`·`ids`·`laws`·`kinds`·순서가 CSV 모드와 같다.
-  - [ ] 같은 조건에서 `EmbedCache`가 CSV 모드가 만든 .npz를 그대로 쓴다(가짜 인코더 호출 수가 확인용 1개뿐).
-  - [ ] 릴리스 바이트 sha가 기록과 다르면(DB 행을 테스트에서 직접 고침 — 트리거 없는 `article_versions`) 시작 거부.
-  - [ ] 활성 릴리스 없음·DB 없음·스키마 낮음 → 각각 시작 거부 문구.
-  - [ ] 실행 중 DB의 활성 릴리스를 바꿔도 같은 프로세스의 검색 결과·피드백의 `corpus_release_id`가 그대로(요청 일관성).
-  - [ ] `check_deploy`가 DB 모드에서 릴리스 id·데이터 버전·sha·조문 수를 PASS/FAIL로 출력.
-  - [ ] `lawbot-db export-release`가 원본과 같은 CSV·매니페스트 바이트를 쓴다.
-  - [ ] 요청 로그에 `corpus_release_id`.
-- [ ] Green: `corpus_store.release_bytes`, `Retriever`·`manifest.verify` 바이트 입력, `service.load_app` 분기, `embed_cache`가 `.npz`에 `meta`(JSON: model_id, max_seq, dim, n_docs, docs_sha256, model_revision) 추가 저장 + `embedding_sets`·`release_embedding_sets` 기록(DB 모드에서만). 차원은 실제 결과 배열에서 읽는다(상수 1024 금지). `meta`가 없는 기존 .npz도 읽는다.
-- [ ] 모델 revision은 모델 서버 `/v1/models`의 `revision`을 읽어 기록만 한다(캐시 재사용 판단은 기존 확인용 벡터 그대로).
-- [ ] e2e_stub: DB 모드로 한 번(질문 → 답변·조문 카드 3개). 기존 CSV 모드 E2E는 그대로.
-- [ ] 완료 기준: CSV 모드 기존 테스트 전부 그대로 Green + DB 모드 테스트 Green.
+- [x] Red:
+  - [x] `LAWBOT_CORPUS=db` + v5 릴리스 활성 → `load_app`(가짜 모델 서버)의 `Retriever.docs`·`ids`·`laws`·`kinds`·순서가 CSV 모드와 같다.
+  - [x] 같은 조건에서 `EmbedCache`가 CSV 모드가 만든 .npz를 그대로 쓴다(가짜 인코더 호출 수가 확인용 1개뿐).
+  - [x] 릴리스 바이트 sha가 기록과 다르면(DB 행을 테스트에서 직접 고침 — 트리거 없는 `article_versions`) 시작 거부.
+  - [x] 활성 릴리스 없음·DB 없음·스키마 낮음 → 각각 시작 거부 문구.
+  - [x] 실행 중 DB의 활성 릴리스를 바꿔도 같은 프로세스의 검색 결과·피드백의 `corpus_release_id`가 그대로(요청 일관성).
+  - [x] `check_deploy`가 DB 모드에서 릴리스 id·데이터 버전·sha·조문 수를 PASS/FAIL로 출력.
+  - [x] `lawbot-db export-release`가 원본과 같은 CSV·매니페스트 바이트를 쓴다.
+  - [x] 요청 로그에 `corpus_release_id`.
+  - [x] DB 코퍼스 오류에도 배포 점검의 독립 항목은 계속 검사한다. revision을 찾지 못하면 메타데이터에는 `null`을 기록한다.
+- [x] Green: `corpus_store.release_bytes`, `Retriever`·`manifest.verify` 바이트 입력, `service.load_app` 분기, `embed_cache`가 `.npz`에 `meta`(JSON: model_id, max_seq, dim, n_docs, docs_sha256, model_revision) 추가 저장 + `embedding_sets`·`release_embedding_sets` 기록(DB 모드에서만). 차원은 실제 결과 배열에서 읽는다(상수 1024 금지). `meta`가 없는 기존 .npz도 읽는다.
+- [x] 모델 revision은 모델 서버 `/v1/models`의 `revision`을 읽어 기록만 한다(캐시 재사용 판단은 기존 확인용 벡터 그대로).
+- [x] e2e_stub: DB 모드로 한 번(질문 → 답변·조문 카드 3개). 기존 CSV 모드 E2E는 그대로.
+- [x] 완료 기준: CSV 모드 기존 테스트 전부 그대로 Green + DB 모드 테스트 Green.
+
+[DB 코퍼스 검색 동등성과 전체 Green 검증 기록](../evals/2026-11-08-corpus-from-db.md)
 
 ### PR 12 — 조문 자동 갱신을 릴리스와 연동 (`feat/articles-update-db`)
 
@@ -782,7 +785,7 @@ CREATE TABLE dataset_releases (
 4. 사용자가 `.env`에 `LAWBOT_CORPUS=db`.
 5. 웹앱 재시작 → 로그에 "임베딩 캐시 사용" 확인(같은 .npz) → `check_deploy` PASS → e2e_live 3개(승인 시).
 6. 다음 06:30 monitor 실행 결과(종료 코드·마지막 줄) 확인.
-- 복구: `lawbot-db export-release --release <활성 릴리스> --out data/live/v5`(최신 법령 본문으로 CSV 갱신; 기존 파일은 2단계 사본으로 보존) → `.env`에서 `LAWBOT_CORPUS` 제거 → 재시작. DB의 릴리스·이벤트는 지우지 않는다.
+- 복구: `lawbot-db export-release --release <활성 릴리스> --out data/live/v5 --overwrite`로 CSV를 갱신한다. 기존 파일은 2단계 사본으로 보존한다. `.env`에서 `LAWBOT_CORPUS`를 제거하고 재시작한다. DB의 릴리스·이벤트는 보존한다. [DB 코퍼스와 CSV 내보내기](../operations.md#db-코퍼스와-csv-내보내기)
 
 ---
 

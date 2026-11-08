@@ -22,6 +22,7 @@ import argparse
 import concurrent.futures
 import datetime
 import json
+import os
 import re
 import subprocess
 import sys
@@ -1050,9 +1051,10 @@ def main():
         summarize(args.tag, test)
         classify(args.tag)
         return
+    from lawbot import settings
     from lawbot.service import load_app
 
-    app = load_app()
+    app = load_app(settings=settings.load(dict(os.environ, LAWBOT_CORPUS='csv')))
     model = args.model or app.profile.models[0].key
     fmt = args.fmt or app.models.specs[model].fmt
     decree = uses_decrees(app, model)

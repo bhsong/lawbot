@@ -158,7 +158,8 @@ v5 Pro는 간결형에 `data/v5/system_v5_concise.txt`를 쓰고, 화면에서 "
 | `LAWBOT_EMBED_CACHE` | 아니요 | `1`(기본)이면 조문 임베딩을 `cache/embeddings/`(Git 제외)에 저장해 다음 시작 때 다시 쓴다. 시작할 때 조문 1개만 다시 임베딩해 확인하고, 다르면(모델 폴더가 바뀜) 전체를 다시 임베딩. `0`이면 매번 임베딩 |
 | `LAWBOT_REQUEST_LOG` | 아니요 | 요청 로그 파일 하나로 정함 (기본: 레포 최상위 `logs/requests-YYYY-MM.jsonl`, 달마다 새 파일). 빈 값이면 기록하지 않음 |
 | `LAWBOT_FEEDBACK` | 아니요 | `1`이면 답변마다 👍·깃발 버튼을 달고 누른 답을 저장 (기본 `0`, `0`·`1`만) |
-| `LAWBOT_DB` | 관리자 사용 시 | 미리 초기화한 SQLite 경로. 지정하면 피드백과 관리자 로그인 감사 기록을 이 DB에 저장. 레포 안에서는 Git 제외 경로만 허용 |
+| `LAWBOT_DB` | 관리자 또는 DB 코퍼스 사용 시 | 미리 초기화한 SQLite 경로. 지정하면 피드백과 관리자 로그인 감사 기록을 이 DB에 저장. 레포 안에서는 Git 제외 경로만 허용 |
+| `LAWBOT_CORPUS` | 아니요 | `csv`(기본) 또는 `db`. DB 모드에서는 시작 시 프로필의 활성 릴리스에서 조문을 읽음 |
 | `LAWBOT_FEEDBACK_DIR` | 아니요 | `LAWBOT_DB`가 비어 있을 때 쓰는 JSONL 폴더. 기본 레포 최상위 `feedback/`. 레포 안에서는 Git 제외 경로만 허용 |
 | `LAWBOT_CALENDAR_API_URL` | 캘린더 프록시 사용 시 | 포트가 명시된 루프백 HTTP 주소. 비워 두면 관리자 캘린더 API는 503 `calendar_not_configured` 반환 |
 
@@ -438,6 +439,16 @@ uv run lawbot-db restore --from "$backup" --to data/db/restore/lawbot.db
 DB와 백업에는 질문 원문이 들어갈 수 있습니다. 레포 밖의 절대 경로나 Git에서 제외되는 `data/db/` 아래에 보관하세요. DB 폴더 권한은 700, DB·WAL·SHM·백업 파일 권한은 600입니다. 권한이 넓으면 프로세스에서 경로별 한 번 경고합니다. 초기화·백업·복원 대상은 하드 링크를 지원하는 파일시스템에 두세요. 외장 디스크가 하드 링크를 지원하지 않으면 로컬 파일시스템에 백업한 뒤 복사하세요.
 
 복구할 때는 `restore`로 새 경로에 복원한 뒤 `status`로 확인하세요. 무결성과 스키마를 확인한 복원본은 담당자가 DB를 쓰는 프로세스를 중지한 상태에서 교체합니다. 초기화·백업·복원은 이미 존재하는 대상 경로를 거부합니다.
+
+### DB 코퍼스와 CSV 내보내기
+
+`LAWBOT_DB`에 현재 스키마의 DB를 지정하고 `LAWBOT_CORPUS=db`를 설정합니다. 웹앱은 시작 때 `LAWBOT_PROFILE`의 활성 릴리스를 읽습니다. `LAWBOT_DECREE_ENABLED=1`이면 조합 CSV를, 그 외에는 법률 CSV를 사용합니다. `uv run python -m lawbot.check_deploy`로 릴리스 ID·데이터 버전·해시·조문 수를 확인합니다. 새 활성 릴리스는 웹앱을 다시 시작할 때 적용됩니다. [코퍼스 전환과 복구 순서](plans/sqlite-admin-pipeline.md#73-코퍼스-db-전환-pr-1012-병합-후)
+
+```sh
+uv run lawbot-db export-release --db PATH --release ID --out DIR
+```
+
+조문 CSV 두 개와 매니페스트 두 개를 원본 이름과 바이트로 내보냅니다. 출력이 모두 같으면 `같음`으로 끝납니다. 기존 파일의 내용이 다른 경우에는 `--overwrite`로 교체를 명시합니다. 교체 결과에는 이전과 새 SHA-256 앞 12자리가 표시됩니다.
 
 ### CSV·JSONL 이관과 대조
 

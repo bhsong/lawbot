@@ -14,7 +14,9 @@ from admin_test_data import add_feedback, seed_qa
 from conftest import ADMIN_PW, ADMIN_USER
 from lawbot.db import cli
 from lawbot.db.connection import connect
+from lawbot.deploy import article_paths
 from lawbot.view import EXAMPLES
+from test_migrate_csv_to_sqlite import run as migrate
 
 pytestmark = pytest.mark.e2e_stub
 
@@ -208,6 +210,38 @@ def test_sources_and_stats_shown(stack, ui):
     assert len(law_cards) == 3, cards  # 법률 조문 3개 (하위법령 카드는 〔시행령〕·〔시행규칙〕 표시)
     assert len(cards) > 3, cards  # 하위법령 카드도 있는 상태에서 법률 카드만 셈 (e2e_live와 같은 헬퍼)
     assert all('리랭커' in c for c in law_cards)
+
+
+@pytest.fixture
+def db_corpus_stack(tmp_path, page, request):
+    db = tmp_path / 'private' / 'lawbot.db'
+    cli.main(['init', '--db', str(db)])
+    release = 'e2e-v5-release'
+    law, _ = article_paths('v5')
+    assert migrate(db, 'corpus', '--dir', law.parent, '--profile', 'v5', '--release-id', release, '--activate') == 0
+    stack = e2e.Stack(
+        tmp_path,
+        read_timeout=READ_TIMEOUT_S,
+        LAWBOT_CORPUS='db',
+        LAWBOT_DB=str(db),
+        LAWBOT_V5_ARTICLES=str(tmp_path / 'absent-law.csv'),
+        LAWBOT_V5_DECREE_ARTICLES=str(tmp_path / 'absent-combined.csv'),
+    )
+    try:
+        yield stack, release
+        e2e.keep_on_failure(request, 'e2e_stub', stack.logs(), page)
+    finally:
+        stack.stop()
+
+
+def test_db_corpus_question_shows_three_law_cards(db_corpus_stack, page):
+    stack, release = db_corpus_stack
+    e2e.login(page, stack.url)
+    e2e.ask(page, QUESTION)
+    e2e.wait_done(page)
+    expect(e2e.answer(page)).to_contain_text(FAKE_ANSWER)
+    assert len(e2e.law_cards(page)) == 3
+    assert e2e.request_log(stack.request_log)[-1]['corpus_release_id'] == release
 
 
 def test_example_click(stack, ui):

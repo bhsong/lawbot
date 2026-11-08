@@ -1,4 +1,7 @@
 # tests/test_embed_cache.py  →  조문 임베딩 캐시 (lawbot.embed_cache): 재시작 때 조문 전체를 다시 임베딩하지 않음
+import hashlib
+import json
+
 import numpy as np
 import pytest
 
@@ -33,6 +36,26 @@ def test_second_start_reuses_vectors_bit_identical(tmp_path):
     second = c.encode(e2, DOCS, 2304)
     assert e2.calls == [(1, 'document', 2304)]  # 확인용 1개만
     assert second.dtype == np.float32 and np.array_equal(first, second) and np.array_equal(second, Enc().encode(DOCS))
+
+
+def test_new_cache_metadata_records_revision_without_invalidating_probe(tmp_path):
+    first = embed_cache.EmbedCache(tmp_path, model_revision='original-revision').encode(Enc(), DOCS, 2304)
+    path = next(tmp_path.glob('*.npz'))
+    with np.load(path) as cached:
+        meta = json.loads(cached['meta'].item())
+    assert meta == {
+        'model_id': 'emb',
+        'model_revision': 'original-revision',
+        'max_seq': 2304,
+        'dim': first.shape[1],
+        'n_docs': len(DOCS),
+        'docs_sha256': hashlib.sha256(b''.join(doc.encode() + b'\0' for doc in DOCS)).hexdigest(),
+    }
+    before = path.read_bytes()
+    encoder = Enc()
+    second = embed_cache.EmbedCache(tmp_path, model_revision='different-revision').encode(encoder, DOCS, 2304)
+    assert encoder.calls == [(1, 'document', 2304)] and np.array_equal(first, second)
+    assert path.read_bytes() == before
 
 
 def test_key_changes_with_text_model_or_max_seq(tmp_path):
