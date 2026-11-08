@@ -642,6 +642,17 @@ CREATE TABLE dataset_releases (
 
 ### PR 9 — 관리자 화면 (`feat/admin-frontend`)
 
+#### 착수 전 API 대조
+
+`main`의 `a5bddbc`에서 목록의 경고 배지에 필요한 데이터를 확인했다. 기존 응답으로 판별할 수 없는 항목이 있어 화면 구현을 보류한다.
+
+| 목록에서 요구한 경고 | 현재 관리자 API | 임시 DB와 합성 데이터로 확인한 결과 |
+|---|---|---|
+| 라벨 바뀜 | 목록은 턴의 최신 라벨만 돌려준다. 상세는 같은 턴의 검수·승격 이력을 돌려주지만 이전 피드백의 라벨 이력은 제공하지 않는다. | 처음부터 문제 신고인 턴과 검수 없이 `like`에서 `flag`로 바뀐 턴의 목록·상세 응답이 동일했다. |
+| 조문 버전 다름 | 목록은 기록 당시의 `dataset_version`을 돌려준다. 현재 조문 버전과 양쪽 조문 해시는 상세 `checks.corpus`에만 있다. | 기록을 고정하고 현재 조문 버전·해시를 바꿨을 때 목록 응답은 같고 상세의 `checks.corpus`만 달라졌다. |
+
+목록 배지를 유지하려면 서버가 기존 `warnings`에 두 경고를 추가하는 선행 변경이 필요하다. 서버 계약을 유지하는 경우 조문 버전 차이는 상세에 표시하고, 라벨 변경 배지는 요구사항에서 빼는 안을 결정해야 한다.
+
 - [ ] `services/chatbot/frontend/src/admin/`:
   - `AdminPage.tsx`: 위 캘린더 영역, 아래 좌(좋아요)·우(문제 신고) 두 패널. 휴대폰 폭에서는 세로로 쌓기.
   - `CalendarPanel.tsx`: `@lawbot/ui`의 `MonthCalendar`·`EventList`·`ChangeView`+`Modal`, 데이터는 `/api/admin/calendar/...`. 503이면 "캘린더 연결 안 됨" 안내.
