@@ -1,5 +1,6 @@
-import { todayKst, shiftDay } from './dates'
-import type { CalendarChange, CalendarLoader, HoldLoader } from './types'
+import { todayKst, shiftDay } from '@lawbot/ui'
+import type { CalendarChange } from '@lawbot/ui'
+import type { CalendarLoader, HoldLoader } from './types'
 
 /** Synthetic UI fixtures only; this marker must never occur in production assets. */
 const DEMO_ID = 'LAW_CALENDAR_SYNTHETIC_ONLY'

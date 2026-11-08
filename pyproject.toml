@@ -7,7 +7,10 @@
 # 공통 개발 도구(pytest·ruff)와 설정은 여기에 둔다. uv.lock은 workspace 전체에 하나
 [tool.uv.workspace]
 members = ["services/*", "packages/*", "tools/*"]
-exclude = ["services/law-calendar"]  # Independent API project and lock; no model dependencies.
+exclude = [
+    "services/law-calendar",  # Independent API project and lock; no model dependencies.
+    "packages/lawbot-ui",  # Shared TypeScript source only.
+]
 
 [tool.uv.sources]
 lawbot = { workspace = true }

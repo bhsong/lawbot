@@ -12,7 +12,14 @@
     "isolatedModules": true,
     "skipLibCheck": true,
     "noEmit": true,
-    "types": ["node", "vite/client", "vitest/globals", "@testing-library/jest-dom"]
+    "types": ["node", "vite/client", "vitest/globals", "@testing-library/jest-dom"],
+    "paths": {
+      "@lawbot/ui": ["../../../packages/lawbot-ui/src/index.ts"],
+      "@lawbot/ui/*": ["../../../packages/lawbot-ui/src/*"],
+      "react": ["./node_modules/@types/react/index.d.ts"],
+      "react/*": ["./node_modules/@types/react/*"]
+    }
   },
-  "include": ["src", "vite.config.ts", "fingerprint.ts"]
+  "include": ["src", "vite.config.ts", "fingerprint.ts", "../../../packages/lawbot-ui/src"],
+  "exclude": ["../../../packages/lawbot-ui/src/**/*.test.*"]
 }

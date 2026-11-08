@@ -1,4 +1,5 @@
-import type { CalendarChange, CalendarLoader, HoldKind } from './types'
+import type { CalendarChange } from '@lawbot/ui'
+import type { CalendarLoader, HoldKind } from './types'
 import type { CalendarMonth, CalendarStatus, ChangePage, HoldPage, PublicDetail } from './api-types'
 
 async function read<T>(path: string, signal: AbortSignal): Promise<T> {

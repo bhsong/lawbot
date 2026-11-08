@@ -1,10 +1,10 @@
 import { useLayoutEffect, useRef } from 'react'
 import type { KeyboardEvent } from 'react'
 import { dateLabel, monthDays, shiftDay, shiftMonth, todayKst, weekday } from './dates'
-import type { CalendarChange, CalendarSnapshot } from './types'
+import type { CalendarChange, CalendarDay } from './types'
 
 export function MonthCalendar({ selected, changes, onSelect, totals }: {
-  selected: string; changes: CalendarChange[]; onSelect: (date: string) => void; totals?: CalendarSnapshot['counts']
+  selected: string; changes: CalendarChange[]; onSelect: (date: string) => void; totals?: CalendarDay[]
 }) {
   const month = selected.slice(0, 7)
   const days = monthDays(month)
