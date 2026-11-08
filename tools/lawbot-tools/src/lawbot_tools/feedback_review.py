@@ -20,7 +20,7 @@ from lawbot.db.migrate import startup_path
 from lawbot.feedback import check_private
 from lawbot.feedback_store import read_records
 from lawbot.paths import DATA, EVAL, V4_QA, V4_SPLIT
-from lawbot.qa_rules import LEAK_SPLITS, THRESHOLD, Overlap
+from lawbot.qa_rules import LEAK_SPLITS, THRESHOLD, Overlap, protected_split
 from lawbot.qa_rules import latest_rows as latest
 from lawbot.qa_rules import norm as norm
 
@@ -50,13 +50,19 @@ SHOW_IDS = 30  # 뺀 문항 id를 이만큼만 출력
 
 def _split_questions(source, qa_path, split_path, splits=LEAK_SPLITS, *, categories=None):
     qa, split_rows = pd.read_csv(qa_path, **E), pd.read_csv(split_path, **E)
-    joined = qa.merge(split_rows[['id', 'split_emb']], on='id', validate='one_to_one')
+    joined = qa.merge(split_rows[['id', 'split_emb', 'split_sllm']], on='id', validate='one_to_one')
     if categories is not None:
         joined = joined[joined.eval_cat.isin(categories)]
+    joined = joined.assign(
+        protected=[
+            protected_split(emb, sllm)
+            for emb, sllm in joined[['split_emb', 'split_sllm']].itertuples(index=False, name=None)
+        ]
+    )
     return [
         (f'{source}_{split}', question_id, question)
         for split in splits
-        for question_id, question in joined.loc[joined.split_emb == split, ['id', 'question']].itertuples(
+        for question_id, question in joined.loc[joined.protected == split, ['id', 'question']].itertuples(
             index=False, name=None
         )
     ]
