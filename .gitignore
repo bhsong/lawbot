@@ -25,6 +25,7 @@ data_gd/
 feedback/
 feedback_review_*
 data/feedback/
+data/v6/
 
 # 챗봇 DB (lawbot.db, 백업 및 복원본에 질문 원문 포함)
 data/db/
