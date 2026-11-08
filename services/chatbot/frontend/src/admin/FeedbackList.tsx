@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useId, useState } from 'react'
 import { AdminApiError, adminGet, adminMessage, useAdminMutation, useAdminRead } from './adminApi'
-import { Modal } from '@lawbot/ui'
-import { FeedbackDetail } from './FeedbackDetail'
+import { FeedbackCorrectionDialog } from './FeedbackCorrectionDialog'
 import type { FeedbackDetailData, FeedbackItem, FeedbackPage, Label, PromotionResult, Status } from './types'
 import { decisionLabels, reasonLabels, statusLabels, verdictLabels } from './types'
 
@@ -15,10 +14,9 @@ const initialFilter: Filter = { status: 'pending', reason: '', q: '' }
 type Listing = { items: FeedbackItem[]; next: string | null; loading: boolean; error: string }
 const initialListing: Listing = { items: [], next: null, loading: true, error: '' }
 
-function OpenFeedback({ item, onClose, onUnauthorized }: {
+function OpenFeedback({ item, onClose, onSaved, onUnauthorized }: {
   item: FeedbackItem; onClose: () => void; onSaved: (message: string) => void; onUnauthorized: () => void
 }) {
-  const id = useId()
   const load = useCallback((signal: AbortSignal) =>
     adminGet<FeedbackDetailData>(`/feedbacks/${encodeURIComponent(item.feedback_id)}`, signal), [item.feedback_id])
   const { data, error, retry } = useAdminRead(load, onUnauthorized)
@@ -26,13 +24,7 @@ function OpenFeedback({ item, onClose, onUnauthorized }: {
     <button type="button" onClick={retry}>다시 시도</button> <button type="button" onClick={onClose}>닫기</button>
   </p>
   if (!data) return <p role="status">피드백 상세를 불러오는 중입니다.</p>
-  return <Modal header="피드백 상세" closeLabel="피드백 상세 닫기" labelledBy={`${id}-title`} describedBy={`${id}-description`} onClose={onClose}>
-    <div className="lc-dialog-body admin-editor">
-      <h2 id={`${id}-title`}>피드백 상세</h2>
-      <p id={`${id}-description`}>저장된 질문과 답변 및 검수 이력을 확인합니다.</p>
-      <FeedbackDetail detail={data} />
-    </div>
-  </Modal>
+  return <FeedbackCorrectionDialog item={item} detail={data} onClose={onClose} onSaved={onSaved} onUnauthorized={onUnauthorized} />
 }
 
 export function FeedbackList({ label, onUnauthorized }: { label: Label; onUnauthorized: () => void }) {
