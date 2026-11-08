@@ -1,7 +1,8 @@
 import { render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
+import type { CalendarChange } from '@lawbot/ui'
 import LawCalendarPage from './LawCalendarPage'
-import type { CalendarChange, CalendarLoader, CalendarSnapshot } from './types'
+import type { CalendarLoader, CalendarSnapshot } from './types'
 
 const change: CalendarChange = {
   id: 'notice', kind: 'notice', date: '2026-11-05', lawName: '[예시] 가상법', article: '제1조',

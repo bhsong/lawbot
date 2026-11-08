@@ -593,7 +593,10 @@ def test_view_and_settings_do_not_import_web_server(env):
 # ---- 화면 빌드 확인 (lawbot-app 시작 때) ----
 def frontend(tmp_path):
     """작은 화면 소스 폴더와 그 지문으로 만든 dist (npm run build가 쓰는 build.json과 같은 형식)"""
-    root = tmp_path / 'frontend'
+    root = tmp_path / 'services/chatbot/frontend'
+    shared = tmp_path / 'packages/lawbot-ui/src'
+    shared.mkdir(parents=True)
+    (shared / 'Modal.tsx').write_text('a', encoding='utf-8')
     (root / 'src' / 'components').mkdir(parents=True)
     for rel, text in {
         'src/main.tsx': 'main',
@@ -609,7 +612,7 @@ def frontend(tmp_path):
     dist = root / 'dist'
     dist.mkdir()
     (dist / 'index.html').write_text('<html>', encoding='utf-8')
-    (dist / 'build.json').write_text(json.dumps({'source': web.source_fingerprint(root)}), encoding='utf-8')
+    (dist / 'build.json').write_text(json.dumps({'source': web.source_fingerprint(tmp_path)}), encoding='utf-8')
     return root, dist
 
 
@@ -617,6 +620,14 @@ def test_build_matches_sources(tmp_path):
     root, dist = frontend(tmp_path)
     web.require_build(dist)  # 통과
     (root / 'src' / 'components' / 'A.tsx').write_text('changed', encoding='utf-8')
+    with pytest.raises(RuntimeError, match='npm ci && npm run build'):
+        web.require_build(dist)
+
+
+def test_build_rejects_single_character_change_in_shared_ui(tmp_path):
+    _, dist = frontend(tmp_path)
+    web.require_build(dist)
+    (tmp_path / 'packages/lawbot-ui/src/Modal.tsx').write_text('b', encoding='utf-8')
     with pytest.raises(RuntimeError, match='npm ci && npm run build'):
         web.require_build(dist)
 

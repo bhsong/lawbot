@@ -629,14 +629,16 @@ CREATE TABLE dataset_releases (
 
 목표: 공개 캘린더 동작·화면·테스트가 그대로이고 컴포넌트만 공유 위치로 옮겨진다.
 
-- [ ] 옮기기 전 기준: 캘린더 프론트엔드 `npm test` 결과(테스트 이름 목록)와 `npm run build` 산출물 크기를 PR 설명에 기록.
-- [ ] `packages/lawbot-ui/src/`로 `MonthCalendar.tsx`, `EventList.tsx`, `dates.ts`, 컴포넌트가 쓰는 타입(`types.ts`에서 해당 부분), `ChangeView.tsx`(ChangeDialog의 본문 표시부), `Modal.tsx`(포커스 가두기·Esc·라벨 연결), 공유 CSS. 각 테스트(`dates.test.ts`, `ChangeDialog.test.tsx`의 표시부)도 함께.
-- [ ] 캘린더 쪽은 `@lawbot/ui`에서 import. `LawCalendarPage`, `data.ts`, `HoldDialog`, `api-types.ts`, `demo.ts`는 그대로.
-- [ ] 두 프론트엔드 `vite.config.ts`·`tsconfig.json`에 alias·dedupe·paths. 캘린더 Vitest `test.include`에 공유 테스트 경로.
-- [ ] 챗봇 화면 지문(`fingerprint.ts`, `web.py SOURCES`)에 공유 폴더 포함 + 테스트: 공유 파일 한 글자 변경 → `require_build`가 거부.
-- [ ] Red→Green: 기존 캘린더 테스트 전부 통과(이름 목록 동일, 옮긴 테스트는 공유 위치에서 실행됨), 캘린더 e2e_stub 통과.
-- [ ] CI 파일은 바꾸지 않아도 되는지 확인(공유 소스는 각 프론트엔드 빌드에 포함됨). 바꿔야 하면 이유를 PR에 적는다.
-- [ ] 완료 기준: 두 프론트엔드 typecheck·test·build Green, 공개 캘린더 화면 차이 없음(e2e_stub 스크린샷 비교는 하지 않고 기존 E2E 단언으로 판단).
+- [x] 옮기기 전 기준: 캘린더·챗봇 프론트엔드 `npm test` 결과(테스트 이름 목록)와 `npm run build` 산출물 크기를 PR 설명에 기록.
+- [x] `packages/lawbot-ui/src/`로 `MonthCalendar.tsx`, `EventList.tsx`, `dates.ts`, 컴포넌트가 쓰는 타입(`types.ts`에서 해당 부분), `ChangeView.tsx`(ChangeDialog의 본문 표시부), `Modal.tsx`(포커스 가두기·Esc·라벨 연결), 공유 CSS. 각 테스트(`dates.test.ts`, `ChangeDialog.test.tsx`의 표시부)도 함께.
+- [x] 캘린더 쪽은 `@lawbot/ui`에서 import. `LawCalendarPage`, `data.ts`, `HoldDialog`, `api-types.ts`, `demo.ts`는 그대로.
+- [x] 두 프론트엔드 `vite.config.ts`·`tsconfig.json`에 alias·dedupe·paths. 캘린더 Vitest `test.include`에 공유 테스트 경로.
+- [x] 챗봇 화면 지문(`fingerprint.ts`, `web.py SOURCES`)에 공유 폴더 포함 + 테스트: 공유 파일 한 글자 변경 → `require_build`가 거부.
+- [x] Red→Green: 기존 캘린더 테스트 전부 통과(이름 목록 동일, 옮긴 테스트는 공유 위치에서 실행됨), 캘린더 e2e_stub 통과.
+- [x] CI 명령·잠금 파일 유지. 루트 uv의 `packages/*` 검색에서 TypeScript 전용 폴더를 제외했다.
+- [x] 완료 기준: 두 프론트엔드 typecheck·test·build Green, 공개 캘린더 화면 차이 없음(e2e_stub 스크린샷 비교는 하지 않고 기존 E2E 단언으로 판단).
+
+[전후 측정과 전체 Green 기록](../evals/2026-11-08-shared-ui.md)
 
 ### PR 9 — 관리자 화면 (`feat/admin-frontend`)
 

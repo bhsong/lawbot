@@ -1,5 +1,5 @@
 import { render, screen, within } from '@testing-library/react'
-import { ChangeDialog, highlightedText } from './ChangeDialog'
+import { ChangeView, highlightedText } from './ChangeView'
 import type { CalendarChange } from './types'
 
 test('highlighting preserves complete source text, newlines and Unicode', () => {
@@ -24,25 +24,9 @@ const storedChange: CalendarChange = {
   effectiveOn: '2026-12-08', commentDeadline: null, sourceUrl: null, collectedAt: null, verifiedAt: null,
 }
 
-const dialogPrototype = HTMLDialogElement.prototype
-const originalShow = Object.getOwnPropertyDescriptor(dialogPrototype, 'showModal')
-const originalClose = Object.getOwnPropertyDescriptor(dialogPrototype, 'close')
-
-beforeAll(() => {
-  Object.defineProperty(dialogPrototype, 'showModal', { configurable: true,
-    value(this: HTMLDialogElement) { this.open = true } })
-  Object.defineProperty(dialogPrototype, 'close', { configurable: true,
-    value(this: HTMLDialogElement) { this.open = false } })
-})
-afterAll(() => {
-  if (originalShow) Object.defineProperty(dialogPrototype, 'showModal', originalShow)
-  else Reflect.deleteProperty(dialogPrototype, 'showModal')
-  if (originalClose) Object.defineProperty(dialogPrototype, 'close', originalClose)
-  else Reflect.deleteProperty(dialogPrototype, 'close')
-})
-
 function renderChange(change: CalendarChange) {
-  return render(<ChangeDialog change={change} demo={false} onClose={vi.fn()} />)
+  return render(<ChangeView change={change} demo={false} titleId="lc-detail-title" descriptionId="lc-detail-notice"
+    comparisonPageSrc={(_id, page) => `/fixtures/notice-comparison/${page}`} />)
 }
 
 test('shows both stored originals with highlighting and separate verification status', () => {

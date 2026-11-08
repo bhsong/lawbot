@@ -33,16 +33,23 @@ from lawbot_common.logs import logger
 
 log = logger('lawbot', 'lawbot')
 
-DIST = ROOT / 'services' / 'chatbot' / 'frontend' / 'dist'  # npm run build 결과 (git 제외)
+FRONTEND = Path('services/chatbot/frontend')
+DIST = ROOT / FRONTEND / 'dist'  # npm run build 결과 (git 제외)
 # 화면 소스 지문을 만드는 파일·폴더 (frontend/fingerprint.ts의 SOURCES와 같아야 함)
 SOURCES = (
-    'src',
-    'index.html',
-    'package.json',
-    'package-lock.json',
-    'tsconfig.json',
-    'vite.config.ts',
-    'fingerprint.ts',
+    *(
+        FRONTEND / name
+        for name in (
+            'src',
+            'index.html',
+            'package.json',
+            'package-lock.json',
+            'tsconfig.json',
+            'vite.config.ts',
+            'fingerprint.ts',
+        )
+    ),
+    Path('packages/lawbot-ui/src'),
 )
 REBUILD = '화면 파일을 다시 만드세요: services/chatbot/frontend에서 npm ci && npm run build'
 COOKIE = 'lawbot_session'
@@ -90,7 +97,7 @@ class Sessions:
 
 
 def source_fingerprint(root):
-    """화면 소스의 sha256: 경로(posix)를 정렬해 '경로 NUL 내용 NUL'을 이어 붙인 해시 (fingerprint.ts와 같은 규칙)"""
+    """Hash sorted repository-relative POSIX paths and file bytes, as in fingerprint.ts."""
     root = Path(root)
     files = sorted(
         p.relative_to(root).as_posix()
@@ -113,7 +120,8 @@ def require_build(dist):
         built = json.loads((dist / 'build.json').read_text(encoding='utf-8'))['source']
     except (OSError, ValueError, KeyError, TypeError) as e:
         raise RuntimeError(f'화면 빌드 정보(build.json)를 읽지 못했습니다. {REBUILD}') from e
-    if built != source_fingerprint(dist.parent):
+    root = dist.parent.resolve().parents[len(FRONTEND.parts) - 1]
+    if built != source_fingerprint(root):
         raise RuntimeError(f'화면 파일이 지금 소스와 다릅니다. {REBUILD}')
 
 
