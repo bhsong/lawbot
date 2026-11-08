@@ -329,7 +329,7 @@ client.chat.completions.create(
   uv run lawbot-build-articles --repo ../legalize-kr --asof 2026-12-08 --out-dir data/v4.1         # 새 기준일로 만들기
   ```
 
-- **자동 갱신** (운영): 웹앱은 git 밖 `data/live/`의 조문 CSV를 읽고(`.env`: `LAWBOT_V4_ARTICLES=data/live/articles_v4.csv`, `LAWBOT_V4_DECREE_ARTICLES=data/live/law_articles_v4_decree.csv`), `law-monitor daily`(06:30)가 `lawbot-articles-update --restart`로 그날 시행 중인 법에 맞춰 새 CSV·임베딩·확인·보관(`data/live/archive/`)·전환·웹앱 재시작을 합니다. 결과는 monitor 요약 md '점검' 절과 `services/monitor/data/articles/<날짜>.md` ([data-provenance.md](data-provenance.md) 6절).
+- **CSV 모드 자동 갱신**은 git 밖 `data/live/`에서 수행합니다. 웹앱은 `.env`의 `LAWBOT_V4_ARTICLES=data/live/articles_v4.csv`와 `LAWBOT_V4_DECREE_ARTICLES=data/live/law_articles_v4_decree.csv`를 읽습니다. `law-monitor daily`(06:30)는 `lawbot-articles-update --restart`로 생성·임베딩·검색 확인·아카이브·전환·재시작을 수행합니다. 결과는 monitor 요약의 '점검' 절과 `services/monitor/data/articles/<날짜>.md`에서 확인합니다. [DB 모드 자동 갱신](#db-코퍼스-자동-갱신) · [데이터 출처와 재현](data-provenance.md)
 
   ```zsh
   uv run lawbot-articles-update --init                      # 처음 한 번: data/v4 → data/live (그다음 .env를 data/live로)
@@ -363,7 +363,7 @@ LAWBOT_PROFILE=v5 uv run lawbot-articles-update --init
 
 운영 `.env`에는 `LAWBOT_PROFILE=v5`, `LAWBOT_V5_ARTICLES=data/live/v5/articles_v5.csv`, `LAWBOT_V5_DECREE_ARTICLES=data/live/v5/law_articles_v5_decree.csv`를 설정합니다. 웹앱은 Pro와 기존 리랭커를 선택하고, 간결형은 v5 기본 파일을 사용합니다. `uv run python -m lawbot.check_deploy`에서 매니페스트와 모델 설정을 확인한 뒤 운영 웹앱을 재시작합니다. 첫 시작에서 법률·하위법령 인덱스 캐시가 생성됩니다.
 
-06:30 `law-monitor daily`는 같은 웹앱 프로필을 읽습니다. v5에서는 `data/v5/scope_tax.csv`와 기존 생성기로 `data/live/v5/`를 갱신합니다. 다음 실행 뒤 조문 보고서의 데이터 경로, 갱신 상태와 웹앱 응답을 확인합니다. v5 내에서 직전 조문 세트로 되돌리려면 `uv run lawbot-articles-update --rollback --restart`를 실행합니다. v4로 전환을 되돌리는 경우에는 보관한 운영 설정과 이전 운영 커밋을 복구하고 `data/live/`의 v4 조문을 사용합니다.
+06:30 `law-monitor daily`는 같은 웹앱 프로필을 읽습니다. CSV 모드의 v5에서는 `data/v5/scope_tax.csv`와 기존 생성기로 `data/live/v5/`를 갱신합니다. 다음 실행 뒤 조문 보고서의 데이터 경로, 갱신 상태와 웹앱 응답을 확인합니다. v5 내에서 직전 조문 세트로 되돌리려면 `uv run lawbot-articles-update --rollback --restart`를 실행합니다. v4로 전환을 되돌리는 경우에는 보관한 운영 설정과 이전 운영 커밋을 복구하고 `data/live/`의 v4 조문을 사용합니다.
 
 ## 요청 로그와 오류 안내
 
@@ -449,6 +449,16 @@ uv run lawbot-db export-release --db PATH --release ID --out DIR
 ```
 
 조문 CSV 두 개와 매니페스트 두 개를 원본 이름과 바이트로 내보냅니다. 출력이 모두 같으면 `같음`으로 끝납니다. 기존 파일의 내용이 다른 경우에는 `--overwrite`로 교체를 명시합니다. 교체 결과에는 이전과 새 SHA-256 앞 12자리가 표시됩니다.
+
+### DB 코퍼스 자동 갱신
+
+웹앱과 monitor의 `lawbot-articles-update`가 같은 `.env`에서 `LAWBOT_CORPUS=db`, `LAWBOT_DB`, `LAWBOT_PROFILE`을 읽도록 설정합니다. 운영의 첫 릴리스는 백업과 기존 CSV 이관 순서에 따라 준비합니다. 빈 프로필에서 기본 조문으로 시작할 때는 `uv run lawbot-articles-update --init`이 `data/<프로필>`을 이관하고 활성화합니다. 프로필에 이미 활성 릴리스가 있으면 초기화를 거부합니다. [코퍼스 전환과 복구 순서](plans/sqlite-admin-pipeline.md#73-코퍼스-db-전환-pr-1012-병합-후)
+
+06:30 monitor는 같은 명령을 사용합니다. DB 폴더의 `.articles-update.lock`을 잡고 활성 릴리스의 해시를 확인한 뒤, 새 조문을 검사하고 임베딩·검색 검증을 거쳐 활성화합니다. `--restart`로 재시작한 웹앱이 응답하지 않으면 이전 릴리스를 다시 활성화하고 재시작합니다. `restart=skipped(...)`이면 새 릴리스가 활성으로 남으며 웹앱에는 다음 시작 때 적용됩니다. 갱신 결과의 `archive=`와 보고서의 보관 항목은 이전 릴리스 ID입니다. [자동 갱신 설계](archives/articles-auto-update.md#211-db-모드)
+
+수동 복구는 `uv run lawbot-articles-update --rollback --restart`로 실행합니다. 현재 활성 릴리스를 마지막으로 활성화한 이벤트의 `previous_release_id`를 복구합니다. DB를 CSV 모드로 전환할 때는 [전환과 복구 순서](plans/sqlite-admin-pipeline.md#73-코퍼스-db-전환-pr-1012-병합-후)에 따라 활성 릴리스를 먼저 내보냅니다.
+
+DB 갱신 뒤에도 `data/live/v5`는 이전 CSV를 담고 있습니다. 평가 도구는 CSV를 읽으므로 평가 전에 `lawbot-db export-release`로 평가할 릴리스를 별도 폴더에 내보내고 그 CSV 경로를 지정합니다. 자동 생성 릴리스는 비교할 원본 CSV 폴더를 보관하지 않으므로 저장 바이트의 해시는 `export-release`로 검증합니다. [CSV 내보내기](#db-코퍼스와-csv-내보내기)
 
 ### CSV·JSONL 이관과 대조
 

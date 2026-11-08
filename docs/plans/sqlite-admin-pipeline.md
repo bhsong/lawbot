@@ -481,13 +481,13 @@ CREATE TABLE dataset_releases (
 `LAWBOT_CORPUS=db`일 때 `lawbot-articles-update`의 흐름:
 
 1. 잠금: `<DB 폴더>/.articles-update.lock`(기존 `.update.lock`과 같은 방식).
-2. 현재 활성 릴리스 바이트로 기존 `articles_check.check_with_files`를 돌린다(경로 대신 바이트를 받도록 최소 수정). 같으면 종료 0.
-3. 다르면 생성 결과를 `corpus_releases(status='staged')`로 저장(짧은 트랜잭션). 매니페스트는 기존 `reindex.new_manifest`로 만든다. 릴리스 id `v5-live-<기준일>`(같은 날 두 번이면 `_2`, `_3`).
-4. 트랜잭션 밖에서 `reindex.validate`와 `gate`(기존 검사)를 돌린다. 임베딩 캐시도 이때 만들어진다. 실패하면 `status='failed'` + 이벤트 + 종료 2.
-5. 성공하면 `validated` → 한 트랜잭션에서 `active_corpus`를 바꾸고 `activated` 이벤트(이전 릴리스 id 포함).
-6. `--restart`면 기존 `do_restart`. 웹앱이 응답하지 않으면 `active_corpus`를 이전 릴리스로 되돌리고(`rolled_back` 이벤트) 다시 재시작, 종료 2.
-7. `--rollback`: `activated` 이벤트의 `previous_release_id`로 되돌림 + 재시작.
-8. 마지막 줄 형식과 종료 코드는 그대로(`archive=` 자리에 이전 릴리스 id). 보고서 md도 그대로 쓴다.
+2. 같은 `.env`의 `LAWBOT_DB`와 프로필에서 활성 릴리스를 찾고 두 CSV와 매니페스트의 복원 해시를 확인한다. 활성 릴리스의 조합 CSV·매니페스트 바이트로 `articles_check.check_with_files`를 돌린다. 답변 근거가 같으면 종료 0.
+3. 생성 결과를 임시 폴더에 쓰고 `reindex.validate`를 돌린 뒤 `reindex.new_manifest`로 매니페스트를 만든다. 검사에 실패하면 릴리스 ID가 없는 `failed` 이벤트를 남기고 종료 2.
+4. 후보를 `staged`로 저장한다. 릴리스 ID는 `<프로필>-live-<기준일>`이며 같은 날 이미 사용한 ID는 실패한 릴리스까지 세어 `_2`, `_3`을 붙인다.
+5. 쓰기 트랜잭션 밖에서 웹앱과 같은 종류의 CSV로 검색기와 임베딩 캐시를 만들고 `gate`를 돌린다. 실패하면 후보를 `failed`로 바꾸고 이벤트를 기록한 뒤 종료 2. 성공하면 같은 쓰기 트랜잭션에서 `validated`로 바꾸고 활성 포인터와 `activated` 이벤트를 기록한다. 이전 릴리스의 상태는 보존한다.
+6. `--restart`로 웹앱을 재시작한다. 응답하지 않으면 `restart_failed`를 기록하고 활성 포인터를 이전 릴리스로 복구한다. `rolled_back`을 기록한 뒤 다시 재시작하고 종료 2. launchd 작업이 없어 재시작을 건너뛰면 새 릴리스는 활성 상태로 남는다.
+7. `--rollback`은 현재 릴리스를 마지막으로 활성화한 `activated` 이벤트의 `previous_release_id`를 복구한다. `--restart`를 주면 재시작한다. `--init`은 활성 릴리스가 없는 프로필에서 기본 데이터로 첫 릴리스를 만든다.
+8. monitor의 마지막 줄과 종료 코드를 유지한다. `archive=`와 보고서의 보관 항목에는 이전 릴리스 ID를 쓴다.
 
 `LAWBOT_CORPUS=csv`(기본)면 지금 코드 경로를 그대로 탄다. 두 경로가 같은 데이터를 동시에 갱신하는 일은 없다(설정 하나가 고른다).
 
@@ -715,21 +715,24 @@ CREATE TABLE dataset_releases (
 
 ### PR 12 — 조문 자동 갱신을 릴리스와 연동 (`feat/articles-update-db`)
 
-- [ ] Red `test_articles_update.py` 확장(기존 테스트는 CSV 모드로 그대로):
-  - [ ] DB 모드 변화 없음 → 종료 0, 릴리스 수 그대로, 마지막 줄 형식 동일.
-  - [ ] 변화 있음 → `staged`→`validated`→`activated` 이벤트, 활성 릴리스 바뀜, 종료 1, 마지막 줄 키(`updated`, `asof`, `changed`, `archive`, `restart`) 그대로.
-  - [ ] 검사 실패(`reindex.validate` 오류, gate 실패) → 릴리스 `failed`, 활성 그대로, 종료 2.
-  - [ ] 재시작 실패(가짜 `restart_web`/`wait_web`) → 활성 이전 릴리스로 되돌림, `rolled_back` 이벤트, 종료 2.
-  - [ ] `--rollback` → 직전 활성 릴리스로, 재시작.
-  - [ ] 동시 실행 → 잠금으로 두 번째가 실패(종료 2, 기존 문구).
-  - [ ] 쓰기 트랜잭션 안에서 임베딩(가짜 인코더)이 불리지 않음: 가짜 인코더가 호출될 때 DB에 쓰기 잠금이 없음을 확인(`BEGIN IMMEDIATE`가 다른 연결에서 바로 성공).
-  - [ ] 같은 날 두 번 갱신 → 릴리스 id `_2`.
-  - [ ] `--init`(DB 모드): 프로필 기본 데이터로 첫 릴리스를 만들고 활성화(이미 있으면 거부).
-  - [ ] monitor 계약: `law_monitor` 쪽 테스트(있으면)가 그대로 통과.
-- [ ] Green: 3.11 흐름. 기존 보호 조건(웹앱 CSV 경로 확인, 매니페스트 확인, 잠금, 복구)은 DB 모드에 맞는 같은 의미의 검사로 바꾸고 하나도 빼지 않는다(PR 설명에 기존 조건 ↔ 새 조건 대응표).
-- [ ] 통합 테스트: tmp DB + 가짜 legalize-kr 저장소(기존 테스트 픽스처 재사용) + 가짜 모델 서버로 생성 → 검증 → 활성화 → 롤백 한 바퀴.
-- [ ] `docs/operations.md`·`docs/archives/articles-auto-update.md` 링크 갱신, DB 모드 운영 절차.
-- [ ] 완료 기준: 명세서 Phase 5의 코드 부분. 운영 전환은 7절(별도 요청).
+- [x] Red `test_articles_update.py` 확장(기존 테스트는 CSV 모드로 그대로):
+  - [x] DB 모드 변화 없음 → 종료 0, 릴리스 수 그대로, 마지막 줄 형식 동일.
+  - [x] 변화 있음 → `staged`→`validated`→`activated` 이벤트, 활성 릴리스 바뀜, 종료 1, 마지막 줄 키(`updated`, `asof`, `changed`, `archive`, `restart`) 그대로.
+  - [x] `reindex.validate` 오류는 릴리스 ID 없는 `failed` 이벤트, gate 실패는 `failed` 릴리스와 이벤트. 두 경우 모두 활성은 유지하고 종료 2.
+  - [x] 비교·발행의 예외는 타입과 메시지를 감사 기록에 남긴 뒤 다시 올린다. 감사 기록이 실패해도 원래 오류를 보고한다.
+  - [x] 재시작 실패(가짜 `restart_web`/`wait_web`) → 활성 이전 릴리스로 되돌림, `rolled_back` 이벤트, 종료 2.
+  - [x] `--rollback` → 직전 활성 릴리스로, 재시작.
+  - [x] 동시 실행 → 잠금으로 두 번째가 실패(종료 2, 기존 문구).
+  - [x] 쓰기 트랜잭션 안에서 임베딩(가짜 인코더)이 불리지 않음: 가짜 인코더가 호출될 때 DB에 쓰기 잠금이 없음을 확인(`BEGIN IMMEDIATE`가 다른 연결에서 바로 성공).
+  - [x] 실패한 릴리스 ID를 포함해 같은 날 `_2`, `_3` 배정.
+  - [x] `--init`(DB 모드): 프로필 기본 데이터로 첫 릴리스를 만들고 활성화(이미 있으면 거부).
+  - [x] monitor 계약: `law_monitor` 쪽 테스트(있으면)가 그대로 통과.
+- [x] Green: 3.11 흐름. 기존 보호 조건(웹앱 CSV 경로 확인, 매니페스트 확인, 잠금, 복구)은 DB 모드에 맞는 같은 의미의 검사로 바꾸고 하나도 빼지 않는다(PR 설명에 기존 조건 ↔ 새 조건 대응표).
+- [x] 통합 테스트: tmp DB + 가짜 legalize-kr 저장소(기존 테스트 픽스처 재사용) + 가짜 모델 서버로 생성 → 검증 → 활성화 → 롤백 한 바퀴.
+- [x] `docs/operations.md`·`docs/archives/articles-auto-update.md` 링크 갱신, DB 모드 운영 절차.
+- [x] 완료 기준: 명세서 Phase 5의 코드 부분. 운영 전환은 7절(별도 요청).
+
+[DB 코퍼스 자동 갱신과 전체 Green 검증 기록](../evals/2026-11-08-articles-update-db.md)
 
 ---
 
@@ -784,7 +787,7 @@ CREATE TABLE dataset_releases (
 3. `migrate_csv_to_sqlite corpus --dir data/live/v5 --profile v5 --release-id v5-live-<기준일> --activate` → `verify` → `export-release`로 만든 CSV sha가 `data/live/v5`의 sha와 같은지 확인.
 4. 사용자가 `.env`에 `LAWBOT_CORPUS=db`.
 5. 웹앱 재시작 → 로그에 "임베딩 캐시 사용" 확인(같은 .npz) → `check_deploy` PASS → e2e_live 3개(승인 시).
-6. 다음 06:30 monitor 실행 결과(종료 코드·마지막 줄) 확인.
+6. 다음 06:30 monitor 실행 결과에서 종료 코드와 마지막 줄을 확인한다. 갱신 시 `archive=`와 보고서에서 이전 릴리스 ID를 확인한다. [DB 모드 자동 갱신](../operations.md#db-코퍼스-자동-갱신)
 - 복구: `lawbot-db export-release --release <활성 릴리스> --out data/live/v5 --overwrite`로 CSV를 갱신한다. 기존 파일은 2단계 사본으로 보존한다. `.env`에서 `LAWBOT_CORPUS`를 제거하고 재시작한다. DB의 릴리스·이벤트는 보존한다. [DB 코퍼스와 CSV 내보내기](../operations.md#db-코퍼스와-csv-내보내기)
 
 ---
