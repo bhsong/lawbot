@@ -36,6 +36,7 @@ class Settings:
     feedback: Feedback | None = None
     db: Path | None = None
     admin: AdminCredentials | None = None
+    calendar_api_url: str | None = None
 
 
 MISSING_SERVER = (
@@ -97,6 +98,7 @@ def load(env=None, web=False):
 
         take('auth', lambda: security.auth(env))
         take('admin', lambda: admin_credentials(env, db_configured=bool(db)))
+        take('calendar_api_url', lambda: security.calendar_api_url(env))
         take('port', lambda: security.server_port(env))
         take('instance', lambda: security.instance_name(env))
         take('chat_concurrency', lambda: view.chat_concurrency(env))

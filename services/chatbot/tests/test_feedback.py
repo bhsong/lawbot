@@ -408,30 +408,34 @@ def test_review_real_eval_sets():
 
 
 def test_review_excludes_val_and_decree_sets():
-    """T13: v4 val 1,110·하위법령 질문 val 444·test 1,880도 뺀다 (하위법령 train은 빼지 않음)"""
+    """T13: v4와 하위법령 질문의 양쪽 검증 분할을 보호한다"""
     evals = feedback_review.eval_sets()
     count = lambda s: sum(src == s for src, _, _ in evals)
-    assert (count('v4_val'), count('decree_val'), count('decree_test')) == (1110, 444, 1880)
+    # sllm-only validation adds 444 v4 and 181 decree questions.
+    assert (count('v4_val'), count('decree_val'), count('decree_test')) == (1554, 625, 1880)
     ov = feedback_review.Overlap(evals)
     from lawbot_tools.eval_v4 import load_test
 
     v = load_test('val').iloc[0]
     assert ov.match(v.question) == (f'v4_val:{v.id}', 'exact')
     qa = pd.read_csv(ROOT / 'data/decree_exp/qa_decree_v4.csv', encoding='utf-8-sig').merge(
-        pd.read_csv(ROOT / 'data/decree_exp/split_decree_v4.csv', encoding='utf-8-sig')[['id', 'split_emb']], on='id'
+        pd.read_csv(ROOT / 'data/decree_exp/split_decree_v4.csv', encoding='utf-8-sig')[
+            ['id', 'split_emb', 'split_sllm']
+        ],
+        on='id',
     )
     for split in ('val', 'test'):
         q = qa[qa.split_emb == split].iloc[0]
         assert ov.match(q.question)[0].startswith('decree_')
     ids = {i for src, i, _ in evals if src.startswith('decree_')}
-    assert not ids & set(qa.loc[qa.split_emb == 'train', 'id'])
+    assert not ids & set(qa.loc[(qa.split_emb == 'train') & (qa.split_sllm == 'train'), 'id'])
 
 
 def test_review_eval_sets_include_v5_and_reasoning():
     evals = feedback_review.eval_sets()
     assert {source: sum(s == source for s, _, _ in evals) for source in ('v5_test', 'v5_val', 'reasoning_v5')} == {
         'v5_test': 3420,
-        'v5_val': 2052,
+        'v5_val': 2907,  # 855 sllm-only validation questions
         'reasoning_v5': 30,
     }
 

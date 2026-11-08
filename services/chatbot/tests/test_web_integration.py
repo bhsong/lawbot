@@ -14,8 +14,10 @@ from pathlib import Path
 import httpx
 import pytest
 
-from conftest import ENV_KEYS, free_port
+from admin_test_data import GOLD, add_feedback, seed_qa
+from conftest import ADMIN_PW, ADMIN_USER, ENV_KEYS, free_port
 from lawbot import view, web
+from lawbot.db import migrate
 
 pytestmark = pytest.mark.integration
 
@@ -30,9 +32,8 @@ def server_log(path):  # 실패 진단용 서버 출력 (비밀번호는 가림)
     return path.read_text(encoding='utf-8', errors='replace').replace(PW, '***')
 
 
-@pytest.fixture(scope='module')
-def server(tmp_path_factory):
-    tmp = tmp_path_factory.mktemp('web_server')
+@contextmanager
+def start_server(tmp, **overrides):
     port, calls, out_path = free_port(), tmp / 'llm_calls.txt', tmp / 'server.log'
     request_log = tmp / 'requests.jsonl'
     env = {k: v for k, v in os.environ.items() if k not in ENV_KEYS}
@@ -44,6 +45,7 @@ def server(tmp_path_factory):
         LAWBOT_CHAT_CONCURRENCY='1',
         LAWBOT_EMBED_CACHE='0',
     )
+    env.update(overrides)
     url = f'http://127.0.0.1:{port}'
     with out_path.open('w') as out:
         proc = subprocess.Popen(
@@ -74,6 +76,12 @@ def server(tmp_path_factory):
         except subprocess.TimeoutExpired:
             proc.kill()
             proc.wait()
+
+
+@pytest.fixture(scope='module')
+def server(tmp_path_factory):
+    with start_server(tmp_path_factory.mktemp('web_server')) as running:
+        yield running
 
 
 @contextmanager
@@ -155,3 +163,44 @@ def test_disconnect_marks_request_cancelled(server, fmt):
         assert time.monotonic() < deadline, f'요청 로그가 남지 않음\n{server_log(server.out)}'
         time.sleep(0.1)
     assert log_rows(server)[-1]['status'] == 'cancelled'
+
+
+def test_admin_review_and_promotion_in_server_process(tmp_path, admin_hash):
+    db = tmp_path / 'private' / 'lawbot.db'
+    migrate.init(db)
+    seed_qa(db)
+    add_feedback(db, 'fixture')
+    with (
+        start_server(
+            tmp_path,
+            LAWBOT_DB=str(db),
+            LAWBOT_ADMIN_USER=ADMIN_USER,
+            LAWBOT_ADMIN_PW_HASH=admin_hash,
+        ) as running,
+        httpx.Client(base_url=running.url, timeout=WAIT_LIMIT) as session,
+    ):
+        assert session.post('/api/login', json={'user': ADMIN_USER, 'password': ADMIN_PW}).status_code == 200
+        prefix = '/api/admin/feedbacks'
+        assert session.get(prefix).json()['items'][0]['feedback_id'] == 'fixture'
+        origin = {'Origin': running.url}
+        review = session.post(
+            f'{prefix}/fixture/review',
+            headers=origin,
+            json={
+                'idempotency_key': 'review',
+                'verdict': 'correct',
+                'decision': 'approved',
+                'gold_articles': GOLD,
+            },
+        )
+        assert (review.status_code, review.json()['status']) == (201, 'reviewed')
+        result = session.post(
+            f'{prefix}/promote-up',
+            headers=origin,
+            json={
+                'idempotency_key': 'promotion',
+                'feedback_ids': ['fixture'],
+            },
+        )
+        assert result.status_code == 200 and result.json()['results'][0]['qa_uid'] == 'feedback:FB-fixture-r1'
+        assert session.get(prefix, params={'status': 'promoted'}).json()['items'][0]['feedback_id'] == 'fixture'

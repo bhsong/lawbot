@@ -13,6 +13,23 @@
 
 모델(임베딩·리랭커·답변)은 모두 모델 서버(`services/model-server`, OpenAI 호환 API)에서 돌고, 웹앱(`services/chatbot`)은 조문 인덱스·검색 정렬·하위법령 필터·프롬프트 조립·화면을 맡습니다. 생성만 OpenAI 호환 클라우드 모델로 바꿀 수 있습니다.
 
+## 관리자 API
+
+관리자 계정을 설정한 경우에만 `lawbot.admin`이 라우트를 등록합니다. SQLite 조회·쓰기와 문항 유사도 검사는 작업 스레드에서 처리합니다. 보호 대상 문항은 시작 시 DB에서 읽으며, 현재 조문 확인은 검색기가 이미 메모리에 올린 조문을 사용합니다.
+
+| 경로 (`/api/admin` 기준) | 메서드 | 역할 |
+| --- | --- | --- |
+| `/feedbacks` | GET | 최신 피드백 목록과 계산된 상태, 필터, 커서 |
+| `/feedbacks/{id}` | GET | 저장된 피드백과 검수·승격 이력, 문항과 조문 대조 결과 |
+| `/feedbacks/{id}/review` | POST | 기존 기록을 보존하며 검수 추가 |
+| `/feedbacks/promote-up` | POST | 승인된 좋아요를 최대 50건 승격하고 건별 결과 반환 |
+| `/feedbacks/{id}/promote-down` | POST | 교정한 문제 신고를 검수와 함께 승격 |
+| `/promotions/{id}/revoke` | POST | 승격을 취소하고 QA를 `retired`로 전환 |
+| `/articles` | GET | 현재 법령명·조문 번호 검색 |
+| `/calendar/{path}` | GET | 허용한 독립 캘린더 경로 조회 |
+
+승격은 누출 검사 뒤 `BEGIN IMMEDIATE`에서 피드백과 검수 상태를 다시 확인합니다. QA·정답·분할·선호 쌍·승격·감사·멱등 응답을 한 트랜잭션에서 기록합니다. 좋아요 배치는 건별로 처리하고 같은 키로 중단 지점부터 이어갈 수 있습니다. 상세 요청·응답 형식은 [SQLite 관리자 파이프라인 §3.7](plans/sqlite-admin-pipeline.md#37-관리자-api)에 있습니다.
+
 ## 학습 구성 요소
 
 | 구성 요소 | 모델·라이브러리 | 비고 |

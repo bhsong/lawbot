@@ -160,6 +160,7 @@ v5 Pro는 간결형에 `data/v5/system_v5_concise.txt`를 쓰고, 화면에서 "
 | `LAWBOT_FEEDBACK` | 아니요 | `1`이면 답변마다 👍·깃발 버튼을 달고 누른 답을 저장 (기본 `0`, `0`·`1`만) |
 | `LAWBOT_DB` | 관리자 사용 시 | 미리 초기화한 SQLite 경로. 지정하면 피드백과 관리자 로그인 감사 기록을 이 DB에 저장. 레포 안에서는 Git 제외 경로만 허용 |
 | `LAWBOT_FEEDBACK_DIR` | 아니요 | `LAWBOT_DB`가 비어 있을 때 쓰는 JSONL 폴더. 기본 레포 최상위 `feedback/`. 레포 안에서는 Git 제외 경로만 허용 |
+| `LAWBOT_CALENDAR_API_URL` | 캘린더 프록시 사용 시 | 포트가 명시된 루프백 HTTP 주소. 비워 두면 관리자 캘린더 API는 503 `calendar_not_configured` 반환 |
 
 모델 서버(`lawbot-model-server`, `lawbot_model_server.check`):
 
@@ -386,6 +387,20 @@ uv run python -m lawbot.auth hash
 
 관리자 계정을 사용하면 사용자명별로 15분 안에 로그인에 5번 실패했을 때 15분 동안 추가 로그인이 제한됩니다. 관리자 로그인 결과는 `audit_events`에 기록되며, 비밀번호·해시·쿠키·세션 ID는 기록하지 않습니다.
 
+### 관리자 API 준비
+
+관리자 계정을 설정하면 시작할 때 `LAWBOT_DB`의 QA 이관 상태를 확인합니다. `migrate_csv_to_sqlite qa --set <세트>`로 `v4`, `v5`, `decree_v4`, `reasoning_v5`, `oos`, `scope`, `refusal_hard`, `labor_eval`을 각각 이관하고 `verify`로 확인합니다. 빠진 세트가 있으면 웹앱이 시작을 거부합니다.
+
+| 작업 | `/api/admin` 기준 경로 | 확인할 응답 |
+| --- | --- | --- |
+| 목록·상세 조회 | `GET /feedbacks`, `GET /feedbacks/{id}` | 200, 비로그인 401, 일반 계정 403 |
+| 검수·승격 | `POST /feedbacks/{id}/review`, `POST /feedbacks/promote-up`, `POST /feedbacks/{id}/promote-down` | 검수·문제 신고 승격 201, 좋아요 배치 200, 다른 Origin 403 |
+| 승격 취소 | `POST /promotions/{id}/revoke` | 200, 이전 QA와 분할 이력 보존 |
+| 조문 조회 | `GET /articles?q=…` | 200, 현재 검색기가 읽은 조문 반환 |
+| 캘린더 조회 | `GET /calendar/{path}` | 주소 미설정 503, 캘린더 연결 실패 502, 10초 초과 504 |
+
+POST는 JSON과 멱등 키가 필요합니다. 같은 요청을 재시도할 때는 본문 바이트와 키를 유지합니다. Tailscale로 접속하는 경우 브라우저가 보낸 `Origin`이 프록시를 거친 요청의 공개 주소와 일치하는지 확인합니다. 캘린더 프록시를 쓸 때는 `LAWBOT_CALENDAR_API_URL`을 설정하고 관리자 세션으로 조회합니다. 허용 경로와 요청 본문 형식은 [관리자 API 명세](plans/sqlite-admin-pipeline.md#37-관리자-api)에 있습니다.
+
 ## 답변 피드백 (선택, `LAWBOT_FEEDBACK=1`)
 
 답변마다 👍과 깃발(이유: 검색 오류·답변 오류·불필요한 거절·기타)이 붙습니다. 버튼을 누르면 질문, 참고 조문과 첨부 설정, system, 답변 원문·화면 글, 인용 판정, 측정값, 데이터 버전, 커밋, `request_id`를 저장합니다. 실제로 읽은 조문 CSV와 사용한 system의 SHA-256, 임베딩·리랭킹·생성 모델 ID도 기록합니다. 리랭커가 꺼져 있으면 `rerank_model`은 `null`이고, CSV 코퍼스의 `corpus_release_id`도 `null`입니다. 앱을 다시 시작하기 전의 답이나 다른 로그인 세션의 답에는 저장하지 않습니다.
@@ -399,7 +414,7 @@ uv run python -m lawbot_tools.feedback_review --db data/db/lawbot.db --out feedb
 uv run python -m lawbot_tools.feedback_export feedback_review_<날짜>.csv --out data/feedback/
 ```
 
-- `feedback_review`는 `--db` 또는 기존 JSONL 폴더·파일을 받습니다. 같은 답의 마지막 선택만 남기고 해제는 뺍니다. 평가 문항과 공백·문장부호를 제외하고 같거나 유사도가 0.9 이상인 질문은 빼고 ID를 출력합니다. 대조 대상에는 v4 test 2,075·val 1,110문항, v5 test 3,420·val 2,052문항, v5 추론 검증 30문항, 하위법령 test 1,880·val 444문항과 `oos_eval`, `scope_controls`, `refusal_hard_cases`, `labor_eval_keywords`가 포함됩니다. 엑셀·Numbers에서 `h_ok`(맞음/틀림/모름), `h_gold`(`법령명 제N조`, 여러 조문은 `;`로 구분), `h_scope`(범위 안/범위 밖), `h_note`를 채웁니다. `--keep 이전 CSV`로 채운 칸을 이어받습니다.
+- `feedback_review`는 `--db` 또는 기존 JSONL 폴더·파일을 받습니다. 같은 답의 마지막 선택만 남기고 해제는 뺍니다. 평가 문항과 공백·문장부호를 제외하고 같거나 유사도가 0.9 이상인 질문은 빼고 ID를 출력합니다. `emb`·`sllm`의 합집합을 대조하며, 어느 쪽에서든 test면 test로 분류합니다. 대상은 v4 test 2,075·val 1,554문항, v5 test 3,420·val 2,907문항, v5 추론 검증 30문항, 하위법령 test 1,880·val 625문항과 `oos_eval`, `scope_controls`, `refusal_hard_cases`, `labor_eval_keywords`입니다. 엑셀·Numbers에서 `h_ok`(맞음/틀림/모름), `h_gold`(여러 `법령명 제N조`는 세미콜론으로 구분), `h_scope`(범위 안/범위 밖), `h_note`를 채웁니다. `--keep 이전 CSV`로 채운 칸을 이어받습니다.
 - `feedback_export`는 v4·v5 기록을 함께 처리합니다. 정답 조문과 저장된 참고 조문을 각 기록의 프로필에 맞는 법률·하위법령 CSV로 대조합니다. 셸의 `LAWBOT_V4_*`·`LAWBOT_V5_*` 조문 경로 설정을 따르며, `--articles`로 지정한 CSV는 모든 기록에 적용합니다. 지원 범위를 벗어난 프로필은 제외하고 건수를 표시합니다.
 - 출력은 `fb_questions.csv`(검수 질문), `fb_emb_pairs.csv`(정답 조문 positive, 검색 오류는 검색 1위를 hard negative), `fb_sft.csv`(맞음 + 👍), `fb_kto.csv`(맞음/틀림 라벨)입니다. 프롬프트는 저장된 참고 조문으로 `llm.build_prompt`를 호출해 재구성합니다. 피드백에서 `random_state=42`로 val을 떼고, 평가는 기존 test로만 합니다.
 
