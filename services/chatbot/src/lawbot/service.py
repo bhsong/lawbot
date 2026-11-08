@@ -15,8 +15,8 @@ from typing import cast
 import httpx
 from openai import OpenAI
 
+from lawbot import corpus_store, deploy, manifest
 from lawbot import decree as decree_filter
-from lawbot import deploy, manifest
 from lawbot.api_client import (
     REQUEST_ID,
     Embedder,
@@ -27,7 +27,7 @@ from lawbot.api_client import (
     request_timeout,
     wait_ready,
 )
-from lawbot.embed_cache import EmbedCache
+from lawbot.embed_cache import EmbedCache, cache_key, embedding_metadata
 from lawbot.hits import Hit, Timing
 from lawbot.llm import LLM
 from lawbot.paths import ROOT
@@ -85,6 +85,9 @@ class LawbotApp:
     llm_mode: str = 'api'  # 생성 위치: 'api'(모델 서버) / 'external'(LAWBOT_LLM_BASE_URL의 외부 API)
     settings: object = None  # lawbot.settings.Settings (load_app이 넣음. 테스트·평가의 가짜 앱은 None)
     dataset_version: str | None = None
+    corpus_release_id: str | None = None
+    corpus_manifest: dict | None = None
+    articles_sha256: str | None = None
 
 
 def uses_decrees(app, model_key):
@@ -98,16 +101,17 @@ def system_text(profile, spec):
     return (spec.system_file or profile.system_file).read_text(encoding='utf-8').strip()
 
 
-def check_profile_files(p):
+def check_profile_files(p, corpus=None):
     """프로필의 조문 CSV·기본 system 파일이 있는지 모델 서버에 접속하기 전에 확인
     조문 CSV가 매니페스트(조문 수·sha256)와 다르면 거부, 매니페스트가 없으면 경고만 (manifest.check)"""
-    missing = [str(f) for f in (p.articles, p.system_file) if not f.is_file()]
+    files = (p.system_file,) if corpus else (p.articles, p.system_file)
+    missing = [str(f) for f in files if not f.is_file()]
     if missing:
         raise RuntimeError(
             f'프로필 {p.name}에 필요한 파일이 없습니다: {", ".join(missing)}. '
             'uv run python -m lawbot.check_deploy로 확인하세요.'
         )
-    metadata = manifest.check(p.articles)
+    metadata = manifest.check(corpus.data, corpus.manifest, name=corpus.name) if corpus else manifest.check(p.articles)
     if metadata is None and p.name == 'v5':
         raise RuntimeError(f'매니페스트 없음: {p.articles.name}')
     return metadata
@@ -147,6 +151,21 @@ def missing_models(available, p, rr, external):
     return [(kind, mid) for mid, kind in need if (mid, kind) not in have]
 
 
+def _record_embeddings(db, release_id, retriever, profile, decree, revision):
+    indexes = [('law', profile.max_seq, retriever.docs[: retriever.n_law], retriever.D)]
+    if decree is not None:
+        indexes.append(('decree', decree.max_seq, retriever.docs[retriever.n_law :], retriever.D_dec))
+    entries = [
+        (
+            part,
+            cache_key(profile.emb_model, limit, docs),
+            embedding_metadata(profile.emb_model, limit, docs, vectors, revision),
+        )
+        for part, limit, docs, vectors in indexes
+    ]
+    corpus_store.record_embeddings(db, release_id, entries)
+
+
 def load_app(settings=None):
     """웹앱·평가용 LawbotApp: 조문 인덱스(임베딩은 모델 서버) + 켜져 있으면 리랭커 + 답변 모델(Fast/Pro) 레지스트리
     settings: lawbot.settings.Settings (없으면 지금 환경 변수로 settings.load()). 설정이 틀리면 모델 서버에 접속하기 전에
@@ -155,31 +174,41 @@ def load_app(settings=None):
 
     cfg = settings or settings_mod.load()
     p, rr, dc = cfg.profile, cfg.reranker, cfg.decree
-    metadata = check_profile_files(p)
+    release = corpus = None
+    if cfg.corpus == 'db':
+        if cfg.db is None:
+            raise ValueError('LAWBOT_CORPUS=db에는 LAWBOT_DB가 필요합니다.')
+        release = corpus_store.active_release(cfg.db, p.name)
+        corpus = release.combined if dc else release.law
+    metadata = check_profile_files(p, corpus)
     url, llm_url, llm_key, external = cfg.model_server, cfg.llm_url, cfg.llm_key, cfg.llm_external
     client = ModelServerClient(url, cfg.model_token)
     wait, limit = cfg.server_wait, request_timeout(cfg.read_timeout)
     log.info(f'모델 서버 {url} 준비 대기 (최대 {wait:g}초)')
     wait_ready(client, wait)
-    missing = missing_models(client.models(), p, rr, external)
+    available = client.models()
+    missing = missing_models(available, p, rr, external)
     if missing:
         raise RuntimeError(
             '모델 서버에 필요한 모델이 없습니다: '
             + ', '.join(f'{kind} {mid}' for kind, mid in missing)
             + ' (모델 서버 .env의 LAWBOT_SERVE_*와 웹앱의 LAWBOT_*_MODEL을 맞추세요)'
         )
+    revision = next(m.get('revision') for m in available if m['id'] == p.emb_model and m.get('type') == 'embedding')
     t0 = time.perf_counter()
     retriever = Retriever(
         Embedder(client, p.emb_model, query_timeout=limit),
-        p.articles,
+        corpus.data if corpus else p.articles,
         max_seq_length=p.max_seq,
         **({'decree_max_seq': dc.max_seq} if dc else {}),
-        **({'cache': EmbedCache(cfg.embed_cache)} if cfg.embed_cache else {}),
+        **({'cache': EmbedCache(cfg.embed_cache, model_revision=revision)} if cfg.embed_cache else {}),
     )
     log.info(
         f'조문 인덱스 {time.perf_counter() - t0:.1f}초 · 법률 {getattr(retriever, "n_law", len(retriever.ids))}개'
         + (f' + 하위법령 {len(retriever.ids) - retriever.n_law}개 (max_seq {dc.max_seq})' if dc else '')
     )
+    if release is not None:
+        _record_embeddings(cfg.db, release.release_id, retriever, p, dc, revision)
     reranker = Reranker(client, rr.model, rr.candidates, timeout=limit) if rr else None
     # 외부 API는 셸의 프록시 설정을 따른다. 모델 서버(127.0.0.1)는 프록시를 거치지 않음
     # openai 3.x는 타입 선언이 httpx2 기준이지만 httpx.Client·httpx.Timeout을 그대로 받아 쓴다 (2026-11-02 확인: 읽기 상한·trust_env 적용)
@@ -214,6 +243,9 @@ def load_app(settings=None):
         'external' if external else 'api',
         cfg,
         (metadata or {}).get('dataset_version'),
+        corpus_release_id=release.release_id if release else None,
+        corpus_manifest=metadata if release else None,
+        articles_sha256=getattr(retriever, 'articles_sha256', None),
     )
 
 
@@ -344,6 +376,7 @@ def request_record(app, st, fmt, status, error):
         'mode': getattr(app, 'llm_mode', 'api'),
         'caller': Path(sys.argv[0]).name,
         'profile': app.profile.name,
+        'corpus_release_id': getattr(app, 'corpus_release_id', None),
         'model': st['model'],
         'fmt': fmt or (spec.fmt if spec else None),
         'reranker': app.reranker is not None,

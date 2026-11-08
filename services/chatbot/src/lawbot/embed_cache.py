@@ -5,9 +5,11 @@
 #   (1개만 임베딩한 값은 batch 구성이 달라 전체 임베딩의 같은 행과 fp16에서 다를 수 있으므로, 같은 호출끼리 비교)
 # 캐시를 읽거나 쓰지 못하면 경고만 하고 지금처럼 매번 임베딩한다. LAWBOT_EMBED_CACHE=0으로 끔 (lawbot.settings)
 import hashlib
+import json
 import os
 import tempfile
 from pathlib import Path
+from typing import TypedDict
 
 import numpy as np
 
@@ -18,16 +20,40 @@ CACHE_DIR = ROOT / 'cache' / 'embeddings'  # .gitignore의 cache/
 log = logger('lawbot', 'lawbot')
 
 
-def cache_key(model, max_seq, texts):
-    h = hashlib.sha256(f'{model}\0{max_seq}\0'.encode())
+def _hash_documents(h, texts):
     for t in texts:
         h.update(t.encode('utf-8') + b'\0')
-    return h.hexdigest()[:32]
+    return h.hexdigest()
+
+
+def cache_key(model, max_seq, texts):
+    return _hash_documents(hashlib.sha256(f'{model}\0{max_seq}\0'.encode()), texts)[:32]
+
+
+class EmbeddingMeta(TypedDict):
+    model_id: str
+    model_revision: str | None
+    max_seq: int
+    dim: int
+    n_docs: int
+    docs_sha256: str
+
+
+def embedding_metadata(model, max_seq, texts, vectors, revision) -> EmbeddingMeta:
+    return EmbeddingMeta(
+        model_id=model,
+        model_revision=revision,
+        max_seq=max_seq,
+        dim=vectors.shape[1],
+        n_docs=len(texts),
+        docs_sha256=_hash_documents(hashlib.sha256(), texts),
+    )
 
 
 class EmbedCache:
-    def __init__(self, folder=CACHE_DIR):
+    def __init__(self, folder=CACHE_DIR, *, model_revision=None):
         self.folder = Path(folder)
+        self.model_revision = model_revision
 
     def encode(self, encoder, texts, max_seq):
         """encoder.encode(texts, 'document', max_seq)와 같은 float32 배열 (캐시가 맞으면 확인용 1개만 임베딩)"""
@@ -45,7 +71,8 @@ class EmbedCache:
             )
         vectors = np.asarray(encoder.encode(texts, 'document', max_seq), dtype=np.float32)
         probe = np.asarray(encoder.encode(texts[:1], 'document', max_seq), dtype=np.float32)
-        self._write(path, vectors, probe)
+        meta = embedding_metadata(encoder.model, max_seq, texts, vectors, self.model_revision)
+        self._write(path, vectors, probe, meta)
         return vectors
 
     def _read(self, path, n):
@@ -61,13 +88,13 @@ class EmbedCache:
             return None
         return vectors, probe
 
-    def _write(self, path, vectors, probe):
+    def _write(self, path, vectors, probe, meta):
         """임시 파일에 쓴 뒤 바꿔 넣는다 (쓰는 중에 멈춰도 깨진 캐시가 남지 않게)"""
         try:
             self.folder.mkdir(parents=True, exist_ok=True)
             fd, tmp = tempfile.mkstemp(dir=self.folder, suffix='.tmp')
             with os.fdopen(fd, 'wb') as f:
-                np.savez(f, vectors=vectors, probe=probe)
+                np.savez(f, vectors=vectors, probe=probe, meta=json.dumps(meta, ensure_ascii=False))
             os.replace(tmp, path)
         except OSError as e:
             log.warning(f'경고: 조문 임베딩 캐시를 쓰지 못했습니다 ({self.folder}: {type(e).__name__})')

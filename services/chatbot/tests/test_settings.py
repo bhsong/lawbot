@@ -63,6 +63,18 @@ def test_db_path_is_optional(extra):
     assert settings.load(BASE | extra, web=True).db is None
 
 
+def test_corpus_defaults_to_csv():
+    assert settings.load(BASE).corpus == 'csv'
+
+
+@pytest.mark.parametrize(
+    ('value', 'message'), [('unknown', 'LAWBOT_CORPUS'), ('', 'LAWBOT_CORPUS'), ('db', 'LAWBOT_DB')]
+)
+def test_corpus_rejects_invalid_mode_or_missing_db(value, message):
+    with pytest.raises(settings.SettingsError, match=message):
+        settings.load(BASE | {'LAWBOT_CORPUS': value, 'LAWBOT_DB': ' '})
+
+
 def test_db_path_accepts_ignored_relative_path():
     path = 'data/db/lawbot.db'
     assert settings.load(BASE | {'LAWBOT_DB': path}).db == ROOT / path

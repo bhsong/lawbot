@@ -7,10 +7,12 @@
 import hashlib
 import os
 import sys
+from io import BytesIO
 
 import pandas as pd
 
-from lawbot import deploy, envfile, manifest, security, service
+from lawbot import corpus_store, deploy, envfile, manifest, security, service, settings
+from lawbot.db.migrate import startup_path
 from lawbot.deploy import get_profile
 
 EXPECTED_ARTICLES = 415  # 법률 조문 수 (매니페스트가 없을 때 기준. 있으면 매니페스트의 법률 수: lawbot-reindex로 바뀜)
@@ -22,10 +24,15 @@ ARTICLE_NO = (
 )
 
 
-def check_articles(p, out):
-    if not p.articles.is_file():
+def _read_articles(articles):
+    return pd.read_csv(BytesIO(articles) if isinstance(articles, bytes) else articles, encoding='utf-8-sig')
+
+
+def check_articles(p, out, part=None):
+    if part is None and not p.articles.is_file():
         return out.append(('FAIL', f'조문 CSV 없음: {p.articles}'))
-    law = pd.read_csv(p.articles, encoding='utf-8-sig')
+    articles = part.data if part else p.articles
+    law = _read_articles(articles)
     missing = COLUMNS - set(law.columns)
     if missing:
         return out.append(('FAIL', f'조문 CSV 열 없음 {sorted(missing)} (있는 열: {list(law.columns)})'))
@@ -33,7 +40,7 @@ def check_articles(p, out):
     key = ['law', 'article_id']
     dup = live[live.duplicated(key, keep=False)]
     n_law = int((live['kind'] == '법률').sum()) if 'kind' in live else len(live)  # 검색기는 kind로 법률만 법률 인덱스에
-    m = manifest.load(p.articles)
+    m = part.manifest if part else manifest.load(p.articles)
     expected = ((m or {}).get('articles_by_kind') or {}).get(manifest.DEFAULT_KIND, EXPECTED_ARTICLES)
     n_ok = n_law == expected
     if 'kind' in live:  # 812조문 CSV (하위법령 첨부)
@@ -41,14 +48,14 @@ def check_articles(p, out):
             (
                 'OK' if n_ok else 'FAIL',
                 f'비삭제 법률 조문 {n_law}개 (기대 {expected}) · '
-                f'전체 {len(live)}개 · sha256 {manifest.sha256(p.articles)[:12]}',
+                f'전체 {len(live)}개 · sha256 {manifest.sha256(articles)[:12]}',
             )
         )
     else:
         out.append(
             (
                 'OK' if n_ok else 'FAIL',
-                f'비삭제 조문 {len(live)}개 (기대 {expected}) · sha256 {manifest.sha256(p.articles)[:12]}',
+                f'비삭제 조문 {len(live)}개 (기대 {expected}) · sha256 {manifest.sha256(articles)[:12]}',
             )
         )
     if len(dup):
@@ -66,7 +73,7 @@ def check_articles(p, out):
     out.append(('INFO', f'법령별 조문 수: {live["law"].value_counts().to_dict()}'))
 
 
-def check_decree(p, out):
+def check_decree(p, out, release=None):
     """하위법령 첨부 설정과 812조문 CSV: 종류별 수, parent_law, 법률 415행이 415조문 CSV와 같은지(법률 검색이 같다는 전제)"""
     try:
         dc = deploy.decree(p)
@@ -74,19 +81,20 @@ def check_decree(p, out):
         return out.append(('FAIL', f'하위법령 설정: {e}'))
     if dc is None:
         return out.append(('INFO', '시행령·시행규칙 첨부 꺼짐 (LAWBOT_DECREE_ENABLED=1이면 812조문 CSV도 검사)'))
+    part = release.combined if release else None
     unknown = [k for k in dc.models if k not in {s.key for s in p.models}]
     out.append(
         (
             'OK',
             f'시행령·시행규칙 첨부 켜짐: τ {dc.tau:g} · 최대 {dc.k}개 · 후보 {dc.candidates}개 · '
-            f'인코딩 max_seq {dc.max_seq} · 첨부 모델 {list(dc.models)} · 조문 CSV {p.articles.name}',
+            f'인코딩 max_seq {dc.max_seq} · 첨부 모델 {list(dc.models)} · 조문 CSV {part.name if part else p.articles.name}',
         )
     )
     if unknown:
         out.append(('INFO', f'첨부 모델 {unknown}은 이 기기에서 쓰지 않음 (LAWBOT_MODELS)'))
-    if not p.articles.is_file():
+    if part is None and not p.articles.is_file():
         return
-    law = pd.read_csv(p.articles, encoding='utf-8-sig')
+    law = _read_articles(part.data if part else p.articles)
     missing = DECREE_COLUMNS - set(law.columns)
     if missing:
         return out.append(
@@ -94,7 +102,8 @@ def check_decree(p, out):
         )
     live = law[law['deleted'] == 0]
     got = live.loc[live['kind'] != '법률', 'kind'].value_counts().to_dict()
-    by_kind = (manifest.load(p.articles) or {}).get('articles_by_kind') or {}
+    m = part.manifest if part else manifest.load(p.articles)
+    by_kind = (m or {}).get('articles_by_kind') or {}
     expected = {
         k: v for k, v in by_kind.items() if k != manifest.DEFAULT_KIND
     } or EXPECTED_DECREE  # 갱신된 데이터는 매니페스트 수
@@ -112,30 +121,35 @@ def check_decree(p, out):
             ),
         )
     )
-    base, _ = deploy.article_paths(p.name)
-    if base.is_file():
-        cols = ['law', 'article_no', 'title', 'text']
-        a = live.loc[live['kind'] == '법률', cols].reset_index(drop=True)
-        b = pd.read_csv(base, encoding='utf-8-sig').query('deleted == 0')[cols].reset_index(drop=True)
-        same = a.equals(b)
-        out.append(
-            (
-                'OK' if same else 'FAIL',
-                f'법률 조문이 {base.name}와 '
-                + ('같음 (법률 검색·임베딩 그대로)' if same else '다름: 하위법령을 켜면 법률 검색 결과가 바뀔 수 있음'),
-            )
+    if release:
+        base, base_name = release.law.data, release.law.name
+    else:
+        base, _ = deploy.article_paths(p.name)
+        if not base.is_file():
+            return
+        base_name = base.name
+    cols = ['law', 'article_no', 'title', 'text']
+    a = live.loc[live['kind'] == '법률', cols].reset_index(drop=True)
+    b = _read_articles(base).query('deleted == 0')[cols].reset_index(drop=True)
+    same = a.equals(b)
+    out.append(
+        (
+            'OK' if same else 'FAIL',
+            f'법률 조문이 {base_name}와 '
+            + ('같음 (법률 검색·임베딩 그대로)' if same else '다름: 하위법령을 켜면 법률 검색 결과가 바뀔 수 있음'),
         )
+    )
 
 
-def check_manifest(p, out):
+def check_manifest(p, out, part=None):
     """조문 CSV가 매니페스트(조문 수·sha256)와 같은지. 웹앱(load_app)은 FAIL이면 시작을 거부한다"""
-    if not p.articles.is_file():
+    if part is None and not p.articles.is_file():
         return  # check_articles가 FAIL
-    m = manifest.load(p.articles)
+    m = part.manifest if part else manifest.load(p.articles)
     if m is None:
         return out.append(('FAIL' if p.name == 'v5' else 'WARN', f'매니페스트 없음: {manifest.path_for(p.articles)}'))
     out.append(('INFO', f'매니페스트: {manifest.describe(m)}'))
-    out.extend(manifest.verify(p.articles, m))
+    out.extend(manifest.verify(part.data if part else p.articles, m))
 
 
 def check_system_file(name, f, out):
@@ -246,12 +260,32 @@ def check_model_server(p, out):
 def run():
     p = get_profile()
     out = [('INFO', f'프로필 {p.name}: {p.title}')]
-    check_articles(p, out)
-    check_manifest(p, out)
+    release = part = None
+    try:
+        if settings.corpus_mode(os.environ) == 'db':
+            db = startup_path(os.environ['LAWBOT_DB'].strip())
+            release = corpus_store.active_release(db, p.name)
+            part = release.combined if deploy.decree_enabled() else release.law
+    except (OSError, RuntimeError, ValueError) as exc:
+        return [*out, ('FAIL', f'DB 코퍼스: {exc}')]
+    check_articles(p, out, part)
+    check_manifest(p, out, part)
+    corpus_ok = not any(level == 'FAIL' for level, _ in out)
     check_system(p, out)
     check_models(p, out)
     check_reranker(p, out)
-    check_decree(p, out)
+    decree_start = len(out)
+    check_decree(p, out, release)
+    if release and part:
+        corpus_ok = corpus_ok and not any(level == 'FAIL' for level, _ in out[decree_start:])
+        metadata = part.manifest
+        out.append(
+            (
+                'PASS' if corpus_ok else 'FAIL',
+                f'코퍼스 릴리스 {release.release_id} · 데이터 버전 {metadata["dataset_version"]} · '
+                f'sha256 {metadata["articles_sha256"][:12]} · 비삭제 조문 {metadata["articles_total"]}개',
+            )
+        )
     check_ports(out)
     check_model_server(p, out)
     return out

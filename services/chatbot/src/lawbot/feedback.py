@@ -167,11 +167,16 @@ def decree_settings(app, model_key):
 
 def turn_record(app, question, hits, raw, shown, model_key, fmt, st):
     """저장할 한 턴 (label·reason·feedback_id·ts·turn_id는 저장할 때 붙인다)"""
-    m = manifest.load(app.profile.articles)
+    release_id = getattr(app, 'corpus_release_id', None)
+    m = manifest.for_app(app)
     system = st.get('_system')
     if system is None:
         system = model_system(app, model_key, fmt)
-    articles_sha = getattr(app.retriever, 'articles_sha256', None) or manifest.sha256(app.profile.articles)
+    articles_sha = getattr(app.retriever, 'articles_sha256', None)
+    if release_id:
+        articles_sha = app.articles_sha256
+    elif not articles_sha:
+        articles_sha = manifest.sha256(app.profile.articles)
     return {
         'question': question,
         'hits': [{k: jsonable(h[k]) for k in HIT_FIELDS if k in h} for h in hits],
@@ -197,7 +202,7 @@ def turn_record(app, question, hits, raw, shown, model_key, fmt, st):
         'rerank_model': getattr(app.reranker, 'model', None),
         'chat_model': app.models.specs[model_key].model,
         'system_sha256': hashlib.sha256(system.encode()).hexdigest(),
-        'corpus_release_id': None,
+        'corpus_release_id': release_id,
     }
 
 

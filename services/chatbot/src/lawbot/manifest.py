@@ -8,6 +8,7 @@
 # ↑ pandas 필터 결과를 ndarray로 잘못 추론 (pandas 타입 선언 한계). 이 파일의 다른 검사는 그대로
 import hashlib
 import json
+from io import BytesIO
 
 from lawbot_common.logs import logger
 
@@ -46,8 +47,16 @@ def load(articles):
     return f[1] if f else None
 
 
-def sha256(path):
-    return hashlib.sha256(path.read_bytes()).hexdigest()
+def for_app(app):
+    """Use the startup manifest in DB mode and retain live file reads in CSV mode."""
+    if getattr(app, 'corpus_release_id', None):
+        return app.corpus_manifest
+    return load(app.profile.articles)
+
+
+def sha256(articles):
+    raw = articles if isinstance(articles, bytes) else articles.read_bytes()
+    return hashlib.sha256(raw).hexdigest()
 
 
 def summary(m):
@@ -78,7 +87,7 @@ def verify(articles, m):
             f'조문 CSV sha256 {digest[:12]} (매니페스트 {m["articles_sha256"][:12]})',
         )
     )
-    law = pd.read_csv(articles, encoding='utf-8-sig')
+    law = pd.read_csv(BytesIO(articles) if isinstance(articles, bytes) else articles, encoding='utf-8-sig')
     live = law[law['deleted'] == 0]
     out.append(
         (
@@ -127,9 +136,10 @@ def describe(m):
     )
 
 
-def check(articles):
+def check(articles, m=None, *, name=None):
     """웹앱 load_app용: 불일치면 RuntimeError, 매니페스트가 없으면 경고만 출력. 매니페스트 dict 또는 None"""
-    m = load(articles)
+    if m is None:
+        m = load(articles)
     if m is None:
         log.warning(
             f'경고: 조문 CSV {articles.name}의 매니페스트({path_for(articles)})가 없어 데이터 버전을 확인하지 않습니다'
@@ -139,7 +149,7 @@ def check(articles):
     fails = [msg for level, msg in out if level == 'FAIL']
     if fails:
         raise RuntimeError(
-            f'조문 CSV가 매니페스트와 다릅니다 ({articles}):\n- '
+            f'조문 CSV가 매니페스트와 다릅니다 ({name or articles}):\n- '
             + '\n- '.join(fails)
             + '\nCSV를 바꿨다면 manifest.json도 새 dataset_version으로 갱신하세요. '
             'uv run python -m lawbot.check_deploy로 확인'

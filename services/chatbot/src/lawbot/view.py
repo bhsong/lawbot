@@ -61,8 +61,8 @@ def source_groups(hits, cited=None, refused=False):
 
 
 def data_notice(app):
-    """제목 아래 한 줄: 법령 기준일 (웹앱 레포의 매니페스트. 조문 데이터는 웹앱에만 있음)"""
-    m = manifest.load(app.profile.articles)
+    """Show the reference date of the corpus used by the web app."""
+    m = manifest.for_app(app)
     kinds = manifest.kinds_text(m)  # 하위법령을 켜면 '법률 415 · 시행령 273 · 시행규칙 124'
     return (
         f'법령 기준일 {m["reference_date"]} (데이터 {m["dataset_version"]}{" · " + kinds if kinds else ""})'
