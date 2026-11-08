@@ -29,7 +29,7 @@ from lawbot_common.logs import logger
 STATUSES = ('pending', 'reviewed', 'hold', 'rejected', 'quarantined', 'promoted', 'all')
 REASONS = ('retrieval', 'answer', 'false_refusal', 'other')
 CALENDAR_PATH = re.compile(
-    r'(?:law-calendar(?:/status)?|law-events|law-changes/[A-Za-z0-9_:-]+(?:/notice-comparison/[0-9]+)?)'
+    r'(?:law-calendar(?:/status)?|law-events|law-holds|law-changes/[A-Za-z0-9_:-]+(?:/notice-comparison/[0-9]+)?)'
 )
 CALENDAR_TIMEOUT = 10
 log = logger('lawbot', 'lawbot')

@@ -447,7 +447,7 @@ CREATE TABLE dataset_releases (
 | `POST /api/admin/feedbacks/{id}/promote-down` | `{idempotency_key, corrected_question, corrected_answer, gold_articles (1–10), review_verdict: 'correct'\|'incorrect', review_note?, scope?}` | 201 `{review_id, promotion_id, qa_uid, preference_id \| null}`. 실패는 409/422 + 위 코드 |
 | `POST /api/admin/promotions/{promotion_id}/revoke` | `{idempotency_key, note}` | 200 `{promotion_id, state: 'revoked'}` |
 | `GET /api/admin/articles?q=` | 법령명·조문 번호 부분 일치(근거 조문 입력 자동완성) | `{items: [{law, article_no, title, kind}]}` 최대 20개 |
-| `GET /api/admin/calendar/{path}` | 허용: `law-calendar`, `law-calendar/status`, `law-events`, `law-changes/{id}`, `law-changes/{id}/notice-comparison/{page}`. 쿼리는 그대로 전달 | 캘린더 응답의 상태·본문·`content-type`을 그대로. 미설정 503 `calendar_not_configured`, 연결 실패 502, 10초 시간 초과 504. 허용 밖 경로 404 |
+| `GET /api/admin/calendar/{path}` | 허용: `law-calendar`, `law-calendar/status`, `law-events`, `law-holds`, `law-changes/{id}`, `law-changes/{id}/notice-comparison/{page}`. 쿼리는 그대로 전달 | 캘린더 응답의 상태·본문·`content-type`을 그대로. 미설정 503 `calendar_not_configured`, 연결 실패 502, 10초 시간 초과 504. 허용 밖 경로 404 |
 
 ### 3.8 인증
 

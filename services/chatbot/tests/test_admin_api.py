@@ -437,8 +437,12 @@ def test_calendar_proxy_filters_paths_and_credentials(db, admin_hash, monkeypatc
             assert requests[-1].url.path == '/api/' + path
             assert requests[-1].url.query == b'q=a%2Bb&q=c'
             assert 'cookie' not in requests[-1].headers and 'authorization' not in requests[-1].headers
+        res = client.get(ROOT + '/calendar/law-holds?type=notice&page=2&page_size=20')
+        assert (res.status_code, res.content) == (202, b'fixture-body')
+        assert requests[-1].url.path == '/api/law-holds'
+        assert requests[-1].url.query == b'type=notice&page=2&page_size=20'
         for path in (
-            'law-holds',
+            'law-holds/anything',
             'law-changes/42/anything',
             'law-changes/42/notice-comparison/wrong',
             '%2E%2E%2Fsecret',
@@ -446,7 +450,7 @@ def test_calendar_proxy_filters_paths_and_credentials(db, admin_hash, monkeypatc
             assert client.get(ROOT + '/calendar/' + path).status_code == 404
         res = client.post(ROOT + '/calendar/law-calendar', json={})
         assert (res.status_code, res.json()['code']) == (405, 'method_not_allowed')
-        assert len(requests) == 5 and all(req.method == 'GET' for req in requests)
+        assert len(requests) == 6 and all(req.method == 'GET' for req in requests)
 
 
 @pytest.mark.parametrize('timeout', [False, True])
@@ -480,9 +484,10 @@ def test_calendar_upstream_failures(db, admin_hash, monkeypatch, timeout):
 
 
 def test_calendar_unconfigured_and_disallowed(admin):
-    res = admin.get(ROOT + '/calendar/law-events')
-    assert (res.status_code, res.json()['code']) == (503, 'calendar_not_configured')
-    res = admin.get(ROOT + '/calendar/law-holds')
+    for path in ('law-events', 'law-holds'):
+        res = admin.get(ROOT + '/calendar/' + path)
+        assert (res.status_code, res.json()['code']) == (503, 'calendar_not_configured')
+    res = admin.get(ROOT + '/calendar/law-holds/anything')
     assert (res.status_code, res.json()['code']) == (404, 'not_found')
 
 
