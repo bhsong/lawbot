@@ -420,12 +420,12 @@ CREATE TABLE dataset_releases (
 | 정답 | `corrected_answer` 있으면 그것, 없으면 `answer_raw` | `corrected_answer` 필수 |
 | 근거 조문 | `gold_articles` 1개 이상, 모두 **현재 웹앱이 읽은 조문**에 있어야 함 | 같음 |
 | 비선호 쌍 | 만들지 않음 | `verdict=incorrect`일 때만 `qa_preferences(chosen=교정 답, rejected=answer_raw)`. `correct`(답은 맞고 검색·표현 문제)면 만들지 않음 |
-| 누출 검사 | 질문(교정본이 있으면 교정본과 원본 둘 다)을 test·val·평가 전용 문항과 `Overlap`으로 대조. 겹치면 `leak_test`/`leak_val`/`leak_eval` 실패, 승격하지 않음 | 같음 |
-| QA 항목 | `qa_items(dataset='feedback', qa_uid='feedback:FB-<feedback_id>', key_set='feedback', answer_key='FB-<feedback_id>')`, `answer_keys`(answer=정답, must_* = `'[]'`), `qa_gold_articles` | 같음 |
+| 누출 검사 | 원 질문과 교정 질문을 `emb`·`sllm`의 val·test 합집합 및 평가 전용 문항과 `Overlap`으로 대조. 한 문항의 두 목적 중 test가 val보다 우선한다. 겹치면 `leak_test`/`leak_val`/`leak_eval` 실패, 승격하지 않음 | 같음 |
+| QA 항목 | `qa_items(dataset='feedback', qa_uid='feedback:FB-<feedback_id>-r<n>', key_set='feedback', answer_key='FB-<feedback_id>-r<n>')`. `n`은 `BEGIN IMMEDIATE` 안에서 해당 피드백의 이전 승격 수에 1을 더한 값, `answer_keys`(answer=정답, must_* = `'[]'`), `qa_gold_articles` | 같음 |
 | 분할 | `qa_splits(split_set='feedback', purpose='emb'/'sllm', split='unassigned')` 두 줄 | 같음 |
 | 중복 | 활성 승격이 있으면 `already_promoted` | 같음 |
 | 트랜잭션 | 검사(읽기)를 트랜잭션 밖에서 한 뒤, `BEGIN IMMEDIATE`에서 상태를 **다시 확인**하고 QA·정답·분할·(선호)·승격·감사를 한 번에 쓴다 | 검수 줄까지 같은 트랜잭션 |
-| 취소 | `POST /api/admin/promotions/{id}/revoke`: 승격 `revoked`, QA 항목 `retired`. 분할 줄은 지우지 않음(스냅샷이 `retired`를 뺌) | 같음 |
+| 취소 | `POST /api/admin/promotions/{id}/revoke`: 승격 `revoked`, QA 항목 `retired`. 이전 QA와 분할을 보존하고 재승격은 새 ID에 새 분할을 쓴다. 스냅샷은 `retired`를 제외하되 PR 10의 분할 상속에는 배정된 `retired`도 포함한다 | 같음 |
 
 - 좋아요만으로 승격되는 경로는 없다(검수 필수). 문제 신고만으로 오답(선호 쌍)이 되는 경로도 없다(`verdict=incorrect` 필수).
 - 같은 규칙을 `lawbot_tools.feedback_export`도 쓴다: 검수 CSV의 `h_ok=맞음` ↔ `correct`, `틀림` ↔ `incorrect`, `모름` ↔ `uncertain`. 매핑은 `qa_rules`에 상수로 둔다.
@@ -436,7 +436,7 @@ CREATE TABLE dataset_releases (
 
 멱등: 본문의 `idempotency_key`(1–64자, `[A-Za-z0-9_-]`). `(actor, endpoint, key)`가 있고 본문 sha256이 같으면 저장된 응답을 그대로, 다르면 409 `idempotency_conflict`. 응답 저장은 처리 트랜잭션 안에서 한다.
 
-오류 본문: `{"detail": "<한국어 안내>", "code": "<영문 코드>"}`.
+오류 본문: `{"detail": "<한국어 안내>", "code": "<영문 코드>"}`. JSON이 아닌 관리자 요청의 415는 `unsupported_media_type`으로 변환한다. 일반 API는 기존 응답을 유지한다.
 
 | API | 요청 | 응답 |
 |---|---|---|
@@ -605,33 +605,25 @@ CREATE TABLE dataset_releases (
 
 ### PR 7 — 관리자 API (`feat/admin-feedback-api`)
 
-#### 착수 전 대조 결과
-
-`main`의 `52ec36e`에서 기존 도구와 DB 스키마를 대조했다. 아래 계약을 확정할 때까지 API 구현을 보류한다.
-
-- **누출 검사 분할 범위.** D6는 기존 `feedback_review` 규칙을 인용하지만 `feedback_review._split_questions`는 `split_emb`만 읽는다. PR 4 이관 도구로 개발 CSV를 임시 DB에 넣어 확인한 결과, `emb=train`이면서 `sllm=val`인 문항은 v4 444개, v5 855개, `decree_v4` 181개다. `emb`와 `sllm` 양쪽의 `val`·`test`를 보호하면 기존 도구의 입력보다 1,480개가 늘어난다. 관리자 API와 기존 도구에서 보호할 범위를 정해야 한다.
-- **이미 배정된 QA의 재승격.** 3.6절은 고정 `qa_uid`에 `unassigned` 두 줄을 쓰고, 취소하면 분할을 남기며, 체크리스트는 재승격을 허용한다. 임시 DB에서 `train`으로 배정한 뒤 QA를 `retired`로 바꾸고 같은 키로 분할을 다시 넣으면 기본키 충돌이 난다. 기존 분할을 `unassigned`로 바꾸거나 삭제하는 시도도 트리거가 거부했다. 재승격에서 기존 배정을 유지할지 별도 규칙이 필요하다.
-- **관리자 415 응답.** PR 6의 `require_json`은 일반 `HTTPException`을 올리므로 현재 응답은 `{"detail": ...}`다. 일반 사용자 응답을 보존하면서 3.7절의 관리자 `{"detail", "code"}` 계약을 적용하려면 관리자 라우트에서 이 오류를 `AdminError`로 변환해야 한다.
-
-- [ ] Red `services/chatbot/tests/test_admin_api.py`(TestClient + tmp DB + 합성 피드백·합성 조문 일부):
-  - [ ] 모든 `/api/admin/*`: 로그인 없음 401, 일반 사용자 403, 관리자 200.
-  - [ ] POST: `Origin` 없음·다름 403, `content-type` JSON 아님 415, 64 KiB 초과 413, 분당 31번째 429.
-  - [ ] 목록: 상태·label·reason·q 필터, 정렬, cursor로 넘겨도 중복·누락 없음(합성 120건), `superseded`·`cleared`는 기본 목록에 없음.
-  - [ ] 상세: hits·citations·검수 이력·승격 이력, `checks.corpus.changed_hits`(합성 조문 하나를 바꿔 `changed` 확인).
-  - [ ] review: 규칙 위반 422(각 코드), 정상 201, 이력 append-only(두 번 저장하면 두 줄).
-  - [ ] promote-up: 검수 없음·uncertain·rejected·hold·gold 없음·없는 조문·flag 줄 → 각 실패 코드. 정상 → `qa_items`·`answer_keys`·`qa_gold_articles`·`qa_splits`(emb·sllm `unassigned`)·`feedback_promotions`·`audit_events` 한 번씩.
-  - [ ] promote-up 배치: 성공·실패 섞임 → 200, 항목별 결과. 같은 키로 재요청 → 같은 응답, 행 수 그대로. 같은 키·다른 본문 → 409. 새 키로 재요청 → `already_promoted`.
-  - [ ] 누출: v5 test 질문(DB에 이관된 세트)과 같은/유사(0.9 이상) 질문 → `leak_test`, val → `leak_val`, 평가 전용 → `leak_eval`, 상태 `quarantined`. **교정 질문만 다르고 원 질문이 test와 같아도 차단.**
-  - [ ] promote-down: `verdict=incorrect` → `qa_preferences` 1줄(chosen=교정 답, rejected=answer_raw). `verdict=correct` → 선호 없음. `uncertain` → 422. flag reason 보존(원본 줄 불변).
-  - [ ] 동시성: 같은 피드백을 두 스레드에서 동시에 promote → 하나만 성공, 다른 하나 `already_promoted`(유니크 인덱스).
-  - [ ] revoke: 승격 `revoked`, QA `retired`, 다시 승격 가능.
-  - [ ] 트랜잭션 원자성: QA 쓰기 뒤 승격 INSERT에서 예외를 주입 → 아무것도 남지 않음.
-  - [ ] 캘린더 프록시(httpx `MockTransport`): 허용 경로 전달·쿼리 전달·상태 코드 전달, 허용 밖 404, 미설정 503, 연결 실패 502, 시간 초과 504. 쓰기 메서드(POST 등)는 405.
-- [ ] Green: `lawbot/admin.py`(APIRouter), `feedback_store`·`dataset_store`의 조회·쓰기 함수, `qa_rules`의 누출 검사(평가·val·test 문항은 DB `qa_items`+`qa_splits`에서 읽어 앱 시작 때 한 번 `Overlap` 생성, 피드백 세트는 제외).
-- [ ] 웹앱 시작: 관리자 설정이 있으면 DB의 이관 세트(v4·v5·decree_v4·평가 전용)가 있는지 확인, 없으면 시작 거부("migrate_csv_to_sqlite qa …를 먼저").
-- [ ] `integration` 테스트(`test_web_integration.py` 방식): 실제 웹앱 프로세스에서 관리자 로그인 → 목록 → review → promote-up 한 번.
-- [ ] `docs/architecture.md`·`operations.md`에 관리자 API 표.
-- [ ] 완료 기준: 명세서 Phase 2 완료 조건(401/403, Origin, 중복 승격, 검수 이력, 누출 차단) 전부 테스트로 있음.
+- [x] Red `services/chatbot/tests/test_admin_api.py`(TestClient + tmp DB + 합성 피드백·합성 조문 일부):
+  - [x] 모든 `/api/admin/*`: 로그인 없음 401, 일반 사용자 403, 관리자 200.
+  - [x] POST: `Origin` 없음·다름 403, `content-type` JSON 아님 415 `unsupported_media_type`(일반 API 415 응답은 기존대로), 64 KiB 초과 413, 분당 31번째 429.
+  - [x] 목록: 상태·label·reason·q 필터, 정렬, cursor로 넘겨도 중복·누락 없음(합성 120건), `superseded`·`cleared`는 기본 목록에 없음.
+  - [x] 상세: hits·citations·검수 이력·승격 이력, `checks.corpus.changed_hits`(합성 조문 하나를 바꿔 `changed` 확인).
+  - [x] review: 규칙 위반 422(각 코드), 정상 201, 이력 append-only(두 번 저장하면 두 줄).
+  - [x] promote-up: 검수 없음·uncertain·rejected·hold·gold 없음·없는 조문·flag 줄 → 각 실패 코드. 정상 → `qa_items`·`answer_keys`·`qa_gold_articles`·`qa_splits`(emb·sllm `unassigned`)·`feedback_promotions`·`audit_events` 한 번씩.
+  - [x] promote-up 배치: 성공·실패 섞임 → 200, 항목별 결과. 같은 키로 재요청 → 같은 응답, 행 수 그대로. 같은 키·다른 본문 → 409. 새 키로 재요청 → `already_promoted`.
+  - [x] 누출: v5 test 질문(DB에 이관된 세트)과 같은/유사(0.9 이상) 질문 → `leak_test`, val → `leak_val`, 평가 전용 → `leak_eval`, 상태 `quarantined`. **교정 질문만 다르고 원 질문이 test와 같아도 차단.** `emb`·`sllm` 합집합을 보호하고 CSV 검수 도구와 DB의 보호 집합이 같은지 확인한다.
+  - [x] promote-down: `verdict=incorrect` → `qa_preferences` 1줄(chosen=교정 답, rejected=answer_raw). `verdict=correct` → 선호 없음. `uncertain` → 422. flag reason 보존(원본 줄 불변).
+  - [x] 동시성: 같은 피드백을 두 스레드에서 동시에 promote → 하나만 성공, 다른 하나 `already_promoted`(유니크 인덱스).
+  - [x] revoke: 승격 `-r1`을 train에 배정하고 취소하면 승격 `revoked`, QA `retired`가 된다. 재승격 `-r2`는 `unassigned`이며 `-r1`과 기존 분할을 보존한다.
+  - [x] 트랜잭션 원자성: QA 쓰기 뒤 승격 INSERT에서 예외를 주입 → 아무것도 남지 않음.
+  - [x] 캘린더 프록시(httpx `MockTransport`): 허용 경로 전달·쿼리 전달·상태 코드 전달, 허용 밖 404, 미설정 503, 연결 실패 502, 시간 초과 504. 쓰기 메서드(POST 등)는 405.
+- [x] Green: `lawbot/admin.py`(APIRouter), `feedback_store`·`dataset_store`의 조회·쓰기 함수, `qa_rules`의 누출 검사(평가·val·test 문항은 DB `qa_items`+`qa_splits`에서 읽어 앱 시작 때 한 번 `Overlap` 생성, 피드백 세트는 제외).
+- [x] 웹앱 시작: 관리자 설정이 있으면 DB의 이관 세트(v4·v5·decree_v4·평가 전용)가 있는지 확인, 없으면 시작 거부("migrate_csv_to_sqlite qa …를 먼저").
+- [x] `integration` 테스트(`test_web_integration.py` 방식): 실제 웹앱 프로세스에서 관리자 로그인 → 목록 → review → promote-up 한 번.
+- [x] `docs/architecture.md`·`operations.md`에 관리자 API 표.
+- [x] 완료 기준: 명세서 Phase 2 완료 조건(401/403, Origin, 중복 승격, 검수 이력, 누출 차단) 전부 테스트로 있음.
 
 ### PR 8 — 공유 UI 추출 (`refactor/lawbot-ui-package`)
 
@@ -668,7 +660,7 @@ CREATE TABLE dataset_releases (
 ### PR 10 — 스냅샷 내보내기와 분할 배정 (`feat/dataset-snapshot`)
 
 - [ ] `lawbot_tools/assign_splits.py --db PATH --split-set feedback --val-frac 0.1 --seed 42`:
-  - 그룹: 활성 피드백 문항(이미 배정된 문항 포함)을 `Overlap`(0.9)으로 묶는다(합집합-찾기). 그룹이 기존 v4·v5 **train** 문항과 겹치면 기록만(분할은 피드백 세트 안에서만 정함).
+  - 그룹: 활성 피드백 문항과 이미 배정된 `retired` 피드백 문항을 `Overlap`(0.9)으로 묶는다(합집합-찾기). 그룹이 기존 v4·v5 **train** 문항과 겹치면 기록만(분할은 피드백 세트 안에서만 정함).
   - 그룹 키는 **한 번 정하면 바뀌지 않는다**. 목적(emb·sllm)마다 따로 판단:
     - 그룹에 이미 배정된 문항이 있고 그 분할이 모두 같으면: 새 문항은 그 분할과 그 문항들의 `group_key`를 **상속**한다(해시를 다시 계산하지 않음).
     - 그룹에 배정된 문항의 분할이 서로 다르면(새 문항이 train 그룹과 val 그룹을 이어 붙인 경우): 그 그룹의 새 문항은 배정하지 않고 `unassigned`로 남긴 뒤 충돌로 보고하고 종료 코드 1. 기존 배정은 바꾸지 않는다(사람이 해당 피드백 승격을 취소하거나 보류).
@@ -795,7 +787,7 @@ CREATE TABLE dataset_releases (
 | D3 | 질문 원문 보존 기간과 삭제 | 이번 범위는 권한·Git 제외만, 기간은 나중에 정함 | 기간(예: N개월)을 정하고 삭제 명령까지 이번에 |
 | D4 | DB 파일 위치 | 운영 트리 `data/db/lawbot.db`(gitignore) | 레포 밖 경로(예: `~/Library/Application Support/lawbot/`) |
 | D5 | 스냅샷 출력 `data/v6/`를 Git에 올릴지 | 피드백 문항이 있으므로 **올리지 않음**(`.gitignore`) | 피드백 없는 부분만 커밋 |
-| D6 | 누출 검사 범위 | test·val·평가 전용과 겹치면 차단(지금 `feedback_review` 규칙), train과 겹침은 허용·기록 | train과 겹쳐도 보류 |
+| D6 | 누출 검사 범위 | `emb`·`sllm` 양쪽 val·test 합집합과 평가 전용은 차단. 양쪽 도구에서 같은 규칙을 쓰고 train과 겹침은 허용·기록 | train과 겹쳐도 보류 |
 | D7 | 조문 갱신 반영 방식 | 재시작으로 활성화(무중단 아님), 전체 재임베딩 | 핫 스왑·부분 재임베딩(복잡도·재현성 문제, 1절 7·8) |
 
 ---
