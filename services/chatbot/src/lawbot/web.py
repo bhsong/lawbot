@@ -18,8 +18,10 @@ from typing import Annotated
 import anyio
 import uvicorn
 from fastapi import Depends, FastAPI, HTTPException, Request, Response
+from fastapi.exception_handlers import http_exception_handler
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
+from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from lawbot import audit_store, envfile, feedback, security, settings, view
 from lawbot import auth as auth_logic
@@ -304,6 +306,8 @@ def create_app(
     *,
     admin: auth_logic.AdminCredentials | None = None,
     db: Path | None = None,
+    protected=None,
+    calendar_url: str | None = None,
 ):
     """app: service.load_app() 결과, auth: (사용자, 비밀번호), fb: feedback.Feedback 또는 None, dist: SPA 빌드 폴더"""
     if admin is not None and db is None:
@@ -436,6 +440,21 @@ def create_app(
             raise HTTPException(404, '기록이 없는 답변입니다.') from e
         return {'saved': row is not None}
 
+    if admin is not None:
+        from lawbot.admin import router
+
+        api.include_router(router(db, app, protected=protected, calendar_url=calendar_url))
+
+        @api.exception_handler(StarletteHTTPException)
+        async def admin_route_error(request: Request, exc: StarletteHTTPException):
+            if request.url.path.startswith('/api/admin/') and exc.status_code == 405:
+                return JSONResponse(
+                    {'detail': '허용되지 않는 메서드입니다.', 'code': 'method_not_allowed'},
+                    status_code=405,
+                    headers=exc.headers,
+                )
+            return await http_exception_handler(request, exc)
+
     mount_spa(api, Path(dist) if dist is not None else None)
     return api
 
@@ -468,7 +487,21 @@ def main(argv=None):
     port = security.server_port(dict(os.environ, LAWBOT_PORT=args.port)) if args.port else cfg.port
     if cfg.auth is None or port is None or cfg.chat_concurrency is None:  # load(web=True)가 채운다
         raise RuntimeError('웹 설정(로그인·포트·동시 처리 수)을 읽지 못했습니다.')
-    api = create_app(load_app(cfg), cfg.auth, cfg.chat_concurrency, cfg.feedback, admin=cfg.admin, db=cfg.db)
+    protected = None
+    if cfg.admin is not None:
+        from lawbot.admin import load_protected
+
+        protected = load_protected(cfg.db)
+    api = create_app(
+        load_app(cfg),
+        cfg.auth,
+        cfg.chat_concurrency,
+        cfg.feedback,
+        admin=cfg.admin,
+        db=cfg.db,
+        protected=protected,
+        calendar_url=cfg.calendar_api_url,
+    )
     log.info(f'웹앱: http://{security.SERVER_NAME}:{port}')
     uvicorn.run(api, host=security.SERVER_NAME, port=port, log_level='warning')
 

@@ -10,6 +10,7 @@ import pytest
 from playwright.sync_api import expect
 
 import e2e_support as e2e
+from admin_test_data import seed_qa
 from conftest import ADMIN_PW, ADMIN_USER
 from lawbot.db import cli
 from lawbot.db.connection import connect
@@ -102,6 +103,7 @@ def test_login_required(stack, fresh):
 def admin_stack(tmp_path, page, request, admin_hash):
     db = tmp_path / 'private' / 'lawbot.db'
     cli.main(['init', '--db', str(db)])
+    seed_qa(db)
     s = e2e.Stack(
         tmp_path,
         read_timeout=READ_TIMEOUT_S,

@@ -1,5 +1,6 @@
 """Persist administrator login outcomes without credential or session data."""
 
+import json
 import sqlite3
 from datetime import UTC, datetime
 from pathlib import Path
@@ -21,3 +22,11 @@ def record_login(path: Path, actor: str, accepted: bool) -> None:
             )
     except (OSError, RuntimeError, sqlite3.Error) as exc:
         log.warning('관리자 로그인 감사 기록을 쓰지 못했습니다 (%s).', type(exc).__name__)
+
+
+def record_action(conn, at, actor, action, target_type, target_id, *, summary=None):
+    """Append the identifier-only audit entry within the caller's transaction."""
+    conn.execute(
+        "INSERT INTO audit_events (at,actor,role,action,target_type,target_id,summary) VALUES (?,?,'admin',?,?,?,?)",
+        (at, actor, action, target_type, str(target_id), json.dumps(summary) if summary else None),
+    )

@@ -84,6 +84,7 @@ class LawbotApp:
     decree: object = None  # deploy.DecreeConfig: 시행령·시행규칙 첨부 (None: 법률 3개만, LAWBOT_DECREE_ENABLED=0 기본)
     llm_mode: str = 'api'  # 생성 위치: 'api'(모델 서버) / 'external'(LAWBOT_LLM_BASE_URL의 외부 API)
     settings: object = None  # lawbot.settings.Settings (load_app이 넣음. 테스트·평가의 가짜 앱은 None)
+    dataset_version: str | None = None
 
 
 def uses_decrees(app, model_key):
@@ -106,8 +107,10 @@ def check_profile_files(p):
             f'프로필 {p.name}에 필요한 파일이 없습니다: {", ".join(missing)}. '
             'uv run python -m lawbot.check_deploy로 확인하세요.'
         )
-    if manifest.check(p.articles) is None and p.name == 'v5':
+    metadata = manifest.check(p.articles)
+    if metadata is None and p.name == 'v5':
         raise RuntimeError(f'매니페스트 없음: {p.articles.name}')
+    return metadata
 
 
 def server_wait(env=None):
@@ -152,7 +155,7 @@ def load_app(settings=None):
 
     cfg = settings or settings_mod.load()
     p, rr, dc = cfg.profile, cfg.reranker, cfg.decree
-    check_profile_files(p)
+    metadata = check_profile_files(p)
     url, llm_url, llm_key, external = cfg.model_server, cfg.llm_url, cfg.llm_key, cfg.llm_external
     client = ModelServerClient(url, cfg.model_token)
     wait, limit = cfg.server_wait, request_timeout(cfg.read_timeout)
@@ -201,7 +204,17 @@ def load_app(settings=None):
         f'({", ".join(s.model for s in p.models)})'
     )
     full = p.system_file.read_text(encoding='utf-8').strip()
-    return LawbotApp(p, retriever, models, reranker, full, dc, 'external' if external else 'api', cfg)
+    return LawbotApp(
+        p,
+        retriever,
+        models,
+        reranker,
+        full,
+        dc,
+        'external' if external else 'api',
+        cfg,
+        (metadata or {}).get('dataset_version'),
+    )
 
 
 def decree_text(dc):

@@ -12,6 +12,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 import lawbot.service as service
+from admin_test_data import seed_qa
 from conftest import ADMIN_PW, ADMIN_USER, set_auth
 from fakes import HITS, FakeLLM, FakeRetriever
 from lawbot import feedback, feedback_store, settings, view, web
@@ -150,6 +151,7 @@ def test_session_cookie_from_other_app_is_rejected(lawbot):
 def admin_app(lawbot, env, tmp_path, admin_hash):
     path = tmp_path / 'private' / 'lawbot.db'
     migrate.init(path)
+    seed_qa(path)
     set_auth(env, USER, PW)
     env.setenv('LAWBOT_DB', str(path))
     env.setenv('LAWBOT_ADMIN_USER', ADMIN_USER)

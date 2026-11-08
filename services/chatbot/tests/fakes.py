@@ -27,6 +27,9 @@ class FakeRetriever:
     created = 0
     ids = [h['article_id'] for h in HITS]
     laws = [h['law'] for h in HITS]
+    titles = [h['title'] for h in HITS]
+    kinds = ['법률'] * len(HITS)
+    docs = [h['doc'] for h in HITS]
 
     def __init__(self, *args, **kw):  # service.load_app이 넘기는 경로·설정을 기록
         FakeRetriever.created += 1

@@ -25,27 +25,38 @@ def server_port(env=None):
 def model_server_url(env=None):
     """모델 서버 주소 (LAWBOT_MODEL_SERVER). 비어 있으면 None (웹앱은 시작을 거부)
     질문이 맥 밖으로 나가지 않도록 http://127.0.0.1:<포트>만 허용한다"""
+    return _loopback_url('LAWBOT_MODEL_SERVER', env, reveal_value=True)
+
+
+def calendar_api_url(env=None):
+    """Validate the optional local calendar endpoint without exposing its value."""
+    return _loopback_url('LAWBOT_CALENDAR_API_URL', env, reveal_value=False)
+
+
+def _loopback_url(key, env, *, reveal_value):
     env = os.environ if env is None else env
-    value = (env.get('LAWBOT_MODEL_SERVER') or '').strip()
+    value = (env.get(key) or '').strip()
     if not value:
         return None
     try:
-        u = urlsplit(value)
-        port = u.port
+        url = urlsplit(value)
+        port = url.port
+        allowed = (
+            url.scheme == 'http'
+            and url.hostname == SERVER_NAME
+            and port is not None
+            and url.username is None
+            and url.password is None
+            and url.path in ('', '/')
+            and not url.query
+            and not url.fragment
+        )
     except ValueError:
-        port = None
-    if (
-        u.scheme != 'http'
-        or u.hostname != SERVER_NAME
-        or port is None
-        or u.username
-        or u.password
-        or u.path not in ('', '/')
-        or u.query
-        or u.fragment
-    ):
-        raise ValueError(f'LAWBOT_MODEL_SERVER는 http://{SERVER_NAME}:<포트> 형식만 허용합니다: {value!r}')
-    parse_port('LAWBOT_MODEL_SERVER', str(port))
+        allowed, port = False, None
+    if not allowed or port is None:
+        suffix = f': {value!r}' if reveal_value else ''
+        raise ValueError(f'{key}는 http://{SERVER_NAME}:<포트> 형식만 허용합니다{suffix}')
+    parse_port(key, str(port))
     return f'http://{SERVER_NAME}:{port}'
 
 
