@@ -215,6 +215,8 @@ def router(db, app, *, protected=None, calendar_url=None):
                 feedback_store.list_feedback,
                 db,
                 index,
+                current_sha=corpus.sha,
+                current_version=corpus.version,
                 status=status,
                 label=label,
                 reason=reason,

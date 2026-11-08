@@ -171,6 +171,39 @@ def test_detail_reads_in_memory_corpus_and_previous_review(db, admin):
 
 
 @pytest.mark.parametrize(
+    ('labels', 'sha', 'version', 'overlap', 'expected'),
+    [
+        (['flag'], 'new-hash', 'old', False, []),
+        (['like', 'flag'], 'new-hash', None, False, ['label_changed']),
+        (['like', 'cleared', 'flag'], 'old-hash', 'current', True, ['leak_test', 'label_changed', 'corpus_changed']),
+        (['like', 'cleared', 'like'], 'new-hash', 'current', False, []),
+        (['like', 'flag', 'flag'], None, 'old', False, ['label_changed', 'corpus_changed']),
+        (['flag'], 'old-hash', 'current', False, ['corpus_changed']),
+        (['flag'], None, 'current', False, []),
+        (['flag'], None, None, False, []),
+    ],
+)
+def test_feedback_list_warning_codes(db, admin, labels, sha, version, overlap, expected):
+    for i, label in enumerate(labels):
+        add_feedback(
+            db,
+            f'f{i}',
+            turn_id='same-turn',
+            label=label,
+            reason='answer' if label == 'flag' else None,
+            articles_sha256=sha,
+            dataset_version=version,
+            **({'question': TEST_QUESTION} if overlap else {}),
+        )
+    response = admin.get(ROOT + '/feedbacks', params={'status': 'all', 'label': labels[-1]})
+    assert response.status_code == 200
+    (item,) = response.json()['items']
+    assert item['status'] == ('quarantined' if overlap else 'pending')
+    assert 'articles_sha256' not in item
+    assert item['warnings'] == expected
+
+
+@pytest.mark.parametrize(
     ('fields', 'code'),
     [
         ({'verdict': 'uncertain'}, 'invalid_verdict'),
@@ -293,7 +326,7 @@ def test_leakage_blocks_original_and_corrected(db, admin, question, correction, 
     res = up(admin, 'leak', 'f1')
     assert res.status_code == 200 and res.json()['results'][0]['code'] == code
     listed = admin.get(ROOT + '/feedbacks', params={'status': 'quarantined'}).json()['items']
-    assert listed[0]['warnings'] == [code]
+    assert listed[0]['warnings'] == [code, 'corpus_changed']
 
 
 def test_db_and_csv_protect_same_questions(db):
