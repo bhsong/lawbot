@@ -18,12 +18,15 @@ import sys
 import tempfile
 import time
 from argparse import Namespace
+from datetime import date
 from pathlib import Path
 
 import httpx
 import pandas as pd
 
-from lawbot import deploy, envfile, manifest, paths
+from lawbot import corpus_store, deploy, envfile, manifest, paths
+from lawbot.db.corpus_import import prepare_corpus
+from lawbot.db.migrate import startup_path
 from lawbot_tools import articles_check as ac
 from lawbot_tools import build_articles as ba
 from lawbot_tools import reindex
@@ -58,7 +61,7 @@ def web_port() -> int:
     return security.server_port()
 
 
-def make_retriever(csv: Path):
+def make_retriever(csv: Path | bytes):
     """웹앱과 같은 방식의 검색기. 만들면서 임베딩 캐시(cache/embeddings)를 남겨 재시작한 웹앱이 그대로 쓴다"""
     from lawbot import settings
     from lawbot.api_client import Embedder, ModelServerClient, request_timeout, wait_ready
@@ -183,6 +186,10 @@ def switch(live: Path, stage: Path, dataset: ac.Dataset) -> tuple[str, list[tupl
 
 def do_restart(previous: list[tuple[Path, Path]]) -> str:
     """Restore the prior snapshot if the matching launchd service fails to start."""
+    return _restart_or_restore(lambda _: restore(previous))
+
+
+def _restart_or_restore(revert) -> str:
     try:
         ok, why = restart_web()
         if not ok:
@@ -191,7 +198,7 @@ def do_restart(previous: list[tuple[Path, Path]]) -> str:
             return 'ok'
         raise UpdateError(f'웹앱이 {READY_TIMEOUT}초 안에 응답하지 않음')
     except UpdateError as e:
-        restore(previous)
+        revert(e)
         restarted, _ = restart_web()
         ready = restarted and wait_web(web_port())
         detail = '웹앱 응답 확인' if ready else '복구 뒤 웹앱 응답을 확인하지 못함'
@@ -310,6 +317,126 @@ def rollback(live: Path, restart: bool, dataset: ac.Dataset) -> int:
     return 0
 
 
+def _prepare_release(stage, files, dataset, current, result):
+    for name in dataset.manifests:
+        (stage / name).write_bytes(files[name])
+    validated = {}
+    for name in dataset.manifests:
+        errors, live_df = reindex.validate(stage / name)
+        if errors:
+            raise UpdateError(f'{name} 검사 실패: {"; ".join(errors)}')
+        validated[name] = live_df
+    args = Namespace(
+        dataset_version=f'{dataset.version}-live-{result.asof}',
+        reference_date=result.asof,
+        collected_date=ac.today(),
+        source_ref=result.head,
+    )
+    for (name, filename), old in zip(dataset.manifests.items(), (current.law, current.combined), strict=True):
+        data = reindex.new_manifest(stage / name, validated[name], old.manifest, args)
+        (stage / filename).write_text(json.dumps(data, ensure_ascii=False, indent=2) + '\n', encoding='utf-8')
+    return prepare_corpus(stage, dataset.version, args.dataset_version)
+
+
+def _restart_db(db, profile, current, previous):
+    return _restart_or_restore(
+        lambda error: corpus_store.rollback_release(db, profile, current, previous, restart_error=str(error))
+    )
+
+
+def _publish_release(db, dataset, current, result, files):
+    release_id = None
+    try:
+        with tempfile.TemporaryDirectory(prefix='lawbot-articles-') as folder:
+            stage = Path(folder)
+            corpus = _prepare_release(stage, files, dataset, current, result)
+            release_id = corpus_store.stage_release(db, corpus, current.release_id)
+            part = corpus.combined if deploy.decree_enabled() else corpus.law
+            missing = gate(make_retriever(files[part.csv.path.name]), result.diff.answer, part.csv.path)
+            if missing:
+                raise UpdateError(f'바뀐 조문이 자기 본문으로 상위 {GATE_K}개 안에 검색되지 않음: {", ".join(missing)}')
+        corpus_store.validate_and_activate(db, dataset.version, release_id, current.release_id)
+    except (OSError, RuntimeError, ValueError, KeyError, httpx.HTTPError) as exc:
+        corpus_store.record_failed(db, dataset.version, release_id, current.release_id, str(exc))
+        raise
+    return release_id
+
+
+def _update_db(args, dataset, db, current):
+    profile, previous = dataset.version, current.release_id
+    if not args.repo:
+        raise UpdateError('--repo가 필요합니다')
+    asof = args.asof or ac.today()
+    if date.fromisoformat(asof).isoformat() != asof:
+        raise UpdateError('기준일은 YYYY-MM-DD 형식이어야 합니다.')
+    try:
+        rdict, files = ac.check_with_files(
+            args.repo,
+            asof,
+            dataset=dataset,
+            current=(current.combined.data, current.combined.manifest_bytes),
+            label=f'릴리스 {previous}',
+        )
+    except (OSError, RuntimeError, ValueError, KeyError, subprocess.SubprocessError) as exc:
+        corpus_store.record_failed(db, profile, None, previous, str(exc))
+        raise
+    result = ac.Result(**rdict)
+    report = args.report_dir / f'{asof}.md' if args.report_dir else None
+    if result.same:
+        if report:
+            report.parent.mkdir(parents=True, exist_ok=True)
+            report.write_text(ac.render(result, next_steps=False), encoding='utf-8')
+            result.report = report
+        print('articles updated=no ' + ac.summary_line(result).removeprefix('articles '))
+        return 0
+
+    release_id = _publish_release(db, dataset, current, result, files)
+    restarted = _restart_db(db, profile, release_id, previous) if args.restart else 'no'
+    if report:
+        report.parent.mkdir(parents=True, exist_ok=True)
+        md = ac.render(result, next_steps=False) + '\n'.join(
+            [
+                '',
+                '## 갱신',
+                '',
+                f'- 새 데이터: 릴리스 `{release_id}` (데이터 {profile}-live-{asof} · 기준일 {asof} · 원문 {result.head[:8]})',
+                f'- 보관: 이전 릴리스 `{previous}`',
+                f'- 확인: 바뀐 조문이 모두 자기 본문으로 상위 {GATE_K}개 안에 검색됨',
+                f'- 재시작: {restarted}',
+                '- 되돌리기: `uv run lawbot-articles-update --rollback --restart`',
+                '',
+            ]
+        )
+        report.write_text(md, encoding='utf-8')
+    print(
+        f'articles updated=yes asof={asof} changed={len(result.diff.answer)} archive={previous} restart={restarted}'
+        + (f' → {report}' if report else '')
+    )
+    return 1
+
+
+def _run_db(args, dataset):
+    db = startup_path(os.environ['LAWBOT_DB'].strip())
+    profile = dataset.version
+    with (db.parent / '.articles-update.lock').open('a') as lock:
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError as exc:
+            raise UpdateError('같은 조문 폴더의 갱신 또는 복구가 진행 중입니다') from exc
+        if args.init:
+            release_id = corpus_store.initialize_release(db, dataset.source_dir, profile)
+            print(f'articles init {dataset.source_dir} → {release_id}')
+            return 0
+        current = corpus_store.active_release(db, profile)
+        if args.rollback:
+            previous = corpus_store.previous_release(db, profile, current.release_id)
+            corpus_store.rollback_release(db, profile, current.release_id, previous)
+            restarted = _restart_db(db, profile, previous, current.release_id) if args.restart else 'no'
+            print(f'articles rollback restored={previous} archived={current.release_id} restart={restarted}')
+            return 0
+        return _update_db(args, dataset, db, current)
+
+
 def main(argv=None):
     p = argparse.ArgumentParser(
         description='조문 데이터 자동 갱신: 점검 → 생성 → 임베딩 → 확인 → 아카이브·전환 → 재시작'
@@ -326,6 +453,10 @@ def main(argv=None):
     try:
         envfile.load()
         dataset = ac.Dataset(deploy.profile_name())
+        from lawbot.settings import corpus_mode
+
+        if corpus_mode(os.environ) == 'db':
+            return _run_db(a, dataset)
         live = a.live_dir or dataset.live_dir
         live.mkdir(parents=True, exist_ok=True)
         with (live / '.update.lock').open('a') as lock:

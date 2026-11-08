@@ -156,7 +156,16 @@ def release_bytes(conn: sqlite3.Connection, release_id: str) -> dict[str, bytes]
     return {law_name: law_bytes, combined_name: combined_bytes, **manifests}
 
 
-def _record_release(conn: sqlite3.Connection, corpus: CorpusImport, now: str) -> None:
+def _record_event(conn, profile, kind, release_id, now, actor, *, previous=None, detail=None):
+    conn.execute(
+        'INSERT INTO corpus_events (release_id,profile,kind,previous_release_id,at,actor,detail) VALUES (?,?,?,?,?,?,?)',
+        (release_id, profile, kind, previous, now, actor, json.dumps(detail, ensure_ascii=False) if detail else None),
+    )
+
+
+def _record_release(
+    conn: sqlite3.Connection, corpus: CorpusImport, now: str, *, status='validated', origin=None, actor='csv-import'
+) -> None:
     law, combined = corpus.law, corpus.combined
     data = combined.manifest_data
     source = data.get('source') or {}
@@ -188,10 +197,10 @@ def _record_release(conn: sqlite3.Connection, corpus: CorpusImport, now: str) ->
             combined.manifest_text,
             law.manifest_name,
             combined.manifest_name,
-            source_name(corpus.directory),
-            'validated',
+            origin if origin is not None else source_name(corpus.directory),
+            status,
             now,
-            now,
+            now if status == 'validated' else None,
             json.dumps(formats),
         ),
     )
@@ -223,34 +232,38 @@ def _record_release(conn: sqlite3.Connection, corpus: CorpusImport, now: str) ->
             (law_id, row['article_no'], checksum),
         ).fetchone()
         conn.execute('INSERT INTO corpus_release_articles VALUES (?,?,?)', (corpus.release_id, position, version))
-    conn.execute(
-        "INSERT INTO corpus_events (release_id, profile, kind, at, actor) VALUES (?,?,'imported',?,'csv-import')",
-        (corpus.release_id, corpus.profile, now),
-    )
+    _record_event(conn, corpus.profile, 'staged' if status == 'staged' else 'imported', corpus.release_id, now, actor)
 
 
-def _activate(conn: sqlite3.Connection, corpus: CorpusImport, now: str) -> int:
-    profile, release_id = corpus.profile, corpus.release_id
+def _activate(conn: sqlite3.Connection, profile, release_id, now, *, actor='csv-import', kind='activated') -> int:
+    if conn.execute('SELECT profile,status FROM corpus_releases WHERE release_id=?', (release_id,)).fetchone() != (
+        profile,
+        'validated',
+    ):
+        raise ValueError(f'활성화할 수 있는 검증 릴리스가 아닙니다: {release_id}')
     current = conn.execute('SELECT release_id FROM active_corpus WHERE profile=?', (profile,)).fetchone()
     if current == (release_id,):
         return 0
     conn.execute(
-        "INSERT INTO active_corpus VALUES (?,?,?,'csv-import') ON CONFLICT(profile) DO UPDATE "
+        'INSERT INTO active_corpus VALUES (?,?,?,?) ON CONFLICT(profile) DO UPDATE '
         'SET release_id=excluded.release_id, activated_at=excluded.activated_at, activated_by=excluded.activated_by',
-        (profile, release_id, now),
+        (profile, release_id, now, actor),
     )
-    conn.execute(
-        'INSERT INTO corpus_events (release_id, profile, kind, previous_release_id, at, actor) '
-        "VALUES (?,?,'activated',?,?,'csv-import')",
-        (release_id, profile, current[0] if current else None, now),
-    )
+    _record_event(conn, profile, kind, release_id, now, actor, previous=current[0] if current else None)
     return 1
 
 
-def write_corpus(conn: sqlite3.Connection, corpus: CorpusImport, activate: bool = False) -> int:
+def write_corpus(
+    conn: sqlite3.Connection, corpus: CorpusImport, activate: bool = False, *, require_inactive: bool = False
+) -> int:
     """Import one corpus atomically, optionally activating its validated release."""
     now = datetime.now(UTC).isoformat()
     with transaction(conn):
+        if (
+            require_inactive
+            and conn.execute('SELECT 1 FROM active_corpus WHERE profile=?', (corpus.profile,)).fetchone()
+        ):
+            raise ValueError(f'프로필 {corpus.profile}에 이미 활성 코퍼스 릴리스가 있습니다.')
         existing = conn.execute(
             'SELECT profile FROM corpus_releases WHERE release_id=?', (corpus.release_id,)
         ).fetchone()
@@ -261,4 +274,4 @@ def write_corpus(conn: sqlite3.Connection, corpus: CorpusImport, activate: bool 
             if existing != (corpus.profile,) or release_bytes(conn, corpus.release_id) != corpus.files():
                 raise ValueError(f'같은 릴리스 ID의 원본 내용이 다릅니다: {corpus.release_id}')
             changed = 0
-        return changed + (_activate(conn, corpus, now) if activate else 0)
+        return changed + (_activate(conn, corpus.profile, corpus.release_id, now) if activate else 0)

@@ -39,6 +39,12 @@ uv run lawbot-articles-update --rollback [--restart]   # 바로 전 파일로 �
 
 종료 코드 (monitor 점검 약속과 같음): 0 바뀐 것 없음, 1 갱신함(확인 필요), 2 실패(지금 데이터 그대로). 마지막 줄: `articles updated=yes|no …`.
 
+### 2.1.1 DB 모드
+
+`LAWBOT_CORPUS=db`이면 웹앱과 갱신 명령이 같은 프로필의 활성 릴리스와 `LAWBOT_DB`를 사용합니다. 갱신 명령은 DB 폴더의 잠금을 잡고 활성 릴리스의 바이트와 해시를 확인합니다. 변경된 조문은 임시 폴더에서 검사와 매니페스트 생성을 마친 뒤 `staged`로 저장합니다. 임베딩과 검색 검증은 쓰기 트랜잭션 밖에서 수행하며, 성공하면 `validated`와 `activated` 이벤트를 남깁니다.
+
+재시작이 실패하면 `restart_failed`와 `rolled_back`을 기록하고 이전 활성 릴리스로 복구합니다. 수동 `--rollback`은 현재 릴리스의 마지막 활성화 이벤트에서 직전 릴리스를 찾습니다. monitor의 명령·종료 코드·마지막 줄 형식을 유지하며, `archive=`는 이전 릴리스 ID를 표시합니다. 설정, 초기화, 복구, 평가용 내보내기는 운영 문서를 따릅니다. [DB 코퍼스 자동 갱신](../operations.md#db-코퍼스-자동-갱신)
+
 ### 2.2 monitor 연결
 
 [monitor-article-check.md](../archives/monitor-article-check.md) 2.2절 그대로 (`checks` 설정, 하위 프로세스, `law-monitor check`, `daily`: collect → checks → summarize, 요약 md '점검' 절, 15분 상한). `targets.yaml`의 명령만 `lawbot-articles-update ... --restart`로.

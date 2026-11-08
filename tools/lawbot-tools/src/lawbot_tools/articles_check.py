@@ -16,6 +16,7 @@ import argparse
 import datetime as dt
 import difflib
 import io
+import json
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -143,20 +144,28 @@ def check(repo, asof, data_dir=V4.source_dir, dataset=V4) -> dict:
     return check_with_files(repo, asof, data_dir, dataset)[0]
 
 
-def check_with_files(repo, asof, data_dir=V4.source_dir, dataset=V4) -> tuple[dict, dict[str, bytes]]:
-    """(비교 결과, 생성한 파일 {이름: 바이트}). lawbot-articles-update가 같은 생성 결과로 갱신한다"""
+def check_with_files(
+    repo, asof, data_dir=V4.source_dir, dataset=V4, *, current: tuple[bytes, bytes] | None = None, label=None
+) -> tuple[dict, dict[str, bytes]]:
+    """Compare generated files with a directory or the current combined CSV and manifest bytes."""
     if not (Path(repo) / 'HEAD').exists() and not (Path(repo) / '.git').exists():
         raise FileNotFoundError(
             f'legalize-kr 클론이 없습니다: {repo} (git clone --filter=blob:none --no-checkout https://github.com/legalize-kr/legalize-kr)'
         )
     _, combined = ba.csv_names(dataset.version)
-    csv = Path(data_dir) / combined
-    m = manifest.load(csv) or {}
+    if current is None:
+        csv = Path(data_dir) / combined
+        m = manifest.load(csv) or {}
+        source, old_csv = str(csv), csv
+    else:
+        csv_bytes, manifest_bytes = current
+        m = json.loads(manifest_bytes)
+        source, old_csv = label or combined, io.BytesIO(csv_bytes)
     scope = dataset.scope
     options = {'scope': ba.load_scope(scope), 'version': dataset.version} if scope else {}
     files, versions, stats = ba.build(repo, asof, **options)
     new_df = pd.read_csv(io.BytesIO(files[combined]), encoding='utf-8-sig', dtype=str, keep_default_na=False)
-    old_df = pd.read_csv(csv, encoding='utf-8-sig', dtype=str, keep_default_na=False)
+    old_df = pd.read_csv(old_csv, encoding='utf-8-sig', dtype=str, keep_default_na=False)
     ref = (m.get('source') or {}).get('ref')
     result = {
         'repo': str(repo),
@@ -164,7 +173,7 @@ def check_with_files(repo, asof, data_dir=V4.source_dir, dataset=V4) -> tuple[di
         'asof': asof,
         'head': stats['head'],
         'data': {
-            'path': str(csv),
+            'path': source,
             'dataset_version': m.get('dataset_version'),
             'reference_date': m.get('reference_date'),
             'ref': ref,
