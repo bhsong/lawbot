@@ -1,0 +1,49 @@
+.admin-shell { display: flex; flex-direction: column; height: 100dvh; }
+.admin-switch { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 8px 16px; border-bottom: 1px solid var(--line); }
+.admin-chat { flex: 1; min-height: 0; }
+.admin-chat .app, .admin-chat .chat { height: 100%; }
+.admin-page { flex: none; overflow-wrap: anywhere; }
+.admin-page > h1 { margin-top: 0; font-size: clamp(22px, 4vw, 30px); }
+.admin-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; align-items: start; }
+.admin-card { min-width: 0; border: 1px solid var(--line); border-radius: 12px; background: var(--panel); padding: 16px; }
+.admin-card h2 { margin-top: 0; }
+.admin-calendar { margin-bottom: 16px; }
+.admin-calendar > button { margin-bottom: 12px; }
+.admin-calendar .lc-month { min-width: 0; }
+.admin-filters { margin-bottom: 12px; }
+.admin-filter-fields, .admin-edit-fields { min-inline-size: 0; padding: 0; margin: 0; border: 0; }
+.admin-filter-fields, .admin-actions { display: flex; flex-wrap: wrap; align-items: end; gap: 8px; }
+.admin-card label, .admin-editor label { display: flex; flex-direction: column; min-width: 0; font-size: 14px; }
+.admin-card input:not([type="checkbox"]), .admin-card select, .admin-editor textarea, .admin-editor input:not([type="radio"]) {
+  min-width: 0; max-width: 100%; font: inherit; color: var(--fg); background: var(--bg);
+  border: 1px solid var(--line); border-radius: 6px; padding: 7px 8px;
+}
+.admin-card input[type="search"] { width: 180px; }
+.admin-card button, .admin-editor button, .admin-holds button {
+  max-width: 100%; padding: 6px 12px; background: var(--bg); border: 1px solid var(--line);
+  border-radius: 6px; cursor: pointer; overflow-wrap: anywhere;
+}
+.admin-card button:disabled, .admin-editor button:disabled, .admin-holds button:disabled { opacity: .55; cursor: default; }
+.admin-feedback-items, .admin-options { list-style: none; margin: 8px 0; padding: 0; }
+.admin-feedback-items > li { padding: 10px 0; border-top: 1px solid var(--line); }
+.admin-options > li { margin: 4px 0; }
+.admin-row, .admin-badges { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.admin-card .admin-question { min-width: 0; border: 0; padding: 4px; text-align: left; background: transparent; font-weight: 600; }
+.admin-badges { margin: 4px 0; font-size: 12px; }
+.admin-badges > span { padding: 2px 7px; background: var(--soft-2); border-radius: 6px; }
+.admin-meta { color: var(--muted); font-size: 12px; margin: 4px 0; }
+.admin-editor, .admin-holds { overflow-wrap: anywhere; }
+.admin-editor textarea { width: 100%; resize: vertical; }
+.admin-editor section, .admin-editor fieldset, .admin-editor label { margin-bottom: 12px; }
+.admin-editor .admin-radio { border: 1px solid var(--line); border-radius: 6px; }
+.admin-editor .admin-radio label { display: inline-flex; flex-direction: row; align-items: center; gap: 4px; margin: 0 12px 0 0; }
+.admin-original { white-space: pre-wrap; overflow-wrap: anywhere; }
+.admin-error { color: var(--danger); }
+
+@media (max-width: 700px) {
+  .admin-grid { grid-template-columns: minmax(0, 1fr); }
+  .admin-card { padding: 12px; }
+  .admin-calendar { padding-inline: 8px; }
+  .admin-calendar .lc-day-counts { overflow-wrap: normal; }
+  .admin-calendar .lc-count-label { display: none; }
+}
