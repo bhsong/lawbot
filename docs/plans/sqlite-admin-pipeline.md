@@ -605,6 +605,14 @@ CREATE TABLE dataset_releases (
 
 ### PR 7 — 관리자 API (`feat/admin-feedback-api`)
 
+#### 착수 전 대조 결과
+
+`main`의 `52ec36e`에서 기존 도구와 DB 스키마를 대조했다. 아래 계약을 확정할 때까지 API 구현을 보류한다.
+
+- **누출 검사 분할 범위.** D6는 기존 `feedback_review` 규칙을 인용하지만 `feedback_review._split_questions`는 `split_emb`만 읽는다. PR 4 이관 도구로 개발 CSV를 임시 DB에 넣어 확인한 결과, `emb=train`이면서 `sllm=val`인 문항은 v4 444개, v5 855개, `decree_v4` 181개다. `emb`와 `sllm` 양쪽의 `val`·`test`를 보호하면 기존 도구의 입력보다 1,480개가 늘어난다. 관리자 API와 기존 도구에서 보호할 범위를 정해야 한다.
+- **이미 배정된 QA의 재승격.** 3.6절은 고정 `qa_uid`에 `unassigned` 두 줄을 쓰고, 취소하면 분할을 남기며, 체크리스트는 재승격을 허용한다. 임시 DB에서 `train`으로 배정한 뒤 QA를 `retired`로 바꾸고 같은 키로 분할을 다시 넣으면 기본키 충돌이 난다. 기존 분할을 `unassigned`로 바꾸거나 삭제하는 시도도 트리거가 거부했다. 재승격에서 기존 배정을 유지할지 별도 규칙이 필요하다.
+- **관리자 415 응답.** PR 6의 `require_json`은 일반 `HTTPException`을 올리므로 현재 응답은 `{"detail": ...}`다. 일반 사용자 응답을 보존하면서 3.7절의 관리자 `{"detail", "code"}` 계약을 적용하려면 관리자 라우트에서 이 오류를 `AdminError`로 변환해야 한다.
+
 - [ ] Red `services/chatbot/tests/test_admin_api.py`(TestClient + tmp DB + 합성 피드백·합성 조문 일부):
   - [ ] 모든 `/api/admin/*`: 로그인 없음 401, 일반 사용자 403, 관리자 200.
   - [ ] POST: `Origin` 없음·다름 403, `content-type` JSON 아님 415, 64 KiB 초과 413, 분당 31번째 429.
