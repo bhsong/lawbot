@@ -100,6 +100,53 @@ def test_db_validation_error_records_failed_without_release(seeded, live, tmp_pa
     assert '본문이 빈' in json.loads(detail)['error']
 
 
+def inject_update_failure(env, live, stage, error):
+    World(env, live, NEW)
+    env.setattr(au, 'make_retriever', hit_all)
+
+    def fail(*args, **kwargs):
+        raise error
+
+    if stage == 'gate':
+        env.setattr(au, 'gate', fail)
+    else:
+        env.setattr(au.ac, 'check_with_files', fail)
+
+
+@pytest.mark.parametrize(('stage', 'candidate'), [('check', None), ('gate', NEW_ID)])
+def test_db_unexpected_failure_is_audited_and_keeps_original_error(
+    seeded, live, tmp_path, env, capsys, stage, candidate
+):
+    message = 'synthetic unexpected error'
+    inject_update_failure(env, live, stage, TypeError(message))
+    assert run(tmp_path, '--restart') == 2
+    assert last_line(capsys) == f'articles updated=no error={message}'
+    active, statuses, events = state(seeded)
+    assert active == BASE
+    assert statuses == ({BASE: 'validated', candidate: 'failed'} if candidate else {BASE: 'validated'})
+    [(kind, release, previous, detail)] = [row for row in events if row[0] == 'failed']
+    assert (kind, release, previous) == ('failed', candidate, BASE)
+    assert json.loads(detail) == {'error_type': 'TypeError', 'error': message}
+
+
+@pytest.mark.parametrize('stage', ['check', 'gate'])
+def test_db_audit_failure_does_not_mask_original_error(seeded, live, tmp_path, env, capsys, stage):
+    with connect(seeded, write=True) as conn, transaction(conn):
+        conn.execute(
+            "CREATE TRIGGER reject_failed_event BEFORE INSERT ON corpus_events WHEN NEW.kind='failed' "
+            "BEGIN SELECT RAISE(ABORT, 'synthetic audit error'); END"
+        )
+    message = 'synthetic original error'
+    inject_update_failure(env, live, stage, au.UpdateError(message))
+    assert run(tmp_path) == 2
+    lines = capsys.readouterr().out.strip().splitlines()
+    assert lines[-1] == f'articles updated=no error={message}'
+    assert any('실패 이벤트를 기록하지 못했습니다' in line and 'IntegrityError' in line for line in lines[:-1])
+    active, statuses, events = state(seeded)
+    assert active == BASE and all(row[0] != 'failed' for row in events)
+    assert statuses == ({BASE: 'validated', NEW_ID: 'staged'} if stage == 'gate' else {BASE: 'validated'})
+
+
 def test_db_gate_failure_reserves_id_and_same_day_uses_suffixes(seeded, live, tmp_path, env, capsys):
     world = World(env, live, NEW, found=False)
     env.setattr(au, 'make_retriever', lambda data: hit_all(data, world.found))

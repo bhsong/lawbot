@@ -107,7 +107,7 @@ def stage_release(db: Path, corpus: CorpusImport, previous: str) -> str:
     return release_id
 
 
-def record_failed(db: Path, profile: str, release_id: str | None, previous: str, error: str) -> None:
+def record_failed(db: Path, profile: str, release_id: str | None, previous: str, error: BaseException) -> None:
     """Record a failed build or gate, keeping any staged candidate for audit."""
     at = datetime.now(UTC).isoformat()
     with connect(db, write=True) as conn, transaction(conn):
@@ -118,7 +118,16 @@ def record_failed(db: Path, profile: str, release_id: str | None, previous: str,
             )
             if changed.rowcount != 1:
                 raise RuntimeError(f'대기 중인 코퍼스 릴리스가 아닙니다: {release_id}')
-        _record_event(conn, profile, 'failed', release_id, at, UPDATE_ACTOR, previous=previous, detail={'error': error})
+        _record_event(
+            conn,
+            profile,
+            'failed',
+            release_id,
+            at,
+            UPDATE_ACTOR,
+            previous=previous,
+            detail={'error_type': type(error).__name__, 'error': str(error)},
+        )
 
 
 def validate_and_activate(db: Path, profile: str, release_id: str, previous: str) -> None:

@@ -27,6 +27,7 @@ import pandas as pd
 from lawbot import corpus_store, deploy, envfile, manifest, paths
 from lawbot.db.corpus_import import prepare_corpus
 from lawbot.db.migrate import startup_path
+from lawbot_common.logs import logger
 from lawbot_tools import articles_check as ac
 from lawbot_tools import build_articles as ba
 from lawbot_tools import reindex
@@ -36,6 +37,7 @@ MANIFESTS = ac.V4.manifests
 READY_TIMEOUT = 180  # 초: 재시작 뒤 웹앱이 응답할 때까지
 GATE_K = 10
 LABEL = os.environ.get('LAWBOT_WEB_LAUNCHD_LABEL', 'com.lawbot.web')
+log = logger('lawbot', 'lawbot')
 
 
 class UpdateError(RuntimeError):
@@ -344,6 +346,14 @@ def _restart_db(db, profile, current, previous):
     )
 
 
+def _record_failed_quietly(db, profile, release_id, previous, error):
+    """Try to record the failure without replacing the original exception."""
+    try:
+        corpus_store.record_failed(db, profile, release_id, previous, error)
+    except Exception as exc:
+        log.warning('경고: 릴리스 %s 실패 이벤트를 기록하지 못했습니다 (%s)', release_id or '-', type(exc).__name__)
+
+
 def _publish_release(db, dataset, current, result, files):
     release_id = None
     try:
@@ -356,8 +366,8 @@ def _publish_release(db, dataset, current, result, files):
             if missing:
                 raise UpdateError(f'바뀐 조문이 자기 본문으로 상위 {GATE_K}개 안에 검색되지 않음: {", ".join(missing)}')
         corpus_store.validate_and_activate(db, dataset.version, release_id, current.release_id)
-    except (OSError, RuntimeError, ValueError, KeyError, httpx.HTTPError) as exc:
-        corpus_store.record_failed(db, dataset.version, release_id, current.release_id, str(exc))
+    except BaseException as exc:  # Audit cleanup only; always re-raised.
+        _record_failed_quietly(db, dataset.version, release_id, current.release_id, exc)
         raise
     return release_id
 
@@ -377,8 +387,8 @@ def _update_db(args, dataset, db, current):
             current=(current.combined.data, current.combined.manifest_bytes),
             label=f'릴리스 {previous}',
         )
-    except (OSError, RuntimeError, ValueError, KeyError, subprocess.SubprocessError) as exc:
-        corpus_store.record_failed(db, profile, None, previous, str(exc))
+    except BaseException as exc:  # Audit cleanup only; always re-raised.
+        _record_failed_quietly(db, profile, None, previous, exc)
         raise
     result = ac.Result(**rdict)
     report = args.report_dir / f'{asof}.md' if args.report_dir else None

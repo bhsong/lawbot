@@ -719,6 +719,7 @@ CREATE TABLE dataset_releases (
   - [x] DB 모드 변화 없음 → 종료 0, 릴리스 수 그대로, 마지막 줄 형식 동일.
   - [x] 변화 있음 → `staged`→`validated`→`activated` 이벤트, 활성 릴리스 바뀜, 종료 1, 마지막 줄 키(`updated`, `asof`, `changed`, `archive`, `restart`) 그대로.
   - [x] `reindex.validate` 오류는 릴리스 ID 없는 `failed` 이벤트, gate 실패는 `failed` 릴리스와 이벤트. 두 경우 모두 활성은 유지하고 종료 2.
+  - [x] 비교·발행의 예외는 타입과 메시지를 감사 기록에 남긴 뒤 다시 올린다. 감사 기록이 실패해도 원래 오류를 보고한다.
   - [x] 재시작 실패(가짜 `restart_web`/`wait_web`) → 활성 이전 릴리스로 되돌림, `rolled_back` 이벤트, 종료 2.
   - [x] `--rollback` → 직전 활성 릴리스로, 재시작.
   - [x] 동시 실행 → 잠금으로 두 번째가 실패(종료 2, 기존 문구).
