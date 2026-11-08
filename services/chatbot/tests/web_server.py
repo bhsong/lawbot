@@ -2,6 +2,7 @@
 # 실제 lawbot.web.main()을 가짜 모델로 띄운다. 인증·주소 설정은 web 그대로, 포트는 --port로
 # 사용법: python tests/web_server.py <포트> <호출 기록 파일> <토큰 간격 초>
 import os
+import runpy
 import sys
 import time
 import types
@@ -44,7 +45,12 @@ os.environ['LAWBOT_MODEL_SERVER'] = 'http://127.0.0.1:65535'  # 가짜 클라이
 os.environ['LAWBOT_MODEL_TOKEN'] = 'test-only-model-token-0123'  # 테스트 전용 가짜 값
 
 import lawbot.service as service  # 가짜 모듈을 넣은 뒤에 import해야 함
-import lawbot.web as web
 
 service.ModelServerClient, service.OpenAI = FakeServerClient, FakeOpenAI
-web.main(['--port', port])
+if '--module' in sys.argv[4:]:
+    sys.argv[1:] = ['--port', port]
+    runpy.run_module('lawbot.web', run_name='__main__', alter_sys=True)
+else:
+    from lawbot.web import main
+
+    main(['--port', port])

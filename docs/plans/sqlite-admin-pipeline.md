@@ -440,7 +440,7 @@ CREATE TABLE dataset_releases (
 
 | API | 요청 | 응답 |
 |---|---|---|
-| `GET /api/admin/feedbacks` | `status`(`pending`·`reviewed`·`hold`·`rejected`·`quarantined`·`promoted`·`all`, 기본 `pending`), `label`(`like`·`flag`), `reason`, `q`(질문 부분 일치, 100자 이하), `limit`(1–200, 기본 50), `cursor` | `{items: [{feedback_id, turn_id, ts, label, reason, status, question_preview(120자), model, profile, dataset_version, corpus_release_id, latest_review: {verdict, decision, reviewer, created_at} \| null, warnings: [code]}], next_cursor}`. 정렬 `ts DESC, feedback_id DESC`. cursor = base64url JSON `{ts, id}` |
+| `GET /api/admin/feedbacks` | `status`(`pending`·`reviewed`·`hold`·`rejected`·`quarantined`·`promoted`·`all`, 기본 `pending`), `label`(`like`·`flag`), `reason`, `q`(질문 부분 일치, 100자 이하), `limit`(1–200, 기본 50), `cursor` | `{items: [{feedback_id, turn_id, ts, label, reason, status, question_preview(120자), model, profile, dataset_version, corpus_release_id, latest_review: {verdict, decision, reviewer, created_at} \| null, warnings: [code]}], next_cursor}`. 정렬 `ts DESC, feedback_id DESC`. cursor = base64url JSON `{ts, id}`. `warnings`는 기존 누출·훈련 겹침 코드 뒤에 `label_changed`(같은 턴의 이전 줄 중 `cleared`를 제외하고 최신 라벨과 다른 라벨이 있음), `corpus_changed`(기록 조문 해시가 현재와 다름. 해시가 없으면 기록 버전이 있고 현재와 다름)를 순서대로 붙인다. 경고는 상태·승격 판정을 바꾸지 않는다. |
 | `GET /api/admin/feedbacks/{id}` | | `{feedback: {저장 필드 전체 + hits, citations, timing, system}, reviews: [...], promotions: [...], checks: {overlap: {qa_uid, split_set, split, how} \| null, corpus: {feedback_dataset_version, feedback_articles_sha256, current_dataset_version, current_articles_sha256, changed_hits: [{law, article_id, status: 'same'\|'changed'\|'missing'}]}}}` |
 | `POST /api/admin/feedbacks/{id}/review` | `{idempotency_key, verdict, decision, scope?, gold_articles: [{law, article_no}] (0–10), corrected_question? (≤2000자), corrected_answer? (≤8000자), note? (≤2000자)}` | 201 `{review_id, status}`. 규칙: `decision=approved`면 `verdict≠uncertain`, `verdict=incorrect`+`approved`면 `corrected_answer` 필수, gold 조문은 현재 조문에 있어야 함(422 `unknown_article`) |
 | `POST /api/admin/feedbacks/promote-up` | `{idempotency_key, feedback_ids: [1–50개, 중복 없음]}` | 200 `{results: [{feedback_id, ok: true, promotion_id, qa_uid} \| {feedback_id, ok: false, code, detail}]}`. 항목마다 따로 트랜잭션. 일부 실패여도 200. 코드: `not_found`, `superseded`, `not_like`, `not_reviewed`, `not_approved`, `verdict_not_correct`, `missing_gold`, `unknown_article`, `leak_test`, `leak_val`, `leak_eval`, `already_promoted` |
@@ -642,22 +642,24 @@ CREATE TABLE dataset_releases (
 
 ### PR 9 — 관리자 화면 (`feat/admin-frontend`)
 
-- [ ] `services/chatbot/frontend/src/admin/`:
+- [x] `services/chatbot/frontend/src/admin/`:
   - `AdminPage.tsx`: 위 캘린더 영역, 아래 좌(좋아요)·우(문제 신고) 두 패널. 휴대폰 폭에서는 세로로 쌓기.
   - `CalendarPanel.tsx`: `@lawbot/ui`의 `MonthCalendar`·`EventList`·`ChangeView`+`Modal`, 데이터는 `/api/admin/calendar/...`. 503이면 "캘린더 연결 안 됨" 안내.
   - `FeedbackList.tsx`: 상태 필터, 검색, 더 보기(cursor), 다중 선택(좋아요 패널만), 경고 배지(`quarantined`, 조문 버전 다름, 라벨 바뀜).
   - `FeedbackDetail.tsx`: 질문, answer_raw·answer_shown(둘이 다를 때 둘 다), 참고 조문, 인용 판정, 검수·승격 이력.
   - `FeedbackCorrectionDialog.tsx`: 명세서 5.2의 7개 요구사항. 원 질문은 읽기 전용으로 따로 표시, "기존 답변을 초안으로 복사" 버튼(복사해도 판정은 비어 있음), 근거 조문 추가(`/api/admin/articles` 자동완성)·삭제, 당시 검색 조문과 현재 조문의 `changed_hits` 표시, 판정 라디오(정답·오답·판정 보류), 메모, 버튼 [검수 저장] [승격] [보류] [반려]. 승격 버튼은 필수 입력이 비었거나 `quarantined`면 비활성 + 이유 문구.
   - `adminApi.ts`: 멱등 키를 버튼 한 번 누를 때 하나 만들고(`crypto.randomUUID()`), 같은 동작 재시도에 같은 키를 쓴다.
-- [ ] `App.tsx`: `role === 'admin'`일 때만 [채팅] / [피드백 & 법령 관리] 전환(`Segmented` 재사용). 일반 사용자는 메뉴 없음.
-- [ ] Red Vitest:
-  - [ ] 일반 사용자에게 전환 메뉴 없음, 관리자에게 있음.
-  - [ ] 목록 로딩·빈 목록·오류(401이면 로그인 화면, 403이면 권한 안내).
-  - [ ] 교정 다이얼로그: Tab 순서·Esc 닫기·첫 입력 포커스·라벨 연결, 필수 누락 시 승격 비활성, 오류 응답 코드별 문구(`leak_test` 등), 저장 중 버튼 비활성, 같은 동작 재시도 시 같은 멱등 키.
-  - [ ] 배치 승격 결과의 성공·실패 항목 표시.
-- [ ] e2e_stub(`test_e2e_stub.py` 확장): 관리자 로그인 → 관리 화면 → 좋아요 하나 검수 저장 → 승격 → 상태 `promoted`. 일반 사용자 로그인 → 메뉴 없음 + `/api/admin/feedbacks` 직접 호출 403. 캘린더 영역은 `LAWBOT_CALENDAR_API_URL` 미설정 안내를 확인(캘린더 서버까지 띄우는 E2E는 기존 캘린더 e2e_stub 픽스처가 재사용 가능할 때만 추가).
-- [ ] 화면 요소는 역할·라벨·`data-testid`로 찾는다(AGENTS.md).
-- [ ] 완료 기준: 명세서 Phase 3 완료 조건.
+- [x] `App.tsx`: `role === 'admin'`일 때만 [채팅] / [피드백 & 법령 관리] 전환(`Segmented` 재사용). 일반 사용자는 메뉴 없음.
+- [x] Red Vitest:
+  - [x] 일반 사용자에게 전환 메뉴 없음, 관리자에게 있음.
+  - [x] 목록 로딩·빈 목록·오류(401이면 로그인 화면, 403이면 권한 안내).
+  - [x] 교정 다이얼로그: Tab 순서·Esc 닫기·첫 입력 포커스·라벨 연결, 필수 누락 시 승격 비활성, 오류 응답 코드별 문구(`leak_test` 등), 저장 중 버튼 비활성, 같은 동작 재시도 시 같은 멱등 키.
+  - [x] 배치 승격 결과의 성공·실패 항목 표시.
+- [x] e2e_stub(`test_e2e_stub.py` 확장): 관리자 로그인 → 관리 화면 → 좋아요 하나 검수 저장 → 승격 → 상태 `promoted`. 일반 사용자 로그인 → 메뉴 없음 + `/api/admin/feedbacks` 직접 호출 403. 캘린더 영역은 `LAWBOT_CALENDAR_API_URL` 미설정 안내를 확인(캘린더 서버까지 띄우는 E2E는 기존 캘린더 e2e_stub 픽스처가 재사용 가능할 때만 추가).
+- [x] 화면 요소는 역할·라벨·`data-testid`로 찾는다(AGENTS.md).
+- [x] 완료 기준: 명세서 Phase 3 완료 조건.
+
+[390px·1280px와 전체 Green 검증 기록](../evals/2026-11-08-admin-frontend.md)
 
 ### PR 10 — 스냅샷 내보내기와 분할 배정 (`feat/dataset-snapshot`)
 

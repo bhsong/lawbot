@@ -2,6 +2,7 @@
 
 import json
 import sqlite3
+from collections import defaultdict
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -112,18 +113,23 @@ def overlap_of(index, feedback, review):
     return index.match(feedback['question'], review.get('corrected_question') if review else None)
 
 
-def list_feedback(path, index, *, status, label, reason, q, limit, cursor):
+def list_feedback(path, index, *, current_sha, current_version, status, label, reason, q, limit, cursor):
     from lawbot.qa_rules import latest_rows
 
     with connect(path) as conn:
         conn.execute('BEGIN')
         rows = _rows(
             conn,
-            'SELECT feedback_id,turn_id,ts,label,reason,question,model,profile,dataset_version,corpus_release_id '
+            'SELECT feedback_id,turn_id,ts,label,reason,question,model,profile,dataset_version,corpus_release_id,'
+            'articles_sha256 '
             'FROM feedbacks ORDER BY rowid',
         )
         reviews = _latest_reviews(conn)
         promoted = {row[0] for row in conn.execute("SELECT feedback_id FROM feedback_promotions WHERE state='active'")}
+    labels = defaultdict(set)
+    for row in rows:
+        if row['label'] != 'cleared':
+            labels[row['turn_id']].add(row['label'])
     latest, _ = latest_rows(rows)
     latest.sort(key=lambda row: (row['ts'], row['feedback_id']), reverse=True)
     items = []
@@ -144,8 +150,17 @@ def list_feedback(path, index, *, status, label, reason, q, limit, cursor):
         warnings = (
             [] if overlap is None else ['overlap_train' if overlap['split'] == 'train' else 'leak_' + overlap['split']]
         )
+        if len(labels[row['turn_id']]) > 1:
+            warnings.append('label_changed')
+        recorded, active = (
+            (row['articles_sha256'], current_sha)
+            if row['articles_sha256']
+            else (row['dataset_version'], current_version)
+        )
+        if recorded and recorded != active:
+            warnings.append('corpus_changed')
         items.append(
-            {key: value for key, value in row.items() if key != 'question'}
+            {key: value for key, value in row.items() if key not in ('question', 'articles_sha256')}
             | dict(
                 status=current,
                 question_preview=row['question'][:120],

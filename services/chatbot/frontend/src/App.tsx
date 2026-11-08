@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { AdminPage } from './admin/AdminPage'
 import { ApiError, NETWORK_ERROR, api } from './api'
 import { Composer } from './components/Composer'
 import { Close, Logout } from './components/icons'
@@ -11,36 +12,69 @@ import { useChatStream } from './useChatStream'
 
 export default function App() {
   const [state, setState] = useState<'checking' | 'out' | 'in'>('checking')
+  const [admin, setAdmin] = useState(false)
   const [config, setConfig] = useState<Config | null>(null)
   const [error, setError] = useState('')
 
-  useEffect(() => {
-    api.me().then(
-      () => setState('in'),
-      () => setState('out'),
-    )
-  }, [])
-
-  useEffect(() => {
-    if (state !== 'in') return
-    api.config().then(
-      (c) => {
-        setConfig(c)
-        document.title = c.title
-      },
-      (e) => (e instanceof ApiError && e.status === 401 ? setState('out') : setError(e instanceof ApiError ? e.message : NETWORK_ERROR)),
-    )
-  }, [state])
-
   const signedOut = useCallback(() => {
+    setAdmin(false)
     setConfig(null)
+    setError('')
     setState('out')
   }, [])
 
-  if (state === 'out') return <Login onDone={() => setState('in')} />
+  useEffect(() => {
+    if (state !== 'checking') return
+    let current = true
+    api.me().then(
+      ({ role }) => {
+        if (!current) return
+        setAdmin(role === 'admin')
+        setState('in')
+      },
+      () => { if (current) signedOut() },
+    )
+    return () => { current = false }
+  }, [state, signedOut])
+
+  useEffect(() => {
+    if (state !== 'in') return
+    let current = true
+    api.config().then(
+      (c) => {
+        if (!current) return
+        setConfig(c)
+        document.title = c.title
+      },
+      (e) => {
+        if (!current) return
+        if (e instanceof ApiError && e.status === 401) signedOut()
+        else setError(e instanceof ApiError ? e.message : NETWORK_ERROR)
+      },
+    )
+    return () => { current = false }
+  }, [state, signedOut])
+
+  if (state === 'out') return <Login onDone={() => setState('checking')} />
   if (error) return <p className="error page-error" role="alert">{error}</p>
   if (state === 'checking' || !config) return null
+  if (admin) return <AdminSession config={config} onSignedOut={signedOut} />
   return <Chat config={config} onSignedOut={signedOut} />
+}
+
+const adminViews = [{ value: 'chat', label: '채팅' }, { value: 'manage', label: '피드백 & 법령 관리' }]
+
+function AdminSession({ config, onSignedOut }: { config: Config; onSignedOut: () => void }) {
+  const [view, setView] = useState('chat')
+  return <div className="admin-shell">
+    <nav className="admin-switch" aria-label="관리자 화면">
+      <Segmented label="화면 전환" items={adminViews} value={view} onChange={setView} />
+      {view === 'manage' && <button type="button" className="icon" aria-label="로그아웃" title="로그아웃"
+        onClick={() => void api.logout().then(onSignedOut, onSignedOut)}><Logout /></button>}
+    </nav>
+    <div className="admin-chat" hidden={view !== 'chat'}><Chat config={config} onSignedOut={onSignedOut} /></div>
+    {view === 'manage' && <AdminPage onUnauthorized={onSignedOut} />}
+  </div>
 }
 
 function Chat({ config, onSignedOut }: { config: Config; onSignedOut: () => void }) {

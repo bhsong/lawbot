@@ -77,11 +77,11 @@ class Proc:
 
 
 def start_web(log_dir, port, **env):
-    """실제 웹앱(lawbot.web, 빌드한 화면 포함)을 127.0.0.1:<port>에 띄우고 로그인 확인 API가 401을 줄 때까지 기다린다
+    """실제 웹앱(lawbot-app, 빌드한 화면 포함)을 127.0.0.1:<port>에 띄우고 로그인 확인 API가 401을 줄 때까지 기다린다
     화면 빌드가 없거나 소스와 다르면 웹앱이 시작을 거부하고 테스트가 실패한다 (CI는 테스트 전에 npm run build)"""
     web = Proc(
         'web',
-        [sys.executable, '-m', 'lawbot.web', '--port', str(port)],
+        [str(Path(sys.executable).with_name('lawbot-app')), '--port', str(port)],
         clean_env(**(env | {'LAWBOT_USER': USER, 'LAWBOT_PW': PW})),  # 테스트 로그인이 .env 값보다 우선
         log_dir,
     )

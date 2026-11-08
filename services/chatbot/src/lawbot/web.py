@@ -515,4 +515,7 @@ def main(argv=None):
 
 
 if __name__ == '__main__':
-    main()
+    # Register handlers from the same module that the admin router imports.
+    from lawbot.web import main as entry
+
+    entry()
