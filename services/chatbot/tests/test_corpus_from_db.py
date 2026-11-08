@@ -187,7 +187,16 @@ def test_embedding_metadata_failure_only_warns(corpus_db, env, capsys):
         assert conn.execute('SELECT count(*) FROM embedding_sets').fetchone() == (0,)
 
 
-def test_check_deploy_checks_db_bytes_and_rejects_corrupt_release(corpus_db, env, tmp_path, model_server):
+def test_embedding_revision_is_optional_if_lookup_has_no_match(corpus_db, env, model_server):
+    configure(env, corpus_db)
+    model_server.available = []
+    env.setattr(service, 'missing_models', lambda *args: [])
+    assert service.load_app().corpus_release_id == RELEASE
+    with connect(corpus_db) as conn:
+        assert conn.execute('SELECT model_revision FROM embedding_sets').fetchall() == [(None,)]
+
+
+def test_check_deploy_checks_db_bytes(corpus_db, env, tmp_path):
     configure(env, corpus_db, decrees=True)
     _, combined = deploy.article_paths(PROFILE)
     metadata = manifest.load(combined)
@@ -201,10 +210,26 @@ def test_check_deploy_checks_db_bytes_and_rejects_corrupt_release(corpus_db, env
     assert any(level == 'OK' and '법률 검색·임베딩 그대로' in msg for level, msg in checks)
     assert any(level == 'OK' and '법령별 조문 수 일치' in msg for level, msg in checks)
 
-    model_server.instances.clear()
-    corrupt_release(corpus_db)
-    assert any(level == 'FAIL' and RELEASE in msg and '복원 해시' in msg for level, msg in check_deploy.run())
-    assert model_server.instances == []
+
+@pytest.mark.parametrize('problem', ['inactive', 'bad-sha'])
+def test_check_deploy_continues_non_corpus_checks_on_db_error(db_path, env, request, problem):
+    if problem == 'bad-sha':
+        assert request.getfixturevalue('corpus_db') == db_path
+        corrupt_release(db_path)
+    configure(env, db_path, decrees=True)
+    checks = check_deploy.run()
+    hint = f'{RELEASE} 조문 CSV의 복원 해시' if problem == 'bad-sha' else '활성 코퍼스 릴리스가 없습니다'
+    assert any(level == 'FAIL' and hint in msg for level, msg in checks)
+    for expected in (
+        '기본 system',
+        '임베딩 ',
+        '리랭커 ',
+        '첨부 켜짐',
+        '웹앱 주소',
+        '필요한 모델이 모델 서버에 모두 있음',
+    ):
+        assert any(expected in msg for _, msg in checks), expected
+    assert not any(msg.startswith(('비삭제 ', '매니페스트:', '하위법령 조문 {')) for _, msg in checks)
 
 
 def test_export_release_is_byte_exact_and_only_overwrites_on_request(corpus_db, tmp_path, capsys):

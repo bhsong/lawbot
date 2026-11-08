@@ -705,6 +705,7 @@ CREATE TABLE dataset_releases (
   - [x] `check_deploy`가 DB 모드에서 릴리스 id·데이터 버전·sha·조문 수를 PASS/FAIL로 출력.
   - [x] `lawbot-db export-release`가 원본과 같은 CSV·매니페스트 바이트를 쓴다.
   - [x] 요청 로그에 `corpus_release_id`.
+  - [x] DB 코퍼스 오류에도 배포 점검의 독립 항목은 계속 검사한다. revision을 찾지 못하면 메타데이터에는 `null`을 기록한다.
 - [x] Green: `corpus_store.release_bytes`, `Retriever`·`manifest.verify` 바이트 입력, `service.load_app` 분기, `embed_cache`가 `.npz`에 `meta`(JSON: model_id, max_seq, dim, n_docs, docs_sha256, model_revision) 추가 저장 + `embedding_sets`·`release_embedding_sets` 기록(DB 모드에서만). 차원은 실제 결과 배열에서 읽는다(상수 1024 금지). `meta`가 없는 기존 .npz도 읽는다.
 - [x] 모델 revision은 모델 서버 `/v1/models`의 `revision`을 읽어 기록만 한다(캐시 재사용 판단은 기존 확인용 벡터 그대로).
 - [x] e2e_stub: DB 모드로 한 번(질문 → 답변·조문 카드 3개). 기존 CSV 모드 E2E는 그대로.

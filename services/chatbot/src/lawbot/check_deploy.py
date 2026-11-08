@@ -73,7 +73,7 @@ def check_articles(p, out, part=None):
     out.append(('INFO', f'법령별 조문 수: {live["law"].value_counts().to_dict()}'))
 
 
-def check_decree(p, out, release=None):
+def check_decree(p, out, release=None, *, skip_articles=False):
     """하위법령 첨부 설정과 812조문 CSV: 종류별 수, parent_law, 법률 415행이 415조문 CSV와 같은지(법률 검색이 같다는 전제)"""
     try:
         dc = deploy.decree(p)
@@ -82,17 +82,18 @@ def check_decree(p, out, release=None):
     if dc is None:
         return out.append(('INFO', '시행령·시행규칙 첨부 꺼짐 (LAWBOT_DECREE_ENABLED=1이면 812조문 CSV도 검사)'))
     part = release.combined if release else None
+    source = 'DB 코퍼스 확인 실패' if skip_articles else f'조문 CSV {part.name if part else p.articles.name}'
     unknown = [k for k in dc.models if k not in {s.key for s in p.models}]
     out.append(
         (
             'OK',
             f'시행령·시행규칙 첨부 켜짐: τ {dc.tau:g} · 최대 {dc.k}개 · 후보 {dc.candidates}개 · '
-            f'인코딩 max_seq {dc.max_seq} · 첨부 모델 {list(dc.models)} · 조문 CSV {part.name if part else p.articles.name}',
+            f'인코딩 max_seq {dc.max_seq} · 첨부 모델 {list(dc.models)} · {source}',
         )
     )
     if unknown:
         out.append(('INFO', f'첨부 모델 {unknown}은 이 기기에서 쓰지 않음 (LAWBOT_MODELS)'))
-    if part is None and not p.articles.is_file():
+    if skip_articles or (part is None and not p.articles.is_file()):
         return
     law = _read_articles(part.data if part else p.articles)
     missing = DECREE_COLUMNS - set(law.columns)
@@ -261,21 +262,24 @@ def run():
     p = get_profile()
     out = [('INFO', f'프로필 {p.name}: {p.title}')]
     release = part = None
+    corpus_unavailable = False
     try:
         if settings.corpus_mode(os.environ) == 'db':
             db = startup_path(os.environ['LAWBOT_DB'].strip())
             release = corpus_store.active_release(db, p.name)
             part = release.combined if deploy.decree_enabled() else release.law
     except (OSError, RuntimeError, ValueError) as exc:
-        return [*out, ('FAIL', f'DB 코퍼스: {exc}')]
-    check_articles(p, out, part)
-    check_manifest(p, out, part)
+        corpus_unavailable = True
+        out.append(('FAIL', f'DB 코퍼스: {exc}'))
+    else:
+        check_articles(p, out, part)
+        check_manifest(p, out, part)
     corpus_ok = not any(level == 'FAIL' for level, _ in out)
     check_system(p, out)
     check_models(p, out)
     check_reranker(p, out)
     decree_start = len(out)
-    check_decree(p, out, release)
+    check_decree(p, out, release, skip_articles=corpus_unavailable)
     if release and part:
         corpus_ok = corpus_ok and not any(level == 'FAIL' for level, _ in out[decree_start:])
         metadata = part.manifest

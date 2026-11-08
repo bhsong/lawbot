@@ -194,7 +194,9 @@ def load_app(settings=None):
             + ', '.join(f'{kind} {mid}' for kind, mid in missing)
             + ' (모델 서버 .env의 LAWBOT_SERVE_*와 웹앱의 LAWBOT_*_MODEL을 맞추세요)'
         )
-    revision = next(m.get('revision') for m in available if m['id'] == p.emb_model and m.get('type') == 'embedding')
+    revision = next(
+        (m.get('revision') for m in available if m['id'] == p.emb_model and m.get('type') == 'embedding'), None
+    )
     t0 = time.perf_counter()
     retriever = Retriever(
         Embedder(client, p.emb_model, query_timeout=limit),
