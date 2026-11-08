@@ -8,6 +8,7 @@ export class AdminApiError extends Error {
 }
 
 const notices: Record<string, string> = {
+  bad_origin: '요청 출처를 확인할 수 없어 저장하지 않았습니다. 같은 주소에서 다시 열어 주세요.',
   leak_test: '시험 데이터와 겹쳐 승격할 수 없습니다.',
   leak_val: '검증 데이터와 겹쳐 승격할 수 없습니다.',
   leak_eval: '평가 전용 문항과 겹쳐 승격할 수 없습니다.',
@@ -20,7 +21,9 @@ function safeDetail(detail: unknown) {
 
 export function adminMessage(error: unknown): string {
   if (!(error instanceof AdminApiError)) return NETWORK_ERROR
-  if (error.status === 403) return '관리자 권한이 필요하거나 이 요청에 대한 권한이 없습니다.'
+  if (error.status === 403 && (!error.code || error.code === 'admin_required')) {
+    return '관리자 권한이 필요하거나 이 요청에 대한 권한이 없습니다.'
+  }
   const notice = notices[error.code]
   if (!notice) return error.detail || `요청을 처리하지 못했습니다. (오류 ${error.status})`
   return error.detail && error.detail !== notice ? `${notice} ${error.detail}` : notice

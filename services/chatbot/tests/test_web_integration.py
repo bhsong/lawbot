@@ -33,7 +33,7 @@ def server_log(path):  # 실패 진단용 서버 출력 (비밀번호는 가림)
 
 
 @contextmanager
-def start_server(tmp, **overrides):
+def start_server(tmp, *, module_entry=False, **overrides):
     port, calls, out_path = free_port(), tmp / 'llm_calls.txt', tmp / 'server.log'
     request_log = tmp / 'requests.jsonl'
     env = {k: v for k, v in os.environ.items() if k not in ENV_KEYS}
@@ -47,9 +47,12 @@ def start_server(tmp, **overrides):
     )
     env.update(overrides)
     url = f'http://127.0.0.1:{port}'
+    args = [sys.executable, str(SERVER), str(port), str(calls), str(DELAY)]
+    if module_entry:
+        args.append('--module')
     with out_path.open('w') as out:
         proc = subprocess.Popen(
-            [sys.executable, str(SERVER), str(port), str(calls), str(DELAY)],
+            args,
             env=env,
             stdout=out,
             stderr=subprocess.STDOUT,
@@ -165,7 +168,8 @@ def test_disconnect_marks_request_cancelled(server, fmt):
     assert log_rows(server)[-1]['status'] == 'cancelled'
 
 
-def test_admin_review_and_promotion_in_server_process(tmp_path, admin_hash):
+@pytest.mark.parametrize('module_entry', [False, True], ids=['imported-main', 'module-main'])
+def test_admin_review_and_promotion_in_server_process(tmp_path, admin_hash, module_entry):
     db = tmp_path / 'private' / 'lawbot.db'
     migrate.init(db)
     seed_qa(db)
@@ -173,6 +177,7 @@ def test_admin_review_and_promotion_in_server_process(tmp_path, admin_hash):
     with (
         start_server(
             tmp_path,
+            module_entry=module_entry,
             LAWBOT_DB=str(db),
             LAWBOT_ADMIN_USER=ADMIN_USER,
             LAWBOT_ADMIN_PW_HASH=admin_hash,
@@ -180,6 +185,8 @@ def test_admin_review_and_promotion_in_server_process(tmp_path, admin_hash):
         httpx.Client(base_url=running.url, timeout=WAIT_LIMIT) as session,
     ):
         assert session.post('/api/login', json={'user': ADMIN_USER, 'password': ADMIN_PW}).status_code == 200
+        calendar = session.get('/api/admin/calendar/law-calendar/status')
+        assert (calendar.status_code, calendar.json().get('code')) == (503, 'calendar_not_configured')
         prefix = '/api/admin/feedbacks'
         assert session.get(prefix).json()['items'][0]['feedback_id'] == 'fixture'
         origin = {'Origin': running.url}

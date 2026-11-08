@@ -204,18 +204,20 @@ test('feedback loads independently of an unconfigured calendar and can be empty'
   expect(await likes.findByText('표시할 피드백이 없습니다.')).toBeVisible()
 })
 
-test.each([401, 403])('feedback response %s shows the correct session state', async (status) => {
-  server({
-    role: 'admin', adminRoutes: (url) => url.pathname.includes('/calendar/')
-      ? unavailable() : json(status, { code: 'fixture', detail: '서버 안내' }),
-  })
-  await management()
-  if (status === 401) expect(await screen.findByLabelText('비밀번호')).toBeVisible()
-  else {
-    const likes = within(screen.getByRole('region', { name: '좋아요' }))
-    expect(await likes.findByRole('alert')).toHaveTextContent('관리자 권한')
-  }
-})
+test.each([[401, 'login_required'], [403, 'admin_required'], [403, undefined]] as const)(
+  'feedback response %s (%s) shows the correct session state', async (status, code) => {
+    server({
+      role: 'admin', adminRoutes: (url) => url.pathname.includes('/calendar/')
+        ? unavailable() : json(status, { code, detail: '서버 안내' }),
+    })
+    await management()
+    if (status === 401) expect(await screen.findByLabelText('비밀번호')).toBeVisible()
+    else {
+      const likes = within(screen.getByRole('region', { name: '좋아요' }))
+      expect(await likes.findByRole('alert')).toHaveTextContent('관리자 권한')
+    }
+  },
+)
 
 test('feedback filters and pagination show the server warning badges', async () => {
   const s = server({
@@ -330,9 +332,11 @@ test('a quarantined correction cannot promote even when all fields are present',
 })
 
 test.each([
-  ['leak_test', /시험 데이터/], ['leak_val', /검증 데이터/], ['leak_eval', /평가 전용/], ['unknown_article', /근거 조문/],
-])('correction reports %s', async (code, message) => {
-  correctionServer(() => json(409, { code, detail: '서버 오류 설명' }))
+  ['leak_test', 409, /시험 데이터/], ['leak_val', 409, /검증 데이터/], ['leak_eval', 409, /평가 전용/],
+  ['unknown_article', 422, /근거 조문/],
+  ['bad_origin', 403, /요청 출처를 확인할 수 없어 저장하지 않았습니다\. 같은 주소에서 다시 열어 주세요\./],
+] as const)('correction reports %s', async (code, status, message) => {
+  correctionServer(() => json(status, { code, detail: '서버 오류 설명' }))
   const { dialog } = await correction()
   await completeCorrection(dialog)
   await userEvent.click(within(dialog).getByRole('button', { name: '승격' }))
