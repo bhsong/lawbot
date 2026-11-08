@@ -133,6 +133,27 @@ def test_assignment_transaction_rolls_back_on_write_error(db_path):
         assert conn.execute("SELECT policy FROM split_sets WHERE split_set='feedback'").fetchone() == ('{}',)
 
 
+@pytest.mark.parametrize('args', [('--seed', '7'), ('--val-frac', '0.25'), ('--sllm-val-frac', '0.25')])
+def test_existing_assignments_lock_the_recorded_policy(db_path, args, capsys):
+    old = add_question(db_path, '01', LEFT)
+    assert run(db_path) == 0
+    with connect(db_path, write=True) as conn, transaction(conn):
+        retire_feedback_qa(conn, old)
+    new = add_question(db_path, '02', '서로 닮지 않은 새 질문')
+    before = splits(db_path)
+    with connect(db_path) as conn:
+        policy = conn.execute("SELECT policy FROM split_sets WHERE split_set='feedback'").fetchone()[0]
+    capsys.readouterr()
+
+    assert run(db_path, *args) == 2
+    assert '정책' in capsys.readouterr().out
+    assert splits(db_path) == before
+    with connect(db_path) as conn:
+        assert conn.execute("SELECT policy FROM split_sets WHERE split_set='feedback'").fetchone() == (policy,)
+    assert run(db_path) == 0
+    assert splits(db_path)[new, 'emb'][0] == 'val'
+
+
 def test_assignment_empty_db_and_cli_errors(db_path):
     assert run(db_path) == 0
     missing = db_path.with_name('missing.db')

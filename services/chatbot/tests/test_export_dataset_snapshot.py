@@ -229,17 +229,33 @@ def test_feedback_uses_review_and_purpose_splits(corpus_db, tmp_path, capsys):
     assert rows['fb_questions']['good']['split'] == rows['fb_emb_pairs']['good']['split'] == 'val'
     assert rows['fb_sft']['good']['split'] == 'train'
     assert rows['fb_sft']['good']['completion'] == '교정 답변 good'
-    assert rows['fb_sft']['good']['prompt'] == build_prompt(HITS, '교정 질문 good')
+    assert rows['fb_sft']['good']['prompt'] == build_prompt(HITS, '원 질문 good')
     assert rows['fb_kto']['wrong']['split'] == 'val'
     assert rows['fb_kto']['wrong']['label'] == 'False'
     assert rows['fb_kto']['wrong']['completion'] == '원래 답변 wrong'
+    assert rows['fb_kto']['wrong']['prompt'] == build_prompt(HITS, '원 질문 wrong')
     assert rows['fb_kto']['good']['label'] == 'True'
     assert set(rows['fb_questions']) == set(rows['fb_emb_pairs']) == {'good', 'wrong', 'flag-correct', 'emb-only'}
     assert set(rows['fb_sft']) == {'good', 'sllm-only'}
     assert set(rows['fb_kto']) == {'good', 'wrong', 'flag-correct', 'sllm-only'}
     assert [json.loads(line) for line in (out / 'fb_preferences.jsonl').read_text().splitlines()] == [
-        dict(prompt=build_prompt(HITS, '교정 질문 wrong'), chosen='교정 답변 wrong', rejected='원래 답변 wrong')
+        dict(
+            feedback_id='wrong',
+            split='val',
+            prompt=build_prompt(HITS, '원 질문 wrong'),
+            chosen='교정 답변 wrong',
+            rejected='원래 답변 wrong',
+        )
     ]
+
+
+def test_preference_rows_include_sllm_split(corpus_db, tmp_path):
+    add_promotion(corpus_db, 'wrong', verdict='incorrect', label='flag', emb='train', sllm='val')
+    add_promotion(corpus_db, 'wrong-train', verdict='incorrect', label='flag', emb='val', sllm='train')
+    out = tmp_path / 'snapshot'
+    assert export(corpus_db, out) == 0
+    rows = [json.loads(line) for line in (out / 'fb_preferences.jsonl').read_text().splitlines()]
+    assert {row.get('feedback_id'): row.get('split') for row in rows} == {'wrong': 'val', 'wrong-train': 'train'}
 
 
 def test_unregistered_directory_and_tampered_snapshot_are_not_overwritten(corpus_db, tmp_path):

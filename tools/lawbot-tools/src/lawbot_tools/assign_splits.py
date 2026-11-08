@@ -112,6 +112,11 @@ def assign(db, split_set, fractions, seed):
         raise ValueError('고정 분할 세트는 배정할 수 없습니다.')
     if any(row.split == 'test' for row in rows):
         raise ValueError('피드백 분할 세트에 test 배정이 있습니다.')
+    policy = json.loads(setting[1]) if setting is not None else {}
+    if any(row.split in ASSIGNED for row in rows) and (
+        policy.get('seed', seed) != seed or policy.get('val_frac', fractions) != fractions
+    ):
+        raise ValueError('이미 배정된 피드백이 있습니다. 기록된 분할 정책의 시드와 목적별 비율을 사용하세요.')
     questions = {row.uid: row.question for row in rows if row.status == 'active' or row.split in ASSIGNED}
     groups = _groups(questions)
     updates, conflicts, results = _plan(rows, groups, fractions, seed)
@@ -121,7 +126,6 @@ def assign(db, split_set, fractions, seed):
         if _state(conn, split_set) != state:
             raise RuntimeError('배정 계산 중 피드백 분할 상태가 바뀌었습니다. 다시 실행하세요.')
         if setting is not None:
-            policy = json.loads(setting[1])
             at = datetime.now(UTC).isoformat()
             conn.executemany(
                 'UPDATE qa_splits SET split=?,group_key=?,assigned_at=? '
@@ -138,7 +142,10 @@ def assign(db, split_set, fractions, seed):
                     train_overlap_groups=overlap_count,
                     results=results,
                 )
-                conn.execute('UPDATE split_sets SET policy=? WHERE split_set=?', (json.dumps(policy), split_set))
+                conn.execute(
+                    'UPDATE split_sets SET policy=? WHERE split_set=?',
+                    (json.dumps(policy, ensure_ascii=False), split_set),
+                )
     for purpose, counts in results.items():
         print(
             f'{purpose} · 신규 배정 {counts["assigned"]} · 상속 {counts["inherited"]} · 충돌 그룹 {counts["conflicts"]}'

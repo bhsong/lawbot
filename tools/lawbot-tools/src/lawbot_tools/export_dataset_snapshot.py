@@ -86,7 +86,8 @@ def _corpus(conn, release, version):
 def _feedback_rows(conn):
     cursor = conn.execute(
         'SELECT q.question,emb.split AS emb,sllm.split AS sllm,emb.group_key AS emb_key,sllm.group_key AS sllm_key, '
-        'f.feedback_id,f.label,f.reason,f.record,f.model,f.answer_raw,r.verdict,r.scope,r.gold_articles,r.note, '
+        'f.feedback_id,f.label,f.reason,f.record,f.model,f.question AS original_question,f.answer_raw, '
+        'r.verdict,r.scope,r.gold_articles,r.note, '
         'r.corrected_answer,a.answer '
         'FROM qa_items q '
         "LEFT JOIN qa_splits emb ON emb.qa_uid=q.qa_uid AND emb.split_set='feedback' AND emb.purpose='emb' "
@@ -131,7 +132,7 @@ def _completion_rows(row, record, sft, kto, preferences, warnings):
         warnings['missing_hits'] += 1
         return
     try:
-        prompt = build_prompt(hits, row['question'])
+        prompt = build_prompt(hits, row['original_question'])
     except IndexError, KeyError, TypeError, AttributeError:
         warnings['missing_hits'] += 1
         return
@@ -154,7 +155,15 @@ def _completion_rows(row, record, sft, kto, preferences, warnings):
         return
     kto.append(example | dict(completion=row['answer_raw'], label=correct))
     if not correct and row['corrected_answer']:
-        preferences.append(dict(prompt=prompt, chosen=row['corrected_answer'], rejected=row['answer_raw']))
+        preferences.append(
+            dict(
+                feedback_id=row['feedback_id'],
+                split=row['sllm'],
+                prompt=prompt,
+                chosen=row['corrected_answer'],
+                rejected=row['answer_raw'],
+            )
+        )
 
 
 def _feedback_files(conn, corpus):

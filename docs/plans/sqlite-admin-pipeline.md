@@ -429,6 +429,7 @@ CREATE TABLE dataset_releases (
 
 - 좋아요만으로 승격되는 경로는 없다(검수 필수). 문제 신고만으로 오답(선호 쌍)이 되는 경로도 없다(`verdict=incorrect` 필수).
 - 같은 규칙을 `lawbot_tools.feedback_export`도 쓴다: 검수 CSV의 `h_ok=맞음` ↔ `correct`, `틀림` ↔ `incorrect`, `모름` ↔ `uncertain`. 매핑은 `qa_rules`에 상수로 둔다.
+- 스냅샷의 `fb_questions`·`fb_emb_pairs`에는 승격된 질문과 emb 분할을 쓴다. `fb_sft`·`fb_kto`·`fb_preferences`에는 당시 검색 조문과 원 질문으로 만든 프롬프트와 sllm 분할을 쓴다. `fb_preferences.jsonl`의 키는 `feedback_id, split, prompt, chosen, rejected`다.
 
 ### 3.7 관리자 API
 
@@ -669,11 +670,11 @@ CREATE TABLE dataset_releases (
     - 그룹에 이미 배정된 문항이 있고 그 분할이 모두 같으면: 새 문항은 그 분할과 그 문항들의 `group_key`를 **상속**한다(해시를 다시 계산하지 않음).
     - 그룹에 배정된 문항의 분할이 서로 다르면(새 문항이 train 그룹과 val 그룹을 이어 붙인 경우): 그 그룹의 새 문항은 배정하지 않고 `unassigned`로 남긴 뒤 충돌로 보고하고 종료 코드 1. 기존 배정은 바꾸지 않는다(사람이 해당 피드백 승격을 취소하거나 보류).
     - 그룹 전체가 `unassigned`일 때만 새 키 = 그룹 안 가장 작은 `qa_uid`, `sha256(f'{seed}:{group_key}')`를 [0,1)로 바꿔 `< val_frac`이면 val, 아니면 train. 목적별 frac은 옵션.
-  - 이미 배정된 줄은 바꾸지 않는다(트리거가 막음). 결과(배정·상속·충돌 수)와 정책을 `split_sets.policy`에 추가 기록.
+  - 이미 배정된 줄은 바꾸지 않는다(트리거가 막음). 결과(배정·상속·충돌 수)와 정책을 `split_sets.policy`에 추가 기록. 기존 배정이 있으면 기록된 시드 또는 목적별 비율과 다른 요청을 종료 코드 2로 거부한다.
   - 같은 이유로 PR 7의 승격 단계에서도, 새 문항이 이미 배정된 피드백 문항과 유사하면 상세의 `checks.overlap`에 그 문항과 분할을 경고로 보여 준다(차단은 하지 않음, 배정은 위 규칙이 정함).
 - [x] `lawbot_tools/export_dataset_snapshot.py --db PATH --version v6 --corpus-release ID --out data/v6/`:
   - [x] 한 읽기 트랜잭션(`BEGIN` … 읽기만)에서 모두 읽는다.
-  - [x] 출력(이름은 기존 도구 계약에 맞춤): `articles_v6.csv`·`law_articles_v6_decree.csv`(릴리스 CSV 바이트 그대로, 이름만 버전) + 매니페스트 2개(`manifest.json`·`manifest_law_articles_v6_decree.json`). 매니페스트는 릴리스의 JSON에서 **`articles_file`만 새 CSV 이름으로 바꾸고** 나머지 값(dataset_version·sha256·조문 수 등)은 그대로, 기존 `reindex`와 같은 형식(`json.dumps(ensure_ascii=False, indent=2) + '\n'`)으로 쓴다. 원래 매니페스트의 sha256은 스냅샷 `manifest.json`에 기록. 이름을 바꾸지 않는 `lawbot-db export-release`는 매니페스트도 바이트 그대로, `qa_<name>.csv`, `split_<name>.csv`(`id, eval_cat, split_emb, split_sllm`), `answer_key_<name>.csv`(기존 열), 피드백 산출물 `fb_questions.csv`·`fb_emb_pairs.csv`·`fb_sft.csv`·`fb_kto.csv`(기존 `feedback_export` 열과 같음) + `fb_preferences.jsonl`(`prompt, chosen, rejected`).
+  - [x] 출력(이름은 기존 도구 계약에 맞춤): `articles_v6.csv`·`law_articles_v6_decree.csv`(릴리스 CSV 바이트 그대로, 이름만 버전) + 매니페스트 2개(`manifest.json`·`manifest_law_articles_v6_decree.json`). 매니페스트는 릴리스의 JSON에서 **`articles_file`만 새 CSV 이름으로 바꾸고** 나머지 값(dataset_version·sha256·조문 수 등)은 그대로, 기존 `reindex`와 같은 형식(`json.dumps(ensure_ascii=False, indent=2) + '\n'`)으로 쓴다. 원래 매니페스트의 sha256은 스냅샷 `manifest.json`에 기록. 이름을 바꾸지 않는 `lawbot-db export-release`는 매니페스트도 바이트 그대로, `qa_<name>.csv`, `split_<name>.csv`(`id, eval_cat, split_emb, split_sllm`), `answer_key_<name>.csv`(기존 열), 피드백 산출물 `fb_questions.csv`·`fb_emb_pairs.csv`·`fb_sft.csv`·`fb_kto.csv`(기존 `feedback_export` 열과 같음) + `fb_preferences.jsonl`(`feedback_id, split, prompt, chosen, rejected`).
   - [x] `fb_emb_pairs.negative`는 검수자가 지정한 오답 조문만(이번 범위에는 지정 UI가 없으므로 빈 값). **`rejected` 답변을 negative로 쓰지 않는다.**
   - [x] test·평가 전용 문항은 학습 산출물(`fb_*`, split의 train/val)에 나오지 않는다.
   - [x] `manifest.json`: DB 경로 이름(전체 경로 아님), 스키마 버전, 코퍼스 릴리스 id·sha, 분할 정책·시드, 그룹 수, 모델 id·system sha(피드백 기록에서), 생성 시각, 파일마다 행 수·sha256.
@@ -688,6 +689,7 @@ CREATE TABLE dataset_releases (
   - [x] 이름을 바꾼 스냅샷: `manifest.load(out/'articles_v6.csv')`·`manifest.load(out/'law_articles_v6_decree.csv')`가 각각 매니페스트를 찾고 `manifest.check`가 통과(sha·조문 수 일치).
   - [x] 재실행 해시 동일, DB에 피드백 하나 추가 후 같은 버전 → 실패.
   - [x] revoked/retired 문항 제외, 선호 쌍은 `verdict=incorrect`만.
+  - [x] 선호 쌍의 sllm 분할, 생성 프롬프트의 원 질문과 임베딩 산출물의 교정 질문, 기존 배정 시 정책 변경 거부를 확인한다.
 - [x] 완료 기준: 명세서 Phase 4 완료 조건. 기존 고정 Test 불변은 frozen 트리거 + 바이트 동일 테스트로 증명.
 
 [스냅샷·분할 배정과 전체 Green 검증 기록](../evals/2026-11-08-dataset-snapshot.md)
