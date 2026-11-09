@@ -9,6 +9,10 @@ import { countSources } from './SourcesView'
 // cjk-friendly: lets **bold** end right before Korean particles, e.g. **수당**을 (CommonMark alone does not)
 const PLUGINS = [remarkGfm, remarkCjkFriendly]
 
+export function AnswerMarkdown({ text }: { text: string }) {
+  return <Markdown remarkPlugins={PLUGINS}>{text}</Markdown>
+}
+
 type Props = {
   turn: Turn
   selected: boolean
@@ -38,7 +42,7 @@ export function TurnView({ turn, selected, reasons, onSelect, onRetry, onFeedbac
         )}
         {turn.text && (
           <div className="answer">
-            <Markdown remarkPlugins={PLUGINS}>{turn.text}</Markdown>
+            <AnswerMarkdown text={turn.text} />
           </div>
         )}
         {turn.stopped && <p className="note">답변을 중지했습니다.</p>}

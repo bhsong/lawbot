@@ -14,6 +14,8 @@ from httpx import URL, AsyncClient, RequestError, TimeoutException
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints, ValidationError
 
 from lawbot import dataset_store, feedback_store
+from lawbot.cache_review_store import ReviewCatalog
+from lawbot.cache_store import CacheDatabaseError
 from lawbot.qa_rules import ProtectedQA, assigned_overlap
 from lawbot.web import (
     AdminError,
@@ -81,6 +83,14 @@ class PromoteDown(Body):
 
 class Revoke(Body):
     note: Annotated[Nonempty, Field(max_length=2000)]
+
+
+class CacheAction(Body):
+    generation: int = Field(ge=0)
+    action: Literal['approve', 'revoke_answer', 'revoke_query', 'mode']
+    target: Annotated[Nonempty, Field(max_length=64)]
+    reason: Note | None = None
+    preview_sha256: Annotated[str, StringConstraints(pattern=r'^[a-f0-9]{64}$')] | None = None
 
 
 def _mutation(model, body, who, endpoint):
@@ -184,11 +194,53 @@ def load_protected(db):
     return ProtectedQA(dataset_store.protection_rows(db))
 
 
+async def _cache_call(fn, *args):
+    try:
+        return await anyio.to_thread.run_sync(fn, *args)
+    except feedback_store.StoreError as exc:
+        raise AdminError(exc.status, exc.detail, exc.code) from exc
+    except (CacheDatabaseError, OSError, ValueError, RuntimeError) as exc:
+        log.warning('관리자 캐시 확인 실패 (%s)', type(exc).__name__)
+        raise AdminError(503, '캐시 DB 또는 검토 자료를 확인할 수 없습니다.', 'cache_unavailable') from exc
+
+
 def router(db, app, *, protected=None, calendar_url=None):
     api = APIRouter(prefix='/api/admin', dependencies=[Depends(require_admin)])
     index = load_protected(db) if protected is None else protected
     corpus = Corpus(app)
     post_guards = [Depends(_post_body), Depends(require_admin_post_rate)]
+
+    def cache_catalog():
+        cache = getattr(app, 'exact_cache', None)
+        if cache is None:
+            raise AdminError(503, 'v5 정확 일치 캐시가 설정되지 않았습니다.', 'cache_unavailable')
+        return ReviewCatalog(
+            cache.store.path, cache.corpus_db, cache.snapshot, getattr(app.settings, 'exact_cache_bundle', None)
+        )
+
+    @api.get('/cache')
+    async def cache_index(status: Literal['all', 'keep', 'pending', 'off', 'approved', 'revoked', 'draft'] = 'all'):
+        return await _cache_call(cache_catalog().index, status)
+
+    @api.get('/cache/answers/{answer_id}')
+    async def cache_detail(answer_id: str):
+        return await _cache_call(cache_catalog().detail, answer_id)
+
+    @api.post('/cache/actions', dependencies=post_guards)
+    async def cache_action(body: PostBody, who: AdminWho):
+        mutation, parsed = _mutation(CacheAction, body, who, '/cache/actions')
+        if not parsed.reason or not parsed.reason.strip():
+            raise AdminError(400, '변경 사유를 입력하세요.', 'reason_required')
+        status, payload = await _cache_call(
+            cache_catalog().mutate,
+            mutation,
+            parsed.generation,
+            parsed.action,
+            parsed.target,
+            parsed.reason.strip(),
+            parsed.preview_sha256,
+        )
+        return JSONResponse(payload, status_code=status)
 
     @api.get('/feedbacks')
     async def feedbacks(

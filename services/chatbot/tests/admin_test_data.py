@@ -14,7 +14,7 @@ TRAIN_QUESTION = '훈련용합성문항우주정거장출입기록'
 GOLD = [{'law': '근로기준법', 'article_no': '제26조'}]
 
 
-def seed_qa(path):
+def seed_qa(path, *, v4_train=()):
     with connect(path, write=True) as conn, transaction(conn):
         for name in SETS:
             conn.execute("INSERT INTO split_sets VALUES (?,0,'{}')", (name,))
@@ -26,6 +26,8 @@ def seed_qa(path):
                 ],
                 'oos': [(EVAL_QUESTION, 'test', 'test')],
             }.get(name, [(f'{name} 합성보호자료', 'test', 'test')])
+            if name == 'v4':
+                rows += [(question, 'train', 'train') for question in v4_train]
             for i, (question, emb, sllm) in enumerate(rows):
                 uid = f'{name}:{i}'
                 conn.execute(

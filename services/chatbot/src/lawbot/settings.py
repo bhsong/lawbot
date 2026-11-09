@@ -39,6 +39,7 @@ class Settings:
     calendar_api_url: str | None = None
     corpus: str = 'csv'
     exact_cache_db: Path | None = None
+    exact_cache_bundle: Path | None = None
 
 
 MISSING_SERVER = (
@@ -127,6 +128,9 @@ def load(env=None, web=False):
         take('feedback', lambda: feedback.from_env(env, db=got.get('db')))
         if cache := (env.get('LAWBOT_EXACT_CACHE_DB') or '').strip():
             take('exact_cache_db', lambda: exact_cache_path(cache, got.get('db')))
+            from lawbot.cache_carry import bundle_path
+
+            take('exact_cache_bundle', lambda: bundle_path(env))
     if errors:
         raise SettingsError(f'설정 오류 {len(errors)}개:\n' + '\n'.join(f'- {e}' for e in errors))
     fields = Settings.__dataclass_fields__

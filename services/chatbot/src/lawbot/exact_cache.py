@@ -6,9 +6,8 @@ import json
 import unicodedata
 from dataclasses import asdict, dataclass
 from io import StringIO
-from pathlib import Path
 
-from lawbot import answer_format, citation
+from lawbot import answer_format
 from lawbot.corpus_store import CorpusRelease
 from lawbot.hits import Hit
 
@@ -16,7 +15,7 @@ NORMALIZER = 'normalizer_v1'
 MODEL = 'pro'
 FORMAT = 'concise'
 PROFILE = 'v5'
-DISPLAY_VERSION = 'exact-display-v1'
+DISPLAY_VERSION = 'exact-display-v2'
 
 
 def normalize(question: str) -> str:
@@ -94,15 +93,8 @@ class Snapshot:
 
     @classmethod
     def load(cls, release: CorpusRelease, *, system: str, combined: bool, attach_decrees: bool):
-        law_hash = release.law.manifest['articles_sha256']
-        combined_hash = release.combined.manifest['articles_sha256']
-        corpus = digest(canonical([PROFILE, release.release_id, law_hash, combined_hash]))
-        renderer_hashes = [
-            hashlib.sha256(Path(path).read_bytes()).hexdigest()
-            for path in (answer_format.__file__, citation.__file__)
-            if path is not None
-        ]
-        policy = digest(canonical([MODEL, FORMAT, digest(system), DISPLAY_VERSION, renderer_hashes]))
+        corpus = corpus_version(release)
+        policy = digest(canonical([MODEL, FORMAT, digest(system), DISPLAY_VERSION]))
         scope = canonical([PROFILE, 'combined' if combined else 'law', attach_decrees])
         part = release.combined if combined else release.law
         articles = read_articles(part.data)
@@ -130,3 +122,16 @@ class Snapshot:
         if unknown or refused or used != hits:
             return None
         return answer_format.render(raw, hits, FORMAT, done=True)
+
+
+def corpus_version(release: CorpusRelease) -> str:
+    return digest(
+        canonical(
+            [
+                PROFILE,
+                release.release_id,
+                release.law.manifest['articles_sha256'],
+                release.combined.manifest['articles_sha256'],
+            ]
+        )
+    )

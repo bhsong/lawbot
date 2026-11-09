@@ -1,0 +1,267 @@
+from dataclasses import replace
+from types import SimpleNamespace
+
+import pytest
+from fastapi.testclient import TestClient
+
+from admin_test_data import seed_qa
+from conftest import ADMIN_PW, ADMIN_USER
+from lawbot import auth, cache_release_store, cache_review_store, cache_runtime, corpus_store, web
+from lawbot.cache_carry import classify, corpus_changes
+from lawbot.cache_release_store import apply_release
+from lawbot.cache_seed import Protection
+from lawbot.cache_store import Draft, Store, init
+from lawbot.db.connection import connect
+from lawbot.db.migrate import init as init_corpus
+from lawbot.exact_cache import DISPLAY_VERSION, Snapshot, digest
+from test_exact_cache import ID, QUESTION, RAW
+
+BASE = {
+    'a': ('법 A', '제1조', '조문', '법률', '본문', '0'),
+    'b': ('법 A', '제2조', '다른 조문', '법률', '본문', '0'),
+    'c': ('법 B', '제3조', '참고', '법률', '본문', '0'),
+}
+
+
+@pytest.mark.parametrize(
+    ('updates', 'removed', 'expected'),
+    [
+        ({}, (), 'keep'),
+        ({'a': (*BASE['a'][:4], '바뀜', '0')}, (), 'off'),
+        ({'c': (*BASE['c'][:5], '1')}, (), 'off'),
+        ({'b': (*BASE['b'][:2], '바뀐 제목', *BASE['b'][3:])}, (), 'pending'),
+        ({'d': ('법 A', '제4조', '추가', '법률', '본문', '0')}, (), 'pending'),
+        ({}, ('b',), 'pending'),
+        ({}, ('a',), 'off'),
+    ],
+)
+def test_classify_by_review_and_display_dependencies(updates, removed, expected):
+    current = {key: row for key, row in (BASE | updates).items() if key not in removed}
+    assert classify({'a', 'c'}, BASE, corpus_changes(BASE, current), None, 'same', 'same')[0] == expected
+
+
+@pytest.mark.parametrize(
+    ('guard', 'shown'),
+    [
+        ('policy_changed', 'same'),
+        ('protection_changed', 'same'),
+        ('bundle_missing', 'same'),
+        (None, 'changed'),
+        (None, None),
+    ],
+)
+def test_safety_gates_prevent_carry(guard, shown):
+    assert classify({'a'}, BASE, {}, guard, 'same', shown)[0] == 'pending'
+
+
+def release(release_id, other='이전 다른 조문', display='근거 본문', review='검토 참고 본문'):
+    text = (
+        'law,article_id,article_no,title,kind,text,deleted\n'
+        f'근로기준법,{ID},제26조,해고의 예고,법률,{display},0\n'
+        f'근로기준법,근로기준법 제27조,제27조,서면통지,법률,{other},0\n'
+        f'최저임금법,최저임금법 제6조,제6조,최저임금의 효력,법률,{review},0\n'
+    )
+    part = corpus_store.CorpusPart('synthetic.csv', text.encode(), {'articles_sha256': digest(text)}, b'')
+    return corpus_store.CorpusRelease(release_id, part, part)
+
+
+@pytest.fixture
+def prepared(tmp_path, monkeypatch):
+    path = tmp_path / 'cache.db'
+    init(path)
+    store = Store(path)
+    old = release('before')
+    snapshot = Snapshot.load(old, system='synthetic', combined=True, attach_decrees=True)
+    citations = [(ID, snapshot.articles[ID].text_hash)]
+    draft = Draft(
+        'fixture',
+        QUESTION,
+        'fixture-answer',
+        digest(RAW),
+        snapshot.render(RAW, citations),
+        citations,
+        {'review_evidence_article_ids': ['최저임금법 제6조']},
+        RAW,
+    )
+    store.stage(snapshot.namespace, [draft], 'test', 'draft')
+    ns = snapshot.namespace.id
+    approval = store.approve(
+        ns, 1, 'protected', {draft.query_id(ns): draft.answer_id(ns)}, actor='test', reason='review'
+    )
+    store.set_mode('shadow', 'test', 'check', approval)
+    store.set_mode('on', 'test', 'enable', approval)
+    protected = Protection(frozenset(), {'fixture': digest(QUESTION)}, 'protected')
+    monkeypatch.setattr(cache_release_store, 'verified_inputs', lambda *a: (protected, {}))
+    monkeypatch.setattr(corpus_store, 'release_at_event', lambda *a: old)
+    return store, old, snapshot, draft
+
+
+@pytest.mark.parametrize(
+    ('changes', 'verdict'),
+    [
+        ({}, 'keep'),
+        ({'other': '변경된 다른 조문'}, 'pending'),
+        ({'display': '변경된 근거 본문'}, 'off'),
+        ({'review': '변경된 검토 근거 본문'}, 'off'),
+    ],
+)
+def test_release_projection_and_runtime(prepared, tmp_path, monkeypatch, changes, verdict):
+    store, _, previous, draft = prepared
+    target = release('after', **changes)
+    snapshot = Snapshot.load(target, system='synthetic', combined=True, attach_decrees=True)
+    token = ('after', 2)
+    monkeypatch.setattr(corpus_store, 'active_token', lambda *a, **kw: token)
+    monkeypatch.setattr(cache_runtime, 'active_token', lambda *a, **kw: token)
+    counts = apply_release(store.path, tmp_path / 'corpus.db', token, target, snapshot, tmp_path / 'fixture.zip')
+    assert counts[verdict] == 1 and sum(counts.values()) == 1
+    assert store.control().activation_event == 2 and store.control().mode == 'on'
+    exact = cache_runtime.ExactCache(store, tmp_path / 'corpus.db', snapshot)
+    hit = exact.lookup(QUESTION, 'pro', 'concise').match
+    if verdict == 'keep':
+        assert hit and hit.answer_id != draft.answer_id(previous.namespace.id)
+        assert hit.text == draft.answer_text
+    else:
+        assert hit is None
+    with connect(store.path) as conn:
+        assert conn.execute('SELECT verdict,previous_answer_id FROM cache_release_decisions').fetchone() == (
+            verdict,
+            draft.answer_id(previous.namespace.id),
+        )
+    assert (
+        apply_release(store.path, tmp_path / 'corpus.db', token, target, snapshot, tmp_path / 'fixture.zip') == counts
+    )
+
+
+def test_failed_projection_leaves_control_and_rows_unchanged(prepared, tmp_path, monkeypatch):
+    store, _, previous, _ = prepared
+    target = release('after')
+    snapshot = replace(previous, release_id='after')
+    control = store.control()
+    monkeypatch.setattr(corpus_store, 'active_token', lambda *a: ('unrelated', 3))
+    with pytest.raises(ValueError, match='판정 중'):
+        apply_release(store.path, tmp_path / 'corpus.db', ('after', 2), target, snapshot, tmp_path / 'fixture.zip')
+    assert store.control() == control
+    with connect(store.path) as conn:
+        assert conn.execute('SELECT count(*) FROM cache_release_decisions').fetchone() == (0,)
+
+
+def test_rollback_does_not_restore_withdrawn_question(prepared, tmp_path, monkeypatch):
+    store, old, previous, draft = prepared
+    target = release('after')
+    snapshot = Snapshot.load(target, system='synthetic', combined=True, attach_decrees=True)
+    monkeypatch.setattr(corpus_store, 'active_token', lambda *a: ('after', 2))
+    apply_release(store.path, tmp_path, ('after', 2), target, snapshot, tmp_path / 'fixture.zip')
+    store.revoke('query', draft.query_id(snapshot.namespace.id), 'test', 'withdraw')
+    monkeypatch.setattr(corpus_store, 'release_at_event', lambda *a: target)
+    monkeypatch.setattr(corpus_store, 'active_token', lambda *a: ('before', 3))
+    apply_release(store.path, tmp_path, ('before', 3), old, previous, tmp_path / 'fixture.zip')
+    assert store.lookup(previous.namespace.id, QUESTION)[1] is None
+
+
+def test_unreviewed_answer_keeps_its_approval_baseline(prepared, tmp_path, monkeypatch):
+    store, old, _, _ = prepared
+    second = release('second', review='변경된 검토 조문')
+    snapshot = Snapshot.load(second, system='synthetic', combined=True, attach_decrees=True)
+    monkeypatch.setattr(corpus_store, 'active_token', lambda *a: ('second', 2))
+    assert apply_release(store.path, tmp_path, ('second', 2), second, snapshot, None)['off'] == 1
+    third = replace(second, release_id='third')
+    snapshot = Snapshot.load(third, system='synthetic', combined=True, attach_decrees=True)
+    monkeypatch.setattr(corpus_store, 'release_at_event', lambda *a: second)
+    monkeypatch.setattr(corpus_store, 'release_by_id', lambda *a: old)
+    monkeypatch.setattr(corpus_store, 'active_token', lambda *a: ('third', 3))
+    assert apply_release(store.path, tmp_path, ('third', 3), third, snapshot, None)['off'] == 1
+    with connect(store.path) as conn:
+        assert conn.execute(
+            'SELECT previous_release_id FROM cache_release_decisions WHERE activation_event=3'
+        ).fetchone() == ('before',)
+
+
+def test_renderer_snapshot_is_tied_to_display_version():
+    snapshot = Snapshot.load(release('before'), system='synthetic', combined=True, attach_decrees=True)
+    citations = [(ID, snapshot.articles[ID].text_hash)]
+    actual = [snapshot.render(RAW, citations), snapshot.render(RAW.replace('제26조', '제99조'), citations)]
+    expected = {'exact-display-v2': ['합성 결론입니다.\n\n근거: 근로기준법 제26조(해고의 예고)', None]}
+    assert actual == expected[DISPLAY_VERSION]
+
+
+@pytest.fixture
+def review_api(prepared, tmp_path, monkeypatch, admin_hash):
+    store, old, _, draft = prepared
+    target = release('after', other='바뀐 다른 조문')
+    snapshot = Snapshot.load(target, system='synthetic', combined=True, attach_decrees=True)
+    db = tmp_path / 'corpus.db'
+    init_corpus(db)
+    seed_qa(db)
+    token = ('after', 2)
+    monkeypatch.setattr(corpus_store, 'active_token', lambda *a, **kw: token)
+    monkeypatch.setattr(corpus_store, 'release_by_id', lambda *args: old if args[2] == 'before' else target)
+    protection = Protection(frozenset(), {'fixture': digest(QUESTION)}, 'protected')
+    monkeypatch.setattr(cache_review_store, 'verified_inputs', lambda *a: (protection, {}))
+    bundle = tmp_path / 'bundle.zip'
+    bundle.write_bytes(b'synthetic bundle fixture')
+    assert apply_release(store.path, db, token, target, snapshot, bundle)['pending'] == 1
+    cache = cache_runtime.ExactCache(store, db, snapshot)
+    state = SimpleNamespace(
+        exact_cache=cache,
+        settings=SimpleNamespace(exact_cache_bundle=bundle),
+        retriever=SimpleNamespace(ids=[], laws=[], kinds=[], titles=[], docs=[]),
+    )
+    credentials = auth.AdminCredentials(ADMIN_USER, auth.parse_password_hash(admin_hash))
+    app = web.create_app(state, ('regular', 'test-only'), db=db, admin=credentials, dist=None)
+    return app, store, draft.answer_id(snapshot.namespace.id), state
+
+
+def test_cache_api_guards_approval_and_idempotency(review_api):
+    app, store, answer_id, _ = review_api
+    origin = {'Origin': 'http://testserver'}
+    path = '/api/admin/cache/actions'
+    with TestClient(app) as client:
+        assert client.get('/api/admin/cache').status_code == 401
+        assert client.post('/api/login', json={'user': 'regular', 'password': 'test-only'}).status_code == 200
+        assert client.get('/api/admin/cache').status_code == 403
+        assert client.post('/api/login', json={'user': ADMIN_USER, 'password': ADMIN_PW}).status_code == 200
+        detail = client.get(f'/api/admin/cache/answers/{answer_id}').json()
+        assert detail['status'] == 'pending' and detail['changes'][0]['after']['text'] == '바뀐 다른 조문'
+        action = dict(
+            action='approve',
+            target=answer_id,
+            generation=detail['generation'],
+            preview_sha256=detail['preview_sha256'],
+            idempotency_key='review',
+            reason='표시본 확인',
+        )
+        assert client.post(path, json=action, headers={'Origin': 'http://invalid.test'}).status_code == 403
+        assert client.post(path, json=action | {'reason': ' '}, headers=origin).status_code == 400
+        assert client.post(path, json=action | {'generation': 0}, headers=origin).status_code == 409
+        assert client.post(path, json=action | {'preview_sha256': '0' * 64}, headers=origin).status_code == 409
+        first = client.post(path, json=action, headers=origin)
+        assert first.status_code == 200, first.json()
+        assert client.post(path, json=action, headers=origin).json() == first.json()
+        assert client.post(path, json=action | {'reason': '다른 본문'}, headers=origin).status_code == 409
+        assert store.lookup(store.control().namespace_id, QUESTION)[1] is not None
+    with connect(store.path) as conn:
+        assert conn.execute(
+            "SELECT count(*) FROM cache_audit_events WHERE actor=? AND action='approve'", (f'admin:{ADMIN_USER}',)
+        ).fetchone() == (1,)
+
+
+def test_cache_api_missing_bundle_allows_off_and_withdrawal(review_api):
+    app, store, answer_id, state = review_api
+    state.settings.exact_cache_bundle = None
+    origin = {'Origin': 'http://testserver'}
+    with TestClient(app) as client:
+        assert client.post('/api/login', json={'user': ADMIN_USER, 'password': ADMIN_PW}).status_code == 200
+        detail = client.get(f'/api/admin/cache/answers/{answer_id}').json()
+        assert 'LAWBOT_EXACT_CACHE_BUNDLE' in detail['disabled_reason'] and detail['preview'] is None
+        path = '/api/admin/cache/actions'
+        action = dict(generation=detail['generation'], idempotency_key='one', reason='검토')
+        assert (
+            client.post(path, json=action | dict(action='approve', target=answer_id), headers=origin).status_code == 409
+        )
+        assert client.post(path, json=action | dict(action='mode', target='off'), headers=origin).status_code == 200
+        action = action | dict(generation=store.control().generation, idempotency_key='two')
+        assert (
+            client.post(path, json=action | dict(action='revoke_answer', target=answer_id), headers=origin).status_code
+            == 200
+        )
+        assert client.get(f'/api/admin/cache/answers/{answer_id}').json()['status'] == 'revoked'
