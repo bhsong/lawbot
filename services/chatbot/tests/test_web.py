@@ -286,10 +286,26 @@ def test_config(authed, lawbot):
     assert cfg['default_model'] == first.key
     assert {m['key']: m['format'] for m in cfg['models']}[first.key] == first.fmt
     assert cfg['formats'] == [{'value': 'concise', 'label': '간결'}, {'value': 'full', 'label': '전체 (4항목)'}]
-    assert cfg['examples'] == view.EXAMPLES
+    assert cfg['examples'] == [
+        '해고 예고 없이 갑자기 해고되면 어떻게 하나요?',
+        '최저임금보다 적게 주기로 한 근로계약은 효력이 있나요?',
+        '육아휴직을 썼다고 불이익을 줘도 되나요?',
+    ]
     assert cfg['sources_title'] == view.sources_title(lawbot)
     assert cfg['feedback'] == {'enabled': False, 'reasons': []}
     assert 'token' not in json.dumps(cfg).lower()
+
+
+def test_v5_config_has_cache_labor_and_tax_examples(lawbot, env):
+    env.setenv('LAWBOT_PROFILE', 'v5')
+    with make_client(service.load_app()) as c:
+        login(c)
+        cfg = c.get('/api/config').json()
+    assert cfg['examples'] == [
+        '연장근로 수당을 지급하는 대신 휴가를 주려면 어떤 절차가 필요한가요?',
+        '해고 예고 없이 갑자기 해고되면 어떻게 하나요?',
+        '회사에서 받은 월급과 상여금은 근로소득에 포함되나요?',
+    ]
 
 
 def test_config_lists_disabled_models(env, lawbot):

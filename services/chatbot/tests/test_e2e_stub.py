@@ -15,7 +15,7 @@ from conftest import ADMIN_PW, ADMIN_USER
 from lawbot.db import cli
 from lawbot.db.connection import connect
 from lawbot.deploy import article_paths
-from lawbot.view import EXAMPLES
+from lawbot.view import V5_EXAMPLES
 from test_migrate_csv_to_sqlite import run as migrate
 
 pytestmark = pytest.mark.e2e_stub
@@ -244,9 +244,11 @@ def test_db_corpus_question_shows_three_law_cards(db_corpus_stack, page):
     assert e2e.request_log(stack.request_log)[-1]['corpus_release_id'] == release
 
 
-def test_example_click(stack, ui):
-    ui.get_by_role('button', name=EXAMPLES[0]).click()
+@pytest.mark.parametrize('question', V5_EXAMPLES)
+def test_example_click(stack, ui, question):
+    ui.get_by_role('button', name=question, exact=True).click()
     e2e.wait_done(ui)
+    expect(ui.get_by_test_id('question').last).to_have_text(question)
     assert FAKE_ANSWER in e2e.answer(ui).inner_text()
 
 

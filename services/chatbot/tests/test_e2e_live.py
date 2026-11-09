@@ -19,7 +19,6 @@ import e2e_support as e2e
 from conftest import free_port
 from lawbot import deploy, envfile, llm, manifest
 from lawbot.paths import ROOT
-from lawbot.view import EXAMPLES
 from lawbot_model_server import revision
 
 pytestmark = pytest.mark.e2e_live
@@ -36,9 +35,9 @@ def first_row(path, keep=lambda r: True):
         return next(r for r in csv.DictReader(f) if keep(r))
 
 
-# 시나리오: 고정 파일의 고정 행 (파일이 바뀌면 질문도 바뀐다: 결과 기록에 질문 원문을 남김)
+# Keep the labor smoke question independent of the cards on the start screen.
 SCENARIOS = {
-    'labor': EXAMPLES[0],  # 일반 노동법 질문
+    'labor': '해고 예고 없이 갑자기 해고되면 어떻게 하나요?',
     'out_of_scope': first_row('data/oos_eval.csv', lambda r: r['category'] == 'other_law')['question'],  # 범위 밖
     'decree': first_row('data/v4/decree_ctx_val200.csv')['question'],  # 시행령·시행규칙 단계가 도는 질문 (Pro)
 }

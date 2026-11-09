@@ -1,6 +1,6 @@
 # 정확 일치 캐시 릴리스 판정과 관리자 검토 검증
 
-2026-11-09 · 개발 기준 `c87dbff` · `feat/exact-cache-carry-forward` · 임시 SQLite와 합성 검토 자료를 사용했다. [구현 계획](../plans/exact-cache-carry-forward.md)
+2026-11-09 · 개발 기준 `c87dbff` · `feat/exact-cache-carry-forward` · 임시 SQLite와 합성 검토 자료를 사용했다. [구현 계획](../archives/exact-cache-carry-forward.md)
 
 | 검증 항목 | 결과 |
 | --- | --- |
