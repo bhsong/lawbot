@@ -49,6 +49,7 @@
 }
 .cache-panel { min-width: 0; overflow-wrap: anywhere; }
 .cache-actions { display: flex; align-items: center; gap: .5rem; flex-wrap: wrap; margin-block: .75rem; }
+.cache-failed-item { outline: 2px solid var(--danger); outline-offset: 2px; }
 .cache-reason-hint { margin-inline-start: .5rem; }
 .cache-panel input { max-width: 100%; }
 .cache-id { font-family: monospace; }

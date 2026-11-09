@@ -192,7 +192,18 @@ def test_admin_batch_approves_drafts_and_activates_cache(review_stack, page, wid
 
     page.route('**/api/admin/cache/approvals', change_second_hash, times=1)
     select_batch.click()
-    expect(panel.get_by_role('alert')).to_contain_text('확인한 표시본이 현재 표시본과 다릅니다.')
+    expect(panel.get_by_role('alert')).to_have_text('답변 합성 유지 답변 · 확인한 표시본이 현재 표시본과 다릅니다.')
+    failed_row = panel.get_by_role('listitem').filter(has_text='합성 유지 답변')
+    expect(failed_row.get_by_text('승인 실패', exact=True)).to_be_visible()
+
+    unrelated = panel.get_by_role('button', name='합성 즉시 반환 답변 · 초안', exact=True)
+    unrelated.click()
+    unrelated_heading = detail.get_by_role('heading', name='합성 즉시 반환 답변 · 초안', exact=True)
+    expect(unrelated_heading).to_be_visible()
+    with page.expect_response(lambda response: response.url.endswith('/api/admin/cache?status=all')):
+        panel.get_by_role('button', name='새로고침', exact=True).click()
+    for key in ('합성 검토 답변', '합성 유지 답변'):
+        expect(panel.get_by_role('checkbox', name=f'{key} 선택', exact=True)).to_be_checked()
     batch_requests = []
     page.on(
         'request', lambda req: batch_requests.append(req) if req.url.endswith('/api/admin/cache/approvals') else None
@@ -204,6 +215,7 @@ def test_admin_batch_approves_drafts_and_activates_cache(review_stack, page, wid
     payload = batch_requests[0].post_data_json
     assert len(payload['items']) == 2 and not payload.get('reason')
     assert all(item['answer_id'] and len(item['preview_sha256']) == 64 for item in payload['items'])
+    expect(unrelated_heading).to_be_visible()
 
     mode = panel.get_by_role('region', name='캐시 모드 전환')
     on = mode.get_by_role('button', name='모드 on', exact=True)
@@ -231,7 +243,9 @@ def test_admin_batch_approves_drafts_and_activates_cache(review_stack, page, wid
     revoke = detail.get_by_role('button', name='답변 철회', exact=True)
     expect(revoke).to_be_disabled()
     expect(revoke).to_have_css('cursor', 'default')
-    expect(detail.get_by_text('변경 사유를 입력하세요', exact=True).last).to_be_visible()
+    expect(detail.get_by_text('변경 사유를 입력하세요', exact=True)).to_have_count(1)
+    expect(revoke).to_have_accessible_description('변경 사유를 입력하세요')
+    expect(detail.get_by_role('button', name='질문 철회')).to_have_accessible_description('변경 사유를 입력하세요')
     assert page.evaluate('document.documentElement.scrollWidth <= document.documentElement.clientWidth')
     approve.click()
     expect(panel.get_by_role('status').get_by_text('변경을 저장했습니다.')).to_be_visible()

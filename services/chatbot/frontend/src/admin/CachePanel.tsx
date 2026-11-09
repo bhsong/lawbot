@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState } from 'react'
 import { SourcesView } from '../components/SourcesView'
 import { AnswerMarkdown } from '../components/TurnView'
 import type { SourceItem } from '../types'
-import { adminGet, adminMessage, useAdminMutation, useAdminRead } from './adminApi'
+import { AdminApiError, adminGet, adminMessage, useAdminMutation, useAdminRead } from './adminApi'
 
 const labels = { all: '전체', keep: '자동 유지', pending: '검토 대기', off: '끔', approved: '승인', revoked: '철회', draft: '초안' }
 const reasons: Record<string, string> = {
@@ -27,7 +27,7 @@ type Detail = {
   audit: { action: string; actor: string; reason: string; at: string }[]
 }
 type Action = 'approve' | 'revoke_answer' | 'revoke_query' | 'mode'
-type Reviewed = { generation: number; items: Record<string, { hash: string; checked: boolean }> }
+type Reviewed = { generation: number; items: Record<string, { hash: string; key: string; checked: boolean }> }
 const BATCH_LIMIT = 50
 const reasonHint = '변경 사유를 입력하세요'
 
@@ -56,6 +56,12 @@ export function CachePanel({ onUnauthorized }: { onUnauthorized: () => void }) {
   const needsReason = !reason.trim()
   const blocked = mutation.busy || needsReason
   const items = reviewed && reviewed.generation === info?.generation ? reviewed.items : {}
+  const failure = mutation.failure?.error
+  const failedId = failure instanceof AdminApiError ? failure.answerId : undefined
+  const failureMessage = failedId ? adminMessage(failure, items[failedId]?.key) : mutation.error
+  const detailReasonHint = needsReason && !mutation.busy && answer &&
+    (answer.status !== 'revoked' || answer.questions.some(query => query.status !== 'revoked'))
+    ? 'cache-detail-reason' : undefined
   const approvals = Object.entries(items).flatMap(([answer_id, item]) =>
     item.checked ? [{ answer_id, preview_sha256: item.hash }] : [])
   const modes = (['off', 'shadow', 'on'] as const).map(mode => ({
@@ -64,12 +70,13 @@ export function CachePanel({ onUnauthorized }: { onUnauthorized: () => void }) {
 
   useEffect(() => {
     if (!answer || answer.answer_id !== selected) return
-    const { answer_id, generation, preview_sha256 } = answer
+    const { answer_id, answer_key, generation, preview_sha256 } = answer
     setReviewed(previous => {
       const items = { ...(previous?.generation === generation ? previous.items : {}) }
       const prior = items[answer_id]
-      if (preview_sha256) items[answer_id] = { hash: preview_sha256, checked: prior?.hash === preview_sha256 && prior.checked }
-      else delete items[answer_id]
+      if (preview_sha256) {
+        items[answer_id] = { hash: preview_sha256, key: answer_key, checked: prior?.hash === preview_sha256 && prior.checked }
+      } else delete items[answer_id]
       return { generation, items }
     })
   }, [answer, selected])
@@ -82,21 +89,21 @@ export function CachePanel({ onUnauthorized }: { onUnauthorized: () => void }) {
     })
   }
 
-  async function save(path: string, fields: Record<string, unknown>, closeDetail = false) {
+  async function save(path: string, fields: Record<string, unknown>, approvedIds: string[] = []) {
     setNotice('')
     const result = await mutation.run<{ generation: number }>(path, { ...fields, reason: reason.trim() })
     if (result) {
       setReason('')
       setReviewed(null)
       setNotice('변경을 저장했습니다.')
-      if (closeDetail) setSelected(null)
+      setSelected(current => current && approvedIds.includes(current) ? null : current)
       index.retry()
       detail.retry()
     }
   }
 
   function change(action: Action, target: string, generation: number, preview_sha256?: string) {
-    return save('/cache/actions', { action, target, generation, preview_sha256 }, action === 'approve')
+    return save('/cache/actions', { action, target, generation, preview_sha256 }, action === 'approve' ? [target] : [])
   }
 
   return <section className="cache-panel" aria-label="정확 일치 캐시 관리">
@@ -115,26 +122,29 @@ export function CachePanel({ onUnauthorized }: { onUnauthorized: () => void }) {
         {needsReason && !mutation.busy && modes.some(({ enabled }) => enabled) &&
           <span id="cache-mode-reason">{reasonHint}</span>}
         <button type="button" disabled={mutation.busy}
-          onClick={() => { setReviewed(null); index.retry(); detail.retry(); mutation.invalidate() }}>새로고침</button>
+          onClick={() => { index.retry(); detail.retry(); mutation.invalidate() }}>새로고침</button>
       </section>
-      {mutation.error && <p role="alert">{mutation.error}</p>}
+      {failureMessage && <p role="alert">{failureMessage}</p>}
       {notice && <p role="status">{notice}</p>}
       <label>판정 필터 <select value={filter} onChange={e => setFilter(e.target.value as keyof typeof labels)}>
         {Object.entries(labels).map(([value, label]) => <option value={value} key={value}>{label}</option>)}
       </select></label>
       <div className="cache-actions">
         <button type="button" disabled={mutation.busy || !!info.disabled_reason || !approvals.length}
-          onClick={() => void save('/cache/approvals', { generation: info.generation, items: approvals }, true)}>선택 승인</button>
+          onClick={() => void save('/cache/approvals', { generation: info.generation, items: approvals },
+            approvals.map(item => item.answer_id))}>선택 승인</button>
         <span>{approvals.length}개 선택 (최대 {BATCH_LIMIT}개)</span>
         {info.mode === 'on' && approvals.length > 0 && <span>승인하면 바로 사용자에게 반환됩니다</span>}
       </div>
       <p>상세에서 표시본을 확인한 답변을 선택할 수 있습니다.</p>
-      <ul aria-label="캐시 답변 목록">{info.items.map(item => <li key={item.answer_id}>
+      <ul aria-label="캐시 답변 목록">{info.items.map(item => <li key={item.answer_id}
+        className={item.answer_id === failedId ? 'cache-failed-item' : undefined}>
         <input type="checkbox" aria-label={`${item.answer_key} 선택`} checked={items[item.answer_id]?.checked ?? false}
           disabled={mutation.busy || !!info.disabled_reason || !items[item.answer_id] ||
             (!items[item.answer_id].checked && approvals.length >= BATCH_LIMIT)}
           onChange={e => toggle(item.answer_id, e.target.checked)} />
         <button type="button" onClick={() => setSelected(item.answer_id)}>{item.answer_key} · {labels[item.status]}</button>
+        {item.answer_id === failedId && <span> 승인 실패</span>}
         <span> 질문 {item.question_count}개 · {item.release_id ?? '판정 전'} {item.reason ? reasons[item.reason] ?? item.reason : ''}</span>
       </li>)}</ul>
       {!info.items.length && <p>이 조건에 해당하는 답변이 없습니다.</p>}
@@ -158,13 +168,11 @@ export function CachePanel({ onUnauthorized }: { onUnauthorized: () => void }) {
       <ul>{answer.audit.map((event, index) => <li key={`${event.at}-${index}`}>{event.at} · {event.actor} · {event.action} · {event.reason}</li>)}</ul>
       <section aria-label="캐시 답변 동작">
         <label>상세 변경 사유 <input value={reason} maxLength={2000} onChange={e => setReason(e.target.value)} /></label>
+        {detailReasonHint && <span id={detailReasonHint} className="cache-reason-hint">{reasonHint}</span>}
         <h4>연결 질문</h4>
         <ul>{answer.questions.map(query => <li key={query.query_id}>{query.question} {query.status === 'revoked' ? '· 철회됨' :
-          <>
-            <button type="button" disabled={blocked}
-              onClick={() => void change('revoke_query', query.query_id, answer.generation)}>질문 철회</button>
-            {needsReason && !mutation.busy && <span className="cache-reason-hint">{reasonHint}</span>}
-          </>
+          <button type="button" disabled={blocked} aria-describedby={detailReasonHint}
+            onClick={() => void change('revoke_query', query.query_id, answer.generation)}>질문 철회</button>
         }</li>)}</ul>
         <div className="cache-actions">
           {(answer.status === 'pending' || answer.status === 'draft') && <button type="button"
@@ -176,9 +184,8 @@ export function CachePanel({ onUnauthorized }: { onUnauthorized: () => void }) {
             <span>{answer.status === 'pending' ? '재승인 즉시 사용자에게 반환됩니다.' : '승인하면 바로 사용자에게 반환됩니다'}</span>}
         </div>
         {answer.status !== 'revoked' && <div className="cache-actions">
-          <button type="button" disabled={blocked}
+          <button type="button" disabled={blocked} aria-describedby={detailReasonHint}
             onClick={() => void change('revoke_answer', answer.answer_id, answer.generation)}>답변 철회</button>
-          {needsReason && !mutation.busy && <span>{reasonHint}</span>}
         </div>}
         {answer.disabled_reason && <p>{answer.disabled_reason}</p>}
         <p>답변 정정은 CLI replace로 진행하세요.</p>

@@ -47,6 +47,35 @@ class ApprovalError(StoreError):
         self.answer_id = answer_id
 
 
+def generation_error(control, generation):
+    if generation != control.generation:
+        return StoreError('stale_generation', '캐시가 변경되었습니다. 새로고침 후 다시 확인하세요.', 409)
+    return None
+
+
+def save_success(conn, mutation):
+    response = {'generation': read_control(conn).generation}
+    mutation.save(conn, 200, response, now())
+    return 200, response
+
+
+def reject_approval(conn, mutation, error, record_rejections):
+    if not record_rejections:
+        raise error
+    if not isinstance(error, ApprovalError):
+        return mutation.reject(conn, error, now())
+    response = {'code': error.code, 'detail': error.detail, 'answer_id': error.answer_id}
+    mutation.save(conn, error.status, response, now())
+    return error.status, response
+
+
+@dataclass(frozen=True)
+class PreparedApprovals:
+    token: tuple[str, int]
+    protection_hash: str
+    answers: dict[str, tuple[Draft, list[str]]]
+
+
 @dataclass(frozen=True)
 class ReviewCatalog:
     path: Path
@@ -193,85 +222,122 @@ class ReviewCatalog:
             audit=[dict(zip(('action', 'actor', 'reason', 'at'), item, strict=True)) for item in history],
         )
 
-    def mutate(self, mutation, generation, action, target, reason, items):
+    def mutate(self, mutation, generation, action, target, reason):
         with translate_sqlite_errors(), connect(self.path, write=True) as conn, transaction(conn):
             receipt = mutation.receipt(conn)
             if receipt is not None:
                 return receipt
             control = read_control(conn)
-            batch = action == 'approve_batch'
-            if batch:
-                conn.execute('SAVEPOINT cache_approvals')
-            try:
-                self.apply_action(conn, control, generation, action, target, f'admin:{mutation.actor}', reason, items)
-            except StoreError as exc:
-                if not batch:
-                    raise
-                conn.execute('ROLLBACK TO cache_approvals')
-                status, response = exc.status, {'code': exc.code, 'detail': exc.detail}
-                if isinstance(exc, ApprovalError):
-                    response['answer_id'] = exc.answer_id
+            if error := generation_error(control, generation):
+                raise error
+            actor = f'admin:{mutation.actor}'
+            if action == 'mode':
+                self.change_mode(conn, control, target, actor, reason)
             else:
-                status, response = 200, {'generation': read_control(conn).generation}
-            if batch:
-                conn.execute('RELEASE cache_approvals')
-            mutation.save(conn, status, response, now())
-            return status, response
+                kind = action.removeprefix('revoke_')
+                table = 'cache_answers' if kind == 'answer' else 'cache_queries'
+                found = conn.execute(
+                    f'SELECT 1 FROM {table} WHERE {kind}_id=? AND namespace_id=?',
+                    (target, control.namespace_id or self.snapshot.namespace.id),
+                ).fetchone()
+                if found is None:
+                    raise StoreError('not_found', '철회 대상을 찾을 수 없습니다.', 404)
+                revoke_in(conn, kind, target, actor, reason)
+            return save_success(conn, mutation)
 
-    def apply_action(self, conn, control, generation, action, target, actor, reason, items):
-        if generation != control.generation:
-            raise StoreError('stale_generation', '캐시가 변경되었습니다. 새로고침 후 다시 확인하세요.', 409)
-        if action == 'mode' and target == 'off':
-            set_mode_in(conn, control, target, actor, reason, None)
-            return
-        if action in ('revoke_answer', 'revoke_query'):
-            kind = action.removeprefix('revoke_')
-            table = 'cache_answers' if kind == 'answer' else 'cache_queries'
-            found = conn.execute(
-                f'SELECT 1 FROM {table} WHERE {kind}_id=? AND namespace_id=?',
-                (target, control.namespace_id or self.snapshot.namespace.id),
-            ).fetchone()
-            if found is None:
-                raise StoreError('not_found', '철회 대상을 찾을 수 없습니다.', 404)
-            revoke_in(conn, kind, target, actor, reason)
-            return
+    def review_inputs(self, control):
         token = corpus_store.active_token(self.corpus_db, PROFILE)
         if disabled := self.disabled(control, token):
             raise StoreError('cache_unavailable', disabled, 409)
         protection, originals = verified_inputs(self.corpus_db, self.bundle)
         if protection is None or token is None:
             raise StoreError('cache_unavailable', '캐시 승인 범위를 확인할 수 없습니다.', 409)
-        if action == 'mode':
-            if protection.fingerprint != control.protection_hash:
-                raise StoreError('protection_changed', PROTECTION_CHANGED, 409)
-            try:
-                set_mode_in(conn, control, target, actor, reason, control.approval_id)
-            except ValueError as exc:
-                raise StoreError('invalid_mode', str(exc), 409) from exc
-        else:
-            if control.protection_hash not in (None, protection.fingerprint):
-                raise StoreError('protection_changed', PROTECTION_CHANGED, 409)
-            self.approve(conn, control, token, protection, originals, items, actor, reason)
-        if corpus_store.active_token(self.corpus_db, PROFILE) != token:
-            raise StoreError('stale_release', '활성 릴리스가 변경되었습니다.', 409)
+        return token, protection, originals
 
-    def approve(self, conn, control, token, protection, originals, items, actor, reason):
-        namespace = self.snapshot.namespace.id
+    def release_error(self, token):
+        if corpus_store.active_token(self.corpus_db, PROFILE) != token:
+            return StoreError('stale_release', '활성 릴리스가 변경되었습니다.', 409)
+        return None
+
+    def change_mode(self, conn, control, target, actor, reason):
+        if target == 'off':
+            set_mode_in(conn, control, target, actor, reason, None)
+            return
+        token, protection, _ = self.review_inputs(control)
+        if protection.fingerprint != control.protection_hash:
+            raise StoreError('protection_changed', PROTECTION_CHANGED, 409)
+        try:
+            set_mode_in(conn, control, target, actor, reason, control.approval_id)
+        except ValueError as exc:
+            raise StoreError('invalid_mode', str(exc), 409) from exc
+        if error := self.release_error(token):
+            raise error
+
+    def approve(self, mutation, generation, items, reason, *, record_rejections=False):
+        with translate_sqlite_errors():
+            with connect(self.path) as conn:
+                conn.execute('BEGIN')
+                receipt = mutation.receipt(conn)
+                if receipt is not None:
+                    return receipt
+                control = read_control(conn)
+                if stale := generation_error(control, generation):
+                    prepared = stale
+                else:
+                    try:
+                        prepared = self.prepare_approvals(conn, control, items)
+                    except StoreError as exc:
+                        prepared = exc
+            with connect(self.path, write=True) as conn, transaction(conn):
+                receipt = mutation.receipt(conn)
+                if receipt is not None:
+                    return receipt
+                control = read_control(conn)
+                if error := generation_error(control, generation):
+                    return reject_approval(conn, mutation, error, record_rejections)
+                if isinstance(prepared, StoreError):
+                    return reject_approval(conn, mutation, prepared, record_rejections)
+
+                # Keep the rejection receipt even if a release change rolls back the writes.
+                if record_rejections:
+                    conn.execute('SAVEPOINT cache_approvals')
+                try:
+                    self.write_approvals(conn, control, prepared, f'admin:{mutation.actor}', reason)
+                except ApprovalError as exc:
+                    error = exc
+                else:
+                    error = self.release_error(prepared.token)
+                if record_rejections:
+                    if error:
+                        conn.execute('ROLLBACK TO cache_approvals')
+                    conn.execute('RELEASE cache_approvals')
+                if error:
+                    return reject_approval(conn, mutation, error, record_rejections)
+                return save_success(conn, mutation)
+
+    def prepare_approvals(self, conn, control, items):
+        token, protection, originals = self.review_inputs(control)
+        if control.protection_hash not in (None, protection.fingerprint):
+            raise StoreError('protection_changed', PROTECTION_CHANGED, 409)
         current = article_rows(corpus_store.release_by_id(self.corpus_db, PROFILE, token[0]))
-        prepared = {}
+        answers = {}
         for target, preview_hash in items:
             try:
-                if target in prepared:
+                if target in answers:
                     raise StoreError('duplicate_answer', '같은 답변을 두 번 선택할 수 없습니다.', 422)
-                prepared[target] = self.prepare_approval(
+                answers[target] = self.prepare_approval(
                     conn, control, protection, originals, current, target, preview_hash
                 )
             except StoreError as exc:
                 raise ApprovalError(target, exc) from exc
+        return PreparedApprovals(token, protection.fingerprint, answers)
 
+    def write_approvals(self, conn, control, prepared, actor, reason):
+        namespace = self.snapshot.namespace.id
+        token = prepared.token
         approved = []
         at = now()
-        for target, (draft, query_ids) in prepared.items():
+        for target, (draft, query_ids) in prepared.answers.items():
             answer_id = insert_answer(conn, namespace, draft)
             changed = conn.execute(
                 "UPDATE cache_answers SET status='approved',reviewed_by=?,reviewed_at=?,valid_from=coalesce(valid_from,?) "
@@ -294,13 +360,11 @@ class ReviewCatalog:
                     (answer_id, token[1], target),
                 )
             approved.append((answer_id, query_ids))
-        # Preserve the existing digest input when approving a single answer.
-        members = list(approved[0]) if len(approved) == 1 else [approved]
-        approval = digest(canonical([control.approval_id, token, control.generation, *members]))
+        approval = digest(canonical([control.approval_id, token, control.generation, approved]))
         conn.execute(
             'UPDATE cache_control SET namespace_id=?,activation_event=?,protection_hash=?,approval_id=?, '
             'generation=generation+1 WHERE singleton=1',
-            (namespace, token[1], protection.fingerprint, approval),
+            (namespace, token[1], prepared.protection_hash, approval),
         )
         for answer_id, query_ids in approved:
             audit(conn, 'approve', answer_id, actor, reason, {'approval_id': approval, 'query_ids': query_ids})

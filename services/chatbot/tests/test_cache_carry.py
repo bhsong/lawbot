@@ -10,8 +10,8 @@ from lawbot import auth, cache_admin, cache_release_store, cache_review_store, c
 from lawbot.cache_carry import classify, corpus_changes
 from lawbot.cache_release_store import apply_release
 from lawbot.cache_seed import Bundle, Protection, load_protection
-from lawbot.cache_store import Draft, Store, init
-from lawbot.db.connection import connect
+from lawbot.cache_store import Draft, Store, init, revoke_in
+from lawbot.db.connection import connect, transaction
 from lawbot.db.migrate import init as init_corpus
 from lawbot.exact_cache import DISPLAY_VERSION, Snapshot, digest
 from test_exact_cache import ID, QUESTION, RAW
@@ -517,6 +517,36 @@ def test_cache_api_batch_rolls_back_and_reports_failed_answer(review_api, monkey
     assert store.control() == control
     assert all(store.lookup(namespace, draft.question)[1] is None for draft in drafts)
     with connect(store.path) as conn:
+        assert conn.execute(
+            'SELECT count(*) FROM cache_audit_events WHERE actor=?', (f'admin:{ADMIN_USER}',)
+        ).fetchone() == (0,)
+
+
+def test_cache_api_batch_rendering_allows_revocation_and_rechecks_generation(review_api, monkeypatch):
+    app, store, _, state = review_api
+    drafts, _ = stage_review_drafts(review_api, monkeypatch, 2)
+    namespace = state.exact_cache.snapshot.namespace.id
+    control = store.control()
+    with TestClient(app) as client:
+        assert client.post('/api/login', json={'user': ADMIN_USER, 'password': ADMIN_PW}).status_code == 200
+        body = batch_payload(client, drafts, namespace, control.generation)
+        preview = cache_review_store.preview
+        revoked = drafts[1].answer_id(namespace)
+
+        def preview_with_revocation(*args):
+            if store.control().generation == control.generation:
+                with connect(store.path, write=True, timeout=0) as conn, transaction(conn):
+                    revoke_in(conn, 'answer', revoked, 'test', 'concurrent withdrawal')
+            return preview(*args)
+
+        monkeypatch.setattr(cache_review_store, 'preview', preview_with_revocation)
+        response = client.post(BATCH_PATH, json=body, headers=ORIGIN)
+        assert (response.status_code, response.json()['code']) == (409, 'stale_generation')
+        assert client.post(BATCH_PATH, json=body, headers=ORIGIN).json() == response.json()
+    assert store.control().generation == control.generation + 1
+    assert store.control().approval_id == control.approval_id
+    with connect(store.path) as conn:
+        assert conn.execute('SELECT status FROM cache_answers WHERE answer_id=?', (revoked,)).fetchone() == ('revoked',)
         assert conn.execute(
             'SELECT count(*) FROM cache_audit_events WHERE actor=?', (f'admin:{ADMIN_USER}',)
         ).fetchone() == (0,)

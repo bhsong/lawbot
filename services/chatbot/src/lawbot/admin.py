@@ -247,28 +247,30 @@ def router(db, app, *, protected=None, calendar_url=None):
         reason = (parsed.reason or '').strip()
         if not reason and parsed.action != 'approve':
             raise AdminError(400, '변경 사유를 입력하세요.', 'reason_required')
-        status, payload = await _cache_call(
-            cache_catalog().mutate,
-            mutation,
-            parsed.generation,
-            parsed.action,
-            parsed.target,
-            reason or DEFAULT_APPROVAL_REASON,
-            [(parsed.target, parsed.preview_sha256)] if parsed.action == 'approve' else [],
-        )
+        catalog = cache_catalog()
+        if parsed.action == 'approve':
+            status, payload = await _cache_call(
+                catalog.approve,
+                mutation,
+                parsed.generation,
+                [(parsed.target, parsed.preview_sha256)],
+                reason or DEFAULT_APPROVAL_REASON,
+            )
+        else:
+            status, payload = await _cache_call(
+                catalog.mutate, mutation, parsed.generation, parsed.action, parsed.target, reason
+            )
         return JSONResponse(payload, status_code=status)
 
     @api.post('/cache/approvals', dependencies=post_guards)
     async def cache_approvals(body: PostBody, who: AdminWho):
         mutation, parsed = _mutation(CacheApprovals, body, who, '/cache/approvals')
         status, payload = await _cache_call(
-            cache_catalog().mutate,
+            partial(cache_catalog().approve, record_rejections=True),
             mutation,
             parsed.generation,
-            'approve_batch',
-            None,
-            (parsed.reason or '').strip() or DEFAULT_APPROVAL_REASON,
             [(item.answer_id, item.preview_sha256) for item in parsed.items],
+            (parsed.reason or '').strip() or DEFAULT_APPROVAL_REASON,
         )
         return JSONResponse(payload, status_code=status)
 
