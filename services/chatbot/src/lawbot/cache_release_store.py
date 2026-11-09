@@ -211,8 +211,8 @@ def apply_release(path, db, token, release, snapshot, bundle_file):
             raise ValueError('판정 중 활성 코퍼스가 변경되었습니다.')
         approval_id = digest(canonical([control.approval_id, namespace, token, control.generation]))
         conn.execute(
-            'UPDATE cache_control SET namespace_id=?,activation_event=?,approval_id=?,protection_hash=?, '
+            'UPDATE cache_control SET namespace_id=?,activation_event=?,approval_id=?, '
             'generation=generation+1 WHERE singleton=1',
-            (namespace, token[1], approval_id, protection.fingerprint if protection is not None else 'unverified'),
+            (namespace, token[1], approval_id),
         )
     return counts

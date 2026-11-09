@@ -3,7 +3,7 @@ import json
 import numpy as np
 import pytest
 
-from lawbot import check_deploy, deploy, embed_cache, feedback, manifest, service, view
+from lawbot import check_deploy, deploy, embed_cache, feedback, manifest, service, settings, view
 from lawbot.admin import Corpus
 from lawbot.cache_store import init as init_cache
 from lawbot.db import cli
@@ -209,6 +209,34 @@ def test_check_deploy_reports_configured_exact_cache(corpus_db, env, tmp_path):
         level == 'OK' and '정확 일치 캐시:' in text and '스키마 2 · 모드 off · namespace ' in text
         for level, text in checks
     )
+
+
+@pytest.mark.parametrize('bundle_state', ['unset', 'missing', 'present'])
+def test_check_deploy_warns_when_carry_bundle_is_missing(corpus_db, env, tmp_path, bundle_state):
+    configure(env, corpus_db)
+    cache = tmp_path / 'private' / 'cache.db'
+    init_cache(cache)
+    env.setenv('LAWBOT_EXACT_CACHE_DB', str(cache))
+    bundle = tmp_path / 'p07.zip'
+    if bundle_state == 'present':
+        bundle.touch()
+    if bundle_state != 'unset':
+        env.setenv('LAWBOT_EXACT_CACHE_BUNDLE', str(bundle))
+    warning = ('WARN', '정확 일치 캐시: 자동 유지 안 됨 (LAWBOT_EXACT_CACHE_BUNDLE 필요)')
+    assert (warning in check_deploy.run()) == (bundle_state != 'present')
+
+
+def test_startup_warns_when_carry_bundle_is_missing(corpus_db, env, tmp_path, model_server, caplog):
+    from conftest import set_auth
+
+    configure(env, corpus_db)
+    set_auth(env)
+    cache = tmp_path / 'private' / 'cache.db'
+    init_cache(cache)
+    env.setenv('LAWBOT_EXACT_CACHE_DB', str(cache))
+    env.setenv('LAWBOT_EXACT_CACHE_BUNDLE', str(tmp_path / 'absent-p07.zip'))
+    assert service.load_app(settings.load(web=True)).corpus_release_id == RELEASE
+    assert '정확 일치 캐시: 자동 유지 안 됨 (LAWBOT_EXACT_CACHE_BUNDLE 필요)' in caplog.messages
 
 
 def test_check_deploy_checks_db_bytes(corpus_db, env, tmp_path):

@@ -51,6 +51,12 @@ def bundle_path(env):
     return (ROOT / Path(value).expanduser()).resolve() if value else None
 
 
+def bundle_warning(path: Path | None) -> str | None:
+    if path is None or not path.is_file():
+        return '자동 유지 안 됨 (LAWBOT_EXACT_CACHE_BUNDLE 필요)'
+    return None
+
+
 def verified_inputs(db, bundle_file):
     if bundle_file is None:
         return None, {}

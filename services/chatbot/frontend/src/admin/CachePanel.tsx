@@ -19,7 +19,7 @@ type Item = { answer_id: string; answer_key: string; status: Verdict; reason: st
 type Index = { mode: Mode; generation: number; namespace: string; active_release: string | null; approval_id: string | null; disabled_reason: string | null; items: Item[] }
 type Article = { law: string; article_no: string; title: string; kind: string; text: string; deleted: string }
 type Detail = {
-  answer_id: string; answer_key: string; status: Verdict; generation: number; text: string; preview: string | null
+  answer_id: string; answer_key: string; status: Verdict; generation: number; mode: Mode; text: string; preview: string | null
   raw_answer: string | null
   preview_sha256: string | null; disabled_reason: string | null; cards: SourceItem[]
   questions: { query_id: string; question: string; status: string }[]
@@ -111,6 +111,8 @@ export function CachePanel({ onUnauthorized }: { onUnauthorized: () => void }) {
         {answer.status !== 'revoked' && <button type="button" disabled={blocked}
           onClick={() => void change('revoke_answer', answer.answer_id, answer.generation)}>답변 철회</button>}
       </div>
+      {answer.status === 'pending' && answer.mode === 'on' && !answer.disabled_reason &&
+        <p>재승인 즉시 사용자에게 반환됩니다.</p>}
       {answer.disabled_reason && <p>{answer.disabled_reason}</p>}
       <p>답변 정정은 CLI replace로 진행하세요.</p>
       <h4>바뀐 조문</h4>

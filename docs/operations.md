@@ -481,6 +481,10 @@ uv run python -m lawbot.cache_admin set-mode on --db "$cache_db" --bundle "$cach
 
 관리자 화면에서 **캐시** 탭을 열고 검토 대기 답변을 선택합니다. 연결 질문, 현재 표시본과 근거, 변경 조문의 이전·이후 본문을 확인합니다. 사유를 입력하고 **표시본 확인 및 재승인**을 누릅니다. 보호 분할과 화면을 다시 확인하므로 검토 중 상태가 바뀌면 새로고침이 필요합니다. 철회와 `off`는 번들 없이도 가능하고, `on`은 `shadow`를 거칩니다. CLI의 추가 보호 CSV를 별도로 쓰는 환경에서는 해당 보호 범위를 포함해 CLI로 승인합니다. 이전 정정 리비전의 원문을 확인할 수 없으면 재승인을 보류합니다.
 
+캐시 DB 설정에 P07 번들이 빠졌거나 파일이 없으면 시작 로그와 배포 점검에서 자동 유지 경고를 표시합니다. 릴리스 판정은 마지막 승인 보호 지문을 유지합니다. 관리자 화면에서 같은 보호 범위를 확인할 수 없으면 `off`에서 CLI로 재승인합니다. 추가 보호 CSV를 사용했다면 이때도 `--protected-csv`로 포함합니다.
+
+한 번도 승인되지 않은 초안은 이전 namespace에 보존됩니다. 새 릴리스의 캐시 탭에서 검토하려면 현재 릴리스로 `cache_admin seed`를 다시 실행합니다. 신규 초안은 `off`에서 승인하고 `shadow`를 거쳐 활성화합니다. `on`에서 검토 대기 답변을 재승인하면 이전에 승인된 연결 질문에 즉시 반환됩니다. 이미 승인된 답변에 새 질문을 추가할 때는 `off`에서 CLI 승인 묶음에 포함한 뒤 `shadow`에서 확인합니다.
+
 기존 캐시에서 처음 전환할 때는 전용 DB를 백업하고 `uv run python -m lawbot.cache_admin migrate --db "$cache_db"`로 스키마를 적용합니다. 캐시를 `off`로 둔 상태에서 `uv run python -m lawbot.cache_carry`로 현재 릴리스를 판정합니다. 이전 파일 지문과 새 `DISPLAY_VERSION` 기반 지문이 달라 첫 판정은 검토 대기로 시작합니다. 관리자 화면이나 CLI에서 검토 후 `shadow`, `on`으로 전환합니다. `answer_format.py`·`citation.py`의 표시 동작을 바꿀 때는 `DISPLAY_VERSION`과 렌더 스냅샷을 갱신합니다.
 
 문제가 발생하면 `set-mode off --db "$cache_db" --reason "$reason"`로 먼저 우회하고, 개별 답변은 `revoke answer "$answer_id" --db "$cache_db" --reason "$reason"`로 철회합니다. 두 명령은 `uv run python -m lawbot.cache_admin`으로 실행합니다. 동일 namespace의 정정은 `off`에서 승인된 질문 하나씩 `replace`로 처리하고 새 승인 ID를 사용합니다. DB 복구가 필요하면 `cache_admin backup`의 온라인 백업을 별도 경로에 준비해 무결성과 마지막 철회·감사 이력을 대조합니다. 복구 DB도 `off`에서 시작합니다. [정정 검토 파일과 세부 절차](archives/exact-cache-p07.md#10-구현-명령과-개발-기록)

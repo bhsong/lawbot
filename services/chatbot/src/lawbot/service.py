@@ -271,8 +271,12 @@ def load_app(settings=None):
     full = p.system_file.read_text(encoding='utf-8').strip()
     exact_cache = None
     if cfg.exact_cache_db is not None:
+        from lawbot.cache_carry import bundle_warning
+
         exact_cache, (level, message) = inspect_exact_cache(cfg.exact_cache_db, cfg.db, p, release, dc)
         (log.warning if level == 'WARN' else log.info)('정확 일치 캐시: %s', message)
+        if warning := bundle_warning(cfg.exact_cache_bundle):
+            log.warning('정확 일치 캐시: %s', warning)
     return LawbotApp(
         p,
         retriever,

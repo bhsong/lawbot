@@ -21,6 +21,9 @@ from lawbot.db.connection import connect, transaction
 from lawbot.exact_cache import PROFILE, Snapshot, canonical, digest
 from lawbot.feedback_store import StoreError
 
+DRAFT_REQUIRES_OFF = '신규 초안은 off에서 승인한 후 shadow를 거치세요.'
+PROTECTION_CHANGED = '기존 승인과 보호 분할이 다릅니다. 추가 보호 CSV를 사용했다면 포함하여 CLI에서 다시 승인하세요.'
+
 
 def disposition(status, verdict):
     if status == 'revoked':
@@ -28,6 +31,15 @@ def disposition(status, verdict):
     if status == 'approved':
         return 'keep' if verdict == 'keep' else 'approved'
     return verdict if verdict in ('pending', 'off') else 'draft'
+
+
+def reviewable_query(query, protection, mode):
+    """Restrict reapproval outside off to previously reviewed question links."""
+    return (
+        query[7] != 'revoked'
+        and (mode == 'off' or query[9] is not None)
+        and allowed_question(protection, query[1], query[2])
+    )
 
 
 @dataclass(frozen=True)
@@ -124,13 +136,18 @@ class ReviewCatalog:
         disabled = self.disabled(control, token)
         shown = None
         raw = raw_for(raw_hash, stored, {})
-        if disabled is None and disposition(status, verdict) in ('pending', 'draft'):
+        state = disposition(status, verdict)
+        if disabled is None and state == 'draft' and control.mode != 'off':
+            disabled = DRAFT_REQUIRES_OFF
+        if disabled is None and state in ('pending', 'draft'):
             try:
                 protection, originals = verified_inputs(self.corpus_db, self.bundle)
-                if protection is None or not any(
-                    q[7] != 'revoked' and allowed_question(protection, q[1], q[2]) for q in queries
-                ):
-                    disabled = '보호 분할 검사를 통과한 질문이 없습니다.'
+                if protection is None:
+                    disabled = 'P07 번들 또는 보호 분할을 확인할 수 없습니다.'
+                elif control.protection_hash not in (None, protection.fingerprint):
+                    disabled = PROTECTION_CHANGED
+                elif not any(reviewable_query(q, protection, control.mode) for q in queries):
+                    disabled = '현재 모드에서 승인할 수 있는 질문이 없습니다.'
                 else:
                     raw = raw_for(raw_hash, stored, originals)
                     shown, new_citations = preview(self.snapshot, raw, citations)
@@ -155,13 +172,14 @@ class ReviewCatalog:
         return dict(
             answer_id=answer_id,
             answer_key=key,
-            status=disposition(status, verdict),
+            status=state,
             reason=reason,
             generation=control.generation,
+            mode=control.mode,
             text=text,
             raw_answer=raw,
             preview=shown,
-            preview_sha256=digest(shown) if shown else None,
+            preview_sha256=digest(shown) if shown and disabled is None else None,
             disabled_reason=disabled,
             questions=[dict(query_id=q[0], question=q[2], status=q[7]) for q in queries],
             cards=[
@@ -202,7 +220,7 @@ class ReviewCatalog:
                     raise StoreError('cache_unavailable', '캐시 승인 범위를 확인할 수 없습니다.', 409)
                 if action == 'mode':
                     if protection.fingerprint != control.protection_hash:
-                        raise StoreError('protection_changed', '보호 분할이 변경되었습니다. 다시 검토하세요.', 409)
+                        raise StoreError('protection_changed', PROTECTION_CHANGED, 409)
                     try:
                         set_mode_in(conn, control, target, actor, reason, control.approval_id)
                     except ValueError as exc:
@@ -217,19 +235,15 @@ class ReviewCatalog:
 
     def approve(self, conn, control, token, protection, originals, target, preview_hash, actor, reason):
         key, raw_hash, _, source, status, stored, verdict, *_ = self.answer(conn, control, target)
-        if disposition(status, verdict) not in ('draft', 'pending'):
+        state = disposition(status, verdict)
+        if state not in ('draft', 'pending'):
             raise StoreError('invalid_state', '검토 대기 또는 초안 답변만 승인할 수 있습니다.', 409)
+        if state == 'draft' and control.mode != 'off':
+            raise StoreError('draft_requires_off', DRAFT_REQUIRES_OFF, 409)
         namespace = self.snapshot.namespace.id
-        if (
-            control.protection_hash not in (None, 'unverified', protection.fingerprint)
-            and conn.execute(
-                'SELECT 1 FROM cache_queries WHERE namespace_id=? AND exact_enabled=1 LIMIT 1', (namespace,)
-            ).fetchone()
-        ):
-            raise StoreError('protection_changed', '기존 승인과 보호 분할이 다릅니다. 캐시를 다시 판정하세요.', 409)
-        eligible = [
-            q for q in query_rows(conn, target) if q[7] != 'revoked' and allowed_question(protection, q[1], q[2])
-        ]
+        if control.protection_hash not in (None, protection.fingerprint):
+            raise StoreError('protection_changed', PROTECTION_CHANGED, 409)
+        eligible = [q for q in query_rows(conn, target) if reviewable_query(q, protection, control.mode)]
         raw = raw_for(raw_hash, stored, originals)
         shown, citations = preview(self.snapshot, raw, citations_for(conn, target))
         if not eligible or shown is None or digest(shown) != preview_hash:

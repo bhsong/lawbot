@@ -6,10 +6,10 @@ from fastapi.testclient import TestClient
 
 from admin_test_data import seed_qa
 from conftest import ADMIN_PW, ADMIN_USER
-from lawbot import auth, cache_release_store, cache_review_store, cache_runtime, corpus_store, web
+from lawbot import auth, cache_admin, cache_release_store, cache_review_store, cache_runtime, corpus_store, web
 from lawbot.cache_carry import classify, corpus_changes
 from lawbot.cache_release_store import apply_release
-from lawbot.cache_seed import Protection
+from lawbot.cache_seed import Bundle, Protection, load_protection
 from lawbot.cache_store import Draft, Store, init
 from lawbot.db.connection import connect
 from lawbot.db.migrate import init as init_corpus
@@ -185,8 +185,8 @@ def test_renderer_snapshot_is_tied_to_display_version():
 
 
 @pytest.fixture
-def review_api(prepared, tmp_path, monkeypatch, admin_hash):
-    store, old, _, draft = prepared
+def review_api(prepared, tmp_path, monkeypatch, admin_hash, request):
+    store, old, previous, draft = prepared
     target = release('after', other='바뀐 다른 조문')
     snapshot = Snapshot.load(target, system='synthetic', combined=True, attach_decrees=True)
     db = tmp_path / 'corpus.db'
@@ -196,6 +196,40 @@ def review_api(prepared, tmp_path, monkeypatch, admin_hash):
     monkeypatch.setattr(corpus_store, 'active_token', lambda *a, **kw: token)
     monkeypatch.setattr(corpus_store, 'release_by_id', lambda *args: old if args[2] == 'before' else target)
     protection = Protection(frozenset(), {'fixture': digest(QUESTION)}, 'protected')
+    if getattr(request, 'param', None) == 'extra_csv':
+        extra = tmp_path / 'extra.csv'
+        extra.write_text('question\n추가 보호 합성 문항\n', encoding='utf-8')
+        bundle_fixture = Bundle([], frozenset())
+        prior = load_protection(db, bundle_fixture, [extra])
+        base = load_protection(db, bundle_fixture, [])
+        assert prior.fingerprint != base.fingerprint and prior.blocked > base.blocked
+        namespace = previous.namespace.id
+        store.set_mode('off', 'test', 'review additional protection')
+        approval = store.approve(
+            namespace,
+            1,
+            prior.fingerprint,
+            {draft.query_id(namespace): draft.answer_id(namespace)},
+            actor='test',
+            reason='review',
+        )
+        store.set_mode('shadow', 'test', 'check', approval)
+        store.set_mode('on', 'test', 'enable', approval)
+        protection = replace(base, v4_train={'fixture': digest(QUESTION)})
+        monkeypatch.setattr(cache_release_store, 'verified_inputs', lambda *a: (protection, {}))
+        monkeypatch.setattr(
+            cache_admin,
+            'context',
+            lambda args: (
+                snapshot,
+                None,
+                dict(
+                    namespace_id=snapshot.namespace.id,
+                    activation_event=token[1],
+                    protection_hash=load_protection(db, bundle_fixture, args.protected_csv).fingerprint,
+                ),
+            ),
+        )
     monkeypatch.setattr(cache_review_store, 'verified_inputs', lambda *a: (protection, {}))
     bundle = tmp_path / 'bundle.zip'
     bundle.write_bytes(b'synthetic bundle fixture')
@@ -265,3 +299,122 @@ def test_cache_api_missing_bundle_allows_off_and_withdrawal(review_api):
             == 200
         )
         assert client.get(f'/api/admin/cache/answers/{answer_id}').json()['status'] == 'revoked'
+
+
+@pytest.mark.parametrize('review_api', ['extra_csv'], indirect=True)
+def test_release_preserves_extra_csv_protection_and_requires_cli(review_api, tmp_path):
+    app, store, answer_id, _ = review_api
+    control = store.control()
+    origin = {'Origin': 'http://testserver'}
+    with TestClient(app) as client:
+        assert client.post('/api/login', json={'user': ADMIN_USER, 'password': ADMIN_PW}).status_code == 200
+        detail = client.get(f'/api/admin/cache/answers/{answer_id}').json()
+        result = client.post(
+            '/api/admin/cache/actions',
+            headers=origin,
+            json=dict(
+                action='approve',
+                target=answer_id,
+                generation=detail['generation'],
+                reason='검토',
+                preview_sha256=digest(detail['text']),
+                idempotency_key='additional-protection',
+            ),
+        )
+        assert result.status_code == 409 and result.json()['code'] == 'protection_changed'
+        assert detail['preview_sha256'] is None and 'CLI' in detail['disabled_reason']
+        assert store.control() == control
+    args = cache_admin.parser().parse_args(
+        [
+            'set-mode',
+            'shadow',
+            '--db',
+            str(store.path),
+            '--bundle',
+            str(tmp_path / 'bundle.zip'),
+            '--protected-csv',
+            str(tmp_path / 'extra.csv'),
+            '--approval',
+            control.approval_id,
+            '--reason',
+            'verified original scope',
+        ]
+    )
+    assert cache_admin.run(args) == {'mode': 'shadow'}
+
+
+@pytest.mark.parametrize('mode', ['on', 'shadow'])
+def test_new_draft_must_be_approved_in_off_before_shadow(review_api, monkeypatch, mode):
+    app, store, _, state = review_api
+    snapshot = state.exact_cache.snapshot
+    article = snapshot.articles[ID]
+    citations = [(ID, article.text_hash)]
+    shown = snapshot.render(RAW, citations)
+    question = '새 합성 초안 질문인가요?'
+    draft = Draft('new', question, 'new-draft', digest(RAW), shown, citations, {}, RAW)
+    store.stage(snapshot.namespace, [draft], 'test', 'draft')
+    if mode == 'shadow':
+        store.set_mode('shadow', 'test', 'check', store.control().approval_id)
+    protection = Protection(frozenset(), {'new': digest(question)}, store.control().protection_hash)
+    monkeypatch.setattr(cache_review_store, 'verified_inputs', lambda *a: (protection, {}))
+    origin = {'Origin': 'http://testserver'}
+    answer_id = draft.answer_id(snapshot.namespace.id)
+    path = '/api/admin/cache/actions'
+    with TestClient(app) as client:
+        assert client.post('/api/login', json={'user': ADMIN_USER, 'password': ADMIN_PW}).status_code == 200
+        detail = client.get(f'/api/admin/cache/answers/{answer_id}').json()
+        action = dict(
+            action='approve',
+            target=answer_id,
+            generation=detail['generation'],
+            reason='표시본 확인',
+            preview_sha256=digest(shown),
+            idempotency_key='draft',
+        )
+        rejected = client.post(path, json=action, headers=origin)
+        assert rejected.status_code == 409 and rejected.json()['code'] == 'draft_requires_off'
+        assert detail['preview_sha256'] is None and 'shadow' in detail['disabled_reason']
+        off = client.post(path, json=action | dict(action='mode', target='off', idempotency_key='off'), headers=origin)
+        assert off.status_code == 200
+        approved = client.post(path, json=action | {'generation': off.json()['generation']}, headers=origin)
+        assert approved.status_code == 200 and store.control().mode == 'off'
+        turn_on = action | dict(
+            action='mode', target='on', generation=approved.json()['generation'], idempotency_key='on'
+        )
+        assert client.post(path, json=turn_on, headers=origin).status_code == 409
+        shadow = client.post(path, json=turn_on | dict(target='shadow', idempotency_key='shadow'), headers=origin)
+        assert shadow.status_code == 200
+        assert (
+            client.post(path, json=turn_on | {'generation': shadow.json()['generation']}, headers=origin).status_code
+            == 200
+        )
+
+
+def test_pending_reapproval_in_on_leaves_new_question_inactive(review_api, prepared, monkeypatch):
+    app, store, answer_id, state = review_api
+    *_, previous = prepared
+    snapshot = state.exact_cache.snapshot
+    question = '검토 대기 답변에 새로 연결한 합성 질문인가요?'
+    draft = replace(previous, source_id='new', question=question)
+    assert draft.answer_id(snapshot.namespace.id) == answer_id
+    store.stage(snapshot.namespace, [draft], 'test', 'draft')
+    protection = Protection(frozenset(), {'fixture': digest(QUESTION), 'new': digest(question)}, 'protected')
+    monkeypatch.setattr(cache_review_store, 'verified_inputs', lambda *a: (protection, {}))
+    with TestClient(app) as client:
+        assert client.post('/api/login', json={'user': ADMIN_USER, 'password': ADMIN_PW}).status_code == 200
+        detail = client.get(f'/api/admin/cache/answers/{answer_id}').json()
+        response = client.post(
+            '/api/admin/cache/actions',
+            headers={'Origin': 'http://testserver'},
+            json=dict(
+                action='approve',
+                target=answer_id,
+                generation=detail['generation'],
+                reason='검토',
+                preview_sha256=detail['preview_sha256'],
+                idempotency_key='pending',
+            ),
+        )
+    assert response.status_code == 200
+    assert store.lookup(snapshot.namespace.id, QUESTION)[2] == 'hit'
+    assert store.lookup(snapshot.namespace.id, question)[2] == 'inactive'

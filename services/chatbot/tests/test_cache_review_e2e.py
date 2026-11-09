@@ -135,6 +135,7 @@ def test_admin_reviews_carried_answer_and_controls_cache(review_stack, page, wid
     panel.get_by_text('근로기준법 제26조 비교', exact=True).click()
     expect(panel.get_by_role('heading', name='이전 본문')).to_be_visible()
     expect(panel.get_by_text('해고의 예고 변경 후', exact=False)).to_be_visible()
+    expect(panel.get_by_text('재승인 즉시 사용자에게 반환됩니다.', exact=True)).to_be_visible()
     assert page.evaluate('document.documentElement.scrollWidth <= document.documentElement.clientWidth')
     panel.get_by_label('변경 사유').fill('합성 재승인')
     panel.get_by_role('button', name='표시본 확인 및 재승인').click()
