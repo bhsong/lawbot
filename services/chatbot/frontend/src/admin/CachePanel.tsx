@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { SourcesView } from '../components/SourcesView'
 import { AnswerMarkdown } from '../components/TurnView'
 import type { SourceItem } from '../types'
@@ -29,7 +29,13 @@ type Detail = {
 type Action = 'approve' | 'revoke_answer' | 'revoke_query' | 'mode'
 type Reviewed = { generation: number; items: Record<string, { hash: string; key: string; checked: boolean }> }
 const BATCH_LIMIT = 50
+const STACKED_WORKSPACE = '(max-width: 850px)' // Matches the layout breakpoint in admin.css.
 const reasonHint = '변경 사유를 입력하세요'
+
+function focusInView(target: HTMLElement, block: ScrollLogicalPosition) {
+  target.focus({ preventScroll: true })
+  target.scrollIntoView({ block })
+}
 
 function VerdictLabel({ status }: { status: Verdict }) {
   return <span className="cache-badge" data-status={status}>{labels[status]}</span>
@@ -48,6 +54,10 @@ export function CachePanel({ onUnauthorized }: { onUnauthorized: () => void }) {
   const [reviewed, setReviewed] = useState<Reviewed | null>(null)
   const [reason, setReason] = useState('')
   const [notice, setNotice] = useState('')
+  const detailHeading = useRef<HTMLHeadingElement>(null)
+  const catalogHeading = useRef<HTMLHeadingElement>(null)
+  const selectedAnswerButton = useRef<HTMLButtonElement>(null)
+  const pendingDetailFocus = useRef<string | null>(null)
   const loadIndex = useCallback((signal: AbortSignal) => adminGet<Index>(`/cache?status=${filter}`, signal), [filter])
   const loadDetail = useCallback((signal: AbortSignal) => selected
     ? adminGet<Detail>(`/cache/answers/${encodeURIComponent(selected)}`, signal)
@@ -85,6 +95,27 @@ export function CachePanel({ onUnauthorized }: { onUnauthorized: () => void }) {
     })
   }, [answer, selected])
 
+  useEffect(() => {
+    if (!answer || answer.answer_id !== selected || pendingDetailFocus.current !== selected) return
+    pendingDetailFocus.current = null
+    if (detailHeading.current && window.matchMedia(STACKED_WORKSPACE).matches) {
+      focusInView(detailHeading.current, 'start')
+    }
+  }, [answer, selected])
+
+  function openAnswer(answerId: string) {
+    const stacked = window.matchMedia(STACKED_WORKSPACE).matches
+    const heading = answerId === selected ? detailHeading.current : null
+    pendingDetailFocus.current = stacked && !heading ? answerId : null
+    if (stacked && heading) focusInView(heading, 'start')
+    setSelected(answerId)
+  }
+
+  function returnToCatalog() {
+    const target = selectedAnswerButton.current ?? catalogHeading.current
+    if (target) focusInView(target, 'nearest')
+  }
+
   function toggle(answerId: string, checked: boolean) {
     setReviewed(previous => {
       const item = previous?.items[answerId]
@@ -117,7 +148,12 @@ export function CachePanel({ onUnauthorized }: { onUnauthorized: () => void }) {
         <p className="cache-muted">표시본과 연결 질문을 검토합니다.</p>
       </div>
       {info && <button className="cache-button" type="button" disabled={mutation.busy}
-        onClick={() => { index.retry(); detail.retry(); mutation.invalidate() }}>새로고침</button>}
+        onClick={() => {
+          pendingDetailFocus.current = null
+          index.retry()
+          detail.retry()
+          mutation.invalidate()
+        }}>새로고침</button>}
     </header>
     {index.error != null && <p className="cache-message" role="alert">{adminMessage(index.error)}</p>}
     {!info && index.error == null && <p className="cache-muted" role="status">캐시 목록을 불러오는 중입니다.</p>}
@@ -151,7 +187,7 @@ export function CachePanel({ onUnauthorized }: { onUnauthorized: () => void }) {
       {info && <section className="cache-surface cache-catalog" aria-labelledby="cache-catalog-heading">
         <header className="cache-catalog-header">
           <div className="cache-heading-row">
-            <h3 id="cache-catalog-heading">캐시 답변</h3>
+            <h3 id="cache-catalog-heading" ref={catalogHeading} tabIndex={-1}>캐시 답변</h3>
             <span className="cache-muted">{info.items.length}개</span>
           </div>
           <div className="cache-list-controls">
@@ -181,7 +217,8 @@ export function CachePanel({ onUnauthorized }: { onUnauthorized: () => void }) {
                 onChange={e => toggle(item.answer_id, e.target.checked)} />
             </label>
             <button className="cache-answer-select" type="button" aria-label={`${item.answer_key} · ${labels[item.status]}`}
-              aria-current={item.answer_id === selected ? 'true' : undefined} onClick={() => setSelected(item.answer_id)}>
+              ref={item.answer_id === selected ? selectedAnswerButton : undefined}
+              aria-current={item.answer_id === selected ? 'true' : undefined} onClick={() => openAnswer(item.answer_id)}>
               <span className="cache-answer-title"><strong>{item.answer_key}</strong><VerdictLabel status={item.status} /></span>
               <span className="cache-answer-meta">질문 {item.question_count}개 · {item.release_id ?? '판정 전'}</span>
               {item.reason && <span className="cache-answer-meta">{reasons[item.reason] ?? item.reason}</span>}
@@ -199,7 +236,7 @@ export function CachePanel({ onUnauthorized }: { onUnauthorized: () => void }) {
         <header className="cache-detail-header">
           <p className="cache-muted">답변 상세</p>
           <div className="cache-heading-row">
-            <h3 aria-label={`${answer.answer_key} · ${labels[answer.status]}`}>{answer.answer_key}</h3>
+            <h3 ref={detailHeading} tabIndex={-1} aria-label={`${answer.answer_key} · ${labels[answer.status]}`}>{answer.answer_key}</h3>
             <VerdictLabel status={answer.status} />
           </div>
         </header>
@@ -272,6 +309,9 @@ export function CachePanel({ onUnauthorized }: { onUnauthorized: () => void }) {
               <p>{event.reason}</p>
             </li>)}</ul>
         </section>
+        <footer className="cache-detail-section cache-detail-return">
+          <button className="cache-button" type="button" onClick={returnToCatalog}>목록으로</button>
+        </footer>
       </section>}
     </div>
   </section>

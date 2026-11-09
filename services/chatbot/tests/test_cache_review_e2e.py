@@ -179,10 +179,34 @@ def test_admin_batch_approves_drafts_and_activates_cache(review_stack, page, wid
     for key in ('합성 검토 답변', '합성 유지 답변'):
         checkbox = panel.get_by_role('checkbox', name=f'{key} 선택', exact=True)
         expect(checkbox).to_be_disabled()
-        panel.get_by_role('button', name=f'{key} · 초안', exact=True).click()
-        expect(detail.get_by_role('heading', name=f'{key} · 초안', exact=True)).to_be_visible()
+        row = panel.get_by_role('button', name=f'{key} · 초안', exact=True)
+        row.click()
+        heading = detail.get_by_role('heading', name=f'{key} · 초안', exact=True)
+        expect(heading).to_be_visible()
         expect(detail.get_by_role('heading', name='현재 릴리스 표시본')).to_be_visible()
+        back = detail.get_by_role('button', name='목록으로', exact=True)
+        if width == 390:
+            expect(heading).to_be_in_viewport()
+            expect(heading).to_be_focused()
+            back.click()
+            expect(row).to_be_in_viewport()
+            expect(row).to_be_focused()
+            row.click()
+            expect(heading).to_be_in_viewport()
+            expect(heading).to_be_focused()
+        else:
+            expect(row).to_be_focused()
+            expect(back).not_to_be_visible()
         checkbox.check()
+    if width == 390:
+        status_filter = panel.get_by_label('판정 필터')
+        status_filter.select_option('approved')
+        expect(panel.get_by_text('이 조건에 해당하는 답변이 없습니다.')).to_be_visible()
+        detail.get_by_role('button', name='목록으로', exact=True).click()
+        catalog_heading = panel.get_by_role('heading', name='캐시 답변', exact=True)
+        expect(catalog_heading).to_be_focused()
+        expect(catalog_heading).to_be_in_viewport()
+        status_filter.select_option('all')
     expect(panel.get_by_role('checkbox', name='합성 즉시 반환 답변 선택')).to_be_disabled()
 
     answer_list = panel.get_by_role('list', name='캐시 답변 목록').bounding_box()
@@ -212,6 +236,8 @@ def test_admin_batch_approves_drafts_and_activates_cache(review_stack, page, wid
     expect(unrelated_heading).to_be_visible()
     with page.expect_response(lambda response: response.url.endswith('/api/admin/cache?status=all')):
         panel.get_by_role('button', name='새로고침', exact=True).click()
+    expect(unrelated_heading).to_be_visible()
+    expect(unrelated_heading).not_to_be_focused()
     for key in ('합성 검토 답변', '합성 유지 답변'):
         expect(panel.get_by_role('checkbox', name=f'{key} 선택', exact=True)).to_be_checked()
     batch_requests = []
