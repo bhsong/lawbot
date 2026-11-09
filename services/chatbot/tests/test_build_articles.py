@@ -10,6 +10,7 @@ from pathlib import Path
 import pytest
 
 from lawbot.paths import V4_ARTICLES, V4_DECREE_ARTICLES
+from lawbot_common import law_scope
 from lawbot_tools import build_articles as b
 
 # ── 부칙 시행일 ──────────────────────────────────────────────────────
@@ -597,7 +598,7 @@ def blob_clones(tmp_path, monkeypatch):
     source, remote = tmp_path / 'source', tmp_path / 'remote.git'
     subprocess.run(['git', 'init', '-q', str(source)], check=True)
     laws = ['시험법', '검증법']
-    monkeypatch.setattr(b, 'LAWS', laws)
+    monkeypatch.setattr(b, 'full_laws', lambda _scope=None: laws)
     paths = {b.doc_name(law, kind): f'kr/{law}/{kind} 원문.md' for law in laws for kind in b.KINDS}
     for i, change in enumerate(('제정', '일부개정', '전부개정', '일부개정', '전부개정')):
         date = f'{2020 + i}-01-01'
@@ -716,31 +717,34 @@ def test_commits_since_batches_and_keeps_report(blob_clones, tmp_path):
 
 def test_find_files_skips_repealed_file_with_the_same_title(tmp_path, monkeypatch):
     """근로기준법 폴더처럼 같은 제목 파일이 둘: 1997년 '(폐지)' 커밋으로 끝난 법률.md는 빼고 법률(법률).md"""
-    monkeypatch.setattr(b, 'LAWS', ['근로기준법'])
+    entry = law_scope.LawScope(name='근로기준법', folder='근로기준법_원문', category=1, keywords=('근로기준법',))
+    folder = f'kr/{entry.folder}'
+    monkeypatch.setattr(law_scope, 'load_law_scope', lambda: (entry,))
     repo = tmp_path / 'legalize'
     subprocess.run(['git', 'init', '-q', str(repo)], check=True)
     head = "---\n제목: {t}\n공포일자: {d}\n공포번호: '1'\n시행일자: {d}\n상태: 시행\n---\n"
     commit(
         repo,
-        {'kr/근로기준법/법률.md': head.format(t='근로기준법', d='1997-03-13')},
+        {f'{folder}/법률.md': head.format(t='근로기준법', d='1997-03-13')},
         '1997-03-13',
         '법률: 근로기준법 (폐지)',
     )
     commit(
         repo,
         {
-            'kr/근로기준법/법률(법률).md': head.format(t='근로기준법', d='2007-04-11'),
-            'kr/근로기준법/시행령.md': head.format(t='근로기준법 시행령', d='2007-06-29'),
-            'kr/근로기준법/시행규칙.md': head.format(t='근로기준법 시행규칙', d='2007-07-24'),
+            f'{folder}/법률(법률).md': head.format(t='근로기준법', d='2007-04-11'),
+            f'{folder}/시행령.md': head.format(t='근로기준법 시행령', d='2007-06-29'),
+            f'{folder}/시행규칙.md': head.format(t='근로기준법 시행규칙', d='2007-07-24'),
         },
         '2007-07-24',
         '법률: 근로기준법 (전부개정)',
     )
-    paths = b.find_files(b.Repo(repo), '2026-10-20')
+    documents = [('근로기준법', kind, None) for kind in b.KINDS]
+    paths = b.find_files(b.Repo(repo), '2026-10-20', documents)
     assert paths == {
-        '근로기준법': 'kr/근로기준법/법률(법률).md',
-        '근로기준법 시행령': 'kr/근로기준법/시행령.md',
-        '근로기준법 시행규칙': 'kr/근로기준법/시행규칙.md',
+        '근로기준법': f'{folder}/법률(법률).md',
+        '근로기준법 시행령': f'{folder}/시행령.md',
+        '근로기준법 시행규칙': f'{folder}/시행규칙.md',
     }
 
 
@@ -827,11 +831,13 @@ def test_generated_csvs_match_repo_except_known_rule_changes():
 
 
 def test_row_order_laws_then_decrees_by_name():
-    """법률은 LAWS 순서, 하위법령은 법령 이름 가나다순 (임베딩 batch·data/decree_exp 후보 번호가 이 순서에 묶여 있음)"""
+    """법률은 공통 범위 순서, 하위법령은 법령 이름 가나다순 (임베딩 batch·data/decree_exp 후보 번호가 이 순서에 묶여 있음)"""
     order = b.doc_order()
-    assert order[:7] == [(law, '법률') for law in b.LAWS]
-    assert [law for law, k in order[7:] if k == '시행령'] == sorted(b.LAWS)
-    assert order[7:9] == [('근로기준법', '시행령'), ('근로기준법', '시행규칙')]
+    laws = b.full_laws()
+    law_count = len(laws)
+    sorted_laws = sorted(laws)
+    assert order[:law_count] == [(law, '법률') for law in laws]
+    assert order[law_count:] == [(law, kind) for law in sorted_laws for kind in ('시행령', '시행규칙')]
 
 
 # ── 부칙 특례 조문 ───────────────────────────────────────────────────
@@ -887,13 +893,62 @@ def test_load_scope_reads_law_kind_article(tmp_path):
     assert b.load_scope(p) == {('소득세법', '법률'): {'제1조', '제3조'}, ('소득세법', '시행령'): {'제2조'}}
 
 
+def test_full_laws_use_manifest_names_and_exclude_v5_article_selections(monkeypatch):
+    first, *others = [law for law, kind in b.doc_order() if kind == '법률']
+    renamed_scope = tuple(
+        entry.model_copy(update={'name': '시험법'}) if entry.name == first else entry
+        for entry in law_scope.load_law_scope()
+    )
+    monkeypatch.setattr(law_scope, 'load_law_scope', lambda: renamed_scope)
+
+    laws = [law for law, kind in b.doc_order() if kind == '법률']
+    assert laws == ['시험법', *others]
+    assert not set(laws) & {law for law, _ in b.load_scope(b.TAX_SCOPE)}
+
+
+def test_canonical_v5_scope_rejects_a_law_absent_from_manifest(tmp_path, monkeypatch):
+    scope = tmp_path / 'scope.csv'
+    scope.write_text('law,kind,article_no\n시험법,법률,제1조\n', encoding='utf-8')
+    monkeypatch.setattr(b, 'TAX_SCOPE', scope)
+
+    with pytest.raises(ValueError, match='조문 범위 목록의 법령이 공통 범위에 없습니다: 시험법'):
+        b.load_scope(scope)
+    with pytest.raises(ValueError, match='조문 범위 목록의 법령이 공통 범위에 없습니다: 시험법'):
+        b.doc_order()
+
+
+def test_alternate_scope_selects_partial_laws_and_restores_omitted_full_laws(tmp_path):
+    alternate = tmp_path / 'alternate.csv'
+    alternate.write_text('law,kind,article_no\n근로기준법,법률,제1조\n국민연금법,법률,제2조\n', encoding='utf-8')
+
+    documents = b.docs(b.load_scope(alternate))
+
+    assert [doc for doc in documents if doc[0] == '근로기준법'] == [('근로기준법', '법률', {'제1조'})]
+    assert [doc for doc in documents if doc[0] == '소득세법'] == [('소득세법', kind, None) for kind in b.KINDS]
+    assert len({(law, kind) for law, kind, _ in documents}) == len(documents)
+
+
+def test_build_full_law_with_no_subordinate_documents(tmp_path, monkeypatch):
+    repo = make_repo(tmp_path, [('2020-01-01', '100', '2020-01-01', V1, '')])
+    entry = law_scope.LawScope(name='시험법', folder='시험법', category=1, keywords=('시험법',))
+    monkeypatch.setattr(law_scope, 'load_law_scope', lambda: (entry,))
+
+    _, _, stats = b.build(repo.path, '2026-10-20', scope={})
+
+    assert stats['paths'] == {'시험법': PATH}
+    assert stats['law_rows'] == stats['decree_rows'] == 3
+    with pytest.raises(ValueError, match='시험법 시행규칙'):
+        b.build(repo.path, '2026-10-20', scope={('시험법', '시행규칙'): {'제1조'}})
+
+
 def test_docs_put_scoped_documents_after_the_full_ones():
-    """노동 7개 법률 문서(전체)는 지금 순서 그대로, 범위 목록 문서는 그 뒤에 같은 규칙(법률 → 하위법령 이름순)으로"""
+    """전체 문서 뒤에 범위 목록 문서를 법률 → 하위법령 이름순으로 붙인다."""
     scope = {('소득세법', '시행령'): {'제2조'}, ('국민연금법', '법률'): {'제1조'}, ('소득세법', '법률'): {'제1조'}}
     docs = b.docs(scope)
-    assert [(law, kind) for law, kind, _ in docs[:21]] == b.doc_order()
-    assert all(s is None for _, _, s in docs[:21])
-    assert docs[21:] == [  # 법률은 목록에 처음 나온 법령 순서
+    order = b.doc_order(scope)
+    doc_count = len(order)
+    assert docs[:doc_count] == [(law, kind, None) for law, kind in order]
+    assert docs[doc_count:] == [  # 법률은 목록에 처음 나온 법령 순서
         ('소득세법', '법률', {'제1조'}),
         ('국민연금법', '법률', {'제1조'}),
         ('소득세법', '시행령', {'제2조'}),

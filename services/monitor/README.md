@@ -39,11 +39,13 @@ uv run law-monitor daily                  # launchd가 매일 실행: collect �
 - `LAW_OC`는 환경변수가 먼저이고, 없으면 `services/monitor/.env`에서 읽습니다. `bootstrap`은 법제처를 부르지 않아 키 없이도 됩니다. 로그·이벤트·오류 메시지에는 `OC=***`로만 남습니다.
 - 법제처 호출이 실패하면(재시도 3회 뒤) 그 수집기가 실패로 끝나고 커서가 그대로라, 다음 실행에서 같은 변경을 다시 처리합니다. 원문이 빠진 이벤트는 저장하지 않습니다.
 - 한 수집기가 3번 연속 실패하면 `collector_failing` 이벤트가 한 번 생깁니다.
-- `bootstrap --force`는 기준점을 다시 잡습니다. 그 사이 변경은 이벤트가 생기지 않으니, 대상 설정을 바꿔서 새 행정규칙을 처음부터 추적할 때만 씁니다 (설정만 바꾸면 이미 있는 행정규칙은 다음 개정부터 잡힘).
+- Git 수집에서 `bootstrap --force`를 실행하면 현재 저장소를 새 기준점으로 삼습니다. 새 행정규칙을 현재 상태부터 추적해야 할 때 사용합니다. 설정만 바꾸면 기존 행정규칙은 다음 개정부터 잡힙니다.
 
 ## 국회 법률안과 입법예고
 
-`services/monitor/.env`의 `LAW_ASSEMBLY_KEY`를 사용합니다. `prelegislation.keywords`의 제목 필터와 `prelegislation.assembly.age` 설정에 따라 의안검색·진행 중·종료 예고를 읽습니다. 배포 전에는 임시 home에서 아래 명령을 사용합니다.
+`services/monitor/.env`의 `LAW_ASSEMBLY_KEY`를 사용합니다. 공통 법령 범위의 `keywords`와 `config/targets.yaml`의 `prelegislation.assembly.age`에 따라 의안검색·진행 중·종료 예고를 읽습니다. 제목과 키워드를 정규화한 뒤 포함 여부를 검사합니다. [공통 법령 범위](../../packages/lawbot-common/src/lawbot_common/law_scope.json)
+
+배포 전에는 임시 home에서 아래 명령을 사용합니다.
 
 ```bash
 uv run law-monitor --home "$MONITOR_HOME" bootstrap --only assembly_bill
@@ -51,7 +53,7 @@ uv run law-monitor --home "$MONITOR_HOME" bootstrap --only assembly_notice
 uv run law-monitor --home "$MONITOR_HOME" collect --only assembly_notice
 ```
 
-기준선을 잡은 뒤 첫 정상 예고 수집에서 해당 키워드의 진행 중 예고를 검토 후보로 발행합니다. 이후 의안·예고 변경을 이어서 추적합니다. 필터나 국회 대수를 바꿀 때는 각 국회 수집기에 `bootstrap --only <수집기> --force`를 실행해 기준을 갱신합니다.
+기준선을 잡은 뒤 첫 정상 예고 수집에서 해당 키워드의 진행 중 예고를 검토 후보로 발행합니다. 이후 의안·예고 변경을 이어서 추적합니다. 공통 키워드나 국회 대수를 바꿀 때는 다음 정기 실행 전에 `assembly_bill`과 `assembly_notice` 각각에 `bootstrap --only <수집기> --force`를 실행해 기준을 갱신합니다.
 
 강제 bootstrap은 기존 관측 순번을 유지하면서 비교 기준을 갱신합니다. 기준에 흡수된 변경은 이벤트 발행 대상에서 제외됩니다. 정상 수집에서 들어온 변경 예고는 캘린더 sync에서 공식 상세의 의안번호와 기간이 일치하면 자동 공개됩니다. 의안 공개는 수동 검토를 거칩니다.
 
@@ -109,9 +111,10 @@ uv run law-monitor --home "$MONITOR_HOME" collect --only assembly_notice
 
 ## 추적 대상 바꾸기
 
-`config/targets.yaml`만 고칩니다.
+법률·시행령·시행규칙 수집은 공통 법령 범위의 `folder`에 해당하는 Legalize KR `kr/<폴더>/`를 추적합니다. `category`는 수집 분류이며 `keywords`는 국회 제목 필터에 사용합니다. [공통 법령 범위](../../packages/lawbot-common/src/lawbot_common/law_scope.json)
 
-- `laws`: legalize-kr `kr/<폴더>/`의 폴더명 (띄어쓰기 없음). 폴더 안 파일(법률·시행령·시행규칙)을 모두 추적합니다.
+별표·서식, 행정규칙, 수집기 설정과 점검 명령은 `config/targets.yaml` 또는 `--config`로 지정한 YAML에서 관리합니다. 이전 설정의 `laws`와 `prelegislation.keywords`는 실행 오류가 되므로 YAML에서 제거하고 공통 법령 범위에 반영합니다. 부가가치세법은 법령과 별표·서식 수집 범위 및 국회 제목 키워드에서 제외했습니다. 행정규칙은 아래 규칙으로 별도 추적합니다.
+
 - `admrules.names`: 소관부처명 + 행정규칙명 정규식. 최저임금처럼 이름에 연도가 들어가는 고시는 `^\d{4}년 적용 최저임금(안)? 고시$`처럼 씁니다.
 - `admrules.keyword_rules`: 소관부처명 + 이름 키워드 (하나라도 들어 있으면 대상).
 - `agency`는 파일 머리말 `소관부처명`과 정확히 같아야 합니다 (국세청 고시는 경로가 `재정경제부/국세청/...`이지만 소관부처명은 `국세청`).

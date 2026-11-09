@@ -1,0 +1,19 @@
+[
+  {"name": "근로기준법", "folder": "근로기준법", "category": 1, "keywords": ["근로기준법"]},
+  {"name": "근로자퇴직급여 보장법", "folder": "근로자퇴직급여보장법", "category": 1, "keywords": ["근로자퇴직급여"]},
+  {"name": "최저임금법", "folder": "최저임금법", "category": 7, "keywords": ["최저임금"]},
+  {"name": "남녀고용평등과 일ㆍ가정 양립 지원에 관한 법률", "folder": "남녀고용평등과일ㆍ가정양립지원에관한법률", "category": 1, "keywords": ["남녀고용평등"]},
+  {"name": "기간제 및 단시간근로자 보호 등에 관한 법률", "folder": "기간제및단시간근로자보호등에관한법률", "category": 1, "keywords": ["기간제법", "기간제 및 단시간근로자 보호"]},
+  {"name": "파견근로자 보호 등에 관한 법률", "folder": "파견근로자보호등에관한법률", "category": 1, "keywords": ["파견법", "파견근로자 보호"]},
+  {"name": "임금채권보장법", "folder": "임금채권보장법", "category": 1, "keywords": ["임금채권보장법"]},
+  {"name": "소득세법", "folder": "소득세법", "category": 1, "keywords": ["소득세법", "원천징수", "연말정산", "지급명세서"]},
+  {"name": "조세특례제한법", "folder": "조세특례제한법", "category": 1, "keywords": ["조세특례제한법"]},
+  {"name": "국세기본법", "folder": "국세기본법", "category": 1, "keywords": ["국세기본법"]},
+  {"name": "지방세법", "folder": "지방세법", "category": 1, "keywords": ["지방세법"]},
+  {"name": "농어촌특별세법", "folder": "농어촌특별세법", "category": 1, "keywords": ["농어촌특별세법"]},
+  {"name": "국민연금법", "folder": "국민연금법", "category": 7, "keywords": ["국민연금"]},
+  {"name": "국민건강보험법", "folder": "국민건강보험법", "category": 7, "keywords": ["국민건강보험"]},
+  {"name": "노인장기요양보험법", "folder": "노인장기요양보험법", "category": 7, "keywords": ["장기요양보험"]},
+  {"name": "고용보험법", "folder": "고용보험법", "category": 7, "keywords": ["고용보험"]},
+  {"name": "고용보험 및 산업재해보상보험의 보험료징수 등에 관한 법률", "folder": "고용보험및산업재해보상보험의보험료징수등에관한법률", "category": 7, "keywords": ["보험료징수"]}
+]

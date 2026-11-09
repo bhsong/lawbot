@@ -292,7 +292,7 @@ def test_cli_daily(tmp_path, legalize, monkeypatch, capsys):
     cfg = tmp_path / 'targets.yaml'
     cfg.write_text(
         f'repos: {{legalize-kr: "{legalize.url}", admrule-kr: "file:///none"}}\n'
-        'laws: [{name: 소득세법, category: 1}]\nadmrules: {names: [], keyword_rules: []}\n',
+        'admrules: {names: [], keyword_rules: []}\n',
         encoding='utf-8',
     )
     base = ['--home', str(tmp_path / 'h'), '--config', str(cfg)]
@@ -328,7 +328,7 @@ def test_cli_daily_runs_checks_before_summary(tmp_path, legalize, monkeypatch, c
     cfg = tmp_path / 'targets.yaml'
     cfg.write_text(
         f'repos: {{legalize-kr: "{legalize.url}", admrule-kr: "file:///none"}}\n'
-        'laws: [{name: 소득세법, category: 1}]\nadmrules: {names: [], keyword_rules: []}\n'
+        'admrules: {names: [], keyword_rules: []}\n'
         f'checks: [{{name: 챗봇 조문 데이터, command: {differ}}}]\n',
         encoding='utf-8',
     )

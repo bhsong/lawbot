@@ -1,7 +1,8 @@
 """Refresh the configured article corpus from Legalize KR for the daily monitor.
 
-The v4 live directory is data/live, and v5 uses data/live/v5 with the tracked
-scope list. Build and gate the candidate before archiving and switching it.
+The v4 live directory is data/live, and v5 uses data/live/v5. The generator uses
+the common law scope and v5 article selections. Build and gate the candidate
+before archiving and switching it.
 The monitor contract is exit 0 for no change, 1 for an update, and 2 for failure.
 """
 

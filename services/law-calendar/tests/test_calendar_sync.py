@@ -22,6 +22,7 @@ FINISHED = '2026-11-05T06:31:00+09:00'
 def scheduled(workflow):
     calendar_db, home, event_file, event = workflow
     event['detected_at'] = '2026-11-05T06:30:30+09:00'
+    event['target']['item_id'] = 'kr/근로기준법/법률.md'
     event_file.write_text(json.dumps(event), encoding='utf-8')
     state = home / 'data' / 'state.db'
     summary = {
@@ -55,6 +56,36 @@ def test_sync_imports_registered_law_events_even_if_model_summary_already_proces
         assert client.get('/api/law-holds').json()['total'] == 3
         assert client.get('/api/law-calendar/status').json()['collectedAt'] == FINISHED
         assert client.get('/api/law-events?month=2026-11&type=notice').json()['total'] == 0
+
+
+def test_sync_skips_registered_events_outside_current_scope(scheduled, monkeypatch):
+    from test_calendar_assembly import register
+
+    (calendar_db, home, _, event), state = scheduled
+    outside = {
+        **event,
+        'event_id': 'outside',
+        'target': {'law_id': 'outside', 'law_name': '미추적법', 'item_id': 'kr/미추적법/법률.md'},
+    }
+    (home / 'outside.json').write_text(json.dumps(outside), encoding='utf-8')
+    with sqlite3.connect(state) as conn:
+        conn.execute(
+            'INSERT INTO events VALUES (?,?,?,?,?,?)',
+            ('outside', outside['source'], outside['change_type'], 'outside.json', outside['detected_at'], NOW),
+        )
+    for source in ('assembly_bill', 'assembly_notice'):
+        event_id = register(home, state, source=source)
+        path = home / f'{event_id}.json'
+        assembly = json.loads(path.read_text(encoding='utf-8'))
+        assembly['target']['law_name'] = '미추적법 일부개정법률안'
+        path.write_text(json.dumps(assembly), encoding='utf-8')
+    monkeypatch.setattr('law_calendar.notice_content.fetch_official', lambda _: pytest.fail('Unexpected notice fetch'))
+
+    result = synchronize(calendar_db, home)
+
+    assert result['failed'] == 0
+    assert result['imported'] == result['skipped'] == 1
+    assert result['assembly_bill_imported'] == result['assembly_notice_imported'] == 0
 
 
 def test_sync_imports_new_notice_after_redetecting_backfilled_notice(scheduled, monkeypatch, calendar_network):

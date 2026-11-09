@@ -47,7 +47,7 @@ class Dataset:
 
     @property
     def scope(self) -> Path | None:
-        return self.source_dir / 'scope_tax.csv' if self.version == 'v5' else None
+        return ba.TAX_SCOPE if self.version == 'v5' else None
 
     @property
     def manifests(self) -> dict[str, str]:

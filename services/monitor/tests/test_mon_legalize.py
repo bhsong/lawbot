@@ -2,9 +2,14 @@
 
 import json
 import logging
+import sqlite3
+from dataclasses import replace
 
 import pytest
 
+from law_calendar.db import migrate
+from law_calendar.sync import synchronize
+from law_monitor.config import load
 from mon_helpers import (
     LAW_PATH,
     WAGE_PATH,
@@ -71,6 +76,51 @@ def test_bootstrap_makes_no_events_and_sets_cursor(tmp_path, legalize, admrule):
     clone = mon.paths.repos / 'legalize-kr'
     assert git(clone, 'config', 'remote.origin.partialclonefilter') == 'blob:none'  # 부분 클론 (bare)
     assert git(clone, 'rev-parse', '--is-bare-repository') == 'true'
+
+
+@pytest.mark.parametrize('force_bootstrap', [False, True], ids=['keep-cursor', 'force-bootstrap'])
+def test_expanded_legalize_scope_does_not_import_history(tmp_path, legalize, admrule, force_bootstrap):
+    added_laws = (
+        '기간제 및 단시간근로자 보호 등에 관한 법률',
+        '남녀고용평등과 일ㆍ가정 양립 지원에 관한 법률',
+        '임금채권보장법',
+        '파견근로자 보호 등에 관한 법률',
+        '농어촌특별세법',
+    )
+    folders = {name.replace(' ', ''): name for name in added_laws}
+    historical = {f'kr/{folder}/법률.md': law_md(name, {'제1조': '기존 조문'}) for folder, name in folders.items()}
+    old_config = make_config(legalize, admrule)
+    old_monitor = make_monitor(tmp_path, old_config)
+    assert old_monitor.bootstrap().failed == {}
+    baseline = legalize.commit(historical, 'newly scoped laws were already present')
+    assert old_monitor.collect().events == []
+    assert old_monitor.state.cursor('legalize-kr') == baseline
+    admrule_before = old_monitor.state.items('legalize_admrule')
+
+    expanded_laws = tuple(law for law in load().laws if law.name in folders)
+    assert {law.name for law in expanded_laws} == folders.keys()
+    expanded = make_monitor(tmp_path, replace(old_config, laws=old_config.laws + expanded_laws))
+    if force_bootstrap:
+        result = expanded.bootstrap(only='legalize_law', force=True)
+        assert result.ok == ['legalize_law'] and result.events == []
+        assert set(expanded.state.items('legalize_law')) == {LAW_PATH, WAGE_PATH, *historical}
+    assert expanded.state.cursor('legalize-kr') == baseline
+    assert expanded.state.items('legalize_admrule') == admrule_before
+    assert expanded.collect().events == []
+
+    database = tmp_path / 'calendar.db'
+    migrate(database)
+    assert synchronize(database, expanded.paths.home) == {'imported': 0, 'unchanged': 0, 'failed': 0, 'skipped': 0}
+
+    path = 'kr/임금채권보장법/법률.md'
+    legalize.commit({path: law_md('임금채권보장법', {'제1조': '개정 조문'})}, 'change after scope cutover')
+    result = expanded.collect()
+    assert result.failed == {}
+    [amended] = result.events
+    assert amended['change_type'] == 'law_amended' and amended['target']['item_id'] == path
+    assert synchronize(database, expanded.paths.home) == {'imported': 1, 'unchanged': 0, 'failed': 0, 'skipped': 0}
+    with sqlite3.connect(database) as conn:
+        assert conn.execute('SELECT COUNT(*) FROM change_events').fetchone() == (1,)
 
 
 def test_amendment_makes_one_event_then_zero(tmp_path, legalize, admrule):
@@ -278,7 +328,17 @@ def test_admrule_removed(tmp_path, legalize, admrule):
 
 
 def test_force_push_falls_back_to_content_compare(tmp_path, legalize, admrule, caplog):
-    mon = make_monitor(tmp_path, make_config(legalize, admrule))
+    config = make_config(legalize, admrule)
+    prior = make_config(
+        legalize,
+        admrule,
+        laws=[
+            {'name': '근로기준법', 'category': 1},
+            {'name': '최저임금법', 'category': 7},
+            {'name': '민법', 'category': 1},
+        ],
+    )
+    mon = make_monitor(tmp_path, prior)
     mon.bootstrap()
     legalize.commit({LAW_PATH: law_md('근로기준법', LABOR_V2)}, '개정')
     first = _law_events(mon.collect())
@@ -287,6 +347,8 @@ def test_force_push_falls_back_to_content_compare(tmp_path, legalize, admrule, c
     # 저장소 재구성: 모든 커밋 해시가 바뀜. 그 사이 최저임금법이 새로 바뀜
     legalize.commit({WAGE_PATH: law_md('최저임금법', {'제1조 (목적)': '최저임금 개정'})}, '개정 2')
     legalize.rewrite_history()
+    # The previously tracked Civil Act is outside the new scope, not a repeal.
+    mon = make_monitor(tmp_path, config)
     with caplog.at_level(logging.WARNING, logger='law_monitor'):
         summary = mon.collect()
     events = _law_events(summary)

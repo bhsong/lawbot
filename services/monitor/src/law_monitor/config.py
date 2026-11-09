@@ -7,6 +7,7 @@ from pathlib import Path
 import yaml
 
 from law_monitor.paths import SERVICE_DIR
+from lawbot_common.law_scope import load_law_scope, scope_keywords
 
 CONFIG_FILE = SERVICE_DIR / 'config' / 'targets.yaml'
 CATEGORIES = range(1, 8)  # 한눈에 보기 표 번호
@@ -71,7 +72,14 @@ class Config:
 
 def load(path: Path = CONFIG_FILE) -> Config:
     with open(path, encoding='utf-8') as f:
-        return from_dict(yaml.safe_load(f) or {})
+        data = yaml.safe_load(f) or {}
+    prelegislation = data.get('prelegislation') or {}
+    if 'laws' in data or 'keywords' in prelegislation:
+        raise ConfigError('Manage laws and prelegislation keywords in law_scope.json')
+    scope = load_law_scope()
+    data['laws'] = [{'name': law.folder, 'category': law.category} for law in scope]
+    data['prelegislation'] = {**prelegislation, 'keywords': scope_keywords(scope)}
+    return from_dict(data)
 
 
 def from_dict(data: dict) -> Config:
