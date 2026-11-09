@@ -266,10 +266,34 @@ def test_db_init_imports_v5_defaults_and_refuses_active_profile(db_path, env, tm
 
 
 def test_db_git_generation_gate_restart_recovery_and_manual_rollback(blob_clones, db_path, tmp_path, env, capsys):
+    from lawbot import cache_carry, cache_release_store, corpus_store
+    from lawbot.cache_store import Draft, Store, init
+    from lawbot.exact_cache import Snapshot, digest
+
     _, repo, _ = blob_clones
     source = '2020-01-01'
     files, _, stats = ba.build(repo.path, source)
     import_baseline(db_path, tmp_path / 'baseline', files, source, stats['head'])
+    cache_path = tmp_path / 'cache.db'
+    init(cache_path)
+    catalog = Store(cache_path)
+    initial = Snapshot.load(active_release(db_path, 'v4'), system='synthetic', combined=True, attach_decrees=True)
+    article_id, article = next(iter(initial.articles.items()))
+    draft = Draft('fixture', '합성 질문', 'answer', digest('answer'), 'answer', [(article_id, article.text_hash)], {})
+    catalog.stage(initial.namespace, [draft], 'tester', 'draft')
+    namespace = initial.namespace.id
+    initial_token = corpus_store.active_token(db_path, 'v4')
+    approval = catalog.approve(
+        namespace,
+        initial_token[1],
+        'protected',
+        {draft.query_id(namespace): draft.answer_id(namespace)},
+        actor='tester',
+        reason='synthetic approval',
+    )
+    catalog.set_mode('shadow', 'tester', 'check', approval)
+    # Exercise the real cache transaction on this test's synthetic v4 corpus; production is scoped to v5.
+    env.setattr(cache_release_store, 'PROFILE', 'v4')
     env.setenv('LAWBOT_DECREE_ENABLED', '1')
     env.setenv('LAWBOT_RERANKER_ENABLED', '1')
     env.setenv('LAWBOT_EMBED_CACHE', '1')
@@ -288,12 +312,25 @@ def test_db_git_generation_gate_restart_recovery_and_manual_rollback(blob_clones
 
     env.setattr(api_client, 'ModelServerClient', CheckedEncoder)
     restarted = []
+    assessed = []
     ready = iter([True, False, True, True])
+
+    def assess(db, profile):
+        token = corpus_store.active_token(db, profile)
+        release = active_release(db, profile)
+        snapshot = Snapshot.load(release, system='synthetic', combined=True, attach_decrees=True)
+        counts = cache_release_store.apply_release(cache_path, db, token, release, snapshot, None)
+        assert counts == {'keep': 0, 'pending': 1, 'off': 0}
+        assessed.append(token)
+        return counts
 
     def restart():
         restarted.append(state(db_path)[0])
+        assert [token[0] for token in assessed] == restarted
+        assert catalog.control().activation_event == assessed[-1][1] and catalog.control().mode == 'shadow'
         return True, 'synthetic restart'
 
+    env.setattr(cache_carry, 'transition', assess)
     env.setattr(au, 'restart_web', restart)
     env.setattr(au, 'wait_web', lambda port: next(ready))
     assert run(tmp_path, '--restart', asof='2021-01-01', repo=repo.path) == 1
@@ -303,6 +340,7 @@ def test_db_git_generation_gate_restart_recovery_and_manual_rollback(blob_clones
     assert list(cache.glob('*.npz')) and {'document', 'query'} <= set(embeddings)
     report = (tmp_path / 'reports' / '2021-01-01.md').read_text()
     assert f'이전 릴리스 `{BASE}`' in report and 'lawbot-articles-update --rollback --restart' in report
+    assert '캐시: 유지 0 · 검토 대기 1 · 끔 0' in report
     assert run(tmp_path, '--restart', asof='2022-01-01', repo=repo.path) == 2
     assert '이전 데이터로 되돌림 (웹앱 응답 확인)' in last_line(capsys)
     second = 'v4-live-2022-01-01'
@@ -313,3 +351,20 @@ def test_db_git_generation_gate_restart_recovery_and_manual_rollback(blob_clones
     assert last_line(capsys) == f'articles rollback restored={BASE} archived={first} restart=ok'
     assert state(db_path)[0] == BASE and restarted == [first, second, first, BASE]
     assert not (tmp_path / 'live').exists() and not (tmp_path / 'unused-live').exists()
+
+
+def test_cache_assessment_failure_does_not_fail_corpus_activation(seeded, live, tmp_path, env, capsys):
+    from lawbot import cache_carry
+
+    World(env, live, NEW)
+    env.setattr(au, 'make_retriever', lambda data: hit_all(data))
+
+    def unavailable(*args):
+        raise ValueError('synthetic cache error')
+
+    env.setattr(cache_carry, 'transition', unavailable)
+    assert run(tmp_path) == 1
+    assert state(seeded)[0] == NEW_ID
+    lines = capsys.readouterr().out.strip().splitlines()
+    assert lines[-2] == '캐시 판정 실패' and lines[-1].startswith('articles updated=yes')
+    assert '캐시 판정 실패' in (tmp_path / 'reports' / f'{ASOF}.md').read_text()

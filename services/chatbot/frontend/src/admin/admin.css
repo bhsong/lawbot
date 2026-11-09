@@ -47,3 +47,10 @@
   .admin-calendar .lc-day-counts { overflow-wrap: normal; }
   .admin-calendar .lc-count-label { display: none; }
 }
+.cache-panel { min-width: 0; overflow-wrap: anywhere; }
+.cache-actions { display: flex; gap: .5rem; flex-wrap: wrap; margin-block: .75rem; }
+.cache-panel input { max-width: 100%; }
+.cache-id { font-family: monospace; }
+.cache-compare { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1rem; }
+.cache-panel pre { white-space: pre-wrap; overflow-wrap: anywhere; }
+@media (max-width: 640px) { .cache-compare { grid-template-columns: 1fr; } }

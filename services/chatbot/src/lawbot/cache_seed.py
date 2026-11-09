@@ -235,7 +235,9 @@ def prepare(bundle: Bundle, protection: Protection, snapshot: Snapshot) -> Seed:
             )
         }
         source.update(bundle_sha256=P07_SHA256, protection_hash=protection.fingerprint)
-        drafts.append(Draft(q['id'], q['question'], q['answer_key'], q['answer_sha256'], text, citations, source))
+        drafts.append(
+            Draft(q['id'], q['question'], q['answer_key'], q['answer_sha256'], text, citations, source, q['answer'])
+        )
         accepted.add(key)
     counts = Counter(row['primary_reason'] for row in exclusions)
     summary: dict[str, int] = dict.fromkeys(

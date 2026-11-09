@@ -53,15 +53,47 @@ def active_release(db: Path, profile: str) -> CorpusRelease:
             ).fetchone()
             if row is None:
                 raise RuntimeError(f'프로필 {profile}의 활성 코퍼스 릴리스가 없습니다.')
-            release_id, law, combined, law_manifest, combined_manifest = row
-            files = release_bytes(conn, release_id)
+            return _restore_release(conn, row)
     except sqlite3.Error as exc:
         raise RuntimeError(f'프로필 {profile}의 활성 코퍼스 릴리스를 읽지 못했습니다.') from exc
+
+
+def _restore_release(conn, row) -> CorpusRelease:
+    release_id, law, combined, law_manifest, combined_manifest = row
+    files = release_bytes(conn, release_id)
     return CorpusRelease(
         release_id,
         CorpusPart(law, files[law], json.loads(files[law_manifest]), files[law_manifest]),
         CorpusPart(combined, files[combined], json.loads(files[combined_manifest]), files[combined_manifest]),
     )
+
+
+def release_at_event(db: Path, profile: str, event_id: int) -> CorpusRelease:
+    """Resolve the historical release bound to an activation, including a rollback."""
+    with connect(db) as conn:
+        conn.execute('BEGIN')
+        row = conn.execute(
+            'SELECT r.release_id,law_csv_name,combined_csv_name,law_manifest_name,combined_manifest_name '
+            'FROM corpus_events e JOIN corpus_releases r USING (release_id) '
+            "WHERE e.profile=? AND r.profile=e.profile AND e.event_id=? AND e.kind IN ('activated','rolled_back')",
+            (profile, event_id),
+        ).fetchone()
+        if row is None:
+            raise ValueError('승인 당시 코퍼스 활성화 기록을 찾을 수 없습니다.')
+        return _restore_release(conn, row)
+
+
+def release_by_id(db: Path, profile: str, release_id: str) -> CorpusRelease:
+    with connect(db) as conn:
+        conn.execute('BEGIN')
+        row = conn.execute(
+            'SELECT release_id,law_csv_name,combined_csv_name,law_manifest_name,combined_manifest_name '
+            'FROM corpus_releases WHERE profile=? AND release_id=?',
+            (profile, release_id),
+        ).fetchone()
+        if row is None:
+            raise ValueError('비교할 코퍼스 릴리스를 찾을 수 없습니다.')
+        return _restore_release(conn, row)
 
 
 def active_token(db: Path, profile: str, *, timeout: float = 5) -> tuple[str, int] | None:

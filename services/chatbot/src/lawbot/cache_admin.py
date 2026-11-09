@@ -141,6 +141,7 @@ def correction(path, identity, seed, snapshot):
     return previous, replace(
         original,
         raw_sha256=digest(raw),
+        raw_answer=raw,
         answer_text=shown,
         citations=citations,
         source=original.source | {'correction_review_sha256': review_hash, 'previous_answer_id': previous},

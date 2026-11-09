@@ -76,12 +76,12 @@ class Proc:
                 self.p.wait()
 
 
-def start_web(log_dir, port, **env):
+def start_web(log_dir, port, *, command=None, **env):
     """실제 웹앱(lawbot-app, 빌드한 화면 포함)을 127.0.0.1:<port>에 띄우고 로그인 확인 API가 401을 줄 때까지 기다린다
     화면 빌드가 없거나 소스와 다르면 웹앱이 시작을 거부하고 테스트가 실패한다 (CI는 테스트 전에 npm run build)"""
     web = Proc(
         'web',
-        [str(Path(sys.executable).with_name('lawbot-app')), '--port', str(port)],
+        [*(command or [str(Path(sys.executable).with_name('lawbot-app'))]), '--port', str(port)],
         clean_env(**(env | {'LAWBOT_USER': USER, 'LAWBOT_PW': PW})),  # 테스트 로그인이 .env 값보다 우선
         log_dir,
     )
@@ -99,7 +99,7 @@ class Stack:
     """웹앱 1개 + 가짜 모델 서버 1개. 모델 서버는 같은 포트에서 모드만 바꿔 다시 띄운다 (웹앱은 그대로)
     extra_env: 웹앱 환경 변수 추가"""
 
-    def __init__(self, tmp, read_timeout, example='.env.example', **extra_env):
+    def __init__(self, tmp, read_timeout, example='.env.example', *, web_command=None, **extra_env):
         self.tmp, self.ms, self.mode, self.n = tmp, None, None, 0
         self.token = TEST_TOKEN  # 모델 서버에는 환경 변수로 넘김 (e2e_model_server를 이 프로세스에서 import하지 않음)
         self.ms_port, self.web_port = free_port(), free_port()
@@ -121,7 +121,7 @@ class Stack:
         self.web = None
         try:
             self.ensure('normal')
-            self.web = start_web(tmp, self.web_port, **web_env)
+            self.web = start_web(tmp, self.web_port, command=web_command, **web_env)
         finally:
             if self.web is None:
                 self.stop_model_server()

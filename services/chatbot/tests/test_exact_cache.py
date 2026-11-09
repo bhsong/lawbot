@@ -48,11 +48,11 @@ def test_namespace_changes_with_scope_and_policy():
 
 def test_new_cache_is_off_and_independently_versioned(tmp_path):
     path = tmp_path / 'private' / 'cache.db'
-    assert init(path) == 1
+    assert init(path) == 2
     store = Store(path)
     assert store.control().mode == 'off'
     assert store.control().namespace_id is None
-    assert migrate(path) == 1
+    assert migrate(path) == 2
 
 
 @pytest.fixture
@@ -160,7 +160,7 @@ def test_deployment_status_reports_disabled_and_stale_cache(catalog, tmp_path):
     store, snapshot, draft = catalog
     cache = cache_runtime.ExactCache(store, store.path, snapshot)
     level, message = cache.deployment_status()
-    assert level == 'OK' and 'off' in message and '스키마 1' in message
+    assert level == 'OK' and 'off' in message and '스키마 2' in message
     store.stage(snapshot.namespace, [draft], 'tester', 'draft')
     activate(store, snapshot, draft)
     level, message = cache.deployment_status()

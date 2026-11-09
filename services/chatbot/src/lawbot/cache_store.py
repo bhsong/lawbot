@@ -12,7 +12,7 @@ from lawbot.db.connection import connect, transaction
 from lawbot.exact_cache import Namespace, canonical, digest, normalize
 
 MIGRATIONS = files('lawbot.db') / 'cache_migrations'
-SCHEMA = 1
+SCHEMA = 2
 READ_TIMEOUT = 0.01
 
 
@@ -61,6 +61,7 @@ class Draft:
     answer_text: str
     citations: list[tuple[str, str]]
     source: dict
+    raw_answer: str | None = None
 
     def query_id(self, namespace_id: str) -> str:
         return digest(canonical([namespace_id, digest(normalize(self.question))]))
@@ -94,6 +95,12 @@ def insert_answer(conn, namespace_id: str, draft: Draft) -> str:
         conn.executemany(
             'INSERT INTO cache_citations VALUES (?,?,?,?)',
             ((answer_id, pos, *pair) for pos, pair in enumerate(draft.citations)),
+        )
+    if draft.raw_answer is not None:
+        if digest(draft.raw_answer) != draft.raw_sha256:
+            raise ValueError('렌더링 원문 해시가 답변 리비전과 다릅니다.')
+        conn.execute(
+            'INSERT INTO cache_render_inputs VALUES (?,?) ON CONFLICT DO NOTHING', (answer_id, draft.raw_answer)
         )
     return answer_id
 
@@ -226,6 +233,8 @@ class Store:
                 )
                 inserted += 1
                 audit(conn, 'stage', query_id, actor, reason, {'answer_id': answer_id, 'source_id': draft.source_id})
+            if inserted:
+                conn.execute('UPDATE cache_control SET generation=generation+1 WHERE singleton=1')
         return inserted
 
     def approve(
@@ -350,32 +359,37 @@ class Store:
 
     def set_mode(self, mode: str, actor: str, reason: str, approval: str | None = None) -> None:
         with connect(self.path, write=True) as conn, transaction(conn):
-            control = read_control(conn)
-            if mode not in ('off', 'shadow', 'on'):
-                raise ValueError('지원하지 않는 캐시 모드입니다.')
-            if mode != 'off' and (approval is None or approval != control.approval_id):
-                raise ValueError('현재 승인 묶음을 지정하세요.')
-            if mode == 'on' and control.mode not in ('shadow', 'on'):
-                raise ValueError('shadow 검증 후 on으로 전환하세요.')
-            conn.execute('UPDATE cache_control SET mode=?,generation=generation+1 WHERE singleton=1', (mode,))
-            audit(conn, 'mode', mode, actor, reason, {'previous': control.mode, 'approval': approval})
+            set_mode_in(conn, read_control(conn), mode, actor, reason, approval)
 
     def revoke(self, kind: str, target: str, actor: str, reason: str) -> None:
         with connect(self.path, write=True) as conn, transaction(conn):
             read_control(conn)
-            if kind == 'answer':
-                result = conn.execute("UPDATE cache_answers SET status='revoked' WHERE answer_id=?", (target,))
-                conn.execute('UPDATE cache_queries SET exact_enabled=0 WHERE answer_id=?', (target,))
-            elif kind == 'query':
-                result = conn.execute(
-                    "UPDATE cache_queries SET status='revoked',exact_enabled=0 WHERE query_id=?", (target,)
-                )
-            else:
-                raise ValueError('철회 대상은 query 또는 answer여야 합니다.')
-            if result.rowcount != 1:
-                raise ValueError('철회 대상을 찾을 수 없습니다.')
-            conn.execute('UPDATE cache_control SET generation=generation+1 WHERE singleton=1')
-            audit(conn, f'revoke_{kind}', target, actor, reason)
+            revoke_in(conn, kind, target, actor, reason)
+
+
+def set_mode_in(conn, control, mode, actor, reason, approval):
+    if mode not in ('off', 'shadow', 'on'):
+        raise ValueError('지원하지 않는 캐시 모드입니다.')
+    if mode != 'off' and (approval is None or approval != control.approval_id):
+        raise ValueError('현재 승인 묶음을 지정하세요.')
+    if mode == 'on' and control.mode not in ('shadow', 'on'):
+        raise ValueError('shadow 검증 후 on으로 전환하세요.')
+    conn.execute('UPDATE cache_control SET mode=?,generation=generation+1 WHERE singleton=1', (mode,))
+    audit(conn, 'mode', mode, actor, reason, {'previous': control.mode, 'approval': approval})
+
+
+def revoke_in(conn, kind, target, actor, reason):
+    if kind == 'answer':
+        result = conn.execute("UPDATE cache_answers SET status='revoked' WHERE answer_id=?", (target,))
+        conn.execute('UPDATE cache_queries SET exact_enabled=0 WHERE answer_id=?', (target,))
+    elif kind == 'query':
+        result = conn.execute("UPDATE cache_queries SET status='revoked',exact_enabled=0 WHERE query_id=?", (target,))
+    else:
+        raise ValueError('철회 대상은 query 또는 answer여야 합니다.')
+    if result.rowcount != 1:
+        raise ValueError('철회 대상을 찾을 수 없습니다.')
+    conn.execute('UPDATE cache_control SET generation=generation+1 WHERE singleton=1')
+    audit(conn, f'revoke_{kind}', target, actor, reason)
 
 
 def valid(current, start, end, expires) -> bool:

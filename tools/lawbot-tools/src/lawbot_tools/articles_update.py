@@ -340,10 +340,34 @@ def _prepare_release(stage, files, dataset, current, result):
     return prepare_corpus(stage, dataset.version, args.dataset_version)
 
 
-def _restart_db(db, profile, current, previous):
-    return _restart_or_restore(
-        lambda error: corpus_store.rollback_release(db, profile, current, previous, restart_error=str(error))
-    )
+def _cache_assessment(db, profile, notes):
+    from lawbot import cache_carry
+    from lawbot.cache_store import translate_sqlite_errors
+
+    try:
+        with translate_sqlite_errors():
+            counts = cache_carry.transition(db, profile)
+            if counts is not None:
+                notes.append(cache_carry.summary(counts))
+    except Exception as exc:  # Optional cache assessment must not undo a valid corpus activation.
+        log.warning('캐시 판정 실패 (%s)', type(exc).__name__)
+        notes.append('캐시 판정 실패')
+
+
+def _restart_db(db, profile, current, previous, notes):
+    def revert(error):
+        corpus_store.rollback_release(db, profile, current, previous, restart_error=str(error))
+        _cache_assessment(db, profile, notes)
+
+    return _restart_or_restore(revert)
+
+
+def _report_assessment(report, md, notes):
+    if report:
+        report.parent.mkdir(parents=True, exist_ok=True)
+        report.write_text(md + ''.join(f'\n- {note}\n' for note in notes), encoding='utf-8')
+    for note in notes:
+        print(note)
 
 
 def _record_failed_quietly(db, profile, release_id, previous, error):
@@ -401,10 +425,13 @@ def _update_db(args, dataset, db, current):
         return 0
 
     release_id = _publish_release(db, dataset, current, result, files)
-    restarted = _restart_db(db, profile, release_id, previous) if args.restart else 'no'
-    if report:
-        report.parent.mkdir(parents=True, exist_ok=True)
-        md = ac.render(result, next_steps=False) + '\n'.join(
+    notes = []
+    _cache_assessment(db, profile, notes)
+    restarted = 'failed'
+    try:
+        restarted = _restart_db(db, profile, release_id, previous, notes) if args.restart else 'no'
+    finally:
+        md = (ac.render(result, next_steps=False) if report else '') + '\n'.join(
             [
                 '',
                 '## 갱신',
@@ -417,7 +444,7 @@ def _update_db(args, dataset, db, current):
                 '',
             ]
         )
-        report.write_text(md, encoding='utf-8')
+        _report_assessment(report, md, notes)
     print(
         f'articles updated=yes asof={asof} changed={len(result.diff.answer)} archive={previous} restart={restarted}'
         + (f' → {report}' if report else '')
@@ -441,7 +468,14 @@ def _run_db(args, dataset):
         if args.rollback:
             previous = corpus_store.previous_release(db, profile, current.release_id)
             corpus_store.rollback_release(db, profile, current.release_id, previous)
-            restarted = _restart_db(db, profile, previous, current.release_id) if args.restart else 'no'
+            notes = []
+            _cache_assessment(db, profile, notes)
+            restarted = 'failed'
+            try:
+                restarted = _restart_db(db, profile, previous, current.release_id, notes) if args.restart else 'no'
+            finally:
+                report = args.report_dir / f'{ac.today()}-rollback.md' if args.report_dir and notes else None
+                _report_assessment(report, f'## 코퍼스 롤백\n\n- 대상 `{previous}`\n- 재시작 {restarted}\n', notes)
             print(f'articles rollback restored={previous} archived={current.release_id} restart={restarted}')
             return 0
         return _update_db(args, dataset, db, current)
