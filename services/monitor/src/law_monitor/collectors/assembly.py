@@ -2,7 +2,6 @@
 
 import hashlib
 import json
-import unicodedata
 
 from law_monitor.assembly import (
     ACTIVE,
@@ -17,6 +16,7 @@ from law_monitor.assembly import (
 from law_monitor.collectors.base import CollectResult, RunContext
 from law_monitor.events import _write_atomic, make_event_id
 from law_monitor.state import ItemState, State
+from lawbot_common.law_scope import normalize_law_text
 
 BILL_DATES = {
     'PROPOSE_DT': 'bill_proposed',
@@ -40,10 +40,6 @@ BILL_STAGES = (
     ('committee_presented', '소관위 상정'),
     ('committee_referred', '소관위 회부'),
 )
-
-
-def normalized(value: str) -> str:
-    return ''.join(unicodedata.normalize('NFKC', value).split()).casefold()
 
 
 def encoded(value: dict) -> str:
@@ -111,7 +107,8 @@ class AssemblyCollector:
                 if (code == BILLS and item_id != bill_id) or item_id in seen:
                     raise AssemblyError('Repeated page or conflicting Assembly identity')
                 seen.add(item_id)
-                if row_age != str(age) or not any(word in normalized(title) for word in keywords):
+                normalized_title = normalize_law_text(title)
+                if row_age != str(age) or not any(word in normalized_title for word in keywords):
                     continue
                 if item_id in snapshots:
                     raise AssemblyError('Notice is in both active and closed lists')
@@ -152,7 +149,7 @@ class AssemblyCollector:
         return 'assembly_notice_changed'
 
     def collect(self, ctx: RunContext) -> CollectResult:
-        keywords = sorted({normalized(word) for word in ctx.config.prelegislation_keywords})
+        keywords = sorted({normalize_law_text(word) for word in ctx.config.prelegislation_keywords})
         age = ctx.config.assembly_age
         scope = digest(encoded({'age': age, 'keywords': keywords}))
         bootstrap = ctx.mode == 'bootstrap'

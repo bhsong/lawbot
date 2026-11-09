@@ -124,7 +124,7 @@ def test_cli_check_command(tmp_path, capsys):
     cfg = tmp_path / 'targets.yaml'
     ok = repr(script('print("articles same=yes")'))
     cfg.write_text(
-        'repos: {legalize-kr: "file:///none", admrule-kr: "file:///none"}\nlaws: []\n'
+        'repos: {legalize-kr: "file:///none", admrule-kr: "file:///none"}\n'
         f'admrules: {{names: [], keyword_rules: []}}\nchecks: [{{name: 조문, command: {ok}}}]\n',
         encoding='utf-8',
     )

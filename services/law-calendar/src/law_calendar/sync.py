@@ -14,6 +14,7 @@ from law_calendar.db import write_database
 from law_calendar.ingest import ARTICLE, Diff, import_files, inside
 from law_calendar.notice_content import synchronize_notice_content
 from law_calendar.validation import timestamp
+from lawbot_common.law_scope import LawScope, load_law_scope, normalize_law_text, scope_keywords
 
 LAW_SOURCE = 'legalize_law'
 SOURCE_TYPES = {LAW_SOURCE: ('law_new', 'law_amended', 'law_repealed'), **ASSEMBLY_TYPES}
@@ -42,13 +43,21 @@ def registrations(home: Path) -> tuple[sqlite3.Row | None, dict, dict[str, list[
 
 
 def source_snapshot(
-    home: Path, source: str, run: sqlite3.Row | None, collectors: dict, rows: list[sqlite3.Row]
+    home: Path,
+    source: str,
+    run: sqlite3.Row | None,
+    collectors: dict,
+    rows: list[sqlite3.Row],
+    scope: tuple[LawScope, ...],
 ) -> tuple[str, list[tuple[Path, dict]], int]:
     if not run or not run['finished_at'] or run['status'] not in ('ok', 'partial'):
         raise ValueError(f'No completed successful {source} collection is available')
     if collectors.get(source, {}).get('status') != 'ok':
         raise ValueError(f'The latest {source} collector did not succeed')
     collected_at = timestamp(run['finished_at'])
+    folders = {law.folder for law in scope}
+    law_titles = {normalize_law_text(law.name + kind) for law in scope for kind in ('', ' 시행령', ' 시행규칙')}
+    keywords = tuple(map(normalize_law_text, scope_keywords(scope)))
     events = []
     skipped = 0
     for row in rows:
@@ -65,11 +74,23 @@ def source_snapshot(
             raise ValueError('Saved event does not match its monitor registration')
         if event.get('replay'):
             raise ValueError('Replay output cannot be used as a scheduled collection result')
+        target = event.get('target')
+        if not isinstance(target, dict) or not isinstance(title := target.get('law_name'), str) or not title.strip():
+            raise ValueError('Registered event has no law name')
+        normalized_title = normalize_law_text(title)
         if source == LAW_SOURCE:
+            item_id = target.get('item_id', '')
+            parts = item_id.split('/') if isinstance(item_id, str) else []
+            in_scope = parts[1] in folders if len(parts) == 3 and parts[0] == 'kr' else normalized_title in law_titles
+            if not in_scope:
+                skipped += 1
+                continue
             diff = Diff.model_validate(event.get('diff'))
             if not any(ARTICLE.fullmatch('##### ' + chunk.article) for chunk in diff.chunks):
                 skipped += 1
                 continue
+        elif not any(word in normalized_title for word in keywords):
+            continue
         events.append((path, event))
     return collected_at, events, skipped
 
@@ -97,11 +118,12 @@ def _synchronize_laws(
 
 
 def synchronize(database: Path, monitor_home: Path) -> dict[str, int]:
+    scope = load_law_scope()
     run, collectors, rows = registrations(monitor_home)
     assembly = [source for source in ASSEMBLY_TYPES if source in collectors]
     result = {'imported': 0, 'unchanged': 0, 'failed': 0, 'skipped': 0}
     try:
-        snapshot = source_snapshot(monitor_home, LAW_SOURCE, run, collectors, rows[LAW_SOURCE])
+        snapshot = source_snapshot(monitor_home, LAW_SOURCE, run, collectors, rows[LAW_SOURCE], scope)
         result = _synchronize_laws(database, monitor_home, snapshot)
     except (OSError, ValueError, sqlite3.Error) as exc:
         if not assembly:
@@ -111,7 +133,7 @@ def synchronize(database: Path, monitor_home: Path) -> dict[str, int]:
 
     for source in assembly:
         try:
-            stamp, events, _ = source_snapshot(monitor_home, source, run, collectors, rows[source])
+            stamp, events, _ = source_snapshot(monitor_home, source, run, collectors, rows[source], scope)
             imported, unchanged = import_assembly(database, source, stamp, [event for _, event in events])
         except (OSError, ValueError, sqlite3.Error) as exc:
             result[f'{source}_failed'] = 1

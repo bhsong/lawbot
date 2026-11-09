@@ -375,6 +375,7 @@ version = "0.1.0"
 source = { editable = "tools/lawbot-tools" }
 dependencies = [
     { name = "lawbot" },
+    { name = "lawbot-common" },
     { name = "numpy" },
     { name = "pandas" },
     { name = "scikit-learn" },
@@ -383,6 +384,7 @@ dependencies = [
 [package.metadata]
 requires-dist = [
     { name = "lawbot", editable = "services/chatbot" },
+    { name = "lawbot-common", editable = "packages/lawbot-common" },
     { name = "numpy", specifier = ">=2.0" },
     { name = "pandas", specifier = ">=3.0.6" },
     { name = "scikit-learn", specifier = ">=1.9" },

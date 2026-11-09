@@ -4,7 +4,7 @@
     uv run lawbot-build-articles --repo ../legalize-kr --asof 2026-10-20 --out-dir data/v4 [--check] [--scope 목록.csv]
 
 출력 (UTF-8 BOM, 행 끝 LF)
-- articles_<버전>.csv: 7개 법률 (+ --scope 문서의 법률). 버전은 --version (기본 v4)
+- articles_<버전>.csv: 공통 범위의 노동 법률 (+ --scope 문서의 법률). 버전은 --version (기본 v4)
 - law_articles_<버전>_decree.csv: 법률 + 시행령·시행규칙 (행 순서는 docs())
 - --check: 파일을 쓰지 않고 out-dir의 기존 파일과 바이트 단위로 비교 (다르면 종료 코드 1)
 - --scope: 범위 목록(law·kind·article_no)의 문서는 목록 조문과 그 조문을 대신하는 부칙 특례 조문만, 노동 문서 뒤에
@@ -49,15 +49,10 @@ from pathlib import Path
 
 import pandas as pd
 
-LAWS = [  # 대상 법률 (CSV의 법령 순서)
-    '근로기준법',
-    '근로자퇴직급여 보장법',
-    '최저임금법',
-    '남녀고용평등과 일ㆍ가정 양립 지원에 관한 법률',
-    '기간제 및 단시간근로자 보호 등에 관한 법률',
-    '파견근로자 보호 등에 관한 법률',
-    '임금채권보장법',
-]
+from lawbot.paths import DATA
+from lawbot_common import law_scope
+
+TAX_SCOPE = DATA / 'v5' / 'scope_tax.csv'
 KINDS = ['법률', '시행령', '시행규칙']
 LAW_COLS = ['law', 'article_id', 'article_no', 'title', 'chapter', 'deleted', 'text', 'effective_date', 'related_ids']
 DECREE_COLS = [*LAW_COLS, 'kind', 'parent_law', 'parent_ids', 'child_ids']
@@ -868,7 +863,7 @@ def doc_name(law, kind):
 
 def doc_names(doc_list=None):
     """공백 없앤 이름 → 문서명 (「…」 참조를 문서로)"""
-    pairs = [(law, kind) for law, kind, _ in doc_list] if doc_list else [(law, k) for law in LAWS for k in KINDS]
+    pairs = [(law, kind) for law, kind, _ in doc_list] if doc_list else doc_order()
     return {re.sub(r'\s+', '', doc_name(law, k)): doc_name(law, k) for law, k in pairs}
 
 
@@ -878,9 +873,10 @@ def find_files(repo: Repo, asof, doc_list=None):
     kinds_of: dict[str, list[str]] = {}
     for law, kind, _ in doc_list or docs(None):
         kinds_of.setdefault(law, []).append(kind)
+    scope_folders = {entry.name: entry.folder for entry in law_scope.load_law_scope()}
+    folders = {law: f'kr/{scope_folders.get(law, law.replace(" ", ""))}/' for law in kinds_of}
     candidates = {}
-    for law in kinds_of:
-        folder = f'kr/{law.replace(" ", "")}/'
+    for law, folder in folders.items():
         files = [f for f in repo.git('ls-tree', '--name-only', 'HEAD', folder).splitlines() if f.endswith('.md')]
         if files:
             repo.load_history(files)
@@ -895,24 +891,16 @@ def find_files(repo: Repo, asof, doc_list=None):
     }
     paths = {}
     for law, kinds in kinds_of.items():
-        folder = f'kr/{law.replace(" ", "")}/'
         for kind in kinds:
             doc = doc_name(law, kind)
             found = [path for sha, path in candidates[law] if titles[(sha, path)] == doc.replace(' ', '')]
             if len(found) != 1:
-                raise ValueError(f'{doc}: 시행 중인 파일이 하나가 아닙니다 ({found or "없음"}, 폴더 {folder})')
+                raise ValueError(f'{doc}: 시행 중인 파일이 하나가 아닙니다 ({found or "없음"}, 폴더 {folders[law]})')
             paths[doc] = found[0]
     return paths
 
 
 # ── 조문 행 ──────────────────────────────────────────────────────────
-
-
-def doc_order():
-    """[(법령, 종류)] 행 순서: 법률은 LAWS 순서, 그 뒤 하위법령은 법령 이름 가나다순으로 시행령 → 시행규칙.
-    순서를 바꾸지 않는 이유: 조문 임베딩(같은 batch에 든 문서에 따라 fp16 값이 달라짐)과 저장된 실험 산출물
-    (data/decree_exp, 후보 번호 = 행 순번)이 이 순서에 묶여 있다"""
-    return [(law, '법률') for law in LAWS] + [(law, k) for law in sorted(LAWS) for k in KINDS if k != '법률']
 
 
 def load_scope(path):
@@ -924,8 +912,25 @@ def load_scope(path):
     return scope
 
 
+def full_laws() -> list[str]:
+    """Read fully included laws in manifest order, excluding the v5 article selections."""
+    laws = [entry.name for entry in law_scope.load_law_scope()]
+    scoped = {law for law, _ in load_scope(TAX_SCOPE)}
+    if missing := scoped.difference(laws):
+        raise ValueError(f'조문 범위 목록의 법령이 공통 범위에 없습니다: {", ".join(sorted(missing))}')
+    return [law for law in laws if law not in scoped]
+
+
+def doc_order():
+    """[(법령, 종류)] 행 순서: 법률은 공통 범위 순서, 그 뒤 하위법령은 법령 이름 가나다순으로 시행령 → 시행규칙.
+    순서를 바꾸지 않는 이유: 조문 임베딩(같은 batch에 든 문서에 따라 fp16 값이 달라짐)과 저장된 실험 산출물
+    (data/decree_exp, 후보 번호 = 행 순번)이 이 순서에 묶여 있다"""
+    laws = full_laws()
+    return [(law, '법률') for law in laws] + [(law, k) for law in sorted(laws) for k in KINDS if k != '법률']
+
+
 def docs(scope):
-    """[(법령, 종류, 범위)] 만들 문서와 행 순서. 노동 7개 법률 문서는 전체(범위 None)로 doc_order() 그대로, 범위 목록 문서는
+    """[(법령, 종류, 범위)] 만들 문서와 행 순서. 노동 법률 문서는 전체(범위 None)로 doc_order() 그대로, 범위 목록 문서는
     그 뒤에 같은 규칙(법률은 목록에 나온 순서, 하위법령은 법령 이름순으로 시행령 → 시행규칙)"""
     out = [(law, kind, None) for law, kind in doc_order()]
     if not scope:

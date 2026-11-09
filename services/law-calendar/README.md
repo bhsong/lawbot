@@ -96,7 +96,9 @@ uv run --project services/law-calendar python -m law_calendar.db $CALENDAR_DB
 uv run --project services/law-calendar --frozen --no-sync python -m law_calendar.sync --monitor-home $MONITOR_HOME --database $CALENDAR_DB
 ```
 
-sync는 monitor state.db의 최신 수집 결과와 등록된 이벤트 파일을 읽기 전용으로 가져온다. 법령·의안·예고 출처별로 검증하고 변경이 0건인 정상 실행도 각 마지막 수집 시각을 기록한다. 실패한 출처는 시각과 기존 데이터를 보존하고 다른 출처의 입력은 진행한다. 입력 실패는 종료 코드 2, 입법예고 검토 대기나 PDF 재시도는 종료 코드 1로 점검 결과에 표시된다.
+sync는 monitor state.db의 최신 수집 결과와 등록된 이벤트 파일을 읽기 전용으로 가져온다. 법령은 공통 법령 범위의 Legalize KR 폴더를, 국회 의안과 입법예고는 정규화한 제목 키워드를 대조해 입력을 고른다. 이 필터는 정기 sync에 적용된다. 기존 일정과 스냅숏을 보존하며 명시적으로 지정한 이벤트의 오프라인 import도 지원한다. [공통 법령 범위](../../packages/lawbot-common/src/lawbot_common/law_scope.json)
+
+법령·의안·예고 출처별로 검증하고 변경이 0건인 정상 실행도 각 마지막 수집 시각을 기록한다. 실패한 출처는 시각과 기존 데이터를 보존하고 다른 출처의 입력은 진행한다. 입력 실패는 종료 코드 2, 입법예고 검토 대기나 PDF 재시도는 종료 코드 1로 점검 결과에 표시된다.
 
 ### 국회 이벤트 공개 검토
 

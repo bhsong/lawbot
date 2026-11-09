@@ -8,6 +8,7 @@ authors = [
 requires-python = ">=3.14"
 dependencies = [
     "lawbot",
+    "lawbot-common",
     "numpy>=2.0",
     "pandas>=3.0.6",
     "scikit-learn>=1.9",
@@ -25,6 +26,7 @@ lawbot-qa-split = "lawbot_tools.qa_split:main"   # 질문 배치 → 합친 질�
 
 [tool.uv.sources]
 lawbot = { workspace = true }
+lawbot-common = { workspace = true }
 
 [build-system]
 requires = ["uv_build>=0.12.19,<0.13.0"]

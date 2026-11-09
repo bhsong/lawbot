@@ -268,7 +268,7 @@ def test_missing_oc_refuses_collect_not_bootstrap(tmp_path, legalize, monkeypatc
     cfg = tmp_path / 'targets.yaml'
     cfg.write_text(
         f'repos: {{legalize-kr: "{legalize.url}", admrule-kr: "file:///none"}}\n'
-        'laws: [{name: 소득세법, category: 1}]\nadmrules: {names: [], keyword_rules: []}\n',
+        'admrules: {names: [], keyword_rules: []}\n',
         encoding='utf-8',
     )
     assert cli.main(['--home', str(tmp_path / 'h'), '--config', str(cfg), 'collect', '--only', 'legalize_law']) == 2

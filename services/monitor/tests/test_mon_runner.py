@@ -105,7 +105,7 @@ def test_cli_end_to_end(tmp_path, legalize, capsys, monkeypatch):
     cfg = tmp_path / 'targets.yaml'
     cfg.write_text(
         f'repos: {{legalize-kr: "{legalize.url}", admrule-kr: "file:///none"}}\n'
-        'laws: [{name: 근로기준법, category: 1}]\nadmrules: {names: [], keyword_rules: []}\n',
+        'admrules: {names: [], keyword_rules: []}\n',
         encoding='utf-8',
     )
     base = ['--home', str(tmp_path / 'h'), '--config', str(cfg)]

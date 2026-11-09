@@ -1,14 +1,21 @@
 """Assembly API and persisted transitions, using synthetic official responses."""
 
 import json
+import sqlite3
+from dataclasses import replace
 from urllib.error import URLError
 from urllib.parse import parse_qs, urlsplit
 
 import pytest
 
+from law_calendar.assembly_ingest import import_assembly
+from law_calendar.db import migrate
+from law_calendar.sync import synchronize
 from law_monitor.assembly import ACTIVE, BILLS, CLOSED, AssemblyClient, AssemblyError
 from law_monitor.collectors.assembly import AssemblyCollector
-from mon_helpers import make_config, make_monitor
+from law_monitor.collectors.legalize_git import default_collectors
+from law_monitor.config import load
+from mon_helpers import LAW_PATH, SourceRepo, law_md, make_config, make_monitor
 from test_mon_summary import FakeLLM
 
 KEY = 'test-secret-assembly-key'
@@ -171,6 +178,143 @@ def test_force_bootstrap_refreshes_existing_notice_period(tmp_path, closed):
     snapshot = json.loads((monitor.paths.home / item.file_path).read_text())
     assert snapshot['dates'] == {'notice_start': '2026-10-26', 'notice_end': '2026-11-06'}
     assert snapshot['context']['endpoint'] == (CLOSED if closed else ACTIVE)
+
+
+@pytest.mark.parametrize('backfill', ['none', 'same-revision', 'conflicting-revision', 'higher-revision'])
+def test_expanded_assembly_scope_bootstrap_and_calendar_import(tmp_path, monkeypatch, backfill):
+    repo = SourceRepo(tmp_path / 'legalize')
+    repo.commit({LAW_PATH: law_md('근로기준법', {'제1조': '기존 조문'})}, 'existing law')
+    prior_config = make_config(repo)
+    expanded_config = replace(prior_config, prelegislation_keywords=load().prelegislation_keywords)
+    feed = Feed()
+    feed.rows[BILLS] = [bill()]
+    feed.rows[ACTIVE] = [notice()]
+    new_bill_id = 'PRC_NEW_BILL'
+    new_notice_id = 'PRC_NEW_NOTICE'
+    new_notice_url = NOTICE_URL.replace(NOTICE_ID, new_notice_id)
+    earlier_id = 'PRC_EARLIER_NOTICE'
+    earlier_url = NOTICE_URL.replace(NOTICE_ID, earlier_id)
+    new_bill_fields = {
+        'BILL_ID': new_bill_id,
+        'BILL_NO': '2200013',
+        'BILL_NAME': '임금 채권 보장법 일부개정법률안',
+    }
+
+    def notice_detail(url):
+        assert url in (NOTICE_URL, new_notice_url, earlier_url)
+        return (feed.html if url == NOTICE_URL else feed.html.replace('2200012', '2200013')).encode()
+
+    def fetch(url, timeout):
+        if urlsplit(url).hostname == 'pal.assembly.go.kr':
+            return 200, notice_detail(url)
+        return feed.fetch(url, timeout)
+
+    monkeypatch.setattr('law_calendar.notice_content.fetch_official', notice_detail)
+    client = AssemblyClient(KEY, fetch=fetch, sleep=lambda _: None)
+    bills = AssemblyCollector('assembly_bill', client)
+    notices = AssemblyCollector('assembly_notice', client)
+    prior = make_monitor(tmp_path, prior_config, collectors=[default_collectors(prior_config)[0], bills, notices])
+    assert prior.bootstrap().failed == {}
+    feed.rows[BILLS] = [bill(COMMITTEE_DT='2026-11-01')]
+    before = prior.collect()
+    assert {(event['source'], event['new']['version_key']) for event in before.events} == {
+        (bills.name, '1'),
+        (notices.name, '1'),
+    }
+    database = tmp_path / 'calendar.db'
+    migrate(database)
+    result = synchronize(database, prior.paths.home)
+    assert result['failed'] == 0
+    assert result['assembly_bill_imported'] == result['assembly_notice_imported'] == 1
+    assert result['notice_auto_published'] == 1
+
+    if backfill != 'none':
+        prior_notice = next(event for event in before.events if event['source'] == notices.name)
+        backfilled = {
+            **prior_notice,
+            'event_id': 'manual-notice',
+            'detected_at': '2026-11-01T06:30:00+09:00',
+            'new': {'version_key': '2' if backfill == 'higher-revision' else '1'},
+            'target': {
+                **prior_notice['target'],
+                'item_id': new_notice_id,
+                'bill_id': new_bill_id,
+                'bill_no': new_bill_fields['BILL_NO'],
+                'law_name': new_bill_fields['BILL_NAME'],
+            },
+            'context': {**prior_notice['context'], 'source_url': new_notice_url},
+        }
+        if backfill == 'conflicting-revision':
+            backfilled['dates'] = {**prior_notice['dates'], 'notice_end': '2026-11-06'}
+            feed.rows[ACTIVE].append(notice(**new_bill_fields, LINK_URL=earlier_url))
+        assert import_assembly(database, notices.name, backfilled['detected_at'], [backfilled]) == (1, 0)
+    assert new_notice_id not in prior.state.items(notices.name)
+
+    feed.rows[BILLS].append(
+        bill(**new_bill_fields, LINK_URL=f'https://likms.assembly.go.kr/bill/billDetail.do?billId={new_bill_id}')
+    )
+    feed.rows[ACTIVE].append(notice(**new_bill_fields, LINK_URL=new_notice_url))
+    expanded = make_monitor(
+        tmp_path, expanded_config, collectors=[default_collectors(expanded_config)[0], bills, notices]
+    )
+    mismatched = expanded.collect()
+    assert mismatched.events == [] and set(mismatched.failed) == {bills.name, notices.name}
+    assert all('scope changed' in error for error in mismatched.failed.values())
+    for source, prior_id, new_id in ((bills.name, BILL_ID, new_bill_id), (notices.name, NOTICE_ID, new_notice_id)):
+        baseline = expanded.bootstrap(only=source, force=True)
+        assert baseline.ok == [source] and baseline.events == []
+        items = expanded.state.items(source)
+        assert items[prior_id].version_key == '1'
+        assert new_id in items
+        assert items[new_id].version_key == '0'
+
+    first = expanded.collect()
+    assert first.failed == {}
+    expected_ids = [earlier_id, new_notice_id] if backfill == 'conflicting-revision' else [new_notice_id]
+    assert [event['target']['item_id'] for event in first.events] == expected_ids
+    observed = first.events[-1]
+    assert observed['change_type'] == 'assembly_notice_observed'
+    assert observed['new']['version_key'] == '1'
+    if backfill == 'conflicting-revision':
+        with sqlite3.connect(database) as conn:
+            before_import = list(conn.iterdump(filter='assembly_%'))
+            result = synchronize(database, expanded.paths.home)
+            assert result['failed'] == result['assembly_notice_failed'] == 1
+            assert 'notice_auto_published' not in result
+            assert list(conn.iterdump(filter='assembly_%')) == before_import
+        return
+
+    result = synchronize(database, expanded.paths.home)
+    assert result['failed'] == 0
+    assert result['assembly_bill_imported'] == 0 and result['assembly_bill_unchanged'] == 1
+    assert result['assembly_notice_imported'] == (0 if backfill == 'same-revision' else 1)
+    assert result['assembly_notice_unchanged'] == (2 if backfill == 'same-revision' else 1)
+    assert result['notice_auto_published'] == 1
+    with sqlite3.connect(database) as conn:
+        assert conn.execute(
+            'SELECT snapshot_id FROM assembly_entries WHERE source=? AND upstream_id=?', (notices.name, new_notice_id)
+        ).fetchone() == ('manual-notice' if backfill != 'none' else observed['event_id'],)
+
+    feed.rows[BILLS][0] = bill(COMMITTEE_DT='2026-11-02')
+    if backfill == 'higher-revision':
+        feed.rows[ACTIVE][-1]['NOTI_ED_DT'] = '2026-11-06'
+        feed.html = feed.html.replace('2026-11-05', '2026-11-06')
+    next_run = expanded.collect()
+    assert next_run.failed == {}
+    [updated] = [event for event in next_run.events if event['source'] == bills.name]
+    assert updated['target']['item_id'] == BILL_ID and updated['new']['version_key'] == '2'
+    result = synchronize(database, expanded.paths.home)
+    assert result['assembly_bill_imported'] == 1
+    if backfill == 'higher-revision':
+        [changed_notice] = [event for event in next_run.events if event['source'] == notices.name]
+        assert changed_notice['new']['version_key'] == '2'
+        assert result['failed'] == result['assembly_notice_failed'] == 1
+    else:
+        assert result['failed'] == 0
+    with sqlite3.connect(database) as conn:
+        assert conn.execute(
+            'SELECT revision FROM assembly_snapshots WHERE upstream_id=? ORDER BY revision', (BILL_ID,)
+        ).fetchall() == [(1,), (2,)]
 
 
 def test_conflicting_pages_leave_notice_state_and_key_out_of_logs(tmp_path, caplog):

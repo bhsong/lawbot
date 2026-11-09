@@ -241,7 +241,8 @@ class _Builder:
             item = self.current.get(key)
             if item is None or item.version_key != new.blob:
                 self.emit(key, None, new, None)
-        for key in [k for k in self.current if k not in found]:
+        missing = [key for key, item in self.current.items() if key not in found and self.m.prefilter(item.file_path)]
+        for key in missing:
             self.emit(key, None, None, None)
 
     def emit(self, key: str, old: Version | None, new: Version | None, commit: CommitInfo | None) -> None:

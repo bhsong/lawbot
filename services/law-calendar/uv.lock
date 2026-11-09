@@ -83,6 +83,7 @@ version = "0.1.0"
 source = { editable = "." }
 dependencies = [
     { name = "fastapi" },
+    { name = "lawbot-common" },
     { name = "pillow" },
     { name = "pypdfium2" },
     { name = "uvicorn" },
@@ -91,10 +92,22 @@ dependencies = [
 [package.metadata]
 requires-dist = [
     { name = "fastapi", specifier = "==0.143.3" },
+    { name = "lawbot-common", editable = "../../packages/lawbot-common" },
     { name = "pillow", specifier = ">=13.0.0" },
     { name = "pypdfium2", specifier = ">=5.14.0" },
     { name = "uvicorn", specifier = "==0.54.0" },
 ]
+
+[[package]]
+name = "lawbot-common"
+version = "0.1.0"
+source = { editable = "../../packages/lawbot-common" }
+dependencies = [
+    { name = "pydantic" },
+]
+
+[package.metadata]
+requires-dist = [{ name = "pydantic", specifier = ">=2.0" }]
 
 [[package]]
 name = "opentelemetry-api"
