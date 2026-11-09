@@ -90,10 +90,12 @@ def unavailable_notice_source(monkeypatch):
 
 
 @pytest.mark.parametrize('source', ['assembly_notice', 'assembly_bill'])
-def test_redetected_snapshot_preserves_first_observation(scheduled, source):
+@pytest.mark.parametrize('changed_id', [False, True], ids=['same-id', 'changed-id'])
+def test_redetected_snapshot_preserves_first_observation(scheduled, source, changed_id):
     (database, home, _, _), state = scheduled
     event_id = register(home, state, source=source, date='2026-11-05')
     event = json.loads((home / f'{event_id}.json').read_text(encoding='utf-8'))
+    event['target']['committee_id'] = None
     assert import_assembly(database, source, NOW, [event]) == (1, 0)
     with sqlite3.connect(database) as conn:
         snapshot_query = 'SELECT collected_at,event_json FROM assembly_snapshots WHERE id=?'
@@ -101,11 +103,15 @@ def test_redetected_snapshot_preserves_first_observation(scheduled, source):
         assert before[0] == json.loads(before[1])['detected_at'] == NOW
 
         event['detected_at'] = REDETECTED_AT
+        if changed_id:
+            event['target']['committee_id'] = 'COMMITTEE_1'
+            event['event_id'] = event_id + '-redetected'
         assert import_assembly(database, source, REDETECTED_AT, [event]) == (0, 1)
         assert conn.execute(snapshot_query, (event_id,)).fetchone() == before
 
 
-def test_altered_snapshot_rolls_back_source_import(scheduled):
+@pytest.mark.parametrize('changed_id', [False, True], ids=['same-id', 'changed-id'])
+def test_altered_snapshot_rolls_back_source_import(scheduled, changed_id):
     (database, home, _, _), state = scheduled
     source = 'assembly_notice'
     event_id = register(home, state)
@@ -117,10 +123,26 @@ def test_altered_snapshot_rolls_back_source_import(scheduled):
         before = list(conn.iterdump())
         event['detected_at'] = REDETECTED_AT
         event['dates']['notice_end'] = '2026-11-07'
+        if changed_id:
+            event['event_id'] = event_id + '-redetected'
 
         with pytest.raises(ValueError, match='Registered Assembly snapshot was altered'):
             import_assembly(database, source, REDETECTED_AT, [new_event, event])
         assert list(conn.iterdump()) == before
+
+
+def test_existing_event_id_cannot_be_reused_for_another_snapshot(scheduled):
+    (database, home, _, _), state = scheduled
+    source = 'assembly_notice'
+    first_id = register(home, state)
+    second_id = register(home, state, notice_id='PRC_SECOND')
+    first = json.loads((home / f'{first_id}.json').read_text(encoding='utf-8'))
+    second = json.loads((home / f'{second_id}.json').read_text(encoding='utf-8'))
+    assert import_assembly(database, source, NOW, [first, second]) == (2, 0)
+
+    reusing_id = {**second, 'event_id': first_id, 'detected_at': REDETECTED_AT}
+    with pytest.raises(ValueError, match='Registered Assembly snapshot was altered'):
+        import_assembly(database, source, REDETECTED_AT, [reusing_id])
 
 
 def test_approved_notice_dates_correction_and_failed_source(scheduled, unavailable_notice_source):
