@@ -1,6 +1,6 @@
 # 데이터셋 스냅샷 검증 (2026-11-08)
 
-개발 트리에서 `tmp_path`의 DB에 v5 CSV를 이관하고 합성 피드백을 넣어 검증했다. [PR 10 계획](../plans/sqlite-admin-pipeline.md#pr-10--스냅샷-내보내기와-분할-배정-featdataset-snapshot)
+개발 트리에서 `tmp_path`의 DB에 v5 CSV를 이관하고 합성 피드백을 넣어 검증했다. [PR 10 계획](../archives/sqlite-admin-pipeline.md#pr-10--스냅샷-내보내기와-분할-배정-featdataset-snapshot)
 
 - Red 테스트 11개는 두 CLI가 없어 실패했다. 구현 후 새 테스트 14개가 통과했다. 첫 전체 실행에서 도구의 직접 `sqlite3` import가 계층 검사에 걸려 기존 DB 오류 타입을 사용하도록 수정했다.
 - v5 QA·분할 CSV 각 13,680행과 정답 키 1,745행이 원본과 바이트 단위로 같았다. `eval_v4.load_tax`에서 고정 Test 3,420개가 원본과 같았고, `keywords('v5')`와 `score_answers.score_one`이 내보낸 파일을 읽었다. 기존 분할 동결 트리거 테스트도 통과했다.

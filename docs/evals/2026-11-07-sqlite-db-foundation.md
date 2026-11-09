@@ -1,6 +1,6 @@
 # SQLite DB 기반 검증 (2026-11-07)
 
-PR 2 범위에서 `0001_init.sql`과 계획서의 DDL이 일치하는지 확인했다. 레포 밖 임시 DB에 합성 데이터만 썼다. [계획](../plans/sqlite-admin-pipeline.md#pr-2--db-기반-featsqlite-db-foundation)
+PR 2 범위에서 `0001_init.sql`과 계획서의 DDL이 일치하는지 확인했다. 레포 밖 임시 DB에 합성 데이터만 썼다. [계획](../archives/sqlite-admin-pipeline.md#pr-2--db-기반-featsqlite-db-foundation)
 
 - Red에서 DB CLI가 없어 초기화 테스트가 실패했다. 설정 테스트 5개는 `LAWBOT_DB` 경로 처리 부재로 실패했고, 의존 규칙 테스트 2개는 금지된 import를 넣었을 때 이를 검출했다. 구현 후 기본 테스트 전체에서 통과했다.
 - `lawbot-db init`, `migrate`, `backup`, `restore`, `status`를 설치된 명령으로 실행했다. 스키마 버전은 1이었고, 배포 패키지에서 초기 SQL을 확인했다. 같은 대상에 동시에 초기화 명령을 실행했을 때 한 명령만 성공했고, 결과 DB의 스키마와 파일 권한이 유효했다.

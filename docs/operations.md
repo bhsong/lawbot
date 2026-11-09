@@ -400,7 +400,7 @@ uv run python -m lawbot.auth hash
 | 조문 조회 | `GET /articles?q=…` | 200, 현재 검색기가 읽은 조문 반환 |
 | 캘린더 조회 | `GET /calendar/{path}` | 주소 미설정 503, 캘린더 연결 실패 502, 10초 초과 504 |
 
-POST는 JSON과 멱등 키가 필요합니다. 같은 요청을 재시도할 때는 본문 바이트와 키를 유지합니다. Tailscale로 접속하는 경우 브라우저가 보낸 `Origin`이 프록시를 거친 요청의 공개 주소와 일치하는지 확인합니다. 캘린더 프록시를 쓸 때는 `LAWBOT_CALENDAR_API_URL`을 설정하고 관리자 세션으로 조회합니다. 허용 경로와 요청 본문 형식은 [관리자 API 명세](plans/sqlite-admin-pipeline.md#37-관리자-api)에 있습니다.
+POST는 JSON과 멱등 키가 필요합니다. 같은 요청을 재시도할 때는 본문 바이트와 키를 유지합니다. Tailscale로 접속하는 경우 브라우저가 보낸 `Origin`이 프록시를 거친 요청의 공개 주소와 일치하는지 확인합니다. 캘린더 프록시를 쓸 때는 `LAWBOT_CALENDAR_API_URL`을 설정하고 관리자 세션으로 조회합니다. 허용 경로와 요청 본문 형식은 [관리자 API 명세](archives/sqlite-admin-pipeline.md#37-관리자-api)에 있습니다.
 
 ## 답변 피드백 (선택, `LAWBOT_FEEDBACK=1`)
 
@@ -442,7 +442,7 @@ DB와 백업에는 질문 원문이 들어갈 수 있습니다. 레포 밖의 �
 
 ### DB 코퍼스와 CSV 내보내기
 
-`LAWBOT_DB`에 현재 스키마의 DB를 지정하고 `LAWBOT_CORPUS=db`를 설정합니다. 웹앱은 시작 때 `LAWBOT_PROFILE`의 활성 릴리스를 읽습니다. `LAWBOT_DECREE_ENABLED=1`이면 조합 CSV를, 그 외에는 법률 CSV를 사용합니다. `uv run python -m lawbot.check_deploy`로 릴리스 ID·데이터 버전·해시·조문 수를 확인합니다. 새 활성 릴리스는 웹앱을 다시 시작할 때 적용됩니다. [코퍼스 전환과 복구 순서](plans/sqlite-admin-pipeline.md#73-코퍼스-db-전환-pr-1012-병합-후)
+`LAWBOT_DB`에 현재 스키마의 DB를 지정하고 `LAWBOT_CORPUS=db`를 설정합니다. 웹앱은 시작 때 `LAWBOT_PROFILE`의 활성 릴리스를 읽습니다. `LAWBOT_DECREE_ENABLED=1`이면 조합 CSV를, 그 외에는 법률 CSV를 사용합니다. `uv run python -m lawbot.check_deploy`로 릴리스 ID·데이터 버전·해시·조문 수를 확인합니다. 새 활성 릴리스는 웹앱을 다시 시작할 때 적용됩니다. [코퍼스 전환과 복구 순서](archives/sqlite-admin-pipeline.md#73-코퍼스-db-전환-pr-1012-병합-후)
 
 ```sh
 uv run lawbot-db export-release --db PATH --release ID --out DIR
@@ -452,11 +452,11 @@ uv run lawbot-db export-release --db PATH --release ID --out DIR
 
 ### DB 코퍼스 자동 갱신
 
-웹앱과 monitor의 `lawbot-articles-update`가 같은 `.env`에서 `LAWBOT_CORPUS=db`, `LAWBOT_DB`, `LAWBOT_PROFILE`을 읽도록 설정합니다. 운영의 첫 릴리스는 백업과 기존 CSV 이관 순서에 따라 준비합니다. 빈 프로필에서 기본 조문으로 시작할 때는 `uv run lawbot-articles-update --init`이 `data/<프로필>`을 이관하고 활성화합니다. 프로필에 이미 활성 릴리스가 있으면 초기화를 거부합니다. [코퍼스 전환과 복구 순서](plans/sqlite-admin-pipeline.md#73-코퍼스-db-전환-pr-1012-병합-후)
+웹앱과 monitor의 `lawbot-articles-update`가 같은 `.env`에서 `LAWBOT_CORPUS=db`, `LAWBOT_DB`, `LAWBOT_PROFILE`을 읽도록 설정합니다. 운영의 첫 릴리스는 백업과 기존 CSV 이관 순서에 따라 준비합니다. 빈 프로필에서 기본 조문으로 시작할 때는 `uv run lawbot-articles-update --init`이 `data/<프로필>`을 이관하고 활성화합니다. 프로필에 이미 활성 릴리스가 있으면 초기화를 거부합니다. [코퍼스 전환과 복구 순서](archives/sqlite-admin-pipeline.md#73-코퍼스-db-전환-pr-1012-병합-후)
 
 06:30 monitor는 같은 명령을 사용합니다. DB 폴더의 `.articles-update.lock`을 잡고 활성 릴리스의 해시를 확인한 뒤, 새 조문을 검사하고 임베딩·검색 검증을 거쳐 활성화합니다. `--restart`로 재시작한 웹앱이 응답하지 않으면 이전 릴리스를 다시 활성화하고 재시작합니다. `restart=skipped(...)`이면 새 릴리스가 활성으로 남으며 웹앱에는 다음 시작 때 적용됩니다. 갱신 결과의 `archive=`와 보고서의 보관 항목은 이전 릴리스 ID입니다. [자동 갱신 설계](archives/articles-auto-update.md#211-db-모드)
 
-수동 복구는 `uv run lawbot-articles-update --rollback --restart`로 실행합니다. 현재 활성 릴리스를 마지막으로 활성화한 이벤트의 `previous_release_id`를 복구합니다. DB를 CSV 모드로 전환할 때는 [전환과 복구 순서](plans/sqlite-admin-pipeline.md#73-코퍼스-db-전환-pr-1012-병합-후)에 따라 활성 릴리스를 먼저 내보냅니다.
+수동 복구는 `uv run lawbot-articles-update --rollback --restart`로 실행합니다. 현재 활성 릴리스를 마지막으로 활성화한 이벤트의 `previous_release_id`를 복구합니다. DB를 CSV 모드로 전환할 때는 [전환과 복구 순서](archives/sqlite-admin-pipeline.md#73-코퍼스-db-전환-pr-1012-병합-후)에 따라 활성 릴리스를 먼저 내보냅니다.
 
 DB 갱신 뒤에도 `data/live/v5`는 이전 CSV를 담고 있습니다. 평가 도구는 CSV를 읽으므로 평가 전에 `lawbot-db export-release`로 평가할 릴리스를 별도 폴더에 내보내고 그 CSV 경로를 지정합니다. 자동 생성 릴리스는 비교할 원본 CSV 폴더를 보관하지 않으므로 저장 바이트의 해시는 `export-release`로 검증합니다. [CSV 내보내기](#db-코퍼스와-csv-내보내기)
 
