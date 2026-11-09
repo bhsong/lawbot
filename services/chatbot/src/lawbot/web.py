@@ -390,7 +390,7 @@ def config_data(app, fb):
         'disabled': [{'key': s.key, 'label': s.label} for s in p.disabled],
         'default_model': p.models[0].key,
         'formats': [{'value': v, 'label': label} for label, v in view.FORMATS],
-        'examples': view.EXAMPLES,
+        'examples': view.V5_EXAMPLES if p.name == 'v5' else view.EXAMPLES,
         'sources_title': view.sources_title(app),
         'feedback': {
             'enabled': fb is not None,

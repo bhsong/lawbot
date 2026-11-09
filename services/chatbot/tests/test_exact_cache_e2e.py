@@ -14,7 +14,8 @@ from lawbot.db import cli
 from lawbot.db.connection import connect
 from lawbot.exact_cache import Snapshot, digest
 from lawbot.service import system_text
-from test_exact_cache import ID, QUESTION, RAW
+from lawbot.view import V5_EXAMPLES
+from test_exact_cache import ID, RAW
 from test_migrate_csv_to_sqlite import run as migrate
 
 pytestmark = pytest.mark.e2e_stub
@@ -31,6 +32,7 @@ def request_row(stack, number):
 
 
 def test_exact_cache_browser_flow(tmp_path, page, request):
+    question = V5_EXAMPLES[0]
     corpus = tmp_path / 'private' / 'corpus.db'
     cli.main(['init', '--db', str(corpus)])
     profile = deploy.get_profile({'LAWBOT_PROFILE': 'v5'})
@@ -50,7 +52,7 @@ def test_exact_cache_browser_flow(tmp_path, page, request):
         attach_decrees=False,
     )
     citations = [(ID, snapshot.articles[ID].text_hash)]
-    draft = Draft('fixture', QUESTION, 'key', digest(RAW), snapshot.render(RAW, citations), citations, {})
+    draft = Draft('fixture', question, 'key', digest(RAW), snapshot.render(RAW, citations), citations, {})
     store.stage(snapshot.namespace, [draft], 'tester', 'synthetic draft')
     namespace = snapshot.namespace.id
     approval = store.approve(
@@ -76,11 +78,11 @@ def test_exact_cache_browser_flow(tmp_path, page, request):
     try:
         assert stack.web.alive()
         denied = page.request.post(
-            stack.url + '/api/chat', data={'question': QUESTION, 'model': 'pro', 'format': 'concise'}
+            stack.url + '/api/chat', data={'question': question, 'model': 'pro', 'format': 'concise'}
         )
         assert denied.status == 401 and not e2e.request_log(stack.request_log)
         e2e.login(page, stack.url)
-        e2e.ask(page, QUESTION)
+        e2e.ask(page, question)
         e2e.wait_done(page)
         expect(e2e.answer(page).last).to_contain_text('가짜 모델 답변입니다.')
         shadow = request_row(stack, 1)
@@ -89,7 +91,8 @@ def test_exact_cache_browser_flow(tmp_path, page, request):
 
         store.set_mode('on', 'tester', 'test', approval)
         stack.stop_model_server()
-        e2e.ask(page, QUESTION)
+        page.reload()
+        page.get_by_role('button', name=question, exact=True).click()
         hit = request_row(stack, 2)
         assert hit['cache_reason'] == 'hit', f'cache decision: {hit["cache_reason"]} ({hit["exact_lookup_ms"]}ms)'
         expect(e2e.answer(page).last).to_contain_text('합성 결론입니다.')
@@ -103,11 +106,11 @@ def test_exact_cache_browser_flow(tmp_path, page, request):
         with connect(corpus) as conn:
             record = json.loads(conn.execute('SELECT record FROM feedbacks').fetchone()[0])
         assert record['request_id'] == hit['request_id'] and record['cache_answer_id'] == draft.answer_id(namespace)
-        assert record['question'] == QUESTION and record['answer_raw'] is None
+        assert record['question'] == question and record['answer_raw'] is None
 
         store.revoke('answer', draft.answer_id(namespace), 'tester', 'test')
         stack.ensure('normal')
-        e2e.ask(page, QUESTION)
+        e2e.ask(page, question)
         e2e.wait_done(page)
         expect(e2e.answer(page).last).to_contain_text('가짜 모델 답변입니다.')
         assert request_row(stack, 3)['cache_reason'] == 'inactive'
