@@ -185,6 +185,16 @@ def test_admin_batch_approves_drafts_and_activates_cache(review_stack, page, wid
         checkbox.check()
     expect(panel.get_by_role('checkbox', name='합성 즉시 반환 답변 선택')).to_be_disabled()
 
+    answer_list = panel.get_by_role('list', name='캐시 답변 목록').bounding_box()
+    answer_detail = detail.bounding_box()
+    assert answer_list and answer_detail
+    if width == 1280:
+        assert answer_list['x'] + answer_list['width'] < answer_detail['x']
+    else:
+        assert answer_list['y'] + answer_list['height'] <= answer_detail['y']
+    questions = detail.get_by_role('list', name='연결 질문 목록')
+    expect(questions.get_by_role('listitem').filter(has_text=KEEP_QUESTION)).to_be_visible()
+
     def change_second_hash(route):
         payload = route.request.post_data_json
         payload['items'][1]['preview_sha256'] = '0' * 64

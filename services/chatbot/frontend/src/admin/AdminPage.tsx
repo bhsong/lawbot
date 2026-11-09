@@ -5,7 +5,7 @@ import './admin.css'
 
 export function AdminPage({ onUnauthorized }: { onUnauthorized: () => void }) {
   const [tab, setTab] = useState<'management' | 'cache'>('management')
-  return <main className="lc-page admin-page">
+  return <main className={tab === 'cache' ? 'lc-page admin-page admin-page-cache' : 'lc-page admin-page'}>
     <h1>피드백 &amp; 법령 관리</h1>
     <nav aria-label="관리 메뉴" className="cache-actions">
       <button type="button" aria-pressed={tab === 'management'} onClick={() => setTab('management')}>피드백·법령</button>
