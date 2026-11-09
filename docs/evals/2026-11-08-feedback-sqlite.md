@@ -1,6 +1,6 @@
 # SQLite 피드백 저장 검증 (2026-11-08)
 
-개발 트리에서 가짜 모델과 임시 DB로 PR 5를 확인했다. [계획서](../plans/sqlite-admin-pipeline.md)
+개발 트리에서 가짜 모델과 임시 DB로 PR 5를 확인했다. [계획서](../archives/sqlite-admin-pipeline.md)
 
 - SQLite 저장, 스키마 오류, 사용한 system 보존과 새 턴 필드, `feedback_review --db`의 실패를 먼저 재현했다.
 - 저장된 `record` JSON에 기존 키와 새 필드가 모두 들어갔다. 웹앱 시작 후 CSV와 system 파일을 교체해도 이미 읽은 CSV와 실제 생성에 사용한 system의 해시를 기록했다.

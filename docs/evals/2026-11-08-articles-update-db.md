@@ -1,6 +1,6 @@
 # DB 코퍼스 자동 갱신 검증 (2026-11-08)
 
-개발 트리에서 `tmp_path`의 DB, 가짜 Legalize KR Git 저장소, 가짜 모델 서버와 재시작 함수로 검증했다. [PR 12 계획](../plans/sqlite-admin-pipeline.md#pr-12--조문-자동-갱신을-릴리스와-연동-featarticles-update-db)
+개발 트리에서 `tmp_path`의 DB, 가짜 Legalize KR Git 저장소, 가짜 모델 서버와 재시작 함수로 검증했다. [PR 12 계획](../archives/sqlite-admin-pipeline.md#pr-12--조문-자동-갱신을-릴리스와-연동-featarticles-update-db)
 
 - 초기 Red 11개는 DB 설정에도 CSV 경로를 타서 실패했다. 초기화와 활성 릴리스 검증, DB 폴더 잠금, DB 상태 전이와 실패 이벤트를 구현한 뒤 통과했다.
 - 변경 없는 경우 보고서를 쓰고 종료 0을 반환했다. 생성 전 사전 검사에서는 DB 설정 누락, 활성 릴리스 누락, 복원 해시 불일치를 검출했다. 실제 조문 생성과 임베딩은 이 오류들 뒤에 시작하지 않았다.

@@ -1,6 +1,6 @@
 # 운영 코퍼스 DB 전환 확인 (2026-11-08)
 
-운영 worktree를 태그 `v5.1.1`의 `6657a06`에서 `main`의 `ff101b9a94bb52df31f6a4a37d40ffa4420ced01`(PR #94–#96)로 전환하고, 웹앱과 06:30 조문 자동 갱신이 SQLite DB의 활성 코퍼스 릴리스를 읽도록 바꿨다. 관리자 변수는 아직 넣지 않았다(관리자 기능 꺼짐). 모든 시각은 KST다. [전환 순서](../plans/sqlite-admin-pipeline.md#73-코퍼스-db-전환-pr-1012-병합-후) · [DB 코퍼스 운영](../operations.md#db-코퍼스와-csv-내보내기)
+운영 worktree를 태그 `v5.1.1`의 `6657a06`에서 `main`의 `ff101b9a94bb52df31f6a4a37d40ffa4420ced01`(PR #94–#96)로 전환하고, 웹앱과 06:30 조문 자동 갱신이 SQLite DB의 활성 코퍼스 릴리스를 읽도록 바꿨다. 관리자 변수는 아직 넣지 않았다(관리자 기능 꺼짐). 모든 시각은 KST다. [전환 순서](../archives/sqlite-admin-pipeline.md#73-코퍼스-db-전환-pr-1012-병합-후) · [DB 코퍼스 운영](../operations.md#db-코퍼스와-csv-내보내기)
 
 ## 반영 범위
 

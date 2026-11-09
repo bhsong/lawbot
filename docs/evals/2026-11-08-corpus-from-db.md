@@ -1,6 +1,6 @@
 # DB 코퍼스 검색 동등성 검증 (2026-11-08)
 
-개발 트리의 v5 원본 조문을 `tmp_path`의 SQLite DB에 이관하고 가짜 모델 서버로 CSV·DB 모드를 대조했다. [PR 11 계획](../plans/sqlite-admin-pipeline.md#pr-11--웹앱-코퍼스를-db-활성-릴리스에서-읽기-featcorpus-from-db)
+개발 트리의 v5 원본 조문을 `tmp_path`의 SQLite DB에 이관하고 가짜 모델 서버로 CSV·DB 모드를 대조했다. [PR 11 계획](../archives/sqlite-admin-pipeline.md#pr-11--웹앱-코퍼스를-db-활성-릴리스에서-읽기-featcorpus-from-db)
 
 | 하위법령 첨부 | 선택한 CSV | 검색 인덱스 | CSV와 같은 캐시 키 | DB 시작 시 가짜 인코더 호출 |
 |---|---|---|---|---|

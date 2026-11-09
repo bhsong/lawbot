@@ -1,6 +1,6 @@
 # 조문 부분 클론 blob 사전 수신 검증 (2026-11-08)
 
-임시 bare 원격과 `file://` 부분·전체 클론을 사용했다. 합성 법령 2개, 문서 6개에 5개 버전을 넣고 `GIT_TRACE2_EVENT`의 fetch 시작 이벤트를 셌다. [계획서](../plans/articles-blob-prefetch.md)
+임시 bare 원격과 `file://` 부분·전체 클론을 사용했다. 합성 법령 2개, 문서 6개에 5개 버전을 넣고 `GIT_TRACE2_EVENT`의 fetch 시작 이벤트를 셌다. [계획서](../archives/articles-blob-prefetch.md)
 
 | 로컬 검증 | 수정 전 fetch | 수정 후 fetch |
 |---|---:|---:|
