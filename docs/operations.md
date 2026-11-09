@@ -460,6 +460,27 @@ uv run lawbot-db export-release --db PATH --release ID --out DIR
 
 DB 갱신 뒤에도 `data/live/v5`는 이전 CSV를 담고 있습니다. 평가 도구는 CSV를 읽으므로 평가 전에 `lawbot-db export-release`로 평가할 릴리스를 별도 폴더에 내보내고 그 CSV 경로를 지정합니다. 자동 생성 릴리스는 비교할 원본 CSV 폴더를 보관하지 않으므로 저장 바이트의 해시는 `export-release`로 검증합니다. [CSV 내보내기](#db-코퍼스와-csv-내보내기)
 
+### P07 정확 일치 캐시
+
+v5 DB 코퍼스와 Pro 간결형에서 승인된 질문을 재사용합니다. `LAWBOT_EXACT_CACHE_DB`에는 코퍼스·피드백 DB와 분리한 비공개 로컬 SQLite 경로를 지정합니다. 미설정이면 웹앱은 캐시를 조회하지 않고, 새 DB의 모드는 `off`입니다. 웹앱 시작 로그와 `uv run python -m lawbot.check_deploy`에서 캐시 스키마·모드·namespace 또는 우회 사유를 확인합니다.
+
+운영 반영과 활성화는 별도 승인 후 진행합니다. 아래 명령은 fish 기준입니다. `$cache_db`는 전용 DB, `$cache_bundle`은 원본 P07 ZIP, `$review_dir`는 새 비공개 검토 폴더입니다.
+
+```fish
+uv run python -m lawbot.cache_admin init --db "$cache_db"
+uv run python -m lawbot.cache_admin seed --db "$cache_db" --bundle "$cache_bundle" --dry-run --report-dir "$review_dir"
+uv run python -m lawbot.cache_admin seed --db "$cache_db" --bundle "$cache_bundle"
+uv run python -m lawbot.cache_admin approve --db "$cache_db" --bundle "$cache_bundle" --review-file "$review_dir/review.json" --reviewed --reason "$reason"
+uv run python -m lawbot.cache_admin set-mode shadow --db "$cache_db" --bundle "$cache_bundle" --approval "$approval_id" --reason "$reason"
+uv run python -m lawbot.cache_admin set-mode on --db "$cache_db" --bundle "$cache_bundle" --approval "$approval_id" --reason "$reason"
+```
+
+승인 전에 `review.json`의 표시본·근거·적용 조건·공개 적합성을 확인하고 승인한 질문과 답변 ID만 `selection`에 적습니다. `approve`가 반환한 ID를 `$approval_id`에 넣습니다. `shadow`에서 실제 캐시 반환 0건, 적중 후보·비용·우회 사유를 확인한 뒤 승인된 범위만 `on`으로 전환합니다. 추가 보호셋이 있으면 `--protected-csv`에 같은 입력을 검토·등록·승인·전환 때 지정합니다. 보호셋 갱신 전에 캐시를 `off`로 둡니다.
+
+새 법령 릴리스가 정기 갱신으로 활성화되거나 `answer_format.py`·`citation.py` 파일이 바뀌면 기존 승인 묶음은 RAG로 우회합니다. 두 표시 파일의 지문은 파일 전체를 사용하므로 주석만 바뀌어도 namespace가 달라집니다. 같은 릴리스로 롤백해도 활성화 이벤트가 바뀝니다. 새 namespace에서는 `off`에서 seed 검사·등록과 재승인을 다시 하고, 동일 namespace의 활성화 이벤트만 바뀌면 현행성·보호셋·표시본을 다시 확인해 재승인합니다. `shadow`에서 확인한 후 `on`으로 전환합니다.
+
+문제가 발생하면 `set-mode off --db "$cache_db" --reason "$reason"`로 먼저 우회하고, 개별 답변은 `revoke answer "$answer_id" --db "$cache_db" --reason "$reason"`로 철회합니다. 두 명령은 `uv run python -m lawbot.cache_admin`으로 실행합니다. 동일 namespace의 정정은 `off`에서 승인된 질문 하나씩 `replace`로 처리하고 새 승인 ID를 사용합니다. DB 복구가 필요하면 `cache_admin backup`의 온라인 백업을 별도 경로에 준비해 무결성과 마지막 철회·감사 이력을 대조합니다. 복구 DB도 `off`에서 시작합니다. [정정 검토 파일과 세부 절차](plans/exact-cache-p07.md#10-구현-명령과-개발-기록)
+
 ### CSV·JSONL 이관과 대조
 
 개발 확인은 임시 DB에서 실행합니다. 이관 명령의 `--db`는 필수이며 상대 경로는 레포 최상위 기준입니다. 기존 스키마 버전 1의 DB에는 백업 후 `lawbot-db migrate --db PATH`로 CSV 복원 형식 열을 추가합니다. 이관 전에 `--dry-run`으로 원본을 검사할 수 있습니다. `verify --dry-run`은 경로만 검사합니다. 실제 대조는 `verify`가 DB를 읽기 전용으로 열어 수행합니다.

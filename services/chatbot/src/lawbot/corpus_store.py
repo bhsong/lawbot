@@ -64,6 +64,18 @@ def active_release(db: Path, profile: str) -> CorpusRelease:
     )
 
 
+def active_token(db: Path, profile: str, *, timeout: float = 5) -> tuple[str, int] | None:
+    """Read the active release and its latest activation/rollback event in one snapshot."""
+    with connect(db, timeout=timeout) as conn:
+        return conn.execute(
+            'SELECT a.release_id,e.event_id FROM active_corpus a JOIN corpus_events e ON e.profile=a.profile '
+            "WHERE a.profile=? AND e.kind IN ('activated','rolled_back') "
+            'AND e.event_id=(SELECT max(event_id) FROM corpus_events WHERE profile=a.profile '
+            "AND kind IN ('activated','rolled_back')) AND e.release_id=a.release_id",
+            (profile,),
+        ).fetchone()
+
+
 def _active_id(conn: sqlite3.Connection, profile: str) -> str | None:
     row = conn.execute('SELECT release_id FROM active_corpus WHERE profile=?', (profile,)).fetchone()
     return row[0] if row else None

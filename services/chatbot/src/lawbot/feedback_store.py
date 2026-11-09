@@ -342,6 +342,8 @@ class Proposal:
 
 def _proposal(conn, articles, feedback_id, down_review):
     state = _state(conn, feedback_id)
+    if json.loads(state.row['record']).get('response_source') == 'exact_cache':
+        raise StoreError('cache_feedback', '캐시 답변 피드백은 생성 답변 학습 자료로 승격할 수 없습니다.')
     if state.superseded:
         raise StoreError('superseded', '더 최근 피드백이 있습니다.', 409)
     if state.promoted:

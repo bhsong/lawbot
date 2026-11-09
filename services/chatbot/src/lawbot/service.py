@@ -88,6 +88,7 @@ class LawbotApp:
     corpus_release_id: str | None = None
     corpus_manifest: dict | None = None
     articles_sha256: str | None = None
+    exact_cache: object = None
 
 
 def uses_decrees(app, model_key):
@@ -99,6 +100,39 @@ def uses_decrees(app, model_key):
 def system_text(profile, spec):
     """모델별 system 파일 → 프로필 system 파일 순서"""
     return (spec.system_file or profile.system_file).read_text(encoding='utf-8').strip()
+
+
+def cache_snapshot(profile, release, decree):
+    """Build the cache namespace from the same settings and release used by the web app."""
+    from lawbot.exact_cache import MODEL, PROFILE, Snapshot
+
+    if profile.name != PROFILE or release is None:
+        return None
+    spec = next((model for model in profile.models if model.key == MODEL), None)
+    if spec is None:
+        return None
+    return Snapshot.load(
+        release,
+        system=system_text(profile, spec),
+        combined=decree is not None,
+        attach_decrees=decree is not None and MODEL in decree.models,
+    )
+
+
+def inspect_exact_cache(path, corpus_db, profile, release, decree):
+    from lawbot.cache_runtime import ExactCache
+    from lawbot.cache_store import Store
+
+    if corpus_db is None or release is None:
+        return None, ('WARN', '사용 안 함 (활성 DB 코퍼스 필요)')
+    try:
+        snapshot = cache_snapshot(profile, release, decree)
+    except OSError, ValueError, KeyError:
+        return None, ('WARN', '사용 안 함 (답변 정책 또는 조문 스냅샷 확인 실패)')
+    if snapshot is None:
+        return None, ('WARN', '사용 안 함 (v5 Pro 프로필 필요)')
+    cache = ExactCache(Store(path), corpus_db, snapshot)
+    return cache, cache.deployment_status()
 
 
 def check_profile_files(p, corpus=None):
@@ -235,6 +269,10 @@ def load_app(settings=None):
         f'({", ".join(s.model for s in p.models)})'
     )
     full = p.system_file.read_text(encoding='utf-8').strip()
+    exact_cache = None
+    if cfg.exact_cache_db is not None:
+        exact_cache, (level, message) = inspect_exact_cache(cfg.exact_cache_db, cfg.db, p, release, dc)
+        (log.warning if level == 'WARN' else log.info)('정확 일치 캐시: %s', message)
     return LawbotApp(
         p,
         retriever,
@@ -248,6 +286,7 @@ def load_app(settings=None):
         corpus_release_id=release.release_id if release else None,
         corpus_manifest=metadata if release else None,
         articles_sha256=getattr(retriever, 'articles_sha256', None),
+        exact_cache=exact_cache,
     )
 
 
@@ -264,6 +303,12 @@ def format_system(app, model_key, fmt):
     return None
 
 
+def count_call(st: Timing, *stages: str) -> None:
+    if (counts := st.get('call_counts')) is not None:
+        for stage in stages:
+            counts[stage] += 1
+
+
 def retrieve(app, question, k, st: Timing, model_key=None) -> tuple[list[Hit], list[Hit]]:
     """(법률 근거 조문 k개, 첨부할 하위법령 목록). 리랭커가 없으면 기존과 같은 임베딩 상위 k개,
     있으면 임베딩 상위 reranker.candidates개를 리랭킹해 점수순 k개. 측정값 search·rerank(초)를 st에 적는다
@@ -274,6 +319,7 @@ def retrieve(app, question, k, st: Timing, model_key=None) -> tuple[list[Hit], l
     되돌리면 화면의 조문이 어느 방식으로 고른 것인지 알 수 없고, 켜 둔 설정과 다른 결과가 섞인다"""
     st['_stage'] = 'search'
     t0 = time.perf_counter()
+    count_call(st, 'embedding', 'search')
     if app.reranker is None:
         hits = app.retriever.search(question, k=k)
         st['search'] = time.perf_counter() - t0
@@ -282,6 +328,7 @@ def retrieve(app, question, k, st: Timing, model_key=None) -> tuple[list[Hit], l
     st['search'] = time.perf_counter() - t0
     st['_stage'] = 'rerank'
     t1 = time.perf_counter()
+    count_call(st, 'rerank')
     hits = app.reranker.rerank(question, candidates, top_k=k)
     st['rerank'] = time.perf_counter() - t1
     if not uses_decrees(app, model_key):
@@ -294,10 +341,12 @@ def retrieve_decrees(app, question, top1_law, st: Timing) -> list[Hit]:
     dc = app.decree
     st['_stage'] = 'search'
     t0 = time.perf_counter()
+    count_call(st, 'embedding', 'search')
     cands = app.retriever.search_decrees(question, k=dc.candidates)
     st['decree_search'] = time.perf_counter() - t0
     st['_stage'] = 'rerank'
     t1 = time.perf_counter()
+    count_call(st, 'rerank')
     scored = app.reranker.rerank(question, cands, top_k=len(cands))
     st['decree_rerank'] = time.perf_counter() - t1
     att = decree_filter.attach(scored, top1_law, dc.tau, dc.k)
@@ -388,6 +437,9 @@ def request_record(app, st, fmt, status, error):
     rec |= {f'{k}_ms': None if st.get(k) is None else round(st[k] * 1000) for k in MS_FIELDS}
     rec |= {k: st.get(k) for k in ('prompt_tokens', 'gen_tokens', 'peak_gb', 'finish')}
     rec |= {k: st.get(k) for k in ('refused', 'n_cited', *CITE_FIELDS)}
+    rec |= st.get('cache_metrics', {})
+    if 'call_counts' in st:
+        rec['call_counts'] = st['call_counts']
     return rec | {'status': status, 'error_type': error}
 
 
@@ -427,7 +479,7 @@ def log_request(app, st, fmt, status, error=None):
         log.warning(f'경고: 요청 로그를 쓰지 못했습니다 ({path}: {type(e).__name__})')
 
 
-def ask(app, question, model_key, k=TOP_K, fmt=None):
+def ask(app, question, model_key, k=TOP_K, fmt=None, *, request_id=None, cache_metrics=None, report=None):
     """질문 하나: (단계, 검색 조문, 답변 원문, 측정값)을 차례로 돌려준다
     단계 'load'(모델 전환 대기) → 'generate'(토큰마다) → 'done'. 조문은 생성 전에 정해짐
     fmt: 화면 형식 ('full'/'concise'). 주면 format_system으로 system을 고름 (None이면 모델 기본, 평가 스크립트)
@@ -437,7 +489,17 @@ def ask(app, question, model_key, k=TOP_K, fmt=None):
     질문마다 요청 로그 한 줄 (log_request): 성공 ok / 오류 error(AskError로 감싸 올림: kind는 요청 로그 error_type과 같고 화면 안내에 씀) /
     중간에 멈춤 cancelled (정지 버튼 등으로 생성기를 닫음)"""
     t0 = time.perf_counter()
-    st: Timing = {'model': model_key, 'load': None, 'request_id': uuid.uuid4().hex[:12]}
+    st: Timing = {'model': model_key, 'load': None, 'request_id': request_id or uuid.uuid4().hex[:12]}
+    if cache_metrics is not None:
+        st['cache_metrics'] = cache_metrics
+        st['call_counts'] = dict.fromkeys(('embedding', 'search', 'rerank', 'llm'), 0)
+
+    def record(status, error=None):
+        if report is None:
+            log_request(app, st, fmt, status, error)
+        else:
+            report(st, status, error)
+
     stage, logged = 'search', False
     try:
         # 요청 id를 모델 서버 요청 헤더로 (단계마다 다시 넣음: 웹앱은 생성기의 next()를 매번 다른 스레드 문맥에서 부름)
@@ -453,6 +515,7 @@ def ask(app, question, model_key, k=TOP_K, fmt=None):
         st['_system'] = system or getattr(llm, 'system', None)
         raw, last, t_gen = '', None, time.perf_counter()
         REQUEST_ID.set(st['request_id'])
+        count_call(st, 'llm')
         for r in llm.stream(question, hits, **({'system': system} if system else {})):
             if last is None:
                 st['ttft'] = time.perf_counter() - t_gen
@@ -473,13 +536,13 @@ def ask(app, question, model_key, k=TOP_K, fmt=None):
             st[name] = getattr(last, attr, None)
         st |= cast(Timing, answer_check(app, raw, hits))
         log_timing(st)
-        log_request(app, st, fmt, 'ok')
+        record('ok')
         logged = True
         yield 'done', hits, raw, st
     except GeneratorExit:
         if not logged:
             st['total'] = time.perf_counter() - t0
-            log_request(app, st, fmt, 'cancelled')
+            record('cancelled')
             logged = True
         raise
     except Exception as e:
@@ -488,5 +551,5 @@ def ask(app, question, model_key, k=TOP_K, fmt=None):
         kind = error_type(e, stage)
         if not logged:
             st['total'] = time.perf_counter() - t0
-            log_request(app, st, fmt, 'error', kind)
+            record('error', kind)
         raise AskError(kind, stage, e) from e

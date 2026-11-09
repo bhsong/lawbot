@@ -261,7 +261,7 @@ def check_model_server(p, out):
 def run():
     p = get_profile()
     out = [('INFO', f'프로필 {p.name}: {p.title}')]
-    release = part = None
+    release = part = db = None
     corpus_unavailable = False
     try:
         if settings.corpus_mode(os.environ) == 'db':
@@ -290,6 +290,13 @@ def run():
                 f'sha256 {metadata["articles_sha256"][:12]} · 비삭제 조문 {metadata["articles_total"]}개',
             )
         )
+    if cache_value := os.environ.get('LAWBOT_EXACT_CACHE_DB', '').strip():
+        try:
+            cache_path = settings.exact_cache_path(cache_value, db)
+            _, (level, message) = service.inspect_exact_cache(cache_path, db, p, release, deploy.decree(p))
+        except OSError, RuntimeError, ValueError:
+            level, message = 'WARN', '사용 안 함 (캐시 설정 확인 실패)'
+        out.append((level, f'정확 일치 캐시: {message}'))
     check_ports(out)
     check_model_server(p, out)
     return out
