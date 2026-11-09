@@ -5,6 +5,7 @@ import pytest
 
 from lawbot import check_deploy, deploy, embed_cache, feedback, manifest, service, view
 from lawbot.admin import Corpus
+from lawbot.cache_store import init as init_cache
 from lawbot.db import cli
 from lawbot.db.connection import connect, transaction
 from lawbot.db.csv_import import sha256
@@ -194,6 +195,20 @@ def test_embedding_revision_is_optional_if_lookup_has_no_match(corpus_db, env, m
     assert service.load_app().corpus_release_id == RELEASE
     with connect(corpus_db) as conn:
         assert conn.execute('SELECT model_revision FROM embedding_sets').fetchall() == [(None,)]
+
+
+def test_check_deploy_reports_configured_exact_cache(corpus_db, env, tmp_path):
+    configure(env, corpus_db)
+    path = tmp_path / 'private' / 'cache.db'
+    env.setenv('LAWBOT_EXACT_CACHE_DB', str(path))
+    checks = check_deploy.run()
+    assert ('WARN', '정확 일치 캐시: 사용 안 함 (DB 파일 없음)') in checks
+    init_cache(path)
+    checks = check_deploy.run()
+    assert any(
+        level == 'OK' and '정확 일치 캐시:' in text and '스키마 1 · 모드 off · namespace ' in text
+        for level, text in checks
+    )
 
 
 def test_check_deploy_checks_db_bytes(corpus_db, env, tmp_path):

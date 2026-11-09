@@ -102,22 +102,37 @@ def system_text(profile, spec):
     return (spec.system_file or profile.system_file).read_text(encoding='utf-8').strip()
 
 
-def cache_snapshot(cfg, release):
+def cache_snapshot(profile, release, decree):
     """Build the cache namespace from the same settings and release used by the web app."""
     from lawbot.exact_cache import MODEL, PROFILE, Snapshot
 
-    if cfg.corpus != 'db' or cfg.profile.name != PROFILE or release is None:
+    if profile.name != PROFILE or release is None:
         return None
-    spec = next((model for model in cfg.profile.models if model.key == MODEL), None)
+    spec = next((model for model in profile.models if model.key == MODEL), None)
     if spec is None:
         return None
-    dc = cfg.decree
     return Snapshot.load(
         release,
-        system=system_text(cfg.profile, spec),
-        combined=dc is not None,
-        attach_decrees=dc is not None and MODEL in dc.models,
+        system=system_text(profile, spec),
+        combined=decree is not None,
+        attach_decrees=decree is not None and MODEL in decree.models,
     )
+
+
+def inspect_exact_cache(path, corpus_db, profile, release, decree):
+    from lawbot.cache_runtime import ExactCache
+    from lawbot.cache_store import Store
+
+    if corpus_db is None or release is None:
+        return None, ('WARN', '사용 안 함 (활성 DB 코퍼스 필요)')
+    try:
+        snapshot = cache_snapshot(profile, release, decree)
+    except OSError, ValueError, KeyError:
+        return None, ('WARN', '사용 안 함 (답변 정책 또는 조문 스냅샷 확인 실패)')
+    if snapshot is None:
+        return None, ('WARN', '사용 안 함 (v5 Pro 프로필 필요)')
+    cache = ExactCache(Store(path), corpus_db, snapshot)
+    return cache, cache.deployment_status()
 
 
 def check_profile_files(p, corpus=None):
@@ -255,13 +270,9 @@ def load_app(settings=None):
     )
     full = p.system_file.read_text(encoding='utf-8').strip()
     exact_cache = None
-    if cfg.exact_cache_db and cfg.db:
-        from lawbot.cache_runtime import ExactCache
-        from lawbot.cache_store import Store
-
-        snapshot = cache_snapshot(cfg, release)
-        if snapshot is not None:
-            exact_cache = ExactCache(Store(cfg.exact_cache_db), cfg.db, snapshot)
+    if cfg.exact_cache_db is not None:
+        exact_cache, (level, message) = inspect_exact_cache(cfg.exact_cache_db, cfg.db, p, release, dc)
+        (log.warning if level == 'WARN' else log.info)('정확 일치 캐시: %s', message)
     return LawbotApp(
         p,
         retriever,

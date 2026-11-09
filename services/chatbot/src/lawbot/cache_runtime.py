@@ -8,8 +8,6 @@ from lawbot.cache_store import READ_TIMEOUT, CacheDatabaseError, Store, translat
 from lawbot.corpus_store import active_token
 from lawbot.exact_cache import FORMAT, MODEL, PROFILE, Article, Snapshot, normalize
 
-LOOKUP_BUDGET = 0.05
-
 
 @dataclass(frozen=True)
 class Match:
@@ -42,19 +40,39 @@ class ExactCache:
     corpus_db: Path
     snapshot: Snapshot
 
+    def deployment_status(self) -> tuple[str, str]:
+        namespace = self.snapshot.namespace.id
+        try:
+            with translate_sqlite_errors():
+                version = self.store.check_schema()
+                control = self.store.control()
+                detail = f'스키마 {version} · 모드 {control.mode} · namespace {namespace[:12]}'
+                if control.namespace_id is not None:
+                    if control.namespace_id != namespace:
+                        return 'WARN', f'사용 안 함 (namespace 불일치 · {detail})'
+                    expected = (self.snapshot.release_id, control.activation_event)
+                    if active_token(self.corpus_db, PROFILE, timeout=READ_TIMEOUT) != expected:
+                        return 'WARN', f'사용 안 함 (코퍼스 활성화 불일치 · {detail})'
+        except FileNotFoundError:
+            return 'WARN', '사용 안 함 (DB 파일 없음)'
+        except OSError, RuntimeError:
+            return 'WARN', '사용 안 함 (DB 스키마 또는 읽기 확인 실패)'
+        return 'OK', f'{"사용 안 함" if control.mode == "off" else "사용"} ({detail})'
+
     def lookup(self, question: str, model: str, fmt: str) -> Decision:
         started = time.perf_counter()
         eligible = (model, fmt) == (MODEL, FORMAT)
-        mode = 'off'
+        mode = 'unknown'
 
         def result(reason: str, match: Match | None = None):
             return Decision(mode, reason, time.perf_counter() - started, eligible, match)
 
-        if not eligible:
-            return result('unsupported_scope')
-        namespace_id = self.snapshot.namespace.id
         try:
             with translate_sqlite_errors():
+                if not eligible:
+                    mode = self.store.control().mode
+                    return result('unsupported_scope')
+                namespace_id = self.snapshot.namespace.id
                 normalized = normalize(question)
                 control, answer, reason = self.store.lookup(namespace_id, normalized)
                 mode = control.mode
@@ -78,6 +96,4 @@ class ExactCache:
             return result('db_error')
         except UnicodeError:
             return result('unsupported_input')
-        if time.perf_counter() - started > LOOKUP_BUDGET:
-            return result('db_timeout')
         return result('hit', Match(answer.answer_id, answer.text, articles))

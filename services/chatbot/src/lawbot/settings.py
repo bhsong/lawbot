@@ -67,6 +67,15 @@ def corpus_mode(env):
     return mode
 
 
+def exact_cache_path(value: str, corpus_db: Path | None) -> Path:
+    from lawbot.db.connection import db_path
+
+    path = db_path(value)
+    if path == corpus_db:
+        raise ValueError('정확 일치 캐시는 별도 SQLite 파일을 사용해야 합니다.')
+    return path
+
+
 def load(env=None, web=False):
     """env(기본 os.environ)에서 설정을 읽는다. web=True면 로그인·포트·동시 처리 수·피드백까지 (웹앱 시작)
     틀린 값이 하나라도 있으면 SettingsError에 모두 적어 올린다 (모델 서버에 접속하기 전에)"""
@@ -108,7 +117,6 @@ def load(env=None, web=False):
         take('db', lambda: startup_path(db) if web or corpus == 'db' else db_path(db))
     if web:
         from lawbot import view
-        from lawbot.db.connection import db_path
 
         take('auth', lambda: security.auth(env))
         take('admin', lambda: admin_credentials(env, db_configured=bool(db)))
@@ -118,9 +126,7 @@ def load(env=None, web=False):
         take('chat_concurrency', lambda: view.chat_concurrency(env))
         take('feedback', lambda: feedback.from_env(env, db=got.get('db')))
         if cache := (env.get('LAWBOT_EXACT_CACHE_DB') or '').strip():
-            cache_db = take('exact_cache_db', lambda: db_path(cache))
-            if cache_db is not None and cache_db == got.get('db'):
-                errors.append('정확 일치 캐시는 별도 SQLite 파일을 사용해야 합니다.')
+            take('exact_cache_db', lambda: exact_cache_path(cache, got.get('db')))
     if errors:
         raise SettingsError(f'설정 오류 {len(errors)}개:\n' + '\n'.join(f'- {e}' for e in errors))
     fields = Settings.__dataclass_fields__

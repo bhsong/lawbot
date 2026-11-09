@@ -73,6 +73,31 @@ def revision_id(namespace_id, answer_key, raw_sha256, text_sha256, citations):
     return digest(canonical([namespace_id, answer_key, raw_sha256, text_sha256, citations]))
 
 
+def insert_answer(conn, namespace_id: str, draft: Draft) -> str:
+    answer_id = draft.answer_id(namespace_id)
+    result = conn.execute(
+        'INSERT INTO cache_answers '
+        '(answer_id,namespace_id,answer_key,raw_sha256,answer_text,text_sha256,source,citation_count) '
+        'VALUES (?,?,?,?,?,?,?,?) ON CONFLICT DO NOTHING',
+        (
+            answer_id,
+            namespace_id,
+            draft.answer_key,
+            draft.raw_sha256,
+            draft.answer_text,
+            digest(draft.answer_text),
+            canonical(draft.source),
+            len(draft.citations),
+        ),
+    )
+    if result.rowcount:
+        conn.executemany(
+            'INSERT INTO cache_citations VALUES (?,?,?,?)',
+            ((answer_id, pos, *pair) for pos, pair in enumerate(draft.citations)),
+        )
+    return answer_id
+
+
 @dataclass(frozen=True)
 class Control:
     mode: str
@@ -111,6 +136,9 @@ class Store:
     def control(self) -> Control:
         with connect(self.path, timeout=READ_TIMEOUT) as conn:
             return read_control(conn)
+
+    def check_schema(self) -> int:
+        return migrations.check_schema(self.path, directory=MIGRATIONS)
 
     def lookup(self, namespace_id: str, question: str) -> tuple[Control, CachedAnswer | None, str]:
         with connect(self.path, timeout=READ_TIMEOUT) as conn:
@@ -167,30 +195,19 @@ class Store:
                     (namespace_id, digest(question)),
                 ).fetchone()
                 if existing is not None:
-                    if existing != (question, answer_id, draft.source_id):
-                        raise ValueError('질문 키 충돌로 이번 등록을 보류했습니다.')
-                    continue
-                source = canonical(draft.source)
-                result = conn.execute(
-                    'INSERT INTO cache_answers '
-                    '(answer_id,namespace_id,answer_key,raw_sha256,answer_text,text_sha256,source,citation_count) '
-                    'VALUES (?,?,?,?,?,?,?,?) ON CONFLICT DO NOTHING',
-                    (
-                        answer_id,
-                        namespace_id,
-                        draft.answer_key,
-                        draft.raw_sha256,
-                        draft.answer_text,
-                        digest(draft.answer_text),
-                        source,
-                        len(draft.citations),
-                    ),
-                )
-                if result.rowcount:
-                    conn.executemany(
-                        'INSERT INTO cache_citations VALUES (?,?,?,?)',
-                        ((answer_id, pos, *pair) for pos, pair in enumerate(draft.citations)),
-                    )
+                    normalized, current, source_id = existing
+                    if (normalized, source_id) == (question, draft.source_id):
+                        if (
+                            current == answer_id
+                            or conn.execute(
+                                "SELECT 1 FROM cache_audit_events WHERE action='stage' AND target=? "
+                                "AND json_extract(detail,'$.answer_id')=?",
+                                (query_id, answer_id),
+                            ).fetchone()
+                        ):
+                            continue
+                    raise ValueError('질문 키 충돌로 이번 등록을 보류했습니다.')
+                insert_answer(conn, namespace_id, draft)
                 conn.execute(
                     'INSERT INTO cache_queries '
                     '(query_id,namespace_id,answer_id,source_id,original,raw_sha256,normalized,normalized_sha256,source) '
@@ -204,7 +221,7 @@ class Store:
                         digest(draft.question),
                         question,
                         digest(question),
-                        source,
+                        canonical(draft.source),
                     ),
                 )
                 inserted += 1
@@ -274,6 +291,59 @@ class Store:
                     'namespace_id': namespace_id,
                     'activation_event': activation_event,
                     'protection_hash': protection_hash,
+                },
+            )
+        return approval
+
+    def replace_answer(self, expected: Control, draft: Draft, previous: str, actor: str, reason: str) -> str:
+        """Approve one corrected revision and move only the explicitly reviewed question."""
+        namespace_id = expected.namespace_id
+        if expected.mode != 'off' or namespace_id is None or expected.approval_id is None:
+            raise ValueError('기존 승인 묶음을 off로 전환한 후 답변을 교체하세요.')
+        query_id = draft.query_id(namespace_id)
+        answer_id = draft.answer_id(namespace_id)
+        if answer_id == previous or not draft.answer_text.strip() or not draft.citations:
+            raise ValueError('검토한 새 답변 리비전과 근거가 필요합니다.')
+        at = now()
+        with connect(self.path, write=True) as conn, transaction(conn):
+            if read_control(conn) != expected:
+                raise ValueError('캐시 상태가 바뀌었습니다. 최신 승인 묶음으로 다시 검토하세요.')
+            row = conn.execute(
+                'SELECT normalized,source_id,answer_id FROM cache_queries '
+                'WHERE query_id=? AND namespace_id=? AND reviewed_at IS NOT NULL',
+                (query_id, namespace_id),
+            ).fetchone()
+            if row != (normalize(draft.question), draft.source_id, previous):
+                raise ValueError('기존 승인 질문 또는 교체할 답변 리비전이 일치하지 않습니다.')
+            insert_answer(conn, namespace_id, draft)
+            result = conn.execute(
+                "UPDATE cache_answers SET status='approved',reviewed_by=?,reviewed_at=?, "
+                "valid_from=COALESCE(valid_from,?) WHERE answer_id=? AND status IN ('draft','approved')",
+                (actor, at, at, answer_id),
+            )
+            if result.rowcount != 1:
+                raise ValueError('철회된 답변 리비전은 다시 사용할 수 없습니다.')
+            conn.execute(
+                "UPDATE cache_queries SET answer_id=?,status='approved',exact_enabled=1,reviewed_by=?,reviewed_at=? "
+                'WHERE query_id=?',
+                (answer_id, actor, at, query_id),
+            )
+            approval = digest(canonical([expected.approval_id, expected.generation, query_id, previous, answer_id]))
+            conn.execute(
+                'UPDATE cache_control SET approval_id=?,generation=generation+1 WHERE singleton=1', (approval,)
+            )
+            audit(
+                conn,
+                'replace',
+                query_id,
+                actor,
+                reason,
+                {
+                    'previous_answer_id': previous,
+                    'answer_id': answer_id,
+                    'previous_approval_id': expected.approval_id,
+                    'approval_id': approval,
+                    'correction_review_sha256': draft.source.get('correction_review_sha256'),
                 },
             )
         return approval

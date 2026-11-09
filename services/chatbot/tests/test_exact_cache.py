@@ -1,11 +1,13 @@
+import json
 import sqlite3
 from contextlib import closing
 from dataclasses import replace
 from datetime import UTC, datetime
+from types import SimpleNamespace
 
 import pytest
 
-from lawbot import cache_runtime
+from lawbot import cache_admin, cache_runtime
 from lawbot.cache_eval import compare
 from lawbot.cache_seed import Bundle, Protection, load_bundle, prepare
 from lawbot.cache_store import Draft, Store, init, migrate, valid
@@ -101,6 +103,155 @@ def test_modes_and_explicit_approval(catalog):
     assert (
         store.lookup(replace(snapshot.namespace, answer_policy_version='other').id, QUESTION)[2] == 'namespace_mismatch'
     )
+
+
+@pytest.mark.parametrize('mode', ['shadow', 'on'])
+def test_unsupported_scope_keeps_the_control_mode(catalog, monkeypatch, mode):
+    store, snapshot, draft = catalog
+    store.stage(snapshot.namespace, [draft], 'tester', 'draft')
+    activate(store, snapshot, draft, mode)
+
+    def unexpected_lookup(*args):
+        pytest.fail('unsupported scope must not look up a question')
+
+    monkeypatch.setattr(store, 'lookup', unexpected_lookup)
+    decision = cache_runtime.ExactCache(store, store.path, snapshot).lookup(QUESTION, 'pro', 'full')
+    assert (decision.mode, decision.eligible, decision.reason) == (mode, False, 'unsupported_scope')
+
+
+def test_slow_successful_lookup_still_returns_the_reviewed_answer(catalog, monkeypatch):
+    store, snapshot, draft = catalog
+    store.stage(snapshot.namespace, [draft], 'tester', 'draft')
+    activate(store, snapshot, draft)
+    clock = iter((0.0, 0.08, 0.08))
+    monkeypatch.setattr(cache_runtime, 'time', SimpleNamespace(perf_counter=lambda: next(clock)))
+    decision = cache_runtime.ExactCache(store, store.path, snapshot).lookup(QUESTION, 'pro', 'concise')
+    assert decision.reason == 'hit' and decision.metrics()['exact_lookup_ms'] == 80
+
+
+def test_explicit_replacement_after_revocation_preserves_old_revision(catalog):
+    store, snapshot, draft = catalog
+    store.stage(snapshot.namespace, [draft], 'tester', 'draft')
+    approval = activate(store, snapshot, draft)
+    ns = snapshot.namespace.id
+    before = draft.answer_id(ns)
+    store.revoke('answer', before, 'tester', 'incorrect')
+    store.set_mode('off', 'tester', 'review correction')
+    corrected = replace(draft, answer_text='검토한 정정 답변입니다.', raw_sha256=digest('corrected'))
+    new_approval = store.replace_answer(store.control(), corrected, before, 'tester', 'approved correction')
+    assert new_approval != approval
+    assert store.stage(snapshot.namespace, [draft], 'tester', 'rerun original import') == 0
+    with pytest.raises(ValueError, match='승인 묶음'):
+        store.set_mode('shadow', 'tester', 'old approval', approval)
+    store.set_mode('shadow', 'tester', 'new approval', new_approval)
+    store.set_mode('on', 'tester', 'after shadow', new_approval)
+    _, answer, _ = store.lookup(ns, QUESTION)
+    assert answer.answer_id == corrected.answer_id(ns)
+    assert answer.text == corrected.answer_text
+    with connect(store.path) as conn:
+        assert conn.execute('SELECT status,answer_text FROM cache_answers WHERE answer_id=?', (before,)).fetchone() == (
+            'revoked',
+            draft.answer_text,
+        )
+        assert conn.execute('SELECT query_id FROM cache_queries').fetchone() == (draft.query_id(ns),)
+
+
+def test_deployment_status_reports_disabled_and_stale_cache(catalog, tmp_path):
+    store, snapshot, draft = catalog
+    cache = cache_runtime.ExactCache(store, store.path, snapshot)
+    level, message = cache.deployment_status()
+    assert level == 'OK' and 'off' in message and '스키마 1' in message
+    store.stage(snapshot.namespace, [draft], 'tester', 'draft')
+    activate(store, snapshot, draft)
+    level, message = cache.deployment_status()
+    assert level == 'OK' and 'on' in message and snapshot.namespace.id[:12] in message
+    stale = replace(cache, snapshot=replace(snapshot, namespace=replace(snapshot.namespace, corpus_version='new')))
+    assert stale.deployment_status()[0] == 'WARN'
+    missing = replace(cache, store=Store(tmp_path / 'missing.db'))
+    assert missing.deployment_status()[0] == 'WARN'
+
+
+def test_replace_command_requires_the_current_revision_and_reviewed_display(catalog, tmp_path, monkeypatch):
+    store, snapshot, draft = catalog
+    store.stage(snapshot.namespace, [draft], 'tester', 'draft')
+    approval = activate(store, snapshot, draft)
+    store.set_mode('off', 'tester', 'review correction')
+    ns = snapshot.namespace.id
+    previous = draft.answer_id(ns)
+    identity = dict(namespace_id=ns, release_id='release', activation_event=1, protection_hash='protected')
+    seed = SimpleNamespace(drafts=[draft])
+    monkeypatch.setattr(cache_admin, 'context', lambda args: (snapshot, seed, identity))
+    path = tmp_path / 'correction.json'
+    corrected = RAW.replace('합성 결론', '합성 정정 결론')
+    shown = snapshot.render(corrected, draft.citations)
+    review = identity | dict(
+        query_id=draft.query_id(ns),
+        previous_answer_id=previous,
+        answer_raw=corrected,
+        answer_shown=shown,
+        citation_article_ids=[ID],
+    )
+    args = cache_admin.parser().parse_args(
+        [
+            'replace',
+            '--db',
+            str(store.path),
+            '--bundle',
+            str(tmp_path / 'p07.zip'),
+            '--approval',
+            approval,
+            '--review-file',
+            str(path),
+            '--reviewed',
+            '--reason',
+            'synthetic correction',
+        ]
+    )
+    path.write_text(json.dumps(review | {'answer_shown': '다른 표시본'}), encoding='utf-8')
+    with pytest.raises(ValueError, match='표시본'):
+        cache_admin.run(args)
+    path.write_text(json.dumps(review | {'previous_answer_id': 'old revision'}), encoding='utf-8')
+    with pytest.raises(ValueError, match='리비전'):
+        cache_admin.run(args)
+    assert store.control().approval_id == approval
+    path.write_text(json.dumps(review), encoding='utf-8')
+    result = cache_admin.run(args)
+    assert result['answer_id'] != previous and result['approval_id'] != approval
+    assert store.control().mode == 'off'
+
+    # A rollback can reactivate the same namespace with a different activation event.
+    identity['activation_event'] = 2
+    path.write_text(json.dumps(review | identity), encoding='utf-8')
+    approval_file = tmp_path / 'approval.json'
+    approval_file.write_text(
+        json.dumps(
+            identity
+            | {
+                'candidates': [cache_admin.review_row(draft, ns)],
+                'selection': {draft.query_id(ns): result['answer_id']},
+            }
+        ),
+        encoding='utf-8',
+    )
+    reapproval = cache_admin.parser().parse_args(
+        [
+            'approve',
+            '--db',
+            str(store.path),
+            '--bundle',
+            str(tmp_path / 'p07.zip'),
+            '--review-file',
+            str(approval_file),
+            '--reviewed',
+            '--reason',
+            'synthetic reapproval',
+        ]
+    )
+    with pytest.raises(ValueError, match='리비전'):
+        cache_admin.run(reapproval)
+    reapproval.correction_file = [path]
+    assert cache_admin.run(reapproval)['approved_query_rows'] == 1
+    assert store.control().activation_event == 2
 
 
 def test_stage_is_idempotent_and_conflict_rolls_back(catalog):

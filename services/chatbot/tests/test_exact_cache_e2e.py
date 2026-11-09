@@ -1,6 +1,7 @@
 """Chromium and the real web/model-server apps with a synthetic reviewed answer."""
 
 import json
+import time
 
 import pytest
 from playwright.sync_api import expect
@@ -17,6 +18,16 @@ from test_exact_cache import ID, QUESTION, RAW
 from test_migrate_csv_to_sqlite import run as migrate
 
 pytestmark = pytest.mark.e2e_stub
+
+
+def request_row(stack, number):
+    deadline = time.monotonic() + e2e.ANSWER_TIMEOUT / 1000
+    while time.monotonic() < deadline:
+        rows = e2e.request_log(stack.request_log)
+        if len(rows) >= number:
+            return rows[number - 1]
+        time.sleep(0.02)
+    pytest.fail(f'request log row {number} was not written')
 
 
 def test_exact_cache_browser_flow(tmp_path, page, request):
@@ -72,14 +83,15 @@ def test_exact_cache_browser_flow(tmp_path, page, request):
         e2e.ask(page, QUESTION)
         e2e.wait_done(page)
         expect(e2e.answer(page).last).to_contain_text('가짜 모델 답변입니다.')
-        shadow = e2e.request_log(stack.request_log)[-1]
+        shadow = request_row(stack, 1)
         assert shadow['response_source'] == 'rag' and shadow['would_hit']
         assert shadow['call_counts'] == {'embedding': 1, 'search': 1, 'rerank': 1, 'llm': 1}
 
         store.set_mode('on', 'tester', 'test', approval)
         stack.stop_model_server()
         e2e.ask(page, QUESTION)
-        e2e.wait_done(page)
+        hit = request_row(stack, 2)
+        assert hit['cache_reason'] == 'hit', f'cache decision: {hit["cache_reason"]} ({hit["exact_lookup_ms"]}ms)'
         expect(e2e.answer(page).last).to_contain_text('합성 결론입니다.')
         expect(page.get_by_test_id('source-card')).to_have_count(1)
         expect(page.get_by_test_id('source-card')).to_contain_text(ID)
@@ -87,7 +99,6 @@ def test_exact_cache_browser_flow(tmp_path, page, request):
         with page.expect_response(stack.url + '/api/feedback', timeout=e2e.ANSWER_TIMEOUT) as response:
             page.get_by_role('button', name='좋아요').last.click()
         assert response.value.json() == {'saved': True}
-        hit = e2e.request_log(stack.request_log)[-1]
         assert hit['response_source'] == 'exact_cache' and set(hit['call_counts'].values()) == {0}
         with connect(corpus) as conn:
             record = json.loads(conn.execute('SELECT record FROM feedbacks').fetchone()[0])
@@ -99,7 +110,7 @@ def test_exact_cache_browser_flow(tmp_path, page, request):
         e2e.ask(page, QUESTION)
         e2e.wait_done(page)
         expect(e2e.answer(page).last).to_contain_text('가짜 모델 답변입니다.')
-        assert e2e.request_log(stack.request_log)[-1]['cache_reason'] == 'inactive'
+        assert request_row(stack, 3)['cache_reason'] == 'inactive'
     finally:
         stack.stop()
         e2e.keep_on_failure(request, 'e2e_stub', stack.logs(), page)

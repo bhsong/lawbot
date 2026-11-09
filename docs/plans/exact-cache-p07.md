@@ -80,7 +80,7 @@ Python 패키지는 uv workspace의 `services/chatbot/src/lawbot/`에 있다. `p
 | `cache_audit_events` | 추가 전용. 시각·행위·주체·대상·이전/새 리비전·사유·입력 manifest 해시·승인 묶음 ID를 남긴다. 등록, 승인, 교체, 철회, 모드 변경, 보호 manifest 변경의 트랜잭션에 함께 기록한다. |
 | `cache_control` | 기본 `off`. 현재 모드, 허용된 namespace와 코퍼스 활성화 이벤트, 승인 manifest, 보호 manifest, 변경 세대를 기록한다. 상태가 없거나 불일치하면 반환을 허용하지 않는다. |
 
-쿼리는 바인딩하고 기간은 UTC 기준 `valid_from ≤ now < valid_until`, `now < expires_at`로 검사한다. 승인된 무기한 항목은 명시적으로 상한을 비워 둘 수 있다. 코퍼스의 시행 기준은 기존 파이프라인의 `Asia/Seoul` 기준을 따른다. 짧은 읽기 트랜잭션과 별도 busy timeout을 설정하고 조회 전체에도 시간 예산을 둔다. 기존 DB helper의 5초 기본 대기를 캐시 요청에 물려주지 않는다. `stream()`의 스레드 실행과 기존 동시성 한도를 활용한다. 락이나 예산 초과 시 읽기를 닫고 같은 요청을 RAG로 넘긴다. 연결이 해제되면 기존 취소 절차로 정리한다. 적중 시 DB 쓰기나 worker별 답변 복제는 필요 없다.
+쿼리는 바인딩하고 기간은 UTC 기준 `valid_from ≤ now < valid_until`, `now < expires_at`로 검사한다. 승인된 무기한 항목은 명시적으로 상한을 비워 둘 수 있다. 코퍼스의 시행 기준은 기존 파이프라인의 `Asia/Seoul` 기준을 따른다. 짧은 읽기 트랜잭션과 10ms SQLite busy timeout을 사용한다. 잠금 때문에 읽지 못하면 같은 요청을 RAG로 넘긴다. 검증을 마친 적중은 반환하고 전체 조회 지연은 `exact_lookup_ms`로 기록한다. `stream()`의 스레드 실행과 기존 동시성·취소 절차를 활용한다. 적중 시 DB 쓰기나 worker별 답변 복제는 필요 없다.
 
 ## 4. 등록, 분할 보호와 승인
 
@@ -248,6 +248,14 @@ uv run python -m lawbot.cache_admin set-mode off --db "$cache_db" --reason "$rea
 uv run python -m lawbot.cache_admin revoke answer "$answer_id" --db "$cache_db" --reason "$reason"
 uv run python -m lawbot.cache_admin backup --db "$cache_db" --out "$backup_path"
 ```
+
+같은 namespace에서 승인 질문 하나의 답변을 정정하려면 캐시를 `off`로 전환한다. 비공개 JSON 검토 파일에 `review.json`의 `namespace_id`, `release_id`, `activation_event`, `protection_hash`를 옮기고 `query_id`, `previous_answer_id`, 정정 `answer_raw`, 검토한 간결형 `answer_shown`, 순서 있는 `citation_article_ids`를 적는다. 기존 질문과 답변 리비전이 일치하는지, 표시본이 현행 렌더러 및 근거와 일치하는지 확인하고 아래 명령을 실행한다. 한 답변을 공유하던 다른 질문은 각 연결을 따로 검토한다.
+
+```fish
+uv run python -m lawbot.cache_admin replace --db "$cache_db" --bundle "$cache_bundle" --approval "$approval_id" --review-file "$correction_file" --reviewed --reason "$reason"
+```
+
+교체는 기존 질문의 유효기간을 유지하면서 새 불변 답변과 질문 연결을 한 트랜잭션에서 저장한다. 이전 답변과 피드백은 기존 리비전을 가리킨다. 교체가 반환한 새 승인 ID로 `shadow`를 확인한 후 `on`으로 전환한다. 원본 ZIP의 동일 행을 다시 seed해도 교체한 연결은 유지한다. 같은 namespace에서 정정 리비전을 재승인할 때는 최신 검토 기준으로 정정 파일을 대조하고 `approve --correction-file "$correction_file"`을 지정한다. `selection`은 현재 연결된 정정 답변 ID를 가리킨다.
 
 계측은 동일 순서의 케이스 ID JSON 배열과 웹 요청 JSONL을 `uv run python -m lawbot.cache_eval exact --cases "$cases" --off "$off_log" --on "$on_log"`에 전달해 비교한다. off 기준선은 동일 웹앱에서 캐시 DB의 제어 모드를 `off`로 두고 기록한다. 설정·동시성·워밍업 조건을 함께 기록한다.
 
