@@ -38,6 +38,7 @@ class Settings:
     admin: AdminCredentials | None = None
     calendar_api_url: str | None = None
     corpus: str = 'csv'
+    exact_cache_db: Path | None = None
 
 
 MISSING_SERVER = (
@@ -107,6 +108,7 @@ def load(env=None, web=False):
         take('db', lambda: startup_path(db) if web or corpus == 'db' else db_path(db))
     if web:
         from lawbot import view
+        from lawbot.db.connection import db_path
 
         take('auth', lambda: security.auth(env))
         take('admin', lambda: admin_credentials(env, db_configured=bool(db)))
@@ -115,6 +117,10 @@ def load(env=None, web=False):
         take('instance', lambda: security.instance_name(env))
         take('chat_concurrency', lambda: view.chat_concurrency(env))
         take('feedback', lambda: feedback.from_env(env, db=got.get('db')))
+        if cache := (env.get('LAWBOT_EXACT_CACHE_DB') or '').strip():
+            cache_db = take('exact_cache_db', lambda: db_path(cache))
+            if cache_db is not None and cache_db == got.get('db'):
+                errors.append('정확 일치 캐시는 별도 SQLite 파일을 사용해야 합니다.')
     if errors:
         raise SettingsError(f'설정 오류 {len(errors)}개:\n' + '\n'.join(f'- {e}' for e in errors))
     fields = Settings.__dataclass_fields__

@@ -91,6 +91,7 @@ def export(review_csv, out, articles=None, frac=VAL_FRAC):
     check_private(out, '--out')
     d, records = read_review(review_csv)
     d = d[(d['h_ok'] != '') | (d['h_gold'] != '')]
+    d = d[~d['feedback_id'].isin(f for f, record in records.items() if record.get('response_source') == 'exact_cache')]
     skipped = [f for f in d['feedback_id'] if records[f].get('profile') not in SUPPORTED_PROFILES]
     d = d[~d['feedback_id'].isin(skipped)]
     profiles = sorted({records[f]['profile'] for f in d['feedback_id']})

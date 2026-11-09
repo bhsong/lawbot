@@ -27,8 +27,9 @@ from lawbot import audit_store, envfile, feedback, security, settings, view
 from lawbot import auth as auth_logic
 from lawbot.answer_format import answer_citations, render
 from lawbot.decree import is_decree
+from lawbot.hits import Timing
 from lawbot.paths import ROOT
-from lawbot.service import AskError, ask, load_app
+from lawbot.service import AskError, ask, load_app, log_request
 from lawbot_common.logs import logger
 
 log = logger('lawbot', 'lawbot')
@@ -148,13 +149,92 @@ def sources_data(hits, cited=None, refused=False):
     }
 
 
-def chat_events(app, question, model_key, fmt, remember=None):
+def cached_events(app, question, model_key, fmt, remember, decision, request_id, started):
+    match = decision.match
+    namespace = app.exact_cache.snapshot.namespace
+    metadata = {
+        'request_id': request_id,
+        'response_source': 'exact_cache',
+        'cache_answer_id': match.answer_id,
+        'corpus_version': namespace.corpus_version,
+        'answer_policy_version': namespace.answer_policy_version,
+    }
+    hits = [article.hit() for article in match.articles]
+    items = [source_item(hit) | {'scores': ''} for hit in hits]
+    sources = {'groups': [{'label': view.CITED_LABEL, 'open': True, 'items': items}]}
+    st = {
+        'model': model_key,
+        'request_id': request_id,
+        'finish': 'stop',
+        'n_cited': len(hits),
+        'refused': False,
+        'cache_metrics': decision.metrics() | metadata,
+        'call_counts': dict.fromkeys(('embedding', 'search', 'rerank', 'llm'), 0),
+    }
+    status = 'cancelled'
+    try:
+        yield 'sources', sources
+        st['first_text'] = time.perf_counter() - started
+        yield 'answer', {'text': match.text}
+        tid = None
+        if remember is not None:
+            record = {
+                'question': question,
+                'answer_shown': match.text,
+                'answer_raw': None,
+                'hits': [{k: v for k, v in h.items() if k != 'score'} for h in hits],
+                'citations': [dict(law=h['law'], article_id=h['article_id'], verdict='ok') for h in hits],
+                'model': model_key,
+                'fmt': fmt,
+                'refused': False,
+                'n_cited': len(hits),
+                'profile': app.profile.name,
+                'dataset_version': app.dataset_version,
+                'corpus_release_id': app.corpus_release_id,
+                'articles_sha256': app.articles_sha256,
+                'commit': feedback.commit(),
+                'instance': security.instance_name(),
+            } | metadata
+            try:
+                tid = remember(record)
+            except (OSError, ValueError, RuntimeError) as exc:
+                log.warning('경고: 캐시 피드백용 턴 기록 실패 (%s)', type(exc).__name__)
+        yield 'stats', {'text': f'정확 일치 캐시 조회 {decision.elapsed * 1000:.1f}ms'}
+        yield 'done', {'text': match.text, 'finish': 'stop', 'turn_id': tid} | metadata
+        status = 'ok'
+    finally:
+        st['total'] = time.perf_counter() - started
+        st['cache_metrics']['request_to_complete_ms'] = round(st['total'] * 1000, 3)
+        if 'first_text' in st:
+            st['cache_metrics']['request_to_first_answer_ms'] = round(st['first_text'] * 1000, 3)
+        log_request(app, st, fmt, status)
+
+
+def chat_events(app, question, model_key, fmt, remember=None, *, started=None):
     """질문 하나 → (이벤트, 데이터)를 차례로. remember(턴 기록) → turn_id (피드백이 꺼져 있으면 None)
     이벤트: status → sources(모두 펼침) → answer·stats… → sources(인용/검색만 구분) → stats → done, 실패하면 error
     생성 단계에서 화면 글이 그대로면(간결형의 근거·설명 토큰) TICK을 낸다: 받는 쪽이 토큰마다 연결 끊김을 확인하게"""
+    started = time.perf_counter() if started is None else started
+    cache = getattr(app, 'exact_cache', None)
+    metadata, ask_options = {}, {}
+    outcomes: list[tuple[Timing, str, str | None]] = []
+    sent_done = False
+
+    def report(st, status, error):
+        outcomes.append((st, status, error))
+
+    if cache is not None:
+        decision = cache.lookup(question, model_key, fmt)
+        request_id = secrets.token_hex(6)
+        if decision.mode == 'on' and decision.match is not None:
+            yield from cached_events(app, question, model_key, fmt, remember, decision, request_id, started)
+            return
+        metadata = {'request_id': request_id, 'response_source': 'rag'}
+        ask_options = {'request_id': request_id, 'cache_metrics': decision.metrics() | metadata, 'report': report}
     spec = app.models.specs[model_key]
     yield 'status', {'text': view.searching_stats(app, model_key)}
     sent_sources, last = False, {}
+    first_ms = None
 
     def changed(event, data):
         if last.get(event) == data:
@@ -163,7 +243,7 @@ def chat_events(app, question, model_key, fmt, remember=None):
         return [(event, data)]
 
     try:
-        for stage, hits, raw, st in ask(app, question, model_key, fmt=fmt):
+        for stage, hits, raw, st in ask(app, question, model_key, fmt=fmt, **ask_options):
             if not sent_sources:
                 sent_sources = True
                 yield 'sources', sources_data(hits)
@@ -173,6 +253,8 @@ def chat_events(app, question, model_key, fmt, remember=None):
                 continue
             if stage != 'done':
                 text = render(raw, hits, fmt, done=False)
+                if first_ms is None and text.strip():
+                    first_ms = round((time.perf_counter() - started) * 1000, 3)
                 out = changed('answer', {'text': text}) if text.strip() else changed('status', {'text': view.WRITING})
                 out += changed('stats', {'text': view.fmt_stats(spec.label, stage, st)})
                 yield from out or [(TICK, None)]
@@ -184,15 +266,27 @@ def chat_events(app, question, model_key, fmt, remember=None):
             tid = None
             if remember is not None:
                 try:
-                    tid = remember(feedback.turn_record(app, question, hits, raw, text, model_key, fmt, st))
+                    tid = remember(feedback.turn_record(app, question, hits, raw, text, model_key, fmt, st) | metadata)
                 except Exception as e:  # 피드백 기록 실패는 답변을 막지 않는다
                     log.warning(f'경고: 피드백용 턴 기록 실패 ({type(e).__name__})')
-            yield 'done', {'text': text, 'finish': st.get('finish'), 'turn_id': tid}
+            if first_ms is None:
+                first_ms = round((time.perf_counter() - started) * 1000, 3)
+            yield 'done', {'text': text, 'finish': st.get('finish'), 'turn_id': tid} | metadata
+            sent_done = True
     except AskError as err:  # 유형(kind)은 요청 로그의 error_type과 같음. 원래 예외는 __cause__
         msg = view.error_message(err.kind, err.__cause__, spec)
         # 원래 예외와 traceback은 서버 로그에 남긴다 (화면에는 안내 문구만, 설정 오류는 자세한 값도 숨김)
         log.error(f'질문 처리 실패 ({err.kind}, {err.stage})', exc_info=err.__cause__ or err)
         yield 'error', {'kind': err.kind, 'message': CONFIG_ERROR if msg is None else msg}
+    finally:
+        if outcomes:
+            timing, status, error = outcomes[-1]
+            if status == 'ok' and not sent_done:
+                status = 'cancelled'
+            metrics = timing.setdefault('cache_metrics', {})
+            metrics['request_to_first_answer_ms'] = first_ms
+            metrics['request_to_complete_ms'] = round((time.perf_counter() - started) * 1000, 3)
+            log_request(app, timing, fmt, status, error)
 
 
 def _session(request: Request):
@@ -403,10 +497,11 @@ def create_app(
 
     @api.post('/api/chat', dependencies=[Depends(require_json)])
     async def chat(request: Request, who: Who):
+        started = time.perf_counter()
         question, model_key, fmt = valid_chat(app, await read_json(request))
         remember = partial(fb.remember_turn, who[1]) if fb is not None else None
         return StreamingResponse(
-            stream(request, chat_events(app, question, model_key, fmt, remember)),
+            stream(request, chat_events(app, question, model_key, fmt, remember, started=started)),
             media_type='text/event-stream',
             headers={'Cache-Control': 'no-cache'},
         )

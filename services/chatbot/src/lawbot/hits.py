@@ -42,3 +42,5 @@ class Timing(TypedDict, total=False):
     n_cited: int
     _stage: str  # 오류가 난 단계 판정용 (내부)
     _system: str | None
+    cache_metrics: dict
+    call_counts: dict[str, int]

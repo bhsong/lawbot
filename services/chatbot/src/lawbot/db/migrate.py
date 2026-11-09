@@ -4,6 +4,7 @@ import sqlite3
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from importlib.resources import files
+from importlib.resources.abc import Traversable
 from pathlib import Path
 
 from lawbot.db.connection import check_db_path, connect, db_path, new_database, transaction
@@ -19,9 +20,9 @@ class Migration:
     sql: str
 
 
-def _migrations() -> list[Migration]:
+def _migrations(directory: Traversable | None = None) -> list[Migration]:
     migrations = []
-    for file in sorted(MIGRATIONS.iterdir(), key=lambda file: file.name):
+    for file in sorted((directory or MIGRATIONS).iterdir(), key=lambda file: file.name):
         match = re.fullmatch(r'(\d{4})_.+\.sql', file.name)
         if match:
             sql = file.read_bytes()
@@ -48,13 +49,13 @@ def _current_version(conn: sqlite3.Connection, migrations: list[Migration]) -> i
     return version
 
 
-def check_schema(path: str | Path) -> int:
+def check_schema(path: str | Path, *, directory: Traversable | None = None) -> int:
     """Require the complete schema version and migration history known to this code."""
-    return _check_schema(check_db_path(path))
+    return _check_schema(check_db_path(path), directory)
 
 
-def _check_schema(path: Path) -> int:
-    migrations = _migrations()
+def _check_schema(path: Path, directory: Traversable | None = None) -> int:
+    migrations = _migrations(directory)
     latest = migrations[-1].version
     with connect(path) as conn:
         version = _current_version(conn, migrations)
@@ -75,9 +76,9 @@ def startup_path(value: str) -> Path:
     return path
 
 
-def migrate(path: str | Path) -> int:
+def migrate(path: str | Path, *, directory: Traversable | None = None) -> int:
     """Apply each pending migration with its history row in one transaction."""
-    migrations = _migrations()
+    migrations = _migrations(directory)
     with connect(check_db_path(path), write=True) as conn:
         for migration in migrations:
             with transaction(conn):
@@ -92,7 +93,7 @@ def migrate(path: str | Path) -> int:
     return migrations[-1].version
 
 
-def init(path: str | Path) -> int:
+def init(path: str | Path, *, directory: Traversable | None = None) -> int:
     """Create a fully migrated database at a new path."""
     with new_database(path) as staged:
-        return migrate(staged)
+        return migrate(staged, directory=directory)

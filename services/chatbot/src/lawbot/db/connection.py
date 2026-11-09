@@ -56,7 +56,7 @@ def _warn_permissions(path: Path, allowed: int) -> None:
 
 
 @contextmanager
-def connect(path: str | Path, write: bool = False) -> Iterator[sqlite3.Connection]:
+def connect(path: str | Path, write: bool = False, *, timeout: float = 5) -> Iterator[sqlite3.Connection]:
     """Open a previously validated DB path for one task. Use transaction() for writes."""
     path = Path(path).expanduser().resolve()
     if not path.is_file():
@@ -67,7 +67,7 @@ def connect(path: str | Path, write: bool = False) -> Iterator[sqlite3.Connectio
 
     mode = 'rw' if write else 'ro'
     uri = f'{path.as_uri()}?mode={mode}'
-    with closing(sqlite3.connect(uri, uri=True, timeout=5, autocommit=True)) as conn:
+    with closing(sqlite3.connect(uri, uri=True, timeout=timeout, autocommit=True)) as conn:
         conn.execute('PRAGMA foreign_keys = ON')
         if conn.execute('PRAGMA foreign_keys').fetchone() != (1,):
             raise RuntimeError('SQLite foreign_keys를 켤 수 없습니다.')
