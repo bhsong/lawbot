@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { NETWORK_ERROR } from '../api'
 
 export class AdminApiError extends Error {
-  constructor(readonly status: number, readonly code: string, readonly detail: string) {
+  constructor(readonly status: number, readonly code: string, readonly detail: string, readonly answerId?: string) {
     super(detail)
   }
 }
@@ -24,6 +24,7 @@ export function adminMessage(error: unknown): string {
   if (error.status === 403 && (!error.code || error.code === 'admin_required')) {
     return '관리자 권한이 필요하거나 이 요청에 대한 권한이 없습니다.'
   }
+  if (error.answerId && error.detail) return `답변 ${error.answerId} · ${error.detail}`
   const notice = notices[error.code]
   if (!notice) return error.detail || `요청을 처리하지 못했습니다. (오류 ${error.status})`
   return error.detail && error.detail !== notice ? `${notice} ${error.detail}` : notice
@@ -32,9 +33,10 @@ export function adminMessage(error: unknown): string {
 async function request<T>(path: string, init: RequestInit): Promise<T> {
   const response = await fetch(`/api/admin${path}`, init)
   if (!response.ok) {
-    const body: { code?: unknown; detail?: unknown } | null = await response.json().catch(() => null)
+    const body: { code?: unknown; detail?: unknown; answer_id?: unknown } | null = await response.json().catch(() => null)
     const code = typeof body?.code === 'string' ? body.code : ''
-    throw new AdminApiError(response.status, code, response.status < 500 || code ? safeDetail(body?.detail) : '')
+    const answerId = typeof body?.answer_id === 'string' && /^[a-f0-9]{64}$/.test(body.answer_id) ? body.answer_id : undefined
+    throw new AdminApiError(response.status, code, response.status < 500 || code ? safeDetail(body?.detail) : '', answerId)
   }
   return response.json() as Promise<T>
 }

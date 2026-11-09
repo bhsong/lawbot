@@ -372,8 +372,6 @@ def set_mode_in(conn, control, mode, actor, reason, approval):
         raise ValueError('지원하지 않는 캐시 모드입니다.')
     if mode != 'off' and (approval is None or approval != control.approval_id):
         raise ValueError('현재 승인 묶음을 지정하세요.')
-    if mode == 'on' and control.mode not in ('shadow', 'on'):
-        raise ValueError('shadow 검증 후 on으로 전환하세요.')
     conn.execute('UPDATE cache_control SET mode=?,generation=generation+1 WHERE singleton=1', (mode,))
     audit(conn, 'mode', mode, actor, reason, {'previous': control.mode, 'approval': approval})
 

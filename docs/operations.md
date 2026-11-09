@@ -471,21 +471,24 @@ uv run python -m lawbot.cache_admin init --db "$cache_db"
 uv run python -m lawbot.cache_admin seed --db "$cache_db" --bundle "$cache_bundle" --dry-run --report-dir "$review_dir"
 uv run python -m lawbot.cache_admin seed --db "$cache_db" --bundle "$cache_bundle"
 uv run python -m lawbot.cache_admin approve --db "$cache_db" --bundle "$cache_bundle" --review-file "$review_dir/review.json" --reviewed --reason "$reason"
+# 적중 후보를 먼저 관찰하려면 아래 shadow 명령을 실행합니다.
 uv run python -m lawbot.cache_admin set-mode shadow --db "$cache_db" --bundle "$cache_bundle" --approval "$approval_id" --reason "$reason"
 uv run python -m lawbot.cache_admin set-mode on --db "$cache_db" --bundle "$cache_bundle" --approval "$approval_id" --reason "$reason"
 ```
 
-승인 전에 `review.json`의 표시본·근거·적용 조건·공개 적합성을 확인하고 승인한 질문과 답변 ID만 `selection`에 적습니다. `approve`가 반환한 ID를 `$approval_id`에 넣습니다. `shadow`에서 실제 캐시 반환 0건, 적중 후보·비용·우회 사유를 확인한 뒤 승인된 범위만 `on`으로 전환합니다. 추가 보호셋이 있으면 `--protected-csv`에 같은 입력을 검토·등록·승인·전환 때 지정합니다. 보호셋 갱신 전에 캐시를 `off`로 둡니다.
+승인 전에 `review.json`의 표시본·근거·적용 조건·공개 적합성을 확인하고 승인한 질문과 답변 ID만 `selection`에 적습니다. `approve`가 반환한 ID를 `$approval_id`에 넣습니다. `off`, `shadow`, `on`은 어느 방향으로든 직접 전환할 수 있습니다. `shadow`와 `on`에는 현재 승인 ID와 일치하는 보호 분할이 필요합니다. `shadow`는 승인 답변을 반환하지 않고 `would_hit`와 비용·우회 사유를 기록하는 선택 단계입니다. 추가 보호셋이 있으면 `--protected-csv`에 같은 입력을 검토·등록·승인·전환 때 지정합니다. 보호셋 갱신 전에 캐시를 `off`로 둡니다.
 
 `LAWBOT_EXACT_CACHE_BUNDLE`에 비공개 경로의 원본 P07 ZIP을 지정합니다. DB 조문 자동 갱신과 롤백은 활성화 직후 웹앱을 재시작하기 전에 답변별로 판정합니다. 표시·검토 참고 조문이 바뀌거나 사라지면 끔, 같은 법령의 다른 조문이 바뀌면 검토 대기입니다. 의존 범위와 재렌더링 결과가 동일한 답변은 새 리비전으로 자동 유지합니다. 번들이 없거나 표시 정책·보호 지문이 바뀌면 검토 대기입니다. 이전 모드는 유지되며, 기존의 미승인·철회 항목은 자동으로 돌아오지 않습니다. 실패하면 기존 제어 행을 보존해 RAG로 우회하고 조문 갱신은 계속합니다. 갱신 보고서와 마지막 상태 줄 바로 앞에 판정 수 또는 실패가 남습니다.
 
-관리자 화면에서 **캐시** 탭을 열고 검토 대기 답변을 선택합니다. 연결 질문, 현재 표시본과 근거, 변경 조문의 이전·이후 본문을 확인합니다. 사유를 입력하고 **표시본 확인 및 재승인**을 누릅니다. 보호 분할과 화면을 다시 확인하므로 검토 중 상태가 바뀌면 새로고침이 필요합니다. 철회와 `off`는 번들 없이도 가능하고, `on`은 `shadow`를 거칩니다. CLI의 추가 보호 CSV를 별도로 쓰는 환경에서는 해당 보호 범위를 포함해 CLI로 승인합니다. 이전 정정 리비전의 원문을 확인할 수 없으면 재승인을 보류합니다.
+관리자 화면에서 **캐시** 탭을 열고 초안 또는 검토 대기 답변의 상세에서 연결 질문, 현재 표시본과 근거, 변경 조문의 이전·이후 본문을 확인합니다. 상세 하단의 **표시본 확인 및 승인** 또는 **표시본 확인 및 재승인**을 누릅니다. 여러 답변은 상세를 각각 연 뒤 목록에서 체크하고 **선택 승인**을 누릅니다. 한 번에 최대 50개를 처리하며, 하나라도 검증에 실패하면 선택한 답변 모두 이전 상태를 유지합니다. 검토 중 상태가 바뀌면 새로고침 후 표시본을 다시 확인합니다.
+
+승인 사유를 비우면 감사에 `표시본 확인 승인`이 남습니다. 모드 전환과 철회에는 사유가 필요합니다. 철회와 `off` 전환은 번들 없이도 가능합니다. CLI의 추가 보호 CSV를 별도로 쓰는 환경에서는 해당 보호 범위를 포함해 CLI로 승인합니다. 이전 정정 리비전의 원문을 확인할 수 없으면 재승인을 보류합니다.
 
 캐시 DB 설정에 P07 번들이 빠졌거나 파일이 없으면 시작 로그와 배포 점검에서 자동 유지 경고를 표시합니다. 릴리스 판정은 마지막 승인 보호 지문을 유지합니다. 관리자 화면에서 같은 보호 범위를 확인할 수 없으면 `off`에서 CLI로 재승인합니다. 추가 보호 CSV를 사용했다면 이때도 `--protected-csv`로 포함합니다.
 
-한 번도 승인되지 않은 초안은 이전 namespace에 보존됩니다. 새 릴리스의 캐시 탭에서 검토하려면 현재 릴리스로 `cache_admin seed`를 다시 실행합니다. 신규 초안은 `off`에서 승인하고 `shadow`를 거쳐 활성화합니다. `on`에서 검토 대기 답변을 재승인하면 이전에 승인된 연결 질문에 즉시 반환됩니다. 이미 승인된 답변에 새 질문을 추가할 때는 `off`에서 CLI 승인 묶음에 포함한 뒤 `shadow`에서 확인합니다.
+한 번도 승인되지 않은 초안은 이전 namespace에 보존됩니다. 새 릴리스의 캐시 탭에서 검토하려면 현재 릴리스로 `cache_admin seed`를 다시 실행합니다. 관리자 화면에서는 모든 모드에서 신규 초안을 승인할 수 있습니다. `on`에서 승인하면 보호 분할을 통과한 초안의 연결 질문에 즉시 반환됩니다. `on`에서 검토 대기 답변을 재승인하면 이전에 승인된 연결 질문에 즉시 반환됩니다. 이미 승인된 답변에 새 질문을 추가할 때는 `off`에서 CLI 승인 묶음에 포함합니다.
 
-기존 캐시에서 처음 전환할 때는 전용 DB를 백업하고 `uv run python -m lawbot.cache_admin migrate --db "$cache_db"`로 스키마를 적용합니다. 캐시를 `off`로 둔 상태에서 `uv run python -m lawbot.cache_carry`로 현재 릴리스를 판정합니다. 이전 파일 지문과 새 `DISPLAY_VERSION` 기반 지문이 달라 첫 판정은 검토 대기로 시작합니다. 관리자 화면이나 CLI에서 검토 후 `shadow`, `on`으로 전환합니다. `answer_format.py`·`citation.py`의 표시 동작을 바꿀 때는 `DISPLAY_VERSION`과 렌더 스냅샷을 갱신합니다.
+기존 캐시에서 처음 전환할 때는 전용 DB를 백업하고 `uv run python -m lawbot.cache_admin migrate --db "$cache_db"`로 스키마를 적용합니다. 캐시를 `off`로 둔 상태에서 `uv run python -m lawbot.cache_carry`로 현재 릴리스를 판정합니다. 이전 파일 지문과 새 `DISPLAY_VERSION` 기반 지문이 달라 첫 판정은 검토 대기로 시작합니다. 관리자 화면이나 CLI에서 검토한 뒤 바로 `on`으로 전환하거나 `shadow`에서 먼저 관찰할 수 있습니다. `answer_format.py`·`citation.py`의 표시 동작을 바꿀 때는 `DISPLAY_VERSION`과 렌더 스냅샷을 갱신합니다.
 
 문제가 발생하면 `set-mode off --db "$cache_db" --reason "$reason"`로 먼저 우회하고, 개별 답변은 `revoke answer "$answer_id" --db "$cache_db" --reason "$reason"`로 철회합니다. 두 명령은 `uv run python -m lawbot.cache_admin`으로 실행합니다. 동일 namespace의 정정은 `off`에서 승인된 질문 하나씩 `replace`로 처리하고 새 승인 ID를 사용합니다. DB 복구가 필요하면 `cache_admin backup`의 온라인 백업을 별도 경로에 준비해 무결성과 마지막 철회·감사 이력을 대조합니다. 복구 DB도 `off`에서 시작합니다. [정정 검토 파일과 세부 절차](archives/exact-cache-p07.md#10-구현-명령과-개발-기록)
 

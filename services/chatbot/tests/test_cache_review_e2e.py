@@ -22,13 +22,15 @@ from test_migrate_csv_to_sqlite import run as migrate
 
 pytestmark = pytest.mark.e2e_stub
 KEEP_QUESTION = '별개 법령의 합성 캐시 질문인가요?'
+LIVE_DRAFT_QUESTION = '활성 캐시에서 승인할 합성 질문인가요?'
 
 
 @pytest.fixture
 def review_stack(tmp_path, page, request, admin_hash, monkeypatch):
     db = tmp_path / 'private' / 'corpus.db'
     cli.main(['init', '--db', str(db)])
-    seed_qa(db, v4_train=[QUESTION, KEEP_QUESTION])
+    drafts_only = getattr(request, 'param', None) == 'drafts'
+    seed_qa(db, v4_train=[QUESTION, KEEP_QUESTION, LIVE_DRAFT_QUESTION])
     profile = deploy.get_profile({'LAWBOT_PROFILE': 'v5'})
     assert (
         migrate(
@@ -43,10 +45,13 @@ def review_stack(tmp_path, page, request, admin_hash, monkeypatch):
     old = corpus_store.active_release(db, 'v5')
     snapshot = Snapshot.load(old, system=system, combined=False, attach_decrees=False)
     drafts = []
-    for source_id, question, article_id, key in (
+    entries = [
         ('1', QUESTION, '근로기준법 제27조', '합성 검토 답변'),
         ('2', KEEP_QUESTION, '최저임금법 제6조', '합성 유지 답변'),
-    ):
+    ]
+    if drafts_only:
+        entries.append(('3', LIVE_DRAFT_QUESTION, '근로기준법 제26조', '합성 즉시 반환 답변'))
+    for source_id, question, article_id, key in entries:
         raw = RAW.replace('근로기준법 제26조', article_id)
         citations = [(article_id, snapshot.articles[article_id].text_hash)]
         shown = snapshot.render(raw, citations)
@@ -64,6 +69,32 @@ def review_stack(tmp_path, page, request, admin_hash, monkeypatch):
             )
         )
     store.stage(snapshot.namespace, drafts, 'tester', 'draft')
+    bundle = tmp_path / 'synthetic.txt'
+    bundle.write_text('synthetic P07 bundle', encoding='utf-8')
+    if not drafts_only:
+        carry_approved_answers(tmp_path, db, store, snapshot, system, drafts, bundle, monkeypatch)
+    stack = e2e.Stack(
+        tmp_path,
+        3,
+        web_command=[sys.executable, str(e2e.TESTS / 'cache_review_test_server.py')],
+        LAWBOT_PROFILE='v5',
+        LAWBOT_CORPUS='db',
+        LAWBOT_DB=str(db),
+        LAWBOT_EXACT_CACHE_DB=str(path),
+        LAWBOT_EXACT_CACHE_BUNDLE=str(bundle),
+        LAWBOT_ADMIN_USER=ADMIN_USER,
+        LAWBOT_ADMIN_PW_HASH=admin_hash,
+        LAWBOT_DECREE_ENABLED='0',
+        LAWBOT_RERANKER_ENABLED='1',
+    )
+    try:
+        yield stack
+        e2e.keep_on_failure(request, 'e2e_stub', stack.logs(), page)
+    finally:
+        stack.stop()
+
+
+def carry_approved_answers(tmp_path, db, store, snapshot, system, drafts, bundle, monkeypatch):
     ns = snapshot.namespace.id
     protection = load_protection(db, Bundle([], frozenset()), [])
     token = corpus_store.active_token(db, 'v5')
@@ -91,28 +122,7 @@ def review_stack(tmp_path, page, request, admin_hash, monkeypatch):
     current = corpus_store.active_release(db, 'v5')
     new_snapshot = Snapshot.load(current, system=system, combined=False, attach_decrees=False)
     monkeypatch.setattr(cache_release_store, 'verified_inputs', lambda *args: (protection, {}))
-    bundle = tmp_path / 'synthetic.txt'
-    bundle.write_text('synthetic P07 bundle', encoding='utf-8')
-    assert apply_release(path, db, token, current, new_snapshot, bundle) == {'keep': 1, 'pending': 1, 'off': 0}
-    stack = e2e.Stack(
-        tmp_path,
-        3,
-        web_command=[sys.executable, str(e2e.TESTS / 'cache_review_test_server.py')],
-        LAWBOT_PROFILE='v5',
-        LAWBOT_CORPUS='db',
-        LAWBOT_DB=str(db),
-        LAWBOT_EXACT_CACHE_DB=str(path),
-        LAWBOT_EXACT_CACHE_BUNDLE=str(bundle),
-        LAWBOT_ADMIN_USER=ADMIN_USER,
-        LAWBOT_ADMIN_PW_HASH=admin_hash,
-        LAWBOT_DECREE_ENABLED='0',
-        LAWBOT_RERANKER_ENABLED='1',
-    )
-    try:
-        yield stack
-        e2e.keep_on_failure(request, 'e2e_stub', stack.logs(), page)
-    finally:
-        stack.stop()
+    assert apply_release(store.path, db, token, current, new_snapshot, bundle) == {'keep': 1, 'pending': 1, 'off': 0}
 
 
 @pytest.mark.parametrize('width', [390, 1280])
@@ -137,7 +147,7 @@ def test_admin_reviews_carried_answer_and_controls_cache(review_stack, page, wid
     expect(panel.get_by_text('해고의 예고 변경 후', exact=False)).to_be_visible()
     expect(panel.get_by_text('재승인 즉시 사용자에게 반환됩니다.', exact=True)).to_be_visible()
     assert page.evaluate('document.documentElement.scrollWidth <= document.documentElement.clientWidth')
-    panel.get_by_label('변경 사유').fill('합성 재승인')
+    panel.get_by_label('변경 사유', exact=True).fill('합성 재승인')
     panel.get_by_role('button', name='표시본 확인 및 재승인').click()
     expect(panel.get_by_text('변경을 저장했습니다.')).to_be_visible()
     page.get_by_role('radio', name='채팅', exact=True).click()
@@ -145,9 +155,88 @@ def test_admin_reviews_carried_answer_and_controls_cache(review_stack, page, wid
     assert request_row(stack, 3)['response_source'] == 'exact_cache'
     admin.click()
     page.get_by_role('button', name='캐시', exact=True).click()
-    panel.get_by_label('변경 사유').fill('합성 중단')
+    panel.get_by_label('변경 사유', exact=True).fill('합성 중단')
     panel.get_by_role('button', name='모드 off').click()
     expect(panel.get_by_text('현재 모드 off', exact=False)).to_be_visible()
     page.get_by_role('radio', name='채팅', exact=True).click()
     e2e.ask(page, QUESTION)
     assert request_row(stack, 4)['response_source'] == 'rag'
+
+
+@pytest.mark.parametrize('review_stack', ['drafts'], indirect=True)
+@pytest.mark.parametrize('width', [390, 1280])
+def test_admin_batch_approves_drafts_and_activates_cache(review_stack, page, width):
+    stack = review_stack
+    page.set_viewport_size({'width': width, 'height': 844})
+    e2e.login(page, stack.url, user=ADMIN_USER, pw=ADMIN_PW)
+    admin = page.get_by_role('radio', name='피드백 & 법령 관리')
+    admin.click()
+    page.get_by_role('button', name='캐시', exact=True).click()
+    panel = page.get_by_role('region', name='정확 일치 캐시 관리')
+    detail = panel.get_by_role('region', name='캐시 답변 상세')
+    select_batch = panel.get_by_role('button', name='선택 승인', exact=True)
+    expect(select_batch).to_be_disabled()
+    for key in ('합성 검토 답변', '합성 유지 답변'):
+        checkbox = panel.get_by_role('checkbox', name=f'{key} 선택', exact=True)
+        expect(checkbox).to_be_disabled()
+        panel.get_by_role('button', name=f'{key} · 초안', exact=True).click()
+        expect(detail.get_by_role('heading', name=f'{key} · 초안', exact=True)).to_be_visible()
+        expect(detail.get_by_role('heading', name='현재 릴리스 표시본')).to_be_visible()
+        checkbox.check()
+    expect(panel.get_by_role('checkbox', name='합성 즉시 반환 답변 선택')).to_be_disabled()
+
+    def change_second_hash(route):
+        payload = route.request.post_data_json
+        payload['items'][1]['preview_sha256'] = '0' * 64
+        route.continue_(post_data=payload)
+
+    page.route('**/api/admin/cache/approvals', change_second_hash, times=1)
+    select_batch.click()
+    expect(panel.get_by_role('alert')).to_contain_text('확인한 표시본이 현재 표시본과 다릅니다.')
+    batch_requests = []
+    page.on(
+        'request', lambda req: batch_requests.append(req) if req.url.endswith('/api/admin/cache/approvals') else None
+    )
+    expect(select_batch).to_be_enabled()
+    select_batch.click()
+    expect(panel.get_by_role('status').get_by_text('변경을 저장했습니다.')).to_be_visible()
+    assert len(batch_requests) == 1 and batch_requests[0].method == 'POST'
+    payload = batch_requests[0].post_data_json
+    assert len(payload['items']) == 2 and not payload.get('reason')
+    assert all(item['answer_id'] and len(item['preview_sha256']) == 64 for item in payload['items'])
+
+    mode = panel.get_by_role('region', name='캐시 모드 전환')
+    on = mode.get_by_role('button', name='모드 on', exact=True)
+    expect(on).to_be_disabled()
+    expect(on).to_have_css('opacity', '0.55')
+    expect(on).to_have_css('cursor', 'default')
+    expect(mode.get_by_text('변경 사유를 입력하세요', exact=True)).to_be_visible()
+    panel.get_by_label('변경 사유', exact=True).fill('합성 활성화')
+    on.click()
+    expect(panel.get_by_text('현재 모드 on', exact=False)).to_be_visible()
+
+    page.get_by_role('radio', name='채팅', exact=True).click()
+    e2e.ask(page, QUESTION)
+    row = request_row(stack, 1)
+    assert row['response_source'] == 'exact_cache'
+    assert row['call_counts'] == dict.fromkeys(('embedding', 'search', 'rerank', 'llm'), 0)
+
+    admin.click()
+    page.get_by_role('button', name='캐시', exact=True).click()
+    panel.get_by_role('button', name='합성 즉시 반환 답변 · 초안', exact=True).click()
+    expect(detail.get_by_text('승인하면 바로 사용자에게 반환됩니다', exact=True)).to_be_visible()
+    approve = detail.get_by_role('button', name='표시본 확인 및 승인', exact=True)
+    approve.scroll_into_view_if_needed()
+    expect(detail.get_by_label('상세 변경 사유', exact=True)).to_be_in_viewport()
+    revoke = detail.get_by_role('button', name='답변 철회', exact=True)
+    expect(revoke).to_be_disabled()
+    expect(revoke).to_have_css('cursor', 'default')
+    expect(detail.get_by_text('변경 사유를 입력하세요', exact=True).last).to_be_visible()
+    assert page.evaluate('document.documentElement.scrollWidth <= document.documentElement.clientWidth')
+    approve.click()
+    expect(panel.get_by_role('status').get_by_text('변경을 저장했습니다.')).to_be_visible()
+    page.get_by_role('radio', name='채팅', exact=True).click()
+    e2e.ask(page, LIVE_DRAFT_QUESTION)
+    row = request_row(stack, 2)
+    assert row['response_source'] == 'exact_cache'
+    assert row['call_counts'] == dict.fromkeys(('embedding', 'search', 'rerank', 'llm'), 0)

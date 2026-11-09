@@ -112,6 +112,7 @@ def test_release_projection_and_runtime(prepared, tmp_path, monkeypatch, changes
     token = ('after', 2)
     monkeypatch.setattr(corpus_store, 'active_token', lambda *a, **kw: token)
     monkeypatch.setattr(cache_runtime, 'active_token', lambda *a, **kw: token)
+    monkeypatch.setattr(cache_runtime, 'active_token', lambda *a, **kw: token)
     counts = apply_release(store.path, tmp_path / 'corpus.db', token, target, snapshot, tmp_path / 'fixture.zip')
     assert counts[verdict] == 1 and sum(counts.values()) == 1
     assert store.control().activation_event == 2 and store.control().mode == 'on'
@@ -194,6 +195,7 @@ def review_api(prepared, tmp_path, monkeypatch, admin_hash, request):
     seed_qa(db)
     token = ('after', 2)
     monkeypatch.setattr(corpus_store, 'active_token', lambda *a, **kw: token)
+    monkeypatch.setattr(cache_runtime, 'active_token', lambda *a, **kw: token)
     monkeypatch.setattr(corpus_store, 'release_by_id', lambda *args: old if args[2] == 'before' else target)
     protection = Protection(frozenset(), {'fixture': digest(QUESTION)}, 'protected')
     if getattr(request, 'param', None) == 'extra_csv':
@@ -265,7 +267,6 @@ def test_cache_api_guards_approval_and_idempotency(review_api):
             reason='표시본 확인',
         )
         assert client.post(path, json=action, headers={'Origin': 'http://invalid.test'}).status_code == 403
-        assert client.post(path, json=action | {'reason': ' '}, headers=origin).status_code == 400
         assert client.post(path, json=action | {'generation': 0}, headers=origin).status_code == 409
         assert client.post(path, json=action | {'preview_sha256': '0' * 64}, headers=origin).status_code == 409
         first = client.post(path, json=action, headers=origin)
@@ -275,8 +276,8 @@ def test_cache_api_guards_approval_and_idempotency(review_api):
         assert store.lookup(store.control().namespace_id, QUESTION)[1] is not None
     with connect(store.path) as conn:
         assert conn.execute(
-            "SELECT count(*) FROM cache_audit_events WHERE actor=? AND action='approve'", (f'admin:{ADMIN_USER}',)
-        ).fetchone() == (1,)
+            "SELECT reason FROM cache_audit_events WHERE actor=? AND action='approve'", (f'admin:{ADMIN_USER}',)
+        ).fetchall() == [('표시본 확인',)]
 
 
 def test_cache_api_missing_bundle_allows_off_and_withdrawal(review_api):
@@ -323,6 +324,14 @@ def test_release_preserves_extra_csv_protection_and_requires_cli(review_api, tmp
         )
         assert result.status_code == 409 and result.json()['code'] == 'protection_changed'
         assert detail['preview_sha256'] is None and 'CLI' in detail['disabled_reason']
+        mode = client.post(
+            '/api/admin/cache/actions',
+            headers=origin,
+            json=dict(
+                action='mode', target='shadow', generation=control.generation, reason='관찰', idempotency_key='mode'
+            ),
+        )
+        assert (mode.status_code, mode.json()['code']) == (409, 'protection_changed')
         assert store.control() == control
     args = cache_admin.parser().parse_args(
         [
@@ -343,51 +352,195 @@ def test_release_preserves_extra_csv_protection_and_requires_cli(review_api, tmp
     assert cache_admin.run(args) == {'mode': 'shadow'}
 
 
-@pytest.mark.parametrize('mode', ['on', 'shadow'])
-def test_new_draft_must_be_approved_in_off_before_shadow(review_api, monkeypatch, mode):
-    app, store, _, state = review_api
+def stage_review_drafts(review_api, monkeypatch, count):
+    _, store, _, state = review_api
     snapshot = state.exact_cache.snapshot
-    article = snapshot.articles[ID]
-    citations = [(ID, article.text_hash)]
+    citations = [(ID, snapshot.articles[ID].text_hash)]
     shown = snapshot.render(RAW, citations)
-    question = '새 합성 초안 질문인가요?'
-    draft = Draft('new', question, 'new-draft', digest(RAW), shown, citations, {}, RAW)
-    store.stage(snapshot.namespace, [draft], 'test', 'draft')
-    if mode == 'shadow':
-        store.set_mode('shadow', 'test', 'check', store.control().approval_id)
-    protection = Protection(frozenset(), {'new': digest(question)}, store.control().protection_hash)
+    drafts = [
+        Draft(str(i), f'합성 초안 질문 {i}인가요?', f'draft-{i}', digest(RAW), shown, citations, {}, RAW)
+        for i in range(count)
+    ]
+    store.stage(snapshot.namespace, drafts, 'test', 'draft')
+    protection = Protection(
+        frozenset(), {d.source_id: digest(d.question) for d in drafts}, store.control().protection_hash
+    )
     monkeypatch.setattr(cache_review_store, 'verified_inputs', lambda *a: (protection, {}))
-    origin = {'Origin': 'http://testserver'}
+    return drafts, protection
+
+
+@pytest.mark.parametrize(('mode', 'reason'), [('on', {}), ('shadow', {'reason': '   '})])
+def test_new_draft_approval_keeps_the_current_mode(review_api, monkeypatch, mode, reason):
+    app, store, _, state = review_api
+    (draft,), _ = stage_review_drafts(review_api, monkeypatch, 1)
+    snapshot = state.exact_cache.snapshot
+    store.set_mode(mode, 'test', 'check', store.control().approval_id)
     answer_id = draft.answer_id(snapshot.namespace.id)
-    path = '/api/admin/cache/actions'
     with TestClient(app) as client:
         assert client.post('/api/login', json={'user': ADMIN_USER, 'password': ADMIN_PW}).status_code == 200
         detail = client.get(f'/api/admin/cache/answers/{answer_id}').json()
-        action = dict(
-            action='approve',
-            target=answer_id,
-            generation=detail['generation'],
-            reason='표시본 확인',
-            preview_sha256=digest(shown),
-            idempotency_key='draft',
+        assert detail['preview_sha256'] == digest(draft.answer_text) and detail['disabled_reason'] is None
+        approved = client.post(
+            '/api/admin/cache/actions',
+            headers={'Origin': 'http://testserver'},
+            json=dict(
+                action='approve',
+                target=answer_id,
+                generation=detail['generation'],
+                preview_sha256=detail['preview_sha256'],
+                idempotency_key='draft',
+            )
+            | reason,
         )
-        rejected = client.post(path, json=action, headers=origin)
-        assert rejected.status_code == 409 and rejected.json()['code'] == 'draft_requires_off'
-        assert detail['preview_sha256'] is None and 'shadow' in detail['disabled_reason']
-        off = client.post(path, json=action | dict(action='mode', target='off', idempotency_key='off'), headers=origin)
-        assert off.status_code == 200
-        approved = client.post(path, json=action | {'generation': off.json()['generation']}, headers=origin)
-        assert approved.status_code == 200 and store.control().mode == 'off'
-        turn_on = action | dict(
-            action='mode', target='on', generation=approved.json()['generation'], idempotency_key='on'
+        assert approved.status_code == 200, approved.json()
+        audit = client.get(f'/api/admin/cache/answers/{answer_id}').json()['audit']
+        assert audit[0]['action'] == 'approve' and audit[0]['reason'] == '표시본 확인 승인'
+    result = state.exact_cache.lookup(draft.question, 'pro', 'concise')
+    assert result.mode == mode and result.match is not None, result.reason
+    assert result.match.answer_id == answer_id
+    assert result.metrics()['would_hit'] == (mode == 'shadow')
+
+
+@pytest.mark.parametrize('action', ['mode', 'revoke_answer', 'revoke_query'])
+def test_cache_api_requires_reason_for_mode_and_withdrawal(review_api, action):
+    app, store, answer_id, _ = review_api
+    control = store.control()
+    with TestClient(app) as client:
+        assert client.post('/api/login', json={'user': ADMIN_USER, 'password': ADMIN_PW}).status_code == 200
+        target = {
+            'mode': 'off',
+            'revoke_answer': answer_id,
+            'revoke_query': client.get(f'/api/admin/cache/answers/{answer_id}').json()['questions'][0]['query_id'],
+        }[action]
+        response = client.post(
+            '/api/admin/cache/actions',
+            headers={'Origin': 'http://testserver'},
+            json=dict(action=action, target=target, generation=control.generation, reason=' ', idempotency_key='empty'),
         )
-        assert client.post(path, json=turn_on, headers=origin).status_code == 409
-        shadow = client.post(path, json=turn_on | dict(target='shadow', idempotency_key='shadow'), headers=origin)
-        assert shadow.status_code == 200
-        assert (
-            client.post(path, json=turn_on | {'generation': shadow.json()['generation']}, headers=origin).status_code
-            == 200
+        assert (response.status_code, response.json()['code']) == (400, 'reason_required')
+    assert store.control() == control
+
+
+BATCH_PATH = '/api/admin/cache/approvals'
+ORIGIN = {'Origin': 'http://testserver'}
+
+
+def batch_payload(client, drafts, namespace, generation):
+    items = []
+    for draft in drafts:
+        answer_id = draft.answer_id(namespace)
+        detail = client.get(f'/api/admin/cache/answers/{answer_id}').json()
+        assert detail['generation'] == generation and detail['preview_sha256']
+        items.append(dict(answer_id=answer_id, preview_sha256=detail['preview_sha256']))
+    return dict(generation=generation, items=items, idempotency_key='batch')
+
+
+def test_cache_api_batch_approves_once_and_replays_receipt(review_api, monkeypatch):
+    app, store, _, state = review_api
+    drafts, _ = stage_review_drafts(review_api, monkeypatch, 2)
+    store.set_mode('off', 'test', 'pause')
+    namespace = state.exact_cache.snapshot.namespace.id
+    control = store.control()
+    with TestClient(app) as client:
+        assert client.post('/api/login', json={'user': ADMIN_USER, 'password': ADMIN_PW}).status_code == 200
+        body = batch_payload(client, drafts, namespace, control.generation)
+        response = client.post(BATCH_PATH, json=body, headers={'Origin': 'http://invalid.test'})
+        assert (response.status_code, response.json()['code']) == (403, 'bad_origin')
+        stale = client.post(
+            BATCH_PATH, json=body | dict(generation=control.generation - 1, idempotency_key='stale'), headers=ORIGIN
         )
+        assert (stale.status_code, stale.json()['code']) == (409, 'stale_generation')
+        first = client.post(BATCH_PATH, json=body, headers=ORIGIN)
+        assert first.status_code == 200 and first.json() == {'generation': control.generation + 1}
+        replay = client.post(BATCH_PATH, json=body, headers=ORIGIN)
+        assert replay.status_code == first.status_code and replay.json() == first.json()
+        new_control = store.control()
+        assert new_control.generation == control.generation + 1 and new_control.approval_id != control.approval_id
+        direct = client.post(
+            '/api/admin/cache/actions',
+            headers=ORIGIN,
+            json=dict(
+                action='mode', target='on', generation=new_control.generation, reason='활성화', idempotency_key='on'
+            ),
+        )
+        assert direct.status_code == 200
+        for draft in drafts:
+            match = state.exact_cache.lookup(draft.question, 'pro', 'concise').match
+            assert match is not None and match.answer_id == draft.answer_id(namespace)
+        monkeypatch.setattr(app.state.admin_post_limit, 'allowed', lambda _: False)
+        limited = client.post(BATCH_PATH, json=body, headers=ORIGIN)
+        assert (limited.status_code, limited.json()['code']) == (429, 'rate_limited')
+    with connect(store.path) as conn:
+        events = conn.execute(
+            "SELECT target,reason,json_extract(detail,'$.approval_id') FROM cache_audit_events "
+            "WHERE actor=? AND action='approve' ORDER BY event_id",
+            (f'admin:{ADMIN_USER}',),
+        ).fetchall()
+    assert events == [(d.answer_id(namespace), '표시본 확인 승인', new_control.approval_id) for d in drafts]
+
+
+@pytest.mark.parametrize(
+    ('failure', 'code'),
+    [
+        ('hash', 'review_changed'),
+        ('revoked_answer', 'invalid_state'),
+        ('revoked_query', 'review_changed'),
+        ('protected', 'review_changed'),
+    ],
+)
+def test_cache_api_batch_rolls_back_and_reports_failed_answer(review_api, monkeypatch, failure, code):
+    app, store, _, state = review_api
+    drafts, protection = stage_review_drafts(review_api, monkeypatch, 2)
+    namespace = state.exact_cache.snapshot.namespace.id
+    with TestClient(app) as client:
+        assert client.post('/api/login', json={'user': ADMIN_USER, 'password': ADMIN_PW}).status_code == 200
+        body = batch_payload(client, drafts, namespace, store.control().generation)
+        failed = body['items'][1]
+        if failure == 'hash':
+            failed['preview_sha256'] = '0' * 64
+        elif failure == 'revoked_answer':
+            store.revoke('answer', failed['answer_id'], 'test', 'withdrawn')
+        elif failure == 'revoked_query':
+            store.revoke('query', drafts[1].query_id(namespace), 'test', 'withdrawn')
+        else:
+            protection = replace(protection, blocked=frozenset({digest(drafts[1].question)}))
+            monkeypatch.setattr(cache_review_store, 'verified_inputs', lambda *a: (protection, {}))
+        control = store.control()
+        body['generation'] = control.generation
+        response = client.post(BATCH_PATH, json=body, headers=ORIGIN)
+        assert response.status_code == 409, response.json()
+        assert response.json()['answer_id'] == failed['answer_id'] and response.json()['code'] == code
+        assert response.json()['detail']
+        replay = client.post(BATCH_PATH, json=body, headers=ORIGIN)
+        assert replay.status_code == response.status_code and replay.json() == response.json()
+        assert client.get(f'/api/admin/cache/answers/{body["items"][0]["answer_id"]}').json()['status'] == 'draft'
+    assert store.control() == control
+    assert all(store.lookup(namespace, draft.question)[1] is None for draft in drafts)
+    with connect(store.path) as conn:
+        assert conn.execute(
+            'SELECT count(*) FROM cache_audit_events WHERE actor=?', (f'admin:{ADMIN_USER}',)
+        ).fetchone() == (0,)
+
+
+def test_cache_api_batch_rolls_back_when_release_changes_during_approval(review_api, monkeypatch):
+    app, store, _, state = review_api
+    drafts, _ = stage_review_drafts(review_api, monkeypatch, 2)
+    namespace = state.exact_cache.snapshot.namespace.id
+    control = store.control()
+    with TestClient(app) as client:
+        assert client.post('/api/login', json={'user': ADMIN_USER, 'password': ADMIN_PW}).status_code == 200
+        body = batch_payload(client, drafts, namespace, control.generation)
+        tokens = iter([('after', 2), ('newer', 3)])
+        monkeypatch.setattr(corpus_store, 'active_token', lambda *_: next(tokens))
+        response = client.post(BATCH_PATH, json=body, headers=ORIGIN)
+        assert (response.status_code, response.json()['code']) == (409, 'stale_release')
+        assert store.control() == control
+        assert all(store.lookup(namespace, draft.question)[2] == 'inactive' for draft in drafts)
+        assert client.post(BATCH_PATH, json=body, headers=ORIGIN).json() == response.json()
+    with connect(store.path) as conn:
+        assert conn.execute(
+            'SELECT count(*) FROM cache_audit_events WHERE actor=?', (f'admin:{ADMIN_USER}',)
+        ).fetchone() == (0,)
 
 
 def test_pending_reapproval_in_on_leaves_new_question_inactive(review_api, prepared, monkeypatch):
