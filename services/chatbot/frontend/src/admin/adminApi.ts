@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { NETWORK_ERROR } from '../api'
 
 export class AdminApiError extends Error {
-  constructor(readonly status: number, readonly code: string, readonly detail: string) {
+  constructor(readonly status: number, readonly code: string, readonly detail: string, readonly answerId?: string) {
     super(detail)
   }
 }
@@ -19,11 +19,12 @@ function safeDetail(detail: unknown) {
   return typeof detail === 'string' && !/[\r\n]/.test(detail) ? detail : ''
 }
 
-export function adminMessage(error: unknown): string {
+export function adminMessage(error: unknown, answerKey?: string): string {
   if (!(error instanceof AdminApiError)) return NETWORK_ERROR
   if (error.status === 403 && (!error.code || error.code === 'admin_required')) {
     return '관리자 권한이 필요하거나 이 요청에 대한 권한이 없습니다.'
   }
+  if (error.answerId && error.detail) return `답변 ${answerKey ?? error.answerId} · ${error.detail}`
   const notice = notices[error.code]
   if (!notice) return error.detail || `요청을 처리하지 못했습니다. (오류 ${error.status})`
   return error.detail && error.detail !== notice ? `${notice} ${error.detail}` : notice
@@ -32,9 +33,10 @@ export function adminMessage(error: unknown): string {
 async function request<T>(path: string, init: RequestInit): Promise<T> {
   const response = await fetch(`/api/admin${path}`, init)
   if (!response.ok) {
-    const body: { code?: unknown; detail?: unknown } | null = await response.json().catch(() => null)
+    const body: { code?: unknown; detail?: unknown; answer_id?: unknown } | null = await response.json().catch(() => null)
     const code = typeof body?.code === 'string' ? body.code : ''
-    throw new AdminApiError(response.status, code, response.status < 500 || code ? safeDetail(body?.detail) : '')
+    const answerId = typeof body?.answer_id === 'string' && /^[a-f0-9]{64}$/.test(body.answer_id) ? body.answer_id : undefined
+    throw new AdminApiError(response.status, code, response.status < 500 || code ? safeDetail(body?.detail) : '', answerId)
   }
   return response.json() as Promise<T>
 }
@@ -70,12 +72,12 @@ export function useAdminMutation(onUnauthorized: () => void) {
   const pending = useRef<{ path: string; payload: string; body: string } | null>(null)
   const active = useRef<AbortController | null>(null)
   const [busy, setBusy] = useState(false)
-  const [error, setError] = useState('')
+  const [failure, setFailure] = useState<{ error: unknown } | null>(null)
   useEffect(() => () => active.current?.abort(), [])
 
   function invalidate() {
     pending.current = null
-    setError('')
+    setFailure(null)
   }
 
   async function run<T>(path: string, fields: Record<string, unknown>): Promise<T | undefined> {
@@ -87,7 +89,7 @@ export function useAdminMutation(onUnauthorized: () => void) {
     const controller = new AbortController()
     active.current = controller
     setBusy(true)
-    setError('')
+    setFailure(null)
     try {
       const result = await request<T>(path, {
         method: 'POST', headers: { 'content-type': 'application/json' }, body: pending.current.body, signal: controller.signal,
@@ -98,12 +100,12 @@ export function useAdminMutation(onUnauthorized: () => void) {
       if (controller.signal.aborted) return
       if (error instanceof AdminApiError && error.status < 500 && error.status !== 429) pending.current = null
       if (error instanceof AdminApiError && error.status === 401) onUnauthorized()
-      else setError(adminMessage(error))
+      else setFailure({ error })
     } finally {
       active.current = null
       if (!controller.signal.aborted) setBusy(false)
     }
   }
 
-  return { run, busy, error, invalidate }
+  return { run, busy, error: failure ? adminMessage(failure.error) : '', failure, invalidate }
 }

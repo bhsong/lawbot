@@ -1,6 +1,6 @@
 # v5 시작 화면 예시 질문 검증
 
-개발 기준 `78a0ab4`. 운영 설정에는 정확 일치 캐시 DB가 지정되어 있지 않았다. 캐시 검증에 임시 SQLite만 사용했다. [계획](../plans/chat-question-examples.md)
+개발 기준 `78a0ab4`. 운영 설정에는 정확 일치 캐시 DB가 지정되어 있지 않았다. 캐시 검증에 임시 SQLite만 사용했다. [계획](../archives/chat-question-examples.md)
 
 ## 질문과 답변
 

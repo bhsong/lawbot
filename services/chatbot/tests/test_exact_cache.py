@@ -91,9 +91,16 @@ def test_modes_and_explicit_approval(catalog):
     assert store.stage(snapshot.namespace, [draft], 'tester', 'draft') == 1
     cache = cache_runtime.ExactCache(store, store.path, snapshot)
     assert cache.lookup(QUESTION, 'pro', 'concise').reason == 'off'
-    with pytest.raises(ValueError, match='승인 묶음'):
-        store.set_mode('shadow', 'tester', 'without approval')
+    for mode in ('shadow', 'on'):
+        with pytest.raises(ValueError, match='승인 묶음'):
+            store.set_mode(mode, 'tester', 'without approval')
     approval = activate(store, snapshot, draft, 'shadow')
+    store.set_mode('off', 'tester', 'pause', approval)
+    with pytest.raises(ValueError, match='승인 묶음'):
+        store.set_mode('on', 'tester', 'outdated approval', 'old')
+    for mode in ('on', 'shadow', 'off', 'shadow', 'on', 'off', 'shadow'):
+        store.set_mode(mode, 'tester', 'transition', approval)
+        assert store.control().mode == mode
     shadow = cache.lookup(QUESTION, 'pro', 'concise')
     assert shadow.mode == 'shadow' and shadow.metrics()['would_hit']
     store.set_mode('on', 'tester', 'enable', approval)

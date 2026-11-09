@@ -43,6 +43,8 @@ Question = Annotated[Nonempty, Field(max_length=2000)]
 Answer = Annotated[Nonempty, Field(max_length=8000)]
 Note = Annotated[str, Field(max_length=2000)]
 Scope = Literal['in', 'out']
+CacheDigest = Annotated[str, StringConstraints(pattern=r'^[a-f0-9]{64}$')]
+DEFAULT_APPROVAL_REASON = '표시본 확인 승인'
 
 
 class Body(BaseModel):
@@ -85,12 +87,25 @@ class Revoke(Body):
     note: Annotated[Nonempty, Field(max_length=2000)]
 
 
-class CacheAction(Body):
+class CacheMutation(Body):
     generation: int = Field(ge=0)
+    reason: Note | None = None
+
+
+class CacheAction(CacheMutation):
     action: Literal['approve', 'revoke_answer', 'revoke_query', 'mode']
     target: Annotated[Nonempty, Field(max_length=64)]
-    reason: Note | None = None
-    preview_sha256: Annotated[str, StringConstraints(pattern=r'^[a-f0-9]{64}$')] | None = None
+    preview_sha256: CacheDigest | None = None
+
+
+class CacheApprovalItem(BaseModel):
+    model_config = ConfigDict(extra='forbid', strict=True)
+    answer_id: CacheDigest
+    preview_sha256: CacheDigest
+
+
+class CacheApprovals(CacheMutation):
+    items: list[CacheApprovalItem] = Field(min_length=1, max_length=50)
 
 
 def _mutation(model, body, who, endpoint):
@@ -229,16 +244,33 @@ def router(db, app, *, protected=None, calendar_url=None):
     @api.post('/cache/actions', dependencies=post_guards)
     async def cache_action(body: PostBody, who: AdminWho):
         mutation, parsed = _mutation(CacheAction, body, who, '/cache/actions')
-        if not parsed.reason or not parsed.reason.strip():
+        reason = (parsed.reason or '').strip()
+        if not reason and parsed.action != 'approve':
             raise AdminError(400, '변경 사유를 입력하세요.', 'reason_required')
+        catalog = cache_catalog()
+        if parsed.action == 'approve':
+            status, payload = await _cache_call(
+                catalog.approve,
+                mutation,
+                parsed.generation,
+                [(parsed.target, parsed.preview_sha256)],
+                reason or DEFAULT_APPROVAL_REASON,
+            )
+        else:
+            status, payload = await _cache_call(
+                catalog.mutate, mutation, parsed.generation, parsed.action, parsed.target, reason
+            )
+        return JSONResponse(payload, status_code=status)
+
+    @api.post('/cache/approvals', dependencies=post_guards)
+    async def cache_approvals(body: PostBody, who: AdminWho):
+        mutation, parsed = _mutation(CacheApprovals, body, who, '/cache/approvals')
         status, payload = await _cache_call(
-            cache_catalog().mutate,
+            partial(cache_catalog().approve, record_rejections=True),
             mutation,
             parsed.generation,
-            parsed.action,
-            parsed.target,
-            parsed.reason.strip(),
-            parsed.preview_sha256,
+            [(item.answer_id, item.preview_sha256) for item in parsed.items],
+            (parsed.reason or '').strip() or DEFAULT_APPROVAL_REASON,
         )
         return JSONResponse(payload, status_code=status)
 
