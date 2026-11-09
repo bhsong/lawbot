@@ -121,10 +121,14 @@ def import_assembly(database: Path, source: str, collected_at: str, events: list
             target, ctx = event.target, event.context
             entry_id = 'assembly-' + sha256(f'{source}:{target.item_id}'.encode()).hexdigest()
             revision = int(event.new.version_key)
-            encoded = event.model_dump_json()
             prior = conn.execute('SELECT event_json FROM assembly_snapshots WHERE id=?', (event.event_id,)).fetchone()
             if prior:
-                if prior['event_json'] != encoded:
+                stored = json.loads(prior['event_json'])
+                if not isinstance(stored, dict):
+                    raise ValueError('Registered Assembly snapshot was altered')
+                stored.pop('detected_at', None)
+                observed = event.model_dump(mode='json', exclude={'detected_at'})
+                if json.dumps(stored, sort_keys=True) != json.dumps(observed, sort_keys=True):
                     raise ValueError('Registered Assembly snapshot was altered')
                 continue
             conn.execute(
@@ -140,7 +144,7 @@ def import_assembly(database: Path, source: str, collected_at: str, events: list
                     ctx.status,
                     ctx.source_url,
                     event.detected_at,
-                    encoded,
+                    event.model_dump_json(),
                 ),
             )
             dates = [

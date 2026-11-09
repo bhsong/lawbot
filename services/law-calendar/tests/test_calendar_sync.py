@@ -8,6 +8,7 @@ import sys
 import pytest
 from fastapi.testclient import TestClient
 
+from law_calendar.assembly_ingest import import_assembly
 from law_calendar.server import create_app
 from law_calendar.sync import synchronize
 from test_calendar_workflow import NOW
@@ -53,6 +54,29 @@ def test_sync_imports_registered_law_events_even_if_model_summary_already_proces
         assert client.get('/api/law-holds').json()['total'] == 3
         assert client.get('/api/law-calendar/status').json()['collectedAt'] == FINISHED
         assert client.get('/api/law-events?month=2026-11&type=notice').json()['total'] == 0
+
+
+def test_sync_imports_new_notice_after_redetecting_backfilled_notice(scheduled, monkeypatch):
+    from test_calendar_assembly import register
+    from test_calendar_notice_content import detail_html
+
+    (calendar_db, home, _, _), state = scheduled
+    backfilled_id = register(home, state)
+    event = json.loads((home / f'{backfilled_id}.json').read_text(encoding='utf-8'))
+    backfilled_at = '2026-11-04T06:30:00+09:00'
+    backfilled = {**event, 'detected_at': backfilled_at}
+    assert import_assembly(calendar_db, 'assembly_notice', backfilled_at, [backfilled]) == (1, 0)
+    new_id = register(home, state, notice_id='PRC_NEW')
+    html = detail_html('2200012', '2026-11-04~2026-11-05', '주요내용<br/>안 제10조를 신설함.', pdf_url='')
+    monkeypatch.setattr('law_calendar.notice_content.fetch_official', lambda _url: html.encode())
+
+    result = synchronize(calendar_db, home)
+
+    assert result['failed'] == result['assembly_notice_failed'] == 0
+    assert result['assembly_notice_imported'] == result['assembly_notice_unchanged'] == 1
+    with sqlite3.connect(calendar_db) as conn:
+        stored = conn.execute('SELECT summary FROM assembly_notice_content WHERE snapshot_id=?', (new_id,)).fetchone()
+        assert stored == ('안 제10조를 신설함.',)
 
 
 def test_successful_collection_without_events_updates_freshness(scheduled):

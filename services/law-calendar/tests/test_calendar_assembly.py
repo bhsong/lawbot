@@ -16,6 +16,7 @@ from test_calendar_sync import scheduled as scheduled
 from test_calendar_workflow import workflow as workflow
 
 NOW = '2026-11-05T06:31:00+09:00'
+REDETECTED_AT = '2026-11-06T06:31:00+09:00'
 
 
 def register(
@@ -86,6 +87,40 @@ def unavailable_notice_source(monkeypatch):
         raise NoticeSourceError('Official detail unavailable')
 
     monkeypatch.setattr('law_calendar.notice_content.fetch_official', unavailable)
+
+
+@pytest.mark.parametrize('source', ['assembly_notice', 'assembly_bill'])
+def test_redetected_snapshot_preserves_first_observation(scheduled, source):
+    (database, home, _, _), state = scheduled
+    event_id = register(home, state, source=source, date='2026-11-05')
+    event = json.loads((home / f'{event_id}.json').read_text(encoding='utf-8'))
+    assert import_assembly(database, source, NOW, [event]) == (1, 0)
+    with sqlite3.connect(database) as conn:
+        snapshot_query = 'SELECT collected_at,event_json FROM assembly_snapshots WHERE id=?'
+        before = conn.execute(snapshot_query, (event_id,)).fetchone()
+        assert before[0] == json.loads(before[1])['detected_at'] == NOW
+
+        event['detected_at'] = REDETECTED_AT
+        assert import_assembly(database, source, REDETECTED_AT, [event]) == (0, 1)
+        assert conn.execute(snapshot_query, (event_id,)).fetchone() == before
+
+
+def test_altered_snapshot_rolls_back_source_import(scheduled):
+    (database, home, _, _), state = scheduled
+    source = 'assembly_notice'
+    event_id = register(home, state)
+    new_id = register(home, state, notice_id='PRC_NEW')
+    event = json.loads((home / f'{event_id}.json').read_text(encoding='utf-8'))
+    new_event = json.loads((home / f'{new_id}.json').read_text(encoding='utf-8'))
+    assert import_assembly(database, source, NOW, [event]) == (1, 0)
+    with sqlite3.connect(database) as conn:
+        before = list(conn.iterdump())
+        event['detected_at'] = REDETECTED_AT
+        event['dates']['notice_end'] = '2026-11-07'
+
+        with pytest.raises(ValueError, match='Registered Assembly snapshot was altered'):
+            import_assembly(database, source, REDETECTED_AT, [new_event, event])
+        assert list(conn.iterdump()) == before
 
 
 def test_approved_notice_dates_correction_and_failed_source(scheduled, unavailable_notice_source):
