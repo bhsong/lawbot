@@ -78,8 +78,9 @@ def held_review_template(database: Path, change_id: str) -> dict | None:
     with read_database(database) as conn:
         held = conn.execute(
             'SELECT c.id,c.event_id,c.article,c.before_text,c.after_text,h.source_url,s.snapshot_id,'
-            "json_extract(v.raw_event,'$.dates.promulgation') AS promulgated_on "
+            "coalesce(e.promulgated_on,json_extract(v.raw_event,'$.dates.promulgation')) AS promulgated_on "
             'FROM public_holds h JOIN article_changes c ON c.id=h.id '
+            'JOIN change_events e ON e.id=c.event_id '
             'JOIN event_sources s ON s.event_id=c.event_id JOIN source_snapshots v ON v.id=s.snapshot_id '
             'WHERE h.id=?',
             (change_id,),

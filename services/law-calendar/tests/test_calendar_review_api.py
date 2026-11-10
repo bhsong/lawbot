@@ -118,6 +118,55 @@ def test_effective_review_rejects_superseded_snapshot(workflow, headers):
         assert client.get('/api/law-events?month=2026-11&type=effective').json()['total'] == 0
 
 
+def test_effective_sibling_approval_preserves_corrected_promulgation(workflow, headers):
+    database = workflow[0]
+    event_id = import_one(workflow)
+    corrected = '2026-10-02'
+    with TestClient(create_app(database)) as client:
+        first, second, *_ = client.get('/api/law-holds').json()['items']
+        payload = {**approval(database, event_id), 'reviewer': 'admin'}
+        first_decision = {
+            **payload,
+            'promulgated_on': corrected,
+            'changes': [change for change in payload['changes'] if change['id'] == first['id']],
+        }
+        first_path = f'{REVIEW_PREFIX}/effective/{first["id"]}'
+        assert client.post(first_path, headers=headers, json=first_decision).status_code == 200
+
+        second_path = f'{REVIEW_PREFIX}/effective/{second["id"]}'
+        response = client.get(second_path, headers=headers)
+        assert response.status_code == 200
+        second_decision = {
+            **payload,
+            'promulgated_on': response.json()['template']['promulgated_on'],
+            'changes': [change for change in payload['changes'] if change['id'] == second['id']],
+        }
+        assert client.post(second_path, headers=headers, json=second_decision).status_code == 200
+        for item in (first, second):
+            assert client.get(f'/api/law-changes/{item["id"]}').json()['promulgatedOn'] == corrected
+
+
+@pytest.mark.parametrize('decision', ['reject', 'withdraw'])
+def test_effective_web_rejects_event_wide_decisions(workflow, headers, decision):
+    database = workflow[0]
+    event_id = import_one(workflow)
+    with TestClient(create_app(database)) as client:
+        first, second, *_ = client.get('/api/law-holds').json()['items']
+        payload = {**approval(database, event_id), 'reviewer': 'admin'}
+        payload['changes'] = [change for change in payload['changes'] if change['id'] == first['id']]
+        assert client.post(f'{REVIEW_PREFIX}/effective/{first["id"]}', headers=headers, json=payload).status_code == 200
+
+        response = client.post(
+            f'{REVIEW_PREFIX}/effective/{second["id"]}',
+            headers=headers,
+            json={**payload, 'decision': decision, 'changes': []},
+        )
+        assert response.status_code == 422
+        assert 'decision' in response.json()['detail']
+        assert client.get(f'/api/law-changes/{first["id"]}').status_code == 200
+        assert client.get('/api/law-holds').json()['total'] == 2
+
+
 def test_effective_retry_after_sibling_approval_does_not_reapply(workflow, headers):
     database = workflow[0]
     event_id = import_one(workflow)

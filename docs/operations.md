@@ -162,7 +162,7 @@ v5 Pro는 간결형에 `data/v5/system_v5_concise.txt`를 쓰고, 화면에서 "
 | `LAWBOT_CORPUS` | 아니요 | `csv`(기본) 또는 `db`. DB 모드에서는 시작 시 프로필의 활성 릴리스에서 조문을 읽음 |
 | `LAWBOT_FEEDBACK_DIR` | 아니요 | `LAWBOT_DB`가 비어 있을 때 쓰는 JSONL 폴더. 기본 레포 최상위 `feedback/`. 레포 안에서는 Git 제외 경로만 허용 |
 | `LAWBOT_CALENDAR_API_URL` | 캘린더 프록시 사용 시 | 포트가 명시된 루프백 HTTP 주소. 비워 두면 관리자 캘린더 API는 503 `calendar_not_configured` 반환 |
-| `LAWBOT_CALENDAR_ADMIN_TOKEN` | 캘린더 검토와 가져오기 실패 조회 사용 시 | 웹앱과 캘린더 서버의 각 `.env`에 같은 서비스 토큰을 입력 |
+| `LAWBOT_CALENDAR_ADMIN_TOKEN` | 캘린더 검토와 가져오기 실패 조회 사용 시 | 레포 최상위 `.env`와 `services/law-calendar/.env`에 같은 서비스 토큰을 입력 |
 
 모델 서버(`lawbot-model-server`, `lawbot_model_server.check`):
 
@@ -421,6 +421,8 @@ uv run python -m lawbot.auth hash
 | 캘린더 가져오기 실패 | `GET /calendar/import-failures` | 소스·이벤트별 최근 실패를 페이지 단위로 조회 |
 
 POST는 JSON과 멱등 키가 필요합니다. 같은 요청을 재시도할 때는 본문 바이트와 키를 유지합니다. Tailscale로 접속하는 경우 브라우저가 보낸 `Origin`이 프록시를 거친 요청의 공개 주소와 일치하는지 확인합니다. 캘린더 프록시를 쓸 때는 `LAWBOT_CALENDAR_API_URL`을 설정하고 관리자 세션으로 조회합니다. 허용 경로와 요청 본문 형식은 [관리자 API 명세](archives/sqlite-admin-pipeline.md#37-관리자-api)에 있습니다.
+
+관리자 캘린더 쓰기를 켤 때는 사용자가 두 환경 파일에 같은 토큰을 직접 입력하고 권한을 `600`으로 설정합니다. 캘린더는 `com.lawbot.calendar`에서 실행 파일을 직접 호출하는 경우에도 서비스 폴더의 `.env`를 읽습니다. 프로세스 환경에 설정한 값이 파일보다 우선합니다. 파일을 바꾼 뒤 캘린더 서버와 웹앱을 다시 시작합니다.
 
 ## 답변 피드백 (선택, `LAWBOT_FEEDBACK=1`)
 

@@ -21,8 +21,11 @@ from law_calendar import admin
 from law_calendar.automation import REASONS
 from law_calendar.db import NOTICE_CONTENT_VERSION, NOTICE_LIMIT_VERSION, read_database
 from law_calendar.models import CalendarMonth, CalendarStatus, ChangePage, HoldPage, PublicDetail
+from lawbot_common import envfile
+from lawbot_common.logs import logger
 
 KST = timezone(timedelta(hours=9))
+SECRETS = ('LAWBOT_CALENDAR_ADMIN_TOKEN',)
 
 
 def month_bounds(value: str) -> tuple[str, str]:
@@ -281,6 +284,8 @@ def create_app(database: Path, frontend: Path | None = None) -> FastAPI:
 
 
 def main():
+    service = Path(__file__).resolve().parents[2]
+    envfile.load(service / '.env', service, SECRETS, logger('law_calendar', 'calendar'))
     parser = argparse.ArgumentParser(description='Independent calendar API')
     parser.add_argument('--database', type=Path, default=os.environ.get('LAW_CALENDAR_DB'))
     parser.add_argument('--port', type=int, required=True)

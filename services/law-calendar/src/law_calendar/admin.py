@@ -55,6 +55,8 @@ def _validation_detail(exc: ValidationError) -> str:
 
 
 def _review_effective(database: Path, change_id: str, payload: dict, reviewer: str) -> None:
+    if payload.get('decision') != 'approve':
+        raise HTTPException(422, 'decision: Only approval is allowed for held articles')
     with read_database(database) as conn:
         change = conn.execute(
             'SELECT c.event_id FROM article_changes c JOIN held_changes h ON h.change_id=c.id WHERE c.id=?',
