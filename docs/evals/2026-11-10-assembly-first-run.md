@@ -41,4 +41,13 @@
 
 ## 수정 후 결과
 
-운영 반영 후 확인 예정
+2026-11-11 06:30 정기 실행(운영 `5a75f20`, v5.2.2)에서 확인했다. 수집기 종료 코드 0, 06:30:03–06:33:45.
+
+| 항목 | 결과 |
+| --- | --- |
+| 수집 | collectors=4 ok=4 failed=0 events=14 (국회 법률안 14건) |
+| 캘린더 점검 | 이상 없음. `failed=0`, `assembly_bill_imported=14`, `assembly_bill_unchanged=9`, `assembly_notice_imported=3`, `assembly_notice_unchanged=13`, `assembly_notice_failed=0`, `notice_auto_published=3`, `notice_content_stored=3`, `notice_content_errors=0`, `notice_pending=0` |
+| 캘린더 DB | 입법예고 스냅숏 115 → 118. 11-10에 빠졌던 `PRC_FEBA737D…`, `PRC_10FD3746…`, `PRC_6CC198EE…`가 revision 1로 등록되고 자동 공개됐다 |
+| 요약 | `summaries/2026-11-11.md` 국회 칸 14건, 점검 절 두 항목 |
+
+같은 실행에서 조문 자동 갱신이 처음으로 실제 갱신을 했다. 임금채권보장법 시행령 제13조·제16조(2026-11-10 시행)가 바뀌어 릴리스 `v5-live-2026-11-11`로 전환했고, 자체 검색 확인 통과, 캐시 유지 30·검토 대기 0·끔 0, 웹앱 재시작 ok였다.
