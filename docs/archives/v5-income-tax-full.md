@@ -1,8 +1,10 @@
 # v5 소득세법 전체 조문 추가
 
+2026-11-11 검색 평가 후 재학습 없이 v5.4.0에 반영했다. [검색 평가](../evals/2026-11-11-v5-income-tax-eval.md) · [운영 반영 기록](../evals/2026-11-11-deploy-v5.2.3-v5.4.0.md)
+
 - 기준 브랜치는 2026-11-10에 원격과 대조한 `main` `0f214d0`이다. 작업 브랜치는 `feat/v5-income-tax-full`이다.
 - 모델 재학습 없이 적용하는 경우 앱 버전은 v5.4.0 예정이다. 조문 프로필과 매니페스트의 `dataset_version`·`trained_on.embedding`은 v5를 유지하며, 새 코퍼스는 CSV SHA-256으로 구분한다.
-- [기존 v5 계획](../archives/v5-tax-scope.md)은 보관했다. [나머지 9개 법령 계획](tax-full-scope-remaining-laws.md)은 후속 작업으로 둔다.
+- [기존 v5 계획](v5-tax-scope.md)은 보관했다. [나머지 9개 법령 계획](../plans/tax-full-scope-remaining-laws.md)은 후속 작업으로 둔다.
 
 ## 변경과 검증 순서
 

@@ -166,7 +166,7 @@ uv run lawbot-reindex data/v5/law_articles_v5_decree.csv (같은 옵션)
 | `law_articles_v5_decree.csv` | 2,114 | 1,859 (법률 812 · 시행령 734 · 시행규칙 313) |
 | `doc_tokens_v5.csv` | 1,859 | 1,859 |
 
-기준일과 원문은 6-1절의 2026-11-03과 Legalize KR `bcb7aea7782e81c21fbeb08382c442f7c2041690`을 유지했다. 제공 CSV는 ID 대조에 사용했다. 원문 조합, 삭제와 부칙 특례 판정은 생성기가 수행했다. 제공 목록과 다른 ID·삭제 상태, 문서 순서와 토큰 상한은 [계획서의 대조 결과](plans/v5-income-tax-full.md#코퍼스-대조와-순서)에 기록했다.
+기준일과 원문은 6-1절의 2026-11-03과 Legalize KR `bcb7aea7782e81c21fbeb08382c442f7c2041690`을 유지했다. 제공 CSV는 ID 대조에 사용했다. 원문 조합, 삭제와 부칙 특례 판정은 생성기가 수행했다. 제공 목록과 다른 ID·삭제 상태, 문서 순서와 토큰 상한은 [계획서의 대조 결과](archives/v5-income-tax-full.md#코퍼스-대조와-순서)에 기록했다.
 
 ```zsh
 out=$(mktemp -d)
