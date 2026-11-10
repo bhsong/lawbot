@@ -1,6 +1,6 @@
 # 관리자 캘린더 보류 승인과 정기 가져오기 검증
 
-2026-11-10 KST · 초기 기준 `cda1b33`, 최종 기준 `91e5c0d` · 합성 법령·국회 이벤트, 임시 SQLite와 루프백 대역 서버로 검증했다. [계획서](../plans/calendar-hold-approval.md)
+2026-11-10 KST · 초기 기준 `cda1b33`, 최종 기준 `91e5c0d` · 합성 법령·국회 이벤트, 임시 SQLite와 루프백 대역 서버로 검증했다. [계획서](../archives/calendar-hold-approval.md)
 
 ## Red
 
