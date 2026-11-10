@@ -6,6 +6,10 @@ from urllib.parse import urlsplit
 HOSTS = {'www.law.go.kr', 'law.go.kr', 'opinion.lawmaking.go.kr'}
 
 
+class StaleSnapshotError(ValueError):
+    """A review is no longer tied to the current source snapshot."""
+
+
 def civil_date(value: str) -> str:
     if date.fromisoformat(value).isoformat() != value:
         raise ValueError('Expected a KST civil date YYYY-MM-DD')

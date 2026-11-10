@@ -5,7 +5,7 @@ from lawbot_common import envfile as common
 from lawbot_common.logs import logger
 
 DEFAULT = ROOT / '.env'
-SECRETS = ('LAWBOT_PW', 'LAWBOT_MODEL_TOKEN', 'LAWBOT_ADMIN_PW_HASH')  # 파일 권한이 넓으면 경고
+SECRETS = ('LAWBOT_PW', 'LAWBOT_MODEL_TOKEN', 'LAWBOT_ADMIN_PW_HASH', 'LAWBOT_CALENDAR_ADMIN_TOKEN')
 
 
 def parse(text, name='.env'):

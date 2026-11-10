@@ -1,6 +1,6 @@
 # 조문 생성기의 필수 하위법령 검증 (2026-11-10)
 
-기준 `cda1b33` · 합성 Git 원천, 임시 CSV·DB와 로컬 개발 Legalize KR을 사용했다. [계획서](../plans/build-articles-required-decrees.md)
+기준 `cda1b33` · 합성 Git 원천, 임시 CSV·DB와 로컬 개발 Legalize KR을 사용했다. [계획서](../archives/build-articles-required-decrees.md)
 
 ## 재현과 수정 확인
 

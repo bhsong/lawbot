@@ -1,4 +1,4 @@
-"""Public read-only API. No collection, inference, chatbot authentication or writes."""
+"""Public calendar reads and service-token administrator reviews."""
 
 import argparse
 import calendar
@@ -17,6 +17,7 @@ from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.responses import JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 
+from law_calendar import admin
 from law_calendar.automation import REASONS
 from law_calendar.db import NOTICE_CONTENT_VERSION, NOTICE_LIMIT_VERSION, read_database
 from law_calendar.models import CalendarMonth, CalendarStatus, ChangePage, HoldPage, PublicDetail
@@ -273,13 +274,14 @@ def create_app(database: Path, frontend: Path | None = None) -> FastAPI:
                 ]
         return {'items': items, 'total': total, 'page': page, 'page_size': page_size}
 
+    app.include_router(admin.router(database))
     if frontend is not None:
         app.mount('/', StaticFiles(directory=frontend, html=True), name='calendar')
     return app
 
 
 def main():
-    parser = argparse.ArgumentParser(description='Independent calendar read API')
+    parser = argparse.ArgumentParser(description='Independent calendar API')
     parser.add_argument('--database', type=Path, default=os.environ.get('LAW_CALENDAR_DB'))
     parser.add_argument('--port', type=int, required=True)
     parser.add_argument('--frontend', type=Path)

@@ -8,7 +8,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from law_calendar.db import read_database, write_database
 from law_calendar.ingest import utc_now
-from law_calendar.validation import civil_date, official_url
+from law_calendar.validation import StaleSnapshotError, civil_date, official_url
 
 
 class ChangeReview(BaseModel):
@@ -73,41 +73,100 @@ def review_template(inspected: dict) -> dict:
     }
 
 
-def review(database: Path, payload: dict, *, reviewer: str) -> None:
+def held_review_template(database: Path, change_id: str) -> dict | None:
+    """Show the current held article and leave unconfirmed review fields for the reviewer."""
+    with read_database(database) as conn:
+        held = conn.execute(
+            'SELECT c.id,c.event_id,c.article,c.before_text,c.after_text,h.source_url,s.snapshot_id,'
+            "json_extract(v.raw_event,'$.dates.promulgation') AS promulgated_on "
+            'FROM public_holds h JOIN article_changes c ON c.id=h.id '
+            'JOIN event_sources s ON s.event_id=c.event_id JOIN source_snapshots v ON v.id=s.snapshot_id '
+            'WHERE h.id=?',
+            (change_id,),
+        ).fetchone()
+    if held is None:
+        return None
+    template = review_template(
+        {
+            'id': held['event_id'],
+            'snapshot_id': held['snapshot_id'],
+            'source_url': held['source_url'],
+            'changes': [held],
+        }
+    )
+    template['promulgated_on'] = held['promulgated_on']
+    return {
+        'template': template,
+        'evidence_url': held['source_url'],
+        'changes': [
+            {'id': held['id'], 'article': held['article'], 'before': held['before_text'], 'after': held['after_text']}
+        ],
+    }
+
+
+def _require_date(field: str, value: str) -> None:
+    try:
+        civil_date(value)
+    except ValueError as exc:
+        raise ValueError(f'{field}: Enter a valid KST date (YYYY-MM-DD)') from exc
+
+
+def _require_evidence(field: str, value: str) -> None:
+    try:
+        official_url(value)
+    except ValueError as exc:
+        raise ValueError(f'{field}: An official HTTPS evidence URL is required') from exc
+
+
+def review(database: Path, payload: dict, *, reviewer: str, idempotent: bool = False) -> None:
     decision = Decision.model_validate(payload)
-    if not reviewer.strip() or not decision.note.strip():
-        raise ValueError('Reviewer and review note are required')
+    if not reviewer.strip():
+        raise ValueError('reviewer: Reviewer is required')
+    if not decision.note.strip():
+        raise ValueError('note: Review note is required')
     if decision.decision == 'approve':
-        if not decision.dates_verified or not decision.changes:
-            raise ValueError('Dates, addenda and at least one article must be reviewed')
-        official_url(decision.source_url or '')
-        civil_date(decision.promulgated_on or '')
-        for value in (decision.published_on, decision.comment_deadline):
+        if not decision.dates_verified:
+            raise ValueError('dates_verified: Review the dates and addenda')
+        if not decision.changes:
+            raise ValueError('changes: Review at least one article')
+        _require_evidence('source_url', decision.source_url or '')
+        _require_date('promulgated_on', decision.promulgated_on or '')
+        for field, value in (('published_on', decision.published_on), ('comment_deadline', decision.comment_deadline)):
             if value is not None:
-                civil_date(value)
-        for change in decision.changes:
-            civil_date(change.effective_on)
-            official_url(change.evidence_url)
-            if (
-                not change.comparison_verified
-                or not change.summary.strip()
-                or '\n' in change.summary
-                or '\r' in change.summary
-            ):
-                raise ValueError('An explicitly verified comparison and one-line summary are required')
+                _require_date(field, value)
+        for index, change in enumerate(decision.changes, 1):
+            field = f'changes[{index}]'
+            _require_date(f'{field}.effective_on', change.effective_on)
+            _require_evidence(f'{field}.evidence_url', change.evidence_url)
+            if not change.comparison_verified:
+                raise ValueError(f'{field}.comparison_verified: Explicitly verify the comparison')
+            if not change.summary.strip() or '\n' in change.summary or '\r' in change.summary:
+                raise ValueError(f'{field}.summary: Enter a one-line summary')
         if len({c.id for c in decision.changes}) != len(decision.changes):
-            raise ValueError('Duplicate change ID in review')
+            raise ValueError('changes: Duplicate change ID in review')
     reviewed_at = utc_now()
+    payload_json = decision.model_dump_json()
     with write_database(database) as conn:
         source = conn.execute('SELECT snapshot_id FROM event_sources WHERE event_id=?', (decision.event_id,)).fetchone()
         if source is None or source['snapshot_id'] != decision.snapshot_id:
-            raise ValueError('Stale or missing source snapshot; inspect the event again')
+            raise StaleSnapshotError('Stale or missing source snapshot; inspect the event again')
         active = {
             r['change_id']
             for r in conn.execute('SELECT change_id FROM change_versions WHERE snapshot_id=?', (decision.snapshot_id,))
         }
-        if any(c.id not in active for c in decision.changes):
-            raise ValueError('Review contains a change outside this snapshot')
+        for index, change in enumerate(decision.changes, 1):
+            if change.id not in active:
+                raise ValueError(f'changes[{index}].id: Change is outside this snapshot')
+        # An earlier accepted request may be retried after a newer decision.
+        if (
+            idempotent
+            and conn.execute(
+                'SELECT 1 FROM review_audit a JOIN review_details d ON d.audit_id=a.id '
+                'WHERE a.event_id=? AND a.reviewer=? AND d.snapshot_id=? AND d.payload_json=? LIMIT 1',
+                (decision.event_id, reviewer, decision.snapshot_id, payload_json),
+            ).fetchone()
+        ):
+            return
         state = {'approve': 'approved', 'reject': 'rejected', 'withdraw': 'withdrawn'}[decision.decision]
         if state == 'approved':
             conn.execute(
@@ -147,5 +206,5 @@ def review(database: Path, payload: dict, *, reviewer: str) -> None:
         )
         conn.execute(
             'INSERT INTO review_details VALUES (?,?,?)',
-            (audit.lastrowid, decision.snapshot_id, decision.model_dump_json()),
+            (audit.lastrowid, decision.snapshot_id, payload_json),
         )

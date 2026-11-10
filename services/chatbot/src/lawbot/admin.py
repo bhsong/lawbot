@@ -4,6 +4,7 @@ import base64
 import hashlib
 import json
 import re
+from datetime import UTC, datetime
 from functools import partial
 from typing import Annotated, Literal
 
@@ -13,9 +14,10 @@ from fastapi.responses import JSONResponse, Response
 from httpx import URL, AsyncClient, RequestError, TimeoutException
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints, ValidationError
 
-from lawbot import dataset_store, feedback_store
+from lawbot import audit_store, dataset_store, feedback_store
 from lawbot.cache_review_store import ReviewCatalog
 from lawbot.cache_store import CacheDatabaseError
+from lawbot.db.connection import connect, transaction
 from lawbot.qa_rules import ProtectedQA, assigned_overlap
 from lawbot.web import (
     AdminError,
@@ -33,6 +35,7 @@ REASONS = ('retrieval', 'answer', 'false_refusal', 'other')
 CALENDAR_PATH = re.compile(
     r'(?:law-calendar(?:/status)?|law-events|law-holds|law-changes/[A-Za-z0-9_:-]+(?:/notice-comparison/[0-9]+)?)'
 )
+CALENDAR_REVIEW_PATH = re.compile(r'law-holds/(effective|notice)/([A-Za-z0-9_:-]+)')
 CALENDAR_TIMEOUT = 10
 log = logger('lawbot', 'lawbot')
 
@@ -50,6 +53,12 @@ DEFAULT_APPROVAL_REASON = '표시본 확인 승인'
 class Body(BaseModel):
     model_config = ConfigDict(extra='forbid', strict=True)
     idempotency_key: Key
+
+
+class CalendarReview(Body):
+    """Validate the proxy envelope and leave review fields to the calendar service."""
+
+    model_config = ConfigDict(extra='allow', strict=True)
 
 
 class Gold(BaseModel):
@@ -137,6 +146,23 @@ def _require_admin_json(request: Request):
         raise AdminError(415, str(exc.detail), 'unsupported_media_type') from exc
 
 
+def _calendar_receipt(db, mutation):
+    with connect(db) as conn:
+        return mutation.receipt(conn)
+
+
+def _save_calendar_review(db, mutation, kind, hold_id, decision):
+    with connect(db, write=True) as conn, transaction(conn):
+        if receipt := mutation.receipt(conn):
+            return receipt
+        at = datetime.now(UTC).isoformat()
+        summary = {'decision': decision} if decision in ('approve', 'reject', 'withdraw') else None
+        audit_store.record_action(conn, at, mutation.actor, 'calendar_review', kind, hold_id, summary=summary)
+        result = {'ok': True}
+        mutation.save(conn, 200, result, at)
+        return 200, result
+
+
 def _cursor(value):
     if value is None:
         return None
@@ -219,11 +245,12 @@ async def _cache_call(fn, *args):
         raise AdminError(503, '캐시 DB 또는 검토 자료를 확인할 수 없습니다.', 'cache_unavailable') from exc
 
 
-def router(db, app, *, protected=None, calendar_url=None):
+def router(db, app, *, protected=None, calendar_url=None, calendar_token=None):
     api = APIRouter(prefix='/api/admin', dependencies=[Depends(require_admin)])
     index = load_protected(db) if protected is None else protected
     corpus = Corpus(app)
     post_guards = [Depends(_post_body), Depends(require_admin_post_rate)]
+    calendar_review_lock = anyio.Lock()
 
     def cache_catalog():
         cache = getattr(app, 'exact_cache', None)
@@ -338,27 +365,72 @@ def router(db, app, *, protected=None, calendar_url=None):
     async def articles(q: str = ''):
         return {'items': corpus.search(q)}
 
-    @api.get('/calendar/{path:path}')
-    async def calendar(path: str, request: Request):
-        if not CALENDAR_PATH.fullmatch(path):
-            raise AdminError(404, '허용된 캘린더 경로가 아닙니다.', 'not_found')
+    def check_calendar_configuration(private):
         if calendar_url is None:
             raise AdminError(503, '캘린더 주소가 설정되지 않았습니다.', 'calendar_not_configured')
-        target = URL(f'{calendar_url}/api/{path}').copy_with(query=request.scope['query_string'])
+        if private and not calendar_token:
+            raise AdminError(503, '캘린더 관리자 서비스 토큰이 설정되지 않았습니다.', 'calendar_review_disabled')
+
+    async def calendar_request(method, path, *, private=False, query=b'', payload=None):
+        headers = {'Accept-Encoding': 'identity'}
+        prefix = '/api'
+        if private:
+            headers['Authorization'] = f'Bearer {calendar_token}'
+            prefix += '/admin'
+        target = URL(f'{calendar_url}{prefix}/{path}').copy_with(query=query)
         try:
             with anyio.fail_after(CALENDAR_TIMEOUT):
                 async with AsyncClient(timeout=CALENDAR_TIMEOUT, follow_redirects=False, trust_env=False) as client:
-                    response = await client.get(target, headers={'Accept-Encoding': 'identity'})
+                    response = await client.request(method, target, headers=headers, json=payload)
         except TimeoutException, TimeoutError:
             raise AdminError(504, '캘린더 응답 시간이 초과됐습니다.', 'calendar_timeout') from None
         except RequestError:
             raise AdminError(502, '캘린더에 연결할 수 없습니다.', 'calendar_unavailable') from None
+        if private and response.status_code == 403:
+            raise AdminError(502, '캘린더 관리자 서비스 인증에 실패했습니다.', 'calendar_auth_failed')
+        if private and response.status_code == 503:
+            raise AdminError(503, '캘린더 관리자 서비스를 사용할 수 없습니다.', 'calendar_unavailable')
         content_type = response.headers.get('content-type')
+        response_headers = {'content-type': content_type} if content_type else {}
+        if private:
+            response_headers['cache-control'] = 'no-store'
         return Response(
             response.content,
             status_code=response.status_code,
-            headers={'content-type': content_type} if content_type else None,
+            headers=response_headers,
         )
+
+    @api.get('/calendar/{path:path}')
+    async def calendar(path: str, request: Request):
+        private = path == 'import-failures' or CALENDAR_REVIEW_PATH.fullmatch(path) is not None
+        if not private and not CALENDAR_PATH.fullmatch(path):
+            raise AdminError(404, '허용된 캘린더 경로가 아닙니다.', 'not_found')
+        check_calendar_configuration(private)
+        return await calendar_request('GET', path, private=private, query=request.scope['query_string'])
+
+    @api.post('/calendar/law-holds/{kind}/{hold_id}', dependencies=post_guards)
+    async def calendar_review(kind: str, hold_id: str, body: PostBody, who: AdminWho):
+        path = f'law-holds/{kind}/{hold_id}'
+        if not CALENDAR_REVIEW_PATH.fullmatch(path):
+            raise AdminError(404, '허용된 캘린더 경로가 아닙니다.', 'not_found')
+        check_calendar_configuration(private=True)
+        mutation, parsed = _mutation(CalendarReview, body, who, f'/calendar/{path}')
+        payload = parsed.model_dump(exclude={'idempotency_key'}) | {'reviewer': who[0]}
+        async with calendar_review_lock:
+            try:
+                receipt = await anyio.to_thread.run_sync(_calendar_receipt, db, mutation)
+            except feedback_store.StoreError as exc:
+                raise AdminError(exc.status, exc.detail, exc.code) from exc
+            except (OSError, feedback_store.DatabaseError) as exc:
+                log.warning('캘린더 검토 기록을 읽지 못했습니다 (%s).', type(exc).__name__)
+                raise AdminError(500, '관리자 저장을 확인하지 못했습니다.', 'storage_error') from None
+            if receipt:
+                status, result = receipt
+                return JSONResponse(result, status_code=status)
+            response = await calendar_request('POST', path, private=True, payload=payload)
+            if response.status_code != 200:
+                return response
+            return await _write(_save_calendar_review, db, mutation, kind, hold_id, payload.get('decision'))
 
     @api.post('/feedbacks/{feedback_id}/review', dependencies=post_guards)
     async def review(feedback_id: str, body: PostBody, who: AdminWho):

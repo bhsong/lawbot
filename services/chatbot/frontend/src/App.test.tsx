@@ -415,3 +415,60 @@ test('calendar events, details, comparison images and holds use the admin proxy'
   expect(paths).toContain('/api/admin/calendar/law-holds?type=notice&page=1&page_size=20')
   expect(paths.some((url) => url.startsWith('/api/law-'))).toBe(false)
 })
+
+test('approving a notice with only an end date opens its calendar month and refreshes holds', async () => {
+  stubDialog()
+  const notice = { id: 'notice-id', lawName: '합성 개정안', billNo: '1234', reason: '기간 확인', sourceUrl: 'https://example.test/notice' }
+  let reviewed = false
+  const s = server({
+    role: 'admin', adminRoutes: (url, init) => {
+      const currentPage = Number(url.searchParams.get('page') ?? '1')
+      if (url.pathname.endsWith('/law-calendar')) return json(200, { days: [] })
+      if (url.pathname.endsWith('/law-calendar/status')) return json(200, { delayed: false })
+      if (url.pathname.endsWith('/law-events')) return json(200, { items: [], page: 1, total: 0 })
+      if (url.pathname.endsWith('/law-holds')) {
+        const items = url.searchParams.get('type') === 'notice' && !reviewed ? [notice] : []
+        return json(200, { items, page: currentPage, total: items.length, page_size: 20 })
+      }
+      if (url.pathname.endsWith('/law-holds/notice/notice-id')) {
+        if (init?.method === 'POST') {
+          reviewed = true
+          return json(200, { ok: true })
+        }
+        return json(200, {
+          template: { snapshot_id: notice.id, decision: 'approve', note: '' }, title: notice.lawName,
+          source_url: notice.sourceUrl, bill_no: notice.billNo, dates: [{ role: 'notice_end', date: '2030-05-15' }],
+        })
+      }
+      if (url.pathname.endsWith('/import-failures')) return json(200, {
+        items: [{ source: 'assembly_notice', event_id: 'notice-bad', error_type: 'ValueError', message: '예고일 누락', occurred_at: '2026-11-10T00:00:00+00:00' }],
+        page: currentPage, total: 1, page_size: 20,
+      })
+      return page()
+    },
+  })
+  await management()
+  const calendar = within(screen.getByRole('region', { name: '법령 캘린더' }))
+  await userEvent.click(await calendar.findByRole('button', { name: '보류 목록' }))
+  const holds = within(screen.getByRole('dialog', { name: '보류 목록' }))
+  await userEvent.click(holds.getByRole('button', { name: '입법예고 검토 대기' }))
+  await userEvent.click(await holds.findByRole('button', { name: /검토 열기.*합성 개정안/ }))
+  expect(await holds.findByText('예고 종료일')).toBeVisible()
+  expect(holds.getByLabelText('검토 결정')).toHaveValue('approve')
+  await userEvent.type(holds.getByLabelText('검토 메모'), '공식 예고 종료일을 확인했습니다.')
+  await userEvent.click(holds.getByRole('button', { name: /^승인$/ }))
+  expect(await holds.findByText('검토 결정을 저장했습니다.')).toBeVisible()
+  expect(await holds.findByText('현재 공개된 보류 항목이 없습니다.')).toBeVisible()
+  expect(s.fetch.mock.calls.filter(([url]) => url.startsWith('/api/admin/calendar/law-events?')).at(-1)?.[0])
+    .toContain('month=2030-05')
+  const [, decision] = s.fetch.mock.calls.find(([, init]) => init?.method === 'POST')!
+  expect(JSON.parse(String(decision?.body))).toEqual({
+    snapshot_id: notice.id, decision: 'approve', note: '공식 예고 종료일을 확인했습니다.', idempotency_key: expect.any(String),
+  })
+  await userEvent.click(holds.getByRole('button', { name: '보류 목록 닫기' }))
+  await userEvent.click(calendar.getByRole('button', { name: '가져오기 실패' }))
+  const failures = within(await screen.findByRole('dialog', { name: '가져오기 실패' }))
+  expect(await failures.findByText('예고일 누락')).toBeVisible()
+  expect(failures.getByText('notice-bad')).toBeVisible()
+  expect(s.fetch.mock.calls.filter(([, init]) => init?.method === 'POST')).toHaveLength(1)
+})

@@ -8,7 +8,9 @@ import sys
 import pytest
 from fastapi.testclient import TestClient
 
+from law_calendar import assembly_ingest, ingest
 from law_calendar.assembly_ingest import import_assembly
+from law_calendar.import_failures import list_import_failures
 from law_calendar.server import create_app
 from law_calendar.sync import synchronize
 from test_calendar_workflow import NOW
@@ -56,6 +58,164 @@ def test_sync_imports_registered_law_events_even_if_model_summary_already_proces
         assert client.get('/api/law-holds').json()['total'] == 3
         assert client.get('/api/law-calendar/status').json()['collectedAt'] == FINISHED
         assert client.get('/api/law-events?month=2026-11&type=notice').json()['total'] == 0
+
+
+@pytest.mark.parametrize('source', ['legalize_law', 'assembly_bill', 'assembly_notice'])
+def test_sync_counts_missing_json_of_an_imported_event_as_unchanged(scheduled, monkeypatch, source):
+    from test_calendar_assembly import register
+    from test_calendar_notice_content import detail_html
+
+    (calendar_db, home, path, _), state = scheduled
+    if source != 'legalize_law':
+        path = home / f'{register(home, state, source=source)}.json'
+    html = detail_html('2200012', '2026-11-04~2026-11-05', '주요내용<br/>안 제10조를 신설함.', pdf_url='')
+    monkeypatch.setattr('law_calendar.notice_content.fetch_official', lambda _: html.encode())
+    prefix = '' if source == 'legalize_law' else f'{source}_'
+    assert synchronize(calendar_db, home)[f'{prefix}imported'] == 1
+
+    path.unlink()
+    result = synchronize(calendar_db, home)
+
+    assert result['failed'] == result[f'{prefix}imported'] == 0
+    assert result[f'{prefix}unchanged'] == 1
+
+
+def test_sync_does_not_revalidate_imported_events_after_model_change(scheduled, monkeypatch):
+    from test_calendar_assembly import register
+
+    (calendar_db, home, _, _), state = scheduled
+    register(home, state, source='assembly_bill')
+    first = synchronize(calendar_db, home)
+    assert first['imported'] == first['assembly_bill_imported'] == 1
+
+    class NewAssemblyEvent(assembly_ingest.AssemblyEvent):
+        new_field: bool = True
+
+    monkeypatch.setattr(assembly_ingest, 'AssemblyEvent', NewAssemblyEvent)
+    monkeypatch.setattr(ingest, 'PARSER_VERSION', 'new-model-version')
+    result = synchronize(calendar_db, home)
+
+    assert result['failed'] == result['imported'] == result['assembly_bill_imported'] == 0
+    assert result['unchanged'] == result['assembly_bill_unchanged'] == 1
+    with sqlite3.connect(calendar_db) as conn:
+        assert conn.execute('SELECT COUNT(*) FROM source_snapshots').fetchone() == (1,)
+
+
+@pytest.mark.parametrize(
+    ('source', 'problem', 'error_type', 'message_fragment'),
+    [
+        ('assembly_bill', 'missing', 'FileNotFoundError', 'No such file'),
+        ('assembly_bill', 'model', 'ValidationError', 'age'),
+        ('assembly_bill', 'evidence', 'ImportInputError', 'Invalid official Assembly evidence URL'),
+        ('assembly_bill', 'date', 'ImportInputError', 'date'),
+        ('legalize_law', 'missing', 'FileNotFoundError', 'No such file'),
+    ],
+)
+def test_sync_records_failed_registered_event_and_retries_it(scheduled, source, problem, error_type, message_fragment):
+    from test_calendar_assembly import register
+
+    (calendar_db, home, path, law), state = scheduled
+    event_id = law['event_id']
+    if source == 'assembly_bill':
+        event_id = register(home, state, source=source, date='2026-11-05')
+        path = home / f'{event_id}.json'
+    original = path.read_text(encoding='utf-8')
+    event = json.loads(original)
+    secret = 'synthetic-password-marker'
+    if problem == 'missing':
+        with sqlite3.connect(state) as conn:
+            conn.execute('UPDATE events SET json_path=? WHERE event_id=?', (f'{secret}.json', event_id))
+    elif problem == 'model':
+        event['target']['age'] = secret
+    elif problem == 'evidence':
+        event['context']['source_url'] += '&key=' + secret
+    else:
+        event['dates']['bill_proposed'] = secret
+    path.write_text(json.dumps(event), encoding='utf-8')
+
+    for _ in range(2):
+        if source == 'legalize_law':
+            with pytest.raises(FileNotFoundError):
+                synchronize(calendar_db, home)
+        else:
+            result = synchronize(calendar_db, home)
+            assert result['failed'] == result['assembly_bill_failed'] == 1
+
+    with sqlite3.connect(calendar_db) as conn:
+        errors = [
+            error
+            for (raw,) in conn.execute('SELECT errors_json FROM import_runs WHERE failed > 0')
+            for error in json.loads(raw)
+        ]
+    assert len(errors) == 2
+    for error in errors:
+        assert error['source'] == source
+        assert error['event_id'] == event_id
+        assert error['error_type'] == error_type
+        assert message_fragment in error['message']
+        assert secret not in json.dumps(error)
+
+    path.write_text(original, encoding='utf-8')
+    with sqlite3.connect(state) as conn:
+        conn.execute('UPDATE events SET json_path=? WHERE event_id=?', (path.name, event_id))
+    result = synchronize(calendar_db, home)
+    assert result['failed'] == 0
+    assert result['imported' if source == 'legalize_law' else 'assembly_bill_imported'] == 1
+
+
+def test_sync_records_assembly_revision_conflict_and_rolls_back_batch(scheduled):
+    from test_calendar_assembly import register
+
+    (database, home, _, _), state = scheduled
+    source = 'assembly_bill'
+    first = register(home, state, source=source, date='2026-11-05')
+    assert synchronize(database, home)['assembly_bill_imported'] == 1
+    register(home, state, source=source, revision=2, date='2026-11-06')
+    conflict = register(home, state, source=source, date='2026-11-07', notice_id='redetected')
+
+    assert synchronize(database, home)['assembly_bill_failed'] == 1
+    with sqlite3.connect(database) as conn:
+        assert conn.execute('SELECT id FROM assembly_snapshots').fetchall() == [(first,)]
+    failures = list_import_failures(database, 1, 20)
+    assert failures['total'] == 1
+    [item] = failures['items']
+    assert item['event_id'] == conflict
+    assert item['message'] == 'Registered Assembly snapshot was altered'
+
+    path = home / f'{conflict}.json'
+    event = json.loads(path.read_text(encoding='utf-8'))
+    event['dates']['bill_proposed'] = '2026-11-05'
+    path.write_text(json.dumps(event), encoding='utf-8')
+    result = synchronize(database, home)
+    assert result['assembly_bill_imported'] == 1 and result['assembly_bill_unchanged'] == 2
+
+
+def test_import_failure_page_excludes_legacy_diagnostics(scheduled):
+    from test_calendar_assembly import register
+
+    (database, home, _, _), state = scheduled
+    event_id = register(home, state, source='assembly_bill')
+    path = home / f'{event_id}.json'
+    path.unlink()
+    assert synchronize(database, home)['assembly_bill_failed'] == 1
+    path.write_text('{broken JSON', encoding='utf-8')
+    assert synchronize(database, home)['assembly_bill_failed'] == 1
+
+    with sqlite3.connect(database) as conn:
+        conn.executemany(
+            'INSERT INTO import_runs VALUES (?,?,?,?,?,?,?)',
+            [
+                ('legacy', NOW, NOW, 0, 0, 1, '[{"file":"/private/old.json","error":"private diagnostic"}]'),
+                ('broken', NOW, NOW, 0, 0, 1, 'invalid json'),
+            ],
+        )
+    first = list_import_failures(database, 1, 1)
+    second = list_import_failures(database, 2, 1)
+    assert (first['total'], first['page'], first['page_size']) == (2, 1, 1)
+    assert (second['total'], second['page'], second['page_size']) == (2, 2, 1)
+    assert first['items'][0]['error_type'] == 'JSONDecodeError'
+    assert second['items'][0]['error_type'] == 'FileNotFoundError'
+    assert list_import_failures(database, 3, 1)['items'] == []
 
 
 def test_sync_skips_registered_events_outside_current_scope(scheduled, monkeypatch):
@@ -204,8 +364,15 @@ def test_import_failure_is_retryable_and_keeps_previous_freshness(scheduled):
     synchronize(calendar_db, home)
     with sqlite3.connect(state) as conn:
         conn.execute('UPDATE runs SET finished_at=? WHERE run_id=?', ('2026-11-06T06:31:00+09:00', 'collection'))
+    event['event_id'] = 'not-yet-imported'
     event['new']['file'] = 'not-yet-available.md'
+    path = home / 'next-event.json'
     path.write_text(json.dumps(event), encoding='utf-8')
+    with sqlite3.connect(state) as conn:
+        conn.execute(
+            'INSERT INTO events VALUES (?,?,?,?,?,?)',
+            (event['event_id'], event['source'], event['change_type'], path.name, FINISHED, None),
+        )
     assert synchronize(calendar_db, home)['failed'] == 1
     with TestClient(create_app(calendar_db)) as client:
         assert client.get('/api/law-calendar/status').json()['collectedAt'] == FINISHED

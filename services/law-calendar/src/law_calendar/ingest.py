@@ -12,6 +12,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from law_calendar.automation import DatedChange, apply_automation, read_schedule, resolve_changes
 from law_calendar.db import write_database
+from law_calendar.import_failures import ImportInputError, import_failure
 from law_calendar.validation import civil_date, timestamp
 
 PARSER_VERSION = 'monitor-law-v7'
@@ -65,7 +66,7 @@ def utc_now() -> str:
 def inside(home: Path, path: Path) -> Path:
     resolved = path.resolve()
     if not resolved.is_relative_to(home.resolve()):
-        raise ValueError('Source path escapes the explicit monitor home')
+        raise ImportInputError('Source path escapes the explicit monitor home')
     return resolved
 
 
@@ -78,7 +79,7 @@ def article_texts(text: str) -> dict[str, str]:
         if match:
             label = match.group(1)
             if label in result:
-                raise ValueError('Duplicate article label requires manual source normalization')
+                raise ImportInputError('Duplicate article label requires manual source normalization')
             end = headings[index + 1].start() if index + 1 < len(headings) else len(text)
             result[label] = text[heading.start() : end]
     return result
@@ -88,10 +89,10 @@ def load_event(home: Path, path: Path):
     raw = inside(home, path).read_bytes().decode('utf-8')
     event = MonitorEvent.model_validate_json(raw)
     if event.source != 'legalize_law' or event.change_type not in {'law_new', 'law_amended', 'law_repealed'}:
-        raise ValueError('Unsupported monitor event; not a law article candidate')
+        raise ImportInputError('Unsupported monitor event; not a law article candidate')
     timestamp(event.detected_at)
     if not event.target.law_id.strip() or not event.target.law_name.strip():
-        raise ValueError('A stable law ID and name are required')
+        raise ImportInputError('A stable law ID and name are required')
     texts = {}
     articles = {}
     for side in ('old', 'new'):
@@ -102,10 +103,10 @@ def load_event(home: Path, path: Path):
     labels = [c.article for c in event.diff.chunks if ARTICLE.fullmatch('##### ' + c.article)]
     labels = list(dict.fromkeys(labels))
     if not labels or not any(texts.values()):
-        raise ValueError('No changed articles with saved source text')
+        raise ImportInputError('No changed articles with saved source text')
     for label in labels:
         if not any(label in part for part in articles.values()):
-            raise ValueError('Changed article absent from saved versions')
+            raise ImportInputError('Changed article absent from saved versions')
     labels = [label for label in labels if articles.get('old', {}).get(label) != articles.get('new', {}).get(label)]
     files_json = json.dumps(texts, ensure_ascii=False, sort_keys=True)
     snapshot_id = digest(PARSER_VERSION + raw + files_json)
@@ -150,10 +151,10 @@ def import_event(database: Path, home: Path, path: Path) -> tuple[bool, str]:
             return False, event.detected_at
         identity = conn.execute('SELECT law_id,review_state FROM change_events WHERE id=?', (event_id,)).fetchone()
         if identity and identity['law_id'] != law_id:
-            raise ValueError('Upstream event identity changed; resolve the law ID before importing')
+            raise ImportInputError('Upstream event identity changed; resolve the law ID before importing')
         law = conn.execute('SELECT name FROM laws WHERE id=?', (law_id,)).fetchone()
         if law and law['name'] != event.target.law_name:
-            raise ValueError('Law name changed; resolve identity before importing')
+            raise ImportInputError('Law name changed; resolve identity before importing')
         conn.execute('INSERT OR IGNORE INTO laws VALUES (?,?)', (law_id, event.target.law_name))
         if prior:
             note = (
@@ -245,7 +246,9 @@ def import_event(database: Path, home: Path, path: Path) -> tuple[bool, str]:
     return True, event.detected_at
 
 
-def import_files(database: Path, home: Path, paths: list[Path]) -> dict[str, int]:
+def import_files(
+    database: Path, home: Path, paths: list[Path], *, event_ids: dict[Path, str] | None = None
+) -> dict[str, int]:
     """Isolate bad files; SQLite serializes writers and deterministic IDs make retries safe."""
     started = utc_now()
     result = {'imported': 0, 'unchanged': 0, 'failed': 0}
@@ -255,7 +258,10 @@ def import_files(database: Path, home: Path, paths: list[Path]) -> dict[str, int
             changed, stamp = import_event(database, home, path)
         except (OSError, ValueError, sqlite3.Error) as exc:
             result['failed'] += 1
-            errors.append({'file': str(path), 'error': f'{type(exc).__name__}: {exc}'})
+            if event_ids is None:
+                errors.append({'file': str(path), 'error': f'{type(exc).__name__}: {exc}'})
+            else:
+                errors.append(import_failure('legalize_law', event_ids[path], exc))
         else:
             result['imported' if changed else 'unchanged'] += 1
             collected.append(stamp)

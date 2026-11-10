@@ -162,6 +162,7 @@ v5 Pro는 간결형에 `data/v5/system_v5_concise.txt`를 쓰고, 화면에서 "
 | `LAWBOT_CORPUS` | 아니요 | `csv`(기본) 또는 `db`. DB 모드에서는 시작 시 프로필의 활성 릴리스에서 조문을 읽음 |
 | `LAWBOT_FEEDBACK_DIR` | 아니요 | `LAWBOT_DB`가 비어 있을 때 쓰는 JSONL 폴더. 기본 레포 최상위 `feedback/`. 레포 안에서는 Git 제외 경로만 허용 |
 | `LAWBOT_CALENDAR_API_URL` | 캘린더 프록시 사용 시 | 포트가 명시된 루프백 HTTP 주소. 비워 두면 관리자 캘린더 API는 503 `calendar_not_configured` 반환 |
+| `LAWBOT_CALENDAR_ADMIN_TOKEN` | 캘린더 검토와 가져오기 실패 조회 사용 시 | 웹앱과 캘린더 서버의 각 `.env`에 같은 서비스 토큰을 입력 |
 
 모델 서버(`lawbot-model-server`, `lawbot_model_server.check`):
 
@@ -416,6 +417,8 @@ uv run python -m lawbot.auth hash
 | 승격 취소 | `POST /promotions/{id}/revoke` | 200, 이전 QA와 분할 이력 보존 |
 | 조문 조회 | `GET /articles?q=…` | 200, 현재 검색기가 읽은 조문 반환 |
 | 캘린더 조회 | `GET /calendar/{path}` | 주소 미설정 503, 캘린더 연결 실패 502, 10초 초과 504 |
+| 캘린더 보류 검토 | `GET /calendar/law-holds/{kind}/{id}`, `POST /calendar/law-holds/{kind}/{id}` | 토큰 미설정 503, 오래된 스냅숏 409, 검증 실패 422, 저장 200 |
+| 캘린더 가져오기 실패 | `GET /calendar/import-failures` | 소스·이벤트별 최근 실패를 페이지 단위로 조회 |
 
 POST는 JSON과 멱등 키가 필요합니다. 같은 요청을 재시도할 때는 본문 바이트와 키를 유지합니다. Tailscale로 접속하는 경우 브라우저가 보낸 `Origin`이 프록시를 거친 요청의 공개 주소와 일치하는지 확인합니다. 캘린더 프록시를 쓸 때는 `LAWBOT_CALENDAR_API_URL`을 설정하고 관리자 세션으로 조회합니다. 허용 경로와 요청 본문 형식은 [관리자 API 명세](archives/sqlite-admin-pipeline.md#37-관리자-api)에 있습니다.
 

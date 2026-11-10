@@ -33,6 +33,14 @@ def calendar_api_url(env=None):
     return _loopback_url('LAWBOT_CALENDAR_API_URL', env, reveal_value=False)
 
 
+def calendar_admin_token(env):
+    """Read the optional service credential without including it in errors."""
+    token = (env.get('LAWBOT_CALENDAR_ADMIN_TOKEN') or '').strip()
+    if token and any(not 33 <= ord(char) <= 126 for char in token):
+        raise ValueError('LAWBOT_CALENDAR_ADMIN_TOKEN에는 공백 없는 ASCII 문자를 사용하세요.')
+    return token or None
+
+
 def _loopback_url(key, env, *, reveal_value):
     env = os.environ if env is None else env
     value = (env.get(key) or '').strip()
