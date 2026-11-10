@@ -12,6 +12,8 @@ from io import BytesIO
 import pandas as pd
 
 from lawbot import corpus_store, deploy, envfile, manifest, security, service, settings
+from lawbot.cache_store import Store, translate_sqlite_errors
+from lawbot.calc_corpus import calculator_report
 from lawbot.db.migrate import startup_path
 from lawbot.deploy import get_profile
 
@@ -290,9 +292,11 @@ def run():
                 f'sha256 {metadata["articles_sha256"][:12]} · 비삭제 조문 {metadata["articles_total"]}개',
             )
         )
+    out.extend(calculator_report(None if corpus_unavailable else (release.combined.data if release else p.articles)))
     if cache_value := os.environ.get('LAWBOT_EXACT_CACHE_DB', '').strip():
         from lawbot.cache_carry import bundle_path, bundle_warning
 
+        cache_path = None
         try:
             cache_path = settings.exact_cache_path(cache_value, db)
             _, (level, message) = service.inspect_exact_cache(cache_path, db, p, release, deploy.decree(p))
@@ -301,6 +305,17 @@ def run():
         except OSError, RuntimeError, ValueError:
             level, message = 'WARN', '사용 안 함 (캐시 설정 확인 실패)'
         out.append((level, f'정확 일치 캐시: {message}'))
+        if cache_path is not None and cache_path.is_file():
+            try:
+                with translate_sqlite_errors():
+                    rows = Store(cache_path).calculation_exclusions()
+            except OSError, RuntimeError:
+                out.append(('WARN', '정확 일치 캐시의 계산 질문 제외 항목을 읽지 못했습니다.'))
+            else:
+                approved = sum(row.status == 'approved' for row in rows)
+                out.append(
+                    ('INFO', f'계산 질문 캐시 제외 {len(rows)}개 · 초안 {len(rows) - approved} · 승인 {approved}')
+                )
     check_ports(out)
     check_model_server(p, out)
     return out

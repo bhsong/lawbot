@@ -36,6 +36,8 @@ GEN_FIELDS = (
     'finish_reason',
 )
 TEMPERATURE = 0  # 탐욕적 생성 (평가·웹앱 공통, 모델 서버 기본값과 같음)
+ROUTER_MAX_TOKENS = 128
+ROUTER_TIMEOUT = 25
 
 
 def response(text='', **kw):
@@ -96,12 +98,39 @@ class LLM:
             {'role': 'user', 'content': build_prompt(hits, question)},
         ]
 
-    def stream(self, question, hits, max_tokens=1024, system=None):
+    def route_calculation(self, question: str) -> str | None:
+        """Classify once via the same chat endpoint as the Pro answer model."""
+        from lawbot.calc_router import ROUTER_SYSTEM
+
+        try:
+            result = self.client.chat.completions.create(
+                model=self.model,
+                messages=[{'role': 'system', 'content': ROUTER_SYSTEM}, {'role': 'user', 'content': question}],
+                max_tokens=ROUTER_MAX_TOKENS,
+                temperature=TEMPERATURE,
+                stream=False,
+                timeout=ROUTER_TIMEOUT,
+                extra_body={'chat_template_kwargs': {'enable_thinking': False}},
+                **({'extra_headers': h} if (h := request_headers()) else {}),
+            )
+        except openai.OpenAIError as exc:
+            converted = convert_error(exc)
+            if type(converted) is RuntimeError:
+                converted = ModelServerError('계산 라우터 응답 오류')
+            raise converted from exc
+        if not result.choices or result.choices[0].finish_reason == 'length':
+            return None
+        return result.choices[0].message.content
+
+    def stream(self, question, hits, max_tokens=1024, system=None, *, suffix=''):
         """system: 이번 요청만 다른 system으로 (None이면 모델의 기본 system). 생성기를 닫으면 연결을 끊는다 (서버가 생성을 멈춤)"""
+        messages = self.build_messages(question, hits, system)
+        if suffix:
+            messages[-1]['content'] += suffix
         try:
             s = self.client.chat.completions.create(
                 model=self.model,
-                messages=self.build_messages(question, hits, system),
+                messages=messages,
                 max_tokens=max_tokens,
                 temperature=TEMPERATURE,
                 stream=True,

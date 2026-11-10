@@ -1,6 +1,7 @@
 # tests/test_api_client.py  →  모델 서버 클라이언트(api_client)·생성 API 주소 설정(security.llm_endpoint)과
 # 두 서비스 계약: 챗봇의 실제 클라이언트·openai SDK가 실제 모델 서버 앱(lawbot_model_server.api, 가짜 모델)과 통한다
 import base64
+import json
 import types
 
 import httpx
@@ -430,6 +431,101 @@ def test_end_to_end_through_real_server_app(env, real_server, tmp_path):
     r = run(a, '해고 예고?', 'fast', 'concise')
     text, stats = r.text, r.stats
     assert text.startswith('예고해야 합니다.') and '25.0 tok/s' in stats
+
+
+def test_calculation_router_through_real_server_app(env, real_server, tmp_path, capsys):
+    from lawbot import web
+    from lawbot.calculators import MEDICAL
+
+    question = '2026년 총급여 5천만 원, 의료비 300만 원, 실손보험금 100만 원입니다. 의료비 세액공제액은 얼마인가요?'
+    path = tmp_path / 'requests.jsonl'
+    env.setenv('LAWBOT_REQUEST_LOG', str(path))
+    env.setenv('LAWBOT_RERANKER_ENABLED', '1')
+
+    def stream(self, messages, **kwargs):
+        self.calls.append((messages, kwargs))
+        if kwargs['max_tokens'] == 128:
+            output = {
+                'calculator': MEDICAL,
+                'inputs': {
+                    'gross_pay': '5천만 원',
+                    'medical_expenses': '300만 원',
+                    'insurance_reimbursement': '100만 원',
+                },
+            }
+            text = json.dumps(output, ensure_ascii=False)
+        else:
+            text = '【결론】 세액공제액은 225,000원입니다.'
+        yield types.SimpleNamespace(text=text, finish_reason='stop')
+
+    env.setattr(Chat, 'stream', stream)
+    app = service.load_app()
+    app.settings = None
+    app.calculator_dependencies = {MEDICAL: ()}
+
+    class ForbiddenCache:
+        def lookup(self, *args):
+            raise AssertionError('calculation question must skip cache lookup')
+
+    app.exact_cache = ForbiddenCache()
+    capsys.readouterr()
+    events = list(web.chat_events(app, question, 'pro', 'concise'))
+    event_names = [event for event, _ in events]
+    assert event_names.index('calculation') < event_names.index('answer') < event_names.index('calculation_check')
+    assert dict(events)['calculation']['results'][0]['value'] == 75_000
+    assert dict(events)['calculation_check'] == {'status': 'mismatch'}
+    record = json.loads(path.read_text(encoding='utf-8'))
+    assert record['cache_reason'] == 'calculation_question'
+    assert record['calculator'] == MEDICAL
+    assert record['calculation_status'] == 'calculated'
+    assert record['router_reason'] == 'selected' and record['router_ms'] >= 0
+    assert record['calculation_check'] == 'mismatch'
+    assert record['call_counts'] == {'router': 1, 'embedding': 1, 'search': 1, 'rerank': 1, 'llm': 1}
+    assert not any(value in path.read_text(encoding='utf-8') for value in ('5천만', '75,000', '75000', question))
+    chat = real_server.chat[app.models.specs['pro'].model]
+    (router_messages, router_kwargs), (answer_messages, answer_kwargs) = chat.calls
+    assert router_messages[1]['content'] == question
+    assert router_kwargs == {'max_tokens': 128, 'temperature': 0.0, 'top_p': None, 'enable_thinking': False}
+    assert answer_kwargs['max_tokens'] == 1024
+    assert answer_messages[1]['content'].startswith('[참고 조문]\n')
+    assert f'[질문]\n{question}\n\n[계산 결과]\n' in answer_messages[1]['content']
+    assert '계산 결과의 숫자를 그대로 쓰고 다시 계산하지 말 것.' in answer_messages[1]['content']
+    posts = [line for line in capsys.readouterr().out.splitlines() if ' POST ' in line]
+    assert len(posts) == 4
+
+
+def test_web_noncalculation_prompt_and_calls_unchanged(env, real_server, capsys):
+    from fakes import HITS
+    from lawbot import web
+
+    search = service.Retriever.search
+
+    def search_with_fixed_hits(self, query, k=3):
+        search(self, query, k)
+        return HITS[:k]
+
+    env.setattr(service.Retriever, 'search', search_with_fixed_hits)
+    env.setenv('LAWBOT_RERANKER_ENABLED', '1')
+    app = service.load_app()
+    capsys.readouterr()
+    events = list(web.chat_events(app, '해고 예고?', 'pro', 'full'))
+    assert all(event not in {'calculation', 'calculation_check'} for event, _ in events)
+    calls = real_server.chat[app.models.specs['pro'].model].calls
+    assert len(calls) == 1
+    messages, kwargs = calls[0]
+    assert messages[0]['content'].encode() == app.profile.system_file.read_text().strip().encode()
+    assert (
+        messages[1]['content'].encode()
+        == (
+            '[참고 조문]\n[1] 근로기준법 제26조(해고의 예고)\n'
+            '사용자는 근로자를 해고하려면 적어도 30일 전에 예고를 하여야 한다.\n\n'
+            '[2] 근로기준법 제36조(금품 청산)\n'
+            '사용자는 근로자가 사망 또는 퇴직한 경우에는 14일 이내에 지급하여야 한다.\n\n[질문]\n해고 예고?'
+        ).encode()
+    )
+    assert kwargs == {'max_tokens': 1024, 'temperature': 0.0, 'top_p': None, 'enable_thinking': False}
+    posts = [line.split()[2] for line in capsys.readouterr().out.splitlines() if ' POST ' in line]
+    assert posts == ['/v1/embeddings', '/v1/rerank', '/v1/chat/completions']
 
 
 def test_request_id_reaches_model_server_log(env, real_server, capsys):

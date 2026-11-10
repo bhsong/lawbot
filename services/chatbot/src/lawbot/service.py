@@ -27,6 +27,8 @@ from lawbot.api_client import (
     request_timeout,
     wait_ready,
 )
+from lawbot.calc_corpus import calculator_compatibility, database_calculator_compatibility
+from lawbot.calc_router import check_conclusion, prompt_suffix, route_calculation
 from lawbot.embed_cache import EmbedCache, cache_key, embedding_metadata
 from lawbot.hits import Hit, Timing
 from lawbot.llm import LLM
@@ -89,6 +91,7 @@ class LawbotApp:
     corpus_manifest: dict | None = None
     articles_sha256: str | None = None
     exact_cache: object = None
+    calculator_dependencies: dict[str, tuple[str, ...]] | None = None
 
 
 def uses_decrees(app, model_key):
@@ -291,6 +294,7 @@ def load_app(settings=None):
         corpus_manifest=metadata if release else None,
         articles_sha256=getattr(retriever, 'articles_sha256', None),
         exact_cache=exact_cache,
+        calculator_dependencies=calculator_compatibility(release.combined.data if release else p.articles),
     )
 
 
@@ -442,6 +446,7 @@ def request_record(app, st, fmt, status, error):
     rec |= {k: st.get(k) for k in ('prompt_tokens', 'gen_tokens', 'peak_gb', 'finish')}
     rec |= {k: st.get(k) for k in ('refused', 'n_cited', *CITE_FIELDS)}
     rec |= st.get('cache_metrics', {})
+    rec |= st.get('calculation_metrics', {})
     if 'call_counts' in st:
         rec['call_counts'] = st['call_counts']
     return rec | {'status': status, 'error_type': error}
@@ -483,7 +488,34 @@ def log_request(app, st, fmt, status, error=None):
         log.warning(f'경고: 요청 로그를 쓰지 못했습니다 ({path}: {type(e).__name__})')
 
 
-def ask(app, question, model_key, k=TOP_K, fmt=None, *, request_id=None, cache_metrics=None, report=None):
+def active_calculators(app) -> dict[str, tuple[str, ...]]:
+    """Require matching law text in the active and loaded corpora."""
+    configured = getattr(app, 'calculator_dependencies', None) or {}
+    cfg = getattr(app, 'settings', None)
+    if cfg is None:
+        return configured
+    current = (
+        database_calculator_compatibility(cfg.db, app.profile.name)
+        if cfg.corpus == 'db'
+        else calculator_compatibility(app.profile.articles)
+    )
+    return {
+        name: tuple(dict.fromkeys((*loaded, *current[name]))) for name, loaded in configured.items() if name in current
+    }
+
+
+def ask(
+    app,
+    question,
+    model_key,
+    k=TOP_K,
+    fmt=None,
+    *,
+    request_id=None,
+    cache_metrics=None,
+    report=None,
+    calculation_candidate=False,
+):
     """질문 하나: (단계, 검색 조문, 답변 원문, 측정값)을 차례로 돌려준다
     단계 'load'(모델 전환 대기) → 'generate'(토큰마다) → 'done'. 조문은 생성 전에 정해짐
     fmt: 화면 형식 ('full'/'concise'). 주면 format_system으로 system을 고름 (None이면 모델 기본, 평가 스크립트)
@@ -505,9 +537,33 @@ def ask(app, question, model_key, k=TOP_K, fmt=None, *, request_id=None, cache_m
             report(st, status, error)
 
     stage, logged = 'search', False
+    suffix = ''
     try:
         # 요청 id를 모델 서버 요청 헤더로 (단계마다 다시 넣음: 웹앱은 생성기의 next()를 매번 다른 스레드 문맥에서 부름)
         REQUEST_ID.set(st['request_id'])
+        if calculation_candidate:
+            stage = 'router'
+            classify = None
+            if 'pro' in app.models.specs:
+                pro, _ = app.models.get('pro')
+                classify = getattr(pro, 'route_calculation', None)
+            if classify is not None:
+                if 'call_counts' in st:
+                    st['call_counts']['router'] = 0
+                count_call(st, 'router')
+            routing = route_calculation(question, classify, lambda: active_calculators(app))
+            payload = st['_calculation'] = routing.payload
+            st['calculation_metrics'] = {
+                'calculator': payload['calculator'],
+                'calculation_status': payload['status'],
+                'router_reason': routing.reason,
+                'router_ms': routing.elapsed_ms,
+                'calculation_check': 'not_run',
+            }
+            suffix = prompt_suffix(payload)
+            yield 'calculation', [], '', st
+            stage = 'search'
+            REQUEST_ID.set(st['request_id'])
         law_hits, decree_hits = retrieve(app, question, k, st, model_key)
         hits = law_hits + decree_hits
         stage = 'load'
@@ -520,7 +576,10 @@ def ask(app, question, model_key, k=TOP_K, fmt=None, *, request_id=None, cache_m
         raw, last, t_gen = '', None, time.perf_counter()
         REQUEST_ID.set(st['request_id'])
         count_call(st, 'llm')
-        for r in llm.stream(question, hits, **({'system': system} if system else {})):
+        options = {'system': system} if system else {}
+        if suffix:
+            options['suffix'] = suffix
+        for r in llm.stream(question, hits, **options):
             if last is None:
                 st['ttft'] = time.perf_counter() - t_gen
             last = r
@@ -539,6 +598,8 @@ def ask(app, question, model_key, k=TOP_K, fmt=None, *, request_id=None, cache_m
         ):
             st[name] = getattr(last, attr, None)
         st |= cast(Timing, answer_check(app, raw, hits))
+        if (payload := st.get('_calculation')) and payload['status'] == 'calculated':
+            st.setdefault('calculation_metrics', {})['calculation_check'] = check_conclusion(raw, payload['results'])
         log_timing(st)
         record('ok')
         logged = True

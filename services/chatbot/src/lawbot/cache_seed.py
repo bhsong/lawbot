@@ -10,6 +10,7 @@ from pathlib import Path
 from zipfile import ZipFile
 
 from lawbot.cache_store import Draft
+from lawbot.calc_gate import is_calculation_question
 from lawbot.dataset_store import protection_rows
 from lawbot.db.connection import connect
 from lawbot.exact_cache import NORMALIZER, Snapshot, canonical, digest, normalize, read_articles
@@ -200,14 +201,21 @@ def prepare(bundle: Bundle, protection: Protection, snapshot: Snapshot) -> Seed:
     claims = defaultdict(set)
     accepted = set()
     for q in bundle.candidates:
+        if is_calculation_question(q['question']):
+            continue
         normalized = normalize(q['question'])
         claims[digest(normalized)].add((normalized, q['answer_sha256'], canonical(q['display_citation_hashes'])))
     for q in bundle.candidates:
         normalized = normalize(q['question'])
         key = digest(normalized)
         reasons = []
+        if is_calculation_question(q['question']):
+            reasons.append('excluded_calculation_rows')
         if protection.v4_train.get(q['id']) != q['question_sha256'] or key in protection.blocked:
             reasons.append('excluded_split_rows')
+        if 'excluded_calculation_rows' in reasons:
+            exclusions.append({'id': q['id'], 'primary_reason': reasons[0], 'reasons': reasons})
+            continue
         citations = [(key, q['display_citation_hashes'][key]) for key in q['display_citation_article_ids']]
         text = snapshot.render(q['answer'], citations)
         if text is None:
@@ -243,6 +251,7 @@ def prepare(bundle: Bundle, protection: Protection, snapshot: Snapshot) -> Seed:
     summary: dict[str, int] = dict.fromkeys(
         (
             'excluded_split_rows',
+            'excluded_calculation_rows',
             'excluded_context_rows',
             'excluded_time_sensitive_rows',
             'excluded_privacy_rows',

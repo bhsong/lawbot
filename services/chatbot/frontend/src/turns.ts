@@ -1,4 +1,4 @@
-import type { Sources, Turn } from './types'
+import type { Calculation, CalculationCheck, Sources, Turn } from './types'
 
 let seq = 0
 
@@ -17,6 +17,10 @@ export function applyEvent(turn: Turn, event: string, data: unknown): Turn {
       return { ...turn, status: d.text as string }
     case 'sources':
       return { ...turn, sources: data as Sources }
+    case 'calculation':
+      return { ...turn, calculation: data as Calculation }
+    case 'calculation_check':
+      return { ...turn, calculationCheck: d.status as CalculationCheck }
     case 'answer':
       return { ...turn, text: d.text as string, status: undefined }
     case 'stats':

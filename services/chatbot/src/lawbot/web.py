@@ -26,6 +26,7 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 from lawbot import audit_store, envfile, feedback, security, settings, view
 from lawbot import auth as auth_logic
 from lawbot.answer_format import answer_citations, render
+from lawbot.calc_gate import is_calculation_question
 from lawbot.decree import is_decree
 from lawbot.hits import Timing
 from lawbot.paths import ROOT
@@ -223,7 +224,23 @@ def chat_events(app, question, model_key, fmt, remember=None, *, started=None):
     def report(st, status, error):
         outcomes.append((st, status, error))
 
-    if cache is not None:
+    if is_calculation_question(question):
+        request_id = secrets.token_hex(6)
+        metadata = {'request_id': request_id, 'response_source': 'rag'}
+        ask_options = {
+            'request_id': request_id,
+            'cache_metrics': {
+                'cache_mode': 'bypass',
+                'cache_reason': 'calculation_question',
+                'cache_eligible': False,
+                'would_hit': False,
+                'exact_lookup_ms': None,
+            }
+            | metadata,
+            'report': report,
+            'calculation_candidate': True,
+        }
+    elif cache is not None:
         decision = cache.lookup(question, model_key, fmt)
         request_id = secrets.token_hex(6)
         if decision.mode == 'on' and decision.match is not None:
@@ -244,6 +261,9 @@ def chat_events(app, question, model_key, fmt, remember=None, *, started=None):
 
     try:
         for stage, hits, raw, st in ask(app, question, model_key, fmt=fmt, **ask_options):
+            if stage == 'calculation':
+                yield 'calculation', st['_calculation']
+                continue
             if not sent_sources:
                 sent_sources = True
                 yield 'sources', sources_data(hits)
@@ -271,6 +291,9 @@ def chat_events(app, question, model_key, fmt, remember=None, *, started=None):
                     log.warning(f'경고: 피드백용 턴 기록 실패 ({type(e).__name__})')
             if first_ms is None:
                 first_ms = round((time.perf_counter() - started) * 1000, 3)
+            check = st.get('calculation_metrics', {}).get('calculation_check')
+            if check and check != 'not_run':
+                yield 'calculation_check', {'status': check}
             yield 'done', {'text': text, 'finish': st.get('finish'), 'turn_id': tid} | metadata
             sent_done = True
     except AskError as err:  # 유형(kind)은 요청 로그의 error_type과 같음. 원래 예외는 __cause__

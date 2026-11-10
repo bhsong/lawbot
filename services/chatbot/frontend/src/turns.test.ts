@@ -26,3 +26,13 @@ test('unknown events are ignored', () => {
   const t = newTurn('q', 'pro', 'full')
   expect(applyEvent(t, 'other', {})).toBe(t)
 })
+
+test('calculation arrives ahead of the model text and keeps its check on completion', () => {
+  const result = { calculator: 'medical_expense_credit', status: 'calculated', results: [{ label: '의료비 세액공제', value: 75000 }] }
+  let t = applyEvent(newTurn('q', 'pro', 'concise'), 'calculation', result)
+  expect(t).toMatchObject({ text: '', done: false, calculation: result })
+  t = applyEvent(t, 'answer', { text: '부분' })
+  t = applyEvent(t, 'calculation_check', { status: 'mismatch' })
+  t = applyEvent(t, 'done', { text: '최종', turn_id: null })
+  expect(t).toMatchObject({ text: '최종', done: true, calculation: result, calculationCheck: 'mismatch' })
+})

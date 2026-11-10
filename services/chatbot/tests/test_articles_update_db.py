@@ -86,7 +86,8 @@ def test_db_same_exit_and_report_without_new_release(seeded, live, tmp_path, env
     line = last_line(capsys)
     assert line.startswith('articles updated=no same=yes changed=0 pending=0 next=- new=0')
     assert state(seeded) == before and world.calls == ['build']
-    assert BASE in (tmp_path / 'reports' / f'{ASOF}.md').read_text()
+    report = (tmp_path / 'reports' / f'{ASOF}.md').read_text()
+    assert BASE in report and '계산기 medical_expense_credit 꺼짐' in report
 
 
 def test_db_validation_error_records_failed_without_release(seeded, live, tmp_path, env, capsys):

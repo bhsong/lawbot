@@ -1,0 +1,173 @@
+import json
+from decimal import Decimal
+from pathlib import Path
+
+import pytest
+
+from lawbot.api_client import ModelServerTimeout
+from lawbot.calc_gate import is_calculation_question
+from lawbot.calc_numbers import amount_spans, parse_amount, parse_quantity, parse_year
+from lawbot.calc_router import check_conclusion, route_calculation
+
+MEDICAL = 'medical_expense_credit'
+QUESTION = '2026년 의료비 300만 원, 실손보험금 100만 원, 총급여 5천만 원입니다. 의료비 세액공제액은 얼마인가요?'
+INPUTS = {'gross_pay': '5천만 원', 'medical_expenses': '300만 원', 'insurance_reimbursement': '100만 원'}
+
+
+@pytest.mark.parametrize(
+    ('source', 'value'),
+    [
+        ('5천만 원', 50_000_000),
+        ('3백만', 3_000_000),
+        ('2억 3천 5백만 6,800 원', 235_006_800),
+        ('1.25억원', 125_000_000),
+        ('삼천오백만 원', 35_000_000),
+        ('０원', 0),
+        ('37,500원', 37_500),
+        ('천원', 1000),
+        ('3만 5천 원', 35_000),
+        ('1만 7원', 10_007),
+    ],
+)
+def test_parse_amount(source, value):
+    assert parse_amount(source) == value
+
+
+@pytest.mark.parametrize(
+    'source',
+    [
+        '5,00원',
+        '300~500만원',
+        '-10만원',
+        '3만원~4만원',
+        '1만2',
+        '5%',
+        '1.25원',
+        '총 3만원',
+        '100,000만원 + 20원',
+        '만억',
+        '1억원 미만',
+    ],
+)
+def test_invalid_amount(source):
+    with pytest.raises(ValueError):
+        parse_amount(source)
+
+
+def test_other_units_and_conclusion_amount_spans():
+    assert parse_quantity('３.５％', '%') == Decimal('3.5')
+    assert parse_quantity('6개월', '개월') == 6
+    assert parse_year('2026년도') == 2026
+    assert list(amount_spans('결정세액은 **75,000원**이고 지방소득세는 7천 5백 원입니다.')) == [
+        ('75,000원', 75_000),
+        ('7천 5백 원', 7_500),
+    ]
+
+
+def test_gate_on_synthetic_val():
+    data = Path(__file__).with_name('fixtures') / 'calc_router_val.json'
+    cases = json.loads(data.read_text(encoding='utf-8'))
+    assert len(cases) == 100 and len({case['question'] for case in cases}) == len(cases)
+    assert {case['kind'] for case in cases} == {'medical', 'midyear', 'unsupported', 'general', 'missing', 'ambiguous'}
+    misses = [case['id'] for case in cases if is_calculation_question(case['question']) != (case['kind'] != 'general')]
+    assert misses == []
+
+
+def classify(inputs, calculator=MEDICAL):
+    return lambda _: json.dumps({'calculator': calculator, 'inputs': inputs}, ensure_ascii=False)
+
+
+def test_routing_uses_original_spans_and_explicit_year():
+    routed = route_calculation(QUESTION, classify(INPUTS), {MEDICAL: ()}, reference_year=2027)
+    assert routed.payload['status'] == 'calculated'
+    assert routed.payload['results'] == [{'label': '의료비 세액공제', 'value': 75_000}]
+    assert {row['source'] for row in routed.payload['inputs']} >= {'질문: 5천만 원', '질문: 2026년'}
+    assert routed.reason == 'selected'
+    assert routed.elapsed_ms >= 0
+
+
+@pytest.mark.parametrize(
+    ('response', 'reason'),
+    [
+        ('{"calculator":', 'invalid_json'),
+        ('{"calculator":"none","calculator":"none","inputs":{}}', 'invalid_json'),
+        ('{"calculator":"none","inputs":{}}', 'unsupported_question'),
+        ('{"calculator":"other","inputs":{}}', 'invalid_schema'),
+        ('{"calculator":"medical_expense_credit","inputs":{"gross_pay":50000000}}', 'invalid_schema'),
+        (classify(INPUTS | {'gross_pay': '50000000'})(None), 'span_not_in_question'),
+        (classify(INPUTS | {'gross_pay': '5'})(None), 'incomplete_amount_span'),
+        (classify(INPUTS | {'gross_pay': '5천만 원입니다'})(None), 'conversion_failed'),
+    ],
+)
+def test_router_fails_closed_once(response, reason):
+    calls = []
+
+    def complete(question):
+        calls.append(question)
+        return response
+
+    route = route_calculation(QUESTION, complete, {MEDICAL: ()})
+    assert route.payload['status'] == 'none'
+    assert route.reason == reason
+    assert calls == [QUESTION]
+
+
+def test_router_times_out_without_retry():
+    calls = []
+
+    def timeout(question):
+        calls.append(question)
+        raise ModelServerTimeout('test')
+
+    result = route_calculation(QUESTION, timeout, {MEDICAL: ()})
+    assert result.reason == 'timeout' and result.payload['status'] == 'none'
+    assert calls == [QUESTION]
+
+
+def test_disabled_and_missing_and_ambiguous():
+    missing = route_calculation(
+        QUESTION.replace('총급여 5천만 원', '총급여 미상'), classify({'medical_expenses': '300만 원'}), {MEDICAL: ()}
+    )
+    assert missing.payload['status'] == 'guidance'
+    assert '총급여' in missing.payload['message']
+    unavailable = route_calculation(QUESTION, classify(INPUTS), {MEDICAL: ('소득세법 제59조의4',)})
+    assert unavailable.payload['status'] == 'none' and unavailable.reason == 'corpus_mismatch'
+    ambiguous = route_calculation(QUESTION.replace('2026년', '2025년 또는 2026년'), classify(INPUTS), {MEDICAL: ()})
+    assert ambiguous.payload['status'] == 'guidance' and ambiguous.reason == 'ambiguous_input'
+
+
+def test_router_cannot_treat_omitted_special_medical_cost_as_general():
+    question = '2026년 총급여 5천만 원, 난임시술비 300만 원의 의료비 세액공제액은 얼마인가요?'
+    inputs = {'gross_pay': '5천만 원', 'medical_expenses': '300만 원'}
+    omitted = route_calculation(question, classify(inputs), {MEDICAL: ()})
+    assert omitted.payload['status'] == 'guidance'
+    included = route_calculation(question, classify(inputs | {'medical_category': '난임'}), {MEDICAL: ()})
+    assert included.payload['results'][0]['value'] == 450_000
+
+
+def test_optional_reimbursement_stated_in_question_cannot_default_to_zero():
+    unaccounted = route_calculation(
+        QUESTION, classify({'gross_pay': '5천만 원', 'medical_expenses': '300만 원'}), {MEDICAL: ()}
+    )
+    assert unaccounted.reason == 'unresolved_input' and unaccounted.payload['status'] == 'guidance'
+
+
+def test_amount_cannot_be_a_year_or_month_excerpt():
+    question = '2026\n년 중 12개월 의료비 300만원의 세액공제액은 얼마인가요?'
+    result = route_calculation(question, classify({'gross_pay': '12', 'medical_expenses': '300만원'}), {MEDICAL: ()})
+    assert result.reason == 'incomplete_amount_span'
+
+
+@pytest.mark.parametrize(
+    ('text', 'status'),
+    [
+        ('【결론】 공제액은 7만 5천 원입니다.\n【설명】의료비는 300만원입니다.', 'match'),
+        ('【결론】 공제액은 225,000원입니다.\n【설명】75,000원으로 계산됩니다.', 'mismatch'),
+        ('【결론】 75,000원 또는 0원입니다.', 'mismatch'),
+        ('【결론】 공제액이 있습니다.', 'missing'),
+        ('의료비 세액공제액은 **75,000원**입니다.', 'match'),
+        ('【결론】\n- 75,000원', 'match'),
+    ],
+)
+def test_conclusion_check_ignores_other_sections(text, status):
+    assert check_conclusion(text, [{'label': '의료비 세액공제', 'value': 75_000}]) == status

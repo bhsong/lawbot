@@ -7,7 +7,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from lawbot import cache_admin, cache_runtime
+from lawbot import cache_admin, cache_runtime, cache_store
 from lawbot.cache_eval import compare
 from lawbot.cache_seed import Bundle, Protection, load_bundle, prepare
 from lawbot.cache_store import Draft, Store, init, migrate, valid
@@ -15,6 +15,7 @@ from lawbot.db.connection import connect, transaction
 from lawbot.exact_cache import Article, Namespace, Snapshot, digest, normalize
 
 QUESTION = '합성 질문인가요?'
+CALCULATION = '총급여 5000만원이고 의료비 300만원이면 세액공제액을 계산해 주세요.'
 ID = '근로기준법 제26조'
 RAW = '【결론】\n합성 결론입니다.\n【근거 조문】\n근로기준법 제26조\n【설명】\n합성 설명\n【참고】\n합성 참고'
 
@@ -110,6 +111,57 @@ def test_modes_and_explicit_approval(catalog):
     assert (
         store.lookup(replace(snapshot.namespace, answer_policy_version='other').id, QUESTION)[2] == 'namespace_mismatch'
     )
+
+
+def test_calculation_question_never_reaches_exact_lookup(catalog, monkeypatch):
+    store, snapshot, _ = catalog
+    monkeypatch.setattr(store, 'lookup', lambda *args: pytest.fail('calculation question reached cache storage'))
+    result = cache_runtime.ExactCache(store, store.path, snapshot).lookup(CALCULATION, 'pro', 'concise')
+    assert result.reason == 'calculation_question' and not result.eligible
+
+
+def test_stage_skips_calculation_questions(catalog):
+    store, snapshot, draft = catalog
+    calculation = replace(draft, source_id='calculation', question=CALCULATION)
+    assert store.stage(snapshot.namespace, [calculation, draft], 'tester', 'draft') == 1
+
+
+def test_legacy_calculation_entries_are_reported_and_disabled(catalog, monkeypatch, capsys):
+    store, snapshot, draft = catalog
+    calculation = replace(draft, source_id='calculation', question=CALCULATION)
+    other_calculation = replace(draft, source_id='other', question=CALCULATION.replace('300만원', '400만원'))
+    namespace = snapshot.namespace.id
+    with monkeypatch.context() as before_policy:
+        before_policy.setattr(cache_store, 'is_calculation_question', lambda question: False, raising=False)
+        store.stage(snapshot.namespace, [calculation, other_calculation, draft], 'tester', 'legacy')
+        approval = store.approve(
+            namespace,
+            1,
+            'protected',
+            {d.query_id(namespace): d.answer_id(namespace) for d in (calculation, draft)},
+            actor='tester',
+            reason='legacy approval',
+        )
+    before = store.control()
+    args = ['exclude-calculations', '--db', str(store.path)]
+    cache_admin.main(args)
+    report = json.loads(capsys.readouterr().out)
+    assert report['counts'] == {'draft': 1, 'approved': 1}
+    assert {row['source_id'] for row in report['items']} == {'calculation', 'other'}
+    assert all(row['effective_status'] == 'off' and 'question' not in row for row in report['items'])
+    assert store.control() == before
+    with pytest.raises(ValueError, match='계산 질문'):
+        activate(store, snapshot, calculation)
+    assert store.control() == before
+    cache_admin.main([*args, '--apply', '--reason', '계산 질문 제외'])
+    assert json.loads(capsys.readouterr().out)['disabled'] == 1
+    after = store.control()
+    assert after.generation == before.generation + 1
+    cache_admin.main([*args, '--apply', '--reason', '계산 질문 제외'])
+    assert json.loads(capsys.readouterr().out)['disabled'] == 0 and store.control() == after
+    store.set_mode('shadow', 'tester', 'synthetic shadow', approval)
+    assert store.lookup(namespace, QUESTION)[1] is not None
+    assert store.lookup(namespace, CALCULATION)[2] == 'inactive'
 
 
 @pytest.mark.parametrize('mode', ['shadow', 'on'])
@@ -356,7 +408,7 @@ def test_time_window_is_half_open():
 
 def test_split_protection_and_display_hold(catalog):
     _, snapshot, _ = catalog
-    questions = ('합성 질문', '  보호 질문 ', '다른 질문', '근거 불명 질문')
+    questions = ('합성 질문', '  보호 질문 ', '다른 질문', '근거 불명 질문', CALCULATION)
     rows = [
         dict(
             id=f'q{i}',
@@ -380,12 +432,20 @@ def test_split_protection_and_display_hold(catalog):
     ]
     rows[3]['answer'] = RAW.replace('제26조\n', '제26조, 제999조\n')
     protected = Protection(
-        frozenset({digest('보호 질문')}), {r['id']: r['question_sha256'] for r in (rows[0], rows[1], rows[3])}, 'hash'
+        frozenset({digest('보호 질문')}),
+        {r['id']: r['question_sha256'] for r in (rows[0], rows[1], rows[3], rows[4])},
+        'hash',
     )
     seed = prepare(Bundle(rows, frozenset()), protected, snapshot)
     assert [d.source_id for d in seed.drafts] == ['q0']
     assert seed.summary['excluded_split_rows'] == 2
     assert seed.summary['incompatible_display_rows'] == 1
+    assert seed.summary['excluded_calculation_rows'] == 1
+    assert seed.exclusions[-1] == {
+        'id': 'q4',
+        'primary_reason': 'excluded_calculation_rows',
+        'reasons': ['excluded_calculation_rows'],
+    }
 
 
 def test_altered_bundle_is_rejected_before_parsing(tmp_path):

@@ -1,6 +1,6 @@
 # lawbot/hits.py  →  웹앱 안에서 주고받는 dict의 모양 (TypedDict: 실행 중에는 그냥 dict, 타입 검사만)
 # 검색 결과(Hit)는 피드백 JSON·평가 CSV에 그대로 저장되므로 dict로 둔다 (dataclass 전환은 다음에 따로 시도)
-from typing import NotRequired, TypedDict
+from typing import Any, NotRequired, TypedDict
 
 
 class Hit(TypedDict):
@@ -44,3 +44,5 @@ class Timing(TypedDict, total=False):
     _system: str | None
     cache_metrics: dict
     call_counts: dict[str, int]
+    _calculation: dict[str, Any]
+    calculation_metrics: dict
