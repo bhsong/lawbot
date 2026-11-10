@@ -598,7 +598,14 @@ def blob_clones(tmp_path, monkeypatch):
     source, remote = tmp_path / 'source', tmp_path / 'remote.git'
     subprocess.run(['git', 'init', '-q', str(source)], check=True)
     laws = ['시험법', '검증법']
-    monkeypatch.setattr(b, 'full_laws', lambda _scope=None: laws)
+    entries = tuple(
+        law_scope.LawScope(name=law, folder=law, category=1, keywords=(law,), decrees=('시행령', '시행규칙'))
+        for law in laws
+    )
+    selection = tmp_path / 'scope.csv'
+    selection.write_text('law,kind,article_no\n', encoding='utf-8')
+    monkeypatch.setattr(law_scope, 'load_law_scope', lambda: entries)
+    monkeypatch.setattr(b, 'TAX_SCOPE', selection)
     paths = {b.doc_name(law, kind): f'kr/{law}/{kind} 원문.md' for law in laws for kind in b.KINDS}
     for i, change in enumerate(('제정', '일부개정', '전부개정', '일부개정', '전부개정')):
         date = f'{2020 + i}-01-01'
@@ -717,7 +724,13 @@ def test_commits_since_batches_and_keeps_report(blob_clones, tmp_path):
 
 def test_find_files_skips_repealed_file_with_the_same_title(tmp_path, monkeypatch):
     """근로기준법 폴더처럼 같은 제목 파일이 둘: 1997년 '(폐지)' 커밋으로 끝난 법률.md는 빼고 법률(법률).md"""
-    entry = law_scope.LawScope(name='근로기준법', folder='근로기준법_원문', category=1, keywords=('근로기준법',))
+    entry = law_scope.LawScope(
+        name='근로기준법',
+        folder='근로기준법_원문',
+        category=1,
+        keywords=('근로기준법',),
+        decrees=('시행령', '시행규칙'),
+    )
     folder = f'kr/{entry.folder}'
     monkeypatch.setattr(law_scope, 'load_law_scope', lambda: (entry,))
     repo = tmp_path / 'legalize'
@@ -833,11 +846,13 @@ def test_generated_csvs_match_repo_except_known_rule_changes():
 def test_row_order_laws_then_decrees_by_name():
     """법률은 공통 범위 순서, 하위법령은 법령 이름 가나다순 (임베딩 batch·data/decree_exp 후보 번호가 이 순서에 묶여 있음)"""
     order = b.doc_order()
-    laws = b.full_laws()
+    scoped = {law for law, _ in b.load_scope(b.TAX_SCOPE)}
+    laws = [entry for entry in law_scope.load_law_scope() if entry.name not in scoped]
     law_count = len(laws)
-    sorted_laws = sorted(laws)
-    assert order[:law_count] == [(law, '법률') for law in laws]
-    assert order[law_count:] == [(law, kind) for law in sorted_laws for kind in ('시행령', '시행규칙')]
+    assert order[:law_count] == [(entry.name, '법률') for entry in laws]
+    assert order[law_count:] == [
+        (entry.name, kind) for entry in sorted(laws, key=lambda law: law.name) for kind in entry.decrees
+    ]
 
 
 # ── 부칙 특례 조문 ───────────────────────────────────────────────────
@@ -930,7 +945,7 @@ def test_alternate_scope_selects_partial_laws_and_restores_omitted_full_laws(tmp
 
 def test_build_full_law_with_no_subordinate_documents(tmp_path, monkeypatch):
     repo = make_repo(tmp_path, [('2020-01-01', '100', '2020-01-01', V1, '')])
-    entry = law_scope.LawScope(name='시험법', folder='시험법', category=1, keywords=('시험법',))
+    entry = law_scope.LawScope(name='시험법', folder='시험법', category=1, keywords=('시험법',), decrees=())
     monkeypatch.setattr(law_scope, 'load_law_scope', lambda: (entry,))
 
     _, _, stats = b.build(repo.path, '2026-10-20', scope={})
@@ -939,6 +954,41 @@ def test_build_full_law_with_no_subordinate_documents(tmp_path, monkeypatch):
     assert stats['law_rows'] == stats['decree_rows'] == 3
     with pytest.raises(ValueError, match='시험법 시행규칙'):
         b.build(repo.path, '2026-10-20', scope={('시험법', '시행규칙'): {'제1조'}})
+
+
+@pytest.fixture
+def law_with_decree(tmp_path, monkeypatch):
+    repo = make_repo(tmp_path, [('2020-01-01', '100', '2020-01-01', V1, '')])
+    entry = law_scope.LawScope(name='시험법', folder='시험법', category=1, keywords=('시험법',), decrees=('시행령',))
+    selection = tmp_path / 'scope.csv'
+    selection.write_text('law,kind,article_no\n', encoding='utf-8')
+    monkeypatch.setattr(law_scope, 'load_law_scope', lambda: (entry,))
+    monkeypatch.setattr(b, 'TAX_SCOPE', selection)
+    decree = 'kr/시험법/시행령.md'
+    first = md('101', '2021-01-01', '2021-01-01', article('제1조', '목적', '시행령 본문'))
+    first = first.replace('시험법', '시험법 시행령')
+    commit(repo.path, {decree: first}, '2021-01-01', '대통령령: 시험법 시행령 (제정)')
+    return repo, decree
+
+
+@pytest.mark.parametrize('damage', ['title-changed', 'path-deleted', 'duplicate-title'])
+def test_build_rejects_missing_or_ambiguous_required_subordinate_document(law_with_decree, damage):
+    repo, decree = law_with_decree
+    _, _, before = b.build(repo.path, '2022-01-01')
+    assert before['paths'] == {'시험법': PATH, '시험법 시행령': decree}
+
+    changes = {}
+    if damage == 'title-changed':
+        body = article('제1조', '목적', '시행령 본문')
+        changes[decree] = md('102', '2023-01-01', '2023-01-01', body).replace('시험법', '다른 법 시행령')
+    elif damage == 'duplicate-title':
+        changes['kr/시험법/시행령(대통령령).md'] = (repo.path / decree).read_text(encoding='utf-8')
+    else:
+        (repo.path / decree).unlink()
+    commit(repo.path, changes, '2023-01-01', '대통령령: 시험법 시행령 (일부개정)')
+
+    with pytest.raises(ValueError, match='시험법 시행령'):
+        b.build(repo.path, '2026-10-20')
 
 
 def test_docs_put_scoped_documents_after_the_full_ones():

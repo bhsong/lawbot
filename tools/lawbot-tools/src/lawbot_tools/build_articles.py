@@ -871,10 +871,10 @@ def doc_names(doc_list=None):
 def find_files(repo: Repo, asof, doc_list=None):
     """문서명 → 파일 경로. 법령 폴더에서 기준일 버전의 머리말 제목이 문서명이고, 그 버전이 폐지 커밋이 아닌 파일
     (예: 근로기준법 폴더의 법률.md는 1997년 '(폐지)' 커밋으로 끝난 옛 법, 법률(법률).md가 현행. 머리말 상태는 둘 다 '시행')
-    전체 법령에 하위법령이 없으면 생략한다. 본법과 범위 CSV에서 직접 선택한 문서는 필요하다."""
-    kinds_of: dict[str, list[tuple[str, bool]]] = {}
-    for law, kind, selection in doc_list or docs(None):
-        kinds_of.setdefault(law, []).append((kind, kind == '법률' or selection is not None))
+    생성 대상으로 지정된 문서마다 파일이 하나여야 한다."""
+    kinds_of: dict[str, list[str]] = {}
+    for law, kind, _ in doc_list or docs(None):
+        kinds_of.setdefault(law, []).append(kind)
     scope_folders = {entry.name: entry.folder for entry in law_scope.load_law_scope()}
     folders = {law: f'kr/{scope_folders.get(law, law.replace(" ", ""))}/' for law in kinds_of}
     candidates = {}
@@ -893,11 +893,9 @@ def find_files(repo: Repo, asof, doc_list=None):
     }
     paths = {}
     for law, kinds in kinds_of.items():
-        for kind, required in kinds:
+        for kind in kinds:
             doc = doc_name(law, kind)
             found = [path for sha, path in candidates[law] if titles[(sha, path)] == doc.replace(' ', '')]
-            if not found and not required:
-                continue
             if len(found) != 1:
                 raise ValueError(f'{doc}: 시행 중인 파일이 하나가 아닙니다 ({found or "없음"}, 폴더 {folders[law]})')
             paths[doc] = found[0]
@@ -920,19 +918,16 @@ def load_scope(path):
     return scope
 
 
-def full_laws(scope=None) -> list[str]:
-    """Read fully included laws in manifest order, using v5 selections as the v4 fallback."""
-    selected = load_scope(TAX_SCOPE) if scope is None else scope
-    partial = {law for law, _ in selected}
-    return [entry.name for entry in law_scope.load_law_scope() if entry.name not in partial]
-
-
 def doc_order(scope=None):
-    """[(법령, 종류)] 행 순서: 법률은 공통 범위 순서, 그 뒤 하위법령은 법령 이름 가나다순으로 시행령 → 시행규칙.
+    """전체 법률은 공통 범위 순서, 선언된 하위법령은 법령 이름 가나다순으로 시행령 → 시행규칙.
     순서를 바꾸지 않는 이유: 조문 임베딩(같은 batch에 든 문서에 따라 fp16 값이 달라짐)과 저장된 실험 산출물
     (data/decree_exp, 후보 번호 = 행 순번)이 이 순서에 묶여 있다"""
-    laws = full_laws(scope)
-    return [(law, '법률') for law in laws] + [(law, k) for law in sorted(laws) for k in KINDS if k != '법률']
+    selected = load_scope(TAX_SCOPE) if scope is None else scope
+    partial = {law for law, _ in selected}
+    full = {entry.name: entry.decrees for entry in law_scope.load_law_scope() if entry.name not in partial}
+    return [(law, '법률') for law in full] + [
+        (law, kind) for law in sorted(full) for kind in KINDS[1:] if kind in full[law]
+    ]
 
 
 def docs(scope):
@@ -1040,7 +1035,6 @@ def build(repo_path, asof, scope=None, version='v4'):
     repo = Repo(repo_path)
     doc_list = docs(scope)
     paths = find_files(repo, asof, doc_list)
-    doc_list = [(law, kind, selection) for law, kind, selection in doc_list if doc_name(law, kind) in paths]
     rows, versions = build_rows(repo, paths, asof, doc_list)
     stats = link(rows, doc_names(doc_list))
     df = pd.DataFrame(rows, columns=DECREE_COLS)
