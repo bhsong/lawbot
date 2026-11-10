@@ -1,17 +1,17 @@
 {
   "dataset_version": "v5",
   "reference_date": "2026-11-03",
-  "collected_date": "2026-11-03",
+  "collected_date": "2026-11-10",
   "source": {
     "name": "Legalize KR",
     "url": "https://github.com/legalize-kr/legalize-kr",
     "ref": "bcb7aea7782e81c21fbeb08382c442f7c2041690"
   },
   "articles_file": "articles_v5.csv",
-  "articles_sha256": "bd1633defcafb67af6ddac027fd9398cb4f9f941ac0c44d1f53bb696f3747993",
-  "articles_total": 705,
+  "articles_sha256": "d1ca15fd0debb2ea546baf2bfc94665afb65eb6a096fe3522091d486b7e763b1",
+  "articles_total": 812,
   "articles_by_law": {
-    "소득세법": 152,
+    "소득세법": 259,
     "근로기준법": 130,
     "남녀고용평등과 일ㆍ가정 양립 지원에 관한 법률": 72,
     "근로자퇴직급여 보장법": 69,
@@ -30,7 +30,7 @@
     "고용보험법": 2
   },
   "articles_by_kind": {
-    "법률": 705
+    "법률": 812
   },
   "trained_on": {
     "embedding": "v5"

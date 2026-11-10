@@ -1,4 +1,4 @@
-"""Legalize KR 원문과 기준일로 조문 CSV 두 개를 만든다 (계획: docs/archives/article-generator.md, docs/plans/v5-tax-scope.md)
+"""Legalize KR 원문과 기준일로 조문 CSV 두 개를 만든다 (계획: docs/archives/article-generator.md, docs/archives/v5-tax-scope.md)
 
     git clone --bare --filter=blob:none https://github.com/legalize-kr/legalize-kr ../legalize-kr
     uv run lawbot-build-articles --repo ../legalize-kr --asof 2026-10-20 --out-dir data/v4 [--check] [--scope 목록.csv]
@@ -8,7 +8,7 @@
 - law_articles_<버전>_decree.csv: 법률 + 시행령·시행규칙 (행 순서는 docs())
 - --check: 파일을 쓰지 않고 out-dir의 기존 파일과 바이트 단위로 비교 (다르면 종료 코드 1)
 - --scope: CSV(law·kind·article_no)에 있는 법령은 목록 조문과 부칙 특례만 전체 법령 문서 뒤에 배치
-- --scope 생략: 기본 v5 선택 조문 CSV에 있는 법령을 제외한 전체 문서만 생성
+- --scope 생략: 고정 v4 매니페스트에 있는 법령의 전체 문서만 생성
 
 규칙 (모든 문서에 같다)
 - 파일: kr/<법령명 띄어쓰기 없이>/ 안에서 기준일 버전의 머리말 `제목`이 문서명이고 폐지 커밋이 아닌 파일
@@ -50,7 +50,8 @@ from pathlib import Path
 
 import pandas as pd
 
-from lawbot.paths import DATA
+from lawbot import manifest
+from lawbot.paths import DATA, V4_ARTICLES
 from lawbot_common import law_scope
 
 TAX_SCOPE = DATA / 'v5' / 'scope_tax.csv'
@@ -918,13 +919,27 @@ def load_scope(path):
     return scope
 
 
+def v4_laws():
+    """Keep the default v4 corpus independent of subsequent v5 scope changes."""
+    baseline = manifest.load(V4_ARTICLES)
+    if not baseline or not baseline.get('articles_by_law'):
+        raise ValueError('v4 매니페스트에 법령 범위가 없습니다.')
+    return baseline['articles_by_law'].keys()
+
+
 def doc_order(scope=None):
     """전체 법률은 공통 범위 순서, 선언된 하위법령은 법령 이름 가나다순으로 시행령 → 시행규칙.
     순서를 바꾸지 않는 이유: 조문 임베딩(같은 batch에 든 문서에 따라 fp16 값이 달라짐)과 저장된 실험 산출물
     (data/decree_exp, 후보 번호 = 행 순번)이 이 순서에 묶여 있다"""
-    selected = load_scope(TAX_SCOPE) if scope is None else scope
-    partial = {law for law, _ in selected}
-    full = {entry.name: entry.decrees for entry in law_scope.load_law_scope() if entry.name not in partial}
+    entries = law_scope.load_law_scope()
+    if scope is None:
+        included = set(v4_laws())
+        if missing := included - {entry.name for entry in entries}:
+            raise ValueError(f'v4 매니페스트의 법령이 공통 범위에 없습니다: {", ".join(sorted(missing))}')
+    else:
+        partial = {law for law, _ in scope}
+        included = {entry.name for entry in entries} - partial
+    full = {entry.name: entry.decrees for entry in entries if entry.name in included}
     return [(law, '법률') for law in full] + [
         (law, kind) for law in sorted(full) for kind in KINDS[1:] if kind in full[law]
     ]

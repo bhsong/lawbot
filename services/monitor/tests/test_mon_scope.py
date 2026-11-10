@@ -6,7 +6,7 @@ import pytest
 
 from law_monitor.config import ConfigError, load
 from lawbot_common.law_scope import load_law_scope, scope_keywords
-from lawbot_tools.build_articles import doc_order, load_scope
+from lawbot_tools.build_articles import docs, load_scope
 
 ROOT = Path(__file__).resolve().parents[3]
 
@@ -14,7 +14,7 @@ ROOT = Path(__file__).resolve().parents[3]
 def test_monitor_tracks_exactly_the_chatbot_laws():
     scope = load_law_scope()
     selected = load_scope(ROOT / 'data/v5/scope_tax.csv')
-    chatbot = {law for law, kind in doc_order() if kind == '법률'} | {law for law, _ in selected}
+    chatbot = {law for law, _, _ in docs(selected)}
     assert {law.name for law in scope} == chatbot
 
     monitor = load()

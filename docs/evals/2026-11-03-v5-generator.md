@@ -1,6 +1,6 @@
 # v5 1단계: 세금·보험 범위 목록 확인과 생성기 일반화 (2026-11-03)
 
-- 계획: [plans/v5-tax-scope.md](../plans/v5-tax-scope.md) 1단계
+- 계획: [archives/v5-tax-scope.md](../archives/v5-tax-scope.md) 1단계
 - 원문: legalize-kr `bcb7aea7782e81c21fbeb08382c442f7c2041690` (전체 bare 클론 `~/Work/legalize-kr`)
 - 기준일: 2026-11-03 (회귀는 2026-10-20도)
 - 실제 모델 호출 없음 (생성기와 데이터 비교만)

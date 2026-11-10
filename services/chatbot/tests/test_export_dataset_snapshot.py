@@ -146,7 +146,11 @@ def test_renamed_corpus_manifests_and_cli(corpus_db, tmp_path):
     assert snapshot['corpus_release_id'] == 'v5'
     for name, metadata in snapshot['files'].items():
         assert sha256((out / name).read_bytes()) == metadata['sha256']
-    assert snapshot['files']['articles_v6.csv']['rows'] == 713
+    for output, source in (
+        ('articles_v6.csv', 'articles_v5.csv'),
+        ('law_articles_v6_decree.csv', 'law_articles_v5_decree.csv'),
+    ):
+        assert snapshot['files'][output]['rows'] == len(csv_rows((DATA / 'v5' / source).read_bytes()))
     assert snapshot['source_manifest_sha256'] == {
         name: sha256((DATA / 'v5' / name).read_bytes())
         for name in ('manifest.json', 'manifest_law_articles_v5_decree.json')

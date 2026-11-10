@@ -1,4 +1,4 @@
-"""질문 평가셋 합치기·ID·train/val/test 분할 (계획: docs/plans/v5-tax-scope.md 3-1)
+"""질문 평가셋 합치기·ID·train/val/test 분할 (계획: docs/archives/v5-tax-scope.md 3-1)
 
     uv run lawbot-qa-split --batches <배치 산출물 폴더> --articles data/v5/law_articles_v5_decree.csv \\
         --prefix T --name tax_v5 --out-dir data/v5

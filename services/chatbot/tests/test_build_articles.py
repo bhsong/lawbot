@@ -1,5 +1,6 @@
 # tests/test_build_articles.py  →  조문 CSV 생성기 (lawbot_tools.build_articles, 계획 docs/archives/article-generator.md)
 # 단위 테스트는 작은 git 저장소를 임시로 만들어 쓴다. 실제 legalize-kr로 레포 CSV와 비교는 -m network (LEGALIZE_KR)
+import csv
 import io
 import json
 import os
@@ -602,10 +603,8 @@ def blob_clones(tmp_path, monkeypatch):
         law_scope.LawScope(name=law, folder=law, category=1, keywords=(law,), decrees=('시행령', '시행규칙'))
         for law in laws
     )
-    selection = tmp_path / 'scope.csv'
-    selection.write_text('law,kind,article_no\n', encoding='utf-8')
     monkeypatch.setattr(law_scope, 'load_law_scope', lambda: entries)
-    monkeypatch.setattr(b, 'TAX_SCOPE', selection)
+    monkeypatch.setattr(b, 'v4_laws', lambda: laws)
     paths = {b.doc_name(law, kind): f'kr/{law}/{kind} 원문.md' for law in laws for kind in b.KINDS}
     for i, change in enumerate(('제정', '일부개정', '전부개정', '일부개정', '전부개정')):
         date = f'{2020 + i}-01-01'
@@ -846,8 +845,8 @@ def test_generated_csvs_match_repo_except_known_rule_changes():
 def test_row_order_laws_then_decrees_by_name():
     """법률은 공통 범위 순서, 하위법령은 법령 이름 가나다순 (임베딩 batch·data/decree_exp 후보 번호가 이 순서에 묶여 있음)"""
     order = b.doc_order()
-    scoped = {law for law, _ in b.load_scope(b.TAX_SCOPE)}
-    laws = [entry for entry in law_scope.load_law_scope() if entry.name not in scoped]
+    included = {row['law'] for row in csv.DictReader(io.StringIO(V4_ARTICLES.read_text(encoding='utf-8-sig')))}
+    laws = [entry for entry in law_scope.load_law_scope() if entry.name in included]
     law_count = len(laws)
     assert order[:law_count] == [(entry.name, '법률') for entry in laws]
     assert order[law_count:] == [
@@ -908,17 +907,18 @@ def test_load_scope_reads_law_kind_article(tmp_path):
     assert b.load_scope(p) == {('소득세법', '법률'): {'제1조', '제3조'}, ('소득세법', '시행령'): {'제2조'}}
 
 
-def test_full_laws_use_manifest_names_and_exclude_v5_article_selections(monkeypatch):
-    first, *others = [law for law, kind in b.doc_order() if kind == '법률']
+def test_full_laws_use_registry_names_and_exclude_v5_article_selections(monkeypatch):
+    scope = b.load_scope(b.TAX_SCOPE)
+    first, *others = [law for law, kind in b.doc_order(scope) if kind == '법률']
     renamed_scope = tuple(
         entry.model_copy(update={'name': '시험법'}) if entry.name == first else entry
         for entry in law_scope.load_law_scope()
     )
     monkeypatch.setattr(law_scope, 'load_law_scope', lambda: renamed_scope)
 
-    laws = [law for law, kind in b.doc_order() if kind == '법률']
+    laws = [law for law, kind in b.doc_order(scope) if kind == '법률']
     assert laws == ['시험법', *others]
-    assert not set(laws) & {law for law, _ in b.load_scope(b.TAX_SCOPE)}
+    assert not set(laws) & {law for law, _ in scope}
 
 
 def test_canonical_v5_scope_rejects_a_law_absent_from_manifest(tmp_path, monkeypatch):
@@ -928,8 +928,6 @@ def test_canonical_v5_scope_rejects_a_law_absent_from_manifest(tmp_path, monkeyp
 
     with pytest.raises(ValueError, match='조문 범위 목록의 법령이 공통 범위에 없습니다: 시험법'):
         b.load_scope(scope)
-    with pytest.raises(ValueError, match='조문 범위 목록의 법령이 공통 범위에 없습니다: 시험법'):
-        b.doc_order()
 
 
 def test_alternate_scope_selects_partial_laws_and_restores_omitted_full_laws(tmp_path):
@@ -960,10 +958,8 @@ def test_build_full_law_with_no_subordinate_documents(tmp_path, monkeypatch):
 def law_with_decree(tmp_path, monkeypatch):
     repo = make_repo(tmp_path, [('2020-01-01', '100', '2020-01-01', V1, '')])
     entry = law_scope.LawScope(name='시험법', folder='시험법', category=1, keywords=('시험법',), decrees=('시행령',))
-    selection = tmp_path / 'scope.csv'
-    selection.write_text('law,kind,article_no\n', encoding='utf-8')
     monkeypatch.setattr(law_scope, 'load_law_scope', lambda: (entry,))
-    monkeypatch.setattr(b, 'TAX_SCOPE', selection)
+    monkeypatch.setattr(b, 'v4_laws', lambda: ('시험법',))
     decree = 'kr/시험법/시행령.md'
     first = md('101', '2021-01-01', '2021-01-01', article('제1조', '목적', '시행령 본문'))
     first = first.replace('시험법', '시험법 시행령')
@@ -989,6 +985,64 @@ def test_build_rejects_missing_or_ambiguous_required_subordinate_document(law_wi
 
     with pytest.raises(ValueError, match='시험법 시행령'):
         b.build(repo.path, '2026-10-20')
+
+
+def test_income_tax_full_corpus_matches_the_union_and_preserves_other_rows(tmp_path, monkeypatch):
+    """Exercise the checked-in scope on a small source with all three income tax documents."""
+    income, other_tax, labor = '소득세법', '지방세법', '시험법'
+    legacy = {(income, kind): {'제1조'} for kind in b.KINDS}
+    legacy[(other_tax, '법률')] = {'제85조'}
+    configured = b.load_scope(b.TAX_SCOPE)
+    current = {key: numbers & configured[key] for key, numbers in legacy.items() if key in configured}
+    entries = tuple(
+        law_scope.LawScope(
+            name=law, folder=law, category=1, keywords=(law,), decrees=tuple(b.KINDS[1:]) if law == income else ()
+        )
+        for law in (labor, income, other_tax)
+    )
+    monkeypatch.setattr(law_scope, 'load_law_scope', lambda: entries)
+    source = tmp_path / 'source'
+    subprocess.run(['git', 'init', '-q', str(source)], check=True)
+    date = '2020-01-01'
+    body = article('제1조', '목적', '선택 조문') + article('제800조', '전체', '제1조에 따른 본문')
+    body += article('제801조', '', '삭제 <2019.1.1>')
+    files = {
+        f'kr/{income}/{kind}.md': md('100', date, date, body).replace('시험법', b.doc_name(income, kind))
+        for kind in b.KINDS
+    }
+    files[f'kr/{other_tax}/법률.md'] = md(
+        '100', date, date, article('제85조', '목적', '선택 조문') + article('제86조', '다른 조문', '범위 밖')
+    ).replace('시험법', other_tax)
+    files[f'kr/{labor}/법률.md'] = md('100', date, date, body)
+    commit(source, files, date, '합성 법령 (제정)')
+
+    def build_rows(scope):
+        output, _, _ = b.build(source, date, scope=scope, version='v5')
+        combined = output[b.csv_names('v5')[1]].decode('utf-8-sig')
+        return list(csv.DictReader(io.StringIO(combined)))
+
+    before, after = build_rows(legacy), build_rows(current)
+    selected = {row['article_id'] for row in before if row['parent_law'] == income}
+    remaining = {f'{b.doc_name(income, kind)} 제800조' for kind in b.KINDS}
+    assert {row['article_id'] for row in after if row['parent_law'] == income and row['deleted'] == '0'} == (
+        selected | remaining
+    )
+    assert {row['article_id'] for row in after if row['parent_law'] == income and row['deleted'] == '1'} == {
+        f'{b.doc_name(income, kind)} 제801조' for kind in b.KINDS
+    }
+    assert [row for row in after if row['parent_law'] != income] == [
+        row for row in before if row['parent_law'] != income
+    ]
+
+
+def test_v4_full_laws_do_not_follow_the_v5_selection(tmp_path, monkeypatch):
+    scope = tmp_path / 'scope.csv'
+    scope.write_text('law,kind,article_no\n지방세법,법률,제85조\n', encoding='utf-8')
+    monkeypatch.setattr(b, 'TAX_SCOPE', scope)
+
+    with V4_ARTICLES.open(encoding='utf-8-sig', newline='') as baseline:
+        expected = {row['law'] for row in csv.DictReader(baseline)}
+    assert {law for law, kind in b.doc_order() if kind == '법률'} == expected
 
 
 def test_docs_put_scoped_documents_after_the_full_ones():

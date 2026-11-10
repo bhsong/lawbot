@@ -92,8 +92,8 @@ def test_corpus_reuses_versions_and_activates_idempotently(db_path, capsys):
     assert db_state(db_path) == before
     with connect(db_path) as conn:
         assert conn.execute('SELECT profile, release_id FROM active_corpus').fetchall() == [('v5', 'v5')]
-        assert conn.execute('SELECT count(*) FROM corpus_release_articles').fetchone() == (840 + 1525,)
-        assert conn.execute('SELECT count(*) FROM article_versions').fetchone()[0] < 840 + 1525
+        assert conn.execute('SELECT count(*) FROM corpus_release_articles').fetchone() == (840 + 2114,)
+        assert conn.execute('SELECT count(*) FROM article_versions').fetchone()[0] < 840 + 2114
     assert run(db_path, 'corpus', '--dir', DATA / 'v4', '--profile', 'v4', '--release-id', 'v5') != 0
     assert db_state(db_path) == before
 

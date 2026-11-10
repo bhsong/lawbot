@@ -499,7 +499,7 @@ def test_resume_concurrent_keeps_order_and_resumes(tmp_path, monkeypatch):
     assert ev.STAGE_TIMES['answers']['n'] == 2  # 두 번째 실행에서 남은 2개
 
 
-# ---- v5 (노동 + 세금·보험, docs/plans/v5-tax-scope.md 3-3) ----
+# ---- v5 (노동 + 세금·보험, docs/archives/v5-tax-scope.md 3-3) ----
 def test_v5_questions_split_by_gold_kind_and_keep_v4_samples():
     """D_tax는 정답이 법률(부칙 특례 포함)이면 법률 검색·답변, 시행령·시행규칙이면 하위법령 단계. v4 문항·표본은 그대로"""
     v4, t = ev.load_test('val'), ev.load_test('val', 'v5')
