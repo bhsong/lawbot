@@ -2,7 +2,7 @@
 
 import unicodedata
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints, TypeAdapter
 
@@ -16,6 +16,7 @@ class LawScope(BaseModel):
     folder: str = Field(pattern=r'^[^\s/\\]+$')
     category: int = Field(ge=1, le=7)
     keywords: tuple[Annotated[str, StringConstraints(min_length=1)], ...] = Field(min_length=1)
+    decrees: tuple[Literal['시행령', '시행규칙'], ...]
 
 
 def load_law_scope() -> tuple[LawScope, ...]:

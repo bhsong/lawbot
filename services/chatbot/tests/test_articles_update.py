@@ -1,8 +1,10 @@
 # tests/test_articles_update.py  →  조문 데이터 자동 갱신 (lawbot_tools.articles_update, 계획 docs/archives/articles-auto-update.md)
-# 점검 → 생성 → 검사·매니페스트 → 임베딩 → 확인 → 아카이브·전환 → 재시작. 생성기·검색기·재시작·포트 확인은 가짜
+# Exercise the update pipeline with synthetic corpora and stubbed search and restart.
 import fcntl
+import io
 import json
 import shutil
+from unittest.mock import Mock
 
 import pandas as pd
 import pytest
@@ -11,6 +13,8 @@ from lawbot import manifest
 from lawbot.paths import V4_ARTICLES
 from lawbot_tools import articles_update as au
 from lawbot_tools import build_articles as ba
+from test_build_articles import commit
+from test_build_articles import law_with_decree as law_with_decree
 
 COLS = ba.DECREE_COLS
 HEAD = 'd' * 40
@@ -52,7 +56,7 @@ def files_of(df):
     return {ba.LAW_CSV: ba.to_csv_bytes(law), ba.DECREE_CSV: ba.to_csv_bytes(df)}
 
 
-def write_set(folder, df, ref_date='2026-10-20'):
+def write_set(folder, df, ref_date='2026-10-20', source_ref='c' * 40):
     folder.mkdir(parents=True, exist_ok=True)
     for name, data in files_of(df).items():
         (folder / name).write_bytes(data)
@@ -61,7 +65,7 @@ def write_set(folder, df, ref_date='2026-10-20'):
             'dataset_version': 'v4',
             'reference_date': ref_date,
             'collected_date': ref_date,
-            'source': {'name': 'Legalize KR', 'url': 'u', 'ref': 'c' * 40},
+            'source': {'name': 'Legalize KR', 'url': 'u', 'ref': source_ref},
             'articles_file': csv,
             'articles_sha256': manifest.sha256(folder / csv),
             'trained_on': {'embedding': 'v4'},
@@ -118,11 +122,11 @@ def live(tmp_path):
     return d
 
 
-def run(live, tmp_path, *extra):
+def run(live, tmp_path, *extra, repo=None):
     return au.main(
         [
             '--repo',
-            str(tmp_path),
+            str(repo or tmp_path),
             '--asof',
             '2026-11-27',
             '--live-dir',
@@ -198,6 +202,33 @@ def test_gate_failure_keeps_current_data(live, tmp_path, monkeypatch, capsys):
     assert '검색되지 않음' in line and '근로기준법 제1조' in line
     assert (live / ba.DECREE_CSV).read_bytes() == before and not (live / 'archive').exists()
     assert 'restart' not in w.calls and not list(live.glob('.staging-*'))
+
+
+def test_update_keeps_live_data_when_required_decree_disappears(tmp_path, law_with_decree, env, capsys):
+    repo, decree = law_with_decree
+    files, _, stats = ba.build(repo.path, '2022-01-01')
+    baseline = pd.read_csv(io.BytesIO(files[ba.DECREE_CSV]), encoding='utf-8-sig')
+    assert '시험법 시행령' in set(baseline['law'])
+    live = tmp_path / 'live'
+    write_set(live, baseline, '2022-01-01', source_ref=stats['head'])
+    before = {path.name: path.read_bytes() for path in live.iterdir()}
+    env.setenv('LAWBOT_V4_ARTICLES', str(live / ba.LAW_CSV))
+    env.setenv('LAWBOT_V4_DECREE_ARTICLES', str(live / ba.DECREE_CSV))
+    retriever = Mock(return_value=None)
+    restart = Mock(return_value=(False, 'synthetic restart'))
+    env.setattr(au, 'make_retriever', retriever)
+    env.setattr(au, 'restart_web', restart)
+    (repo.path / decree).unlink()
+    commit(repo.path, {}, '2023-01-01', '대통령령: 시험법 시행령 원문 삭제')
+
+    assert run(live, tmp_path, '--restart', repo=repo.path) == 2
+    line = last_line(capsys)
+    assert line.startswith('articles updated=no error=시험법 시행령:')
+    assert not (live / 'archive').exists()
+    assert {path.name: path.read_bytes() for path in live.iterdir() if not path.name.startswith('.')} == before
+    assert not list(live.glob('.staging-*'))
+    retriever.assert_not_called()
+    restart.assert_not_called()
 
 
 def test_web_not_ready_rolls_back_and_restarts_again(live, tmp_path, monkeypatch, capsys):
