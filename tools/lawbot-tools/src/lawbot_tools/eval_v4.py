@@ -69,7 +69,7 @@ SPLITS = ('test', 'val')
 DQ_QA, DQ_SPLIT = DATA / 'decree_exp' / 'qa_decree_v4.csv', DATA / 'decree_exp' / 'split_decree_v4.csv'
 DQ_SAMPLE = DATA / 'v4' / 'decree_ctx_dq_val200.csv'  # 하위법령 답변 표본 200 (실험 eval_decree와 같은 id)
 
-# ---- v5: 노동 + 세금·보험 (--dataset v5, docs/plans/v5-tax-scope.md 3-3). v4 문항·표본·채점은 그대로 ----
+# ---- v5: 노동 + 세금·보험 (--dataset v5, docs/archives/v5-tax-scope.md 3-3). v4 문항·표본·채점은 그대로 ----
 DATASET = 'v4'  # main이 --dataset으로 정한다
 V5 = DATA / 'v5'
 TAX_QA, TAX_SPLIT, TAX_KEYS = V5 / 'qa_tax_v5.csv', V5 / 'split_tax_v5.csv', V5 / 'answer_key_tax_v5.csv'

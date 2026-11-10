@@ -2,7 +2,7 @@
 
 **결론: v5 val 검색을 오류 없이 마쳤다. 세금·보험 법률 질문의 리랭킹 Recall@3은 0.940(노동과 비슷), 노동 질문은 v4보다 0.9p 낮다(1,110문항 중 10문항). 정답이 임베딩 상위 10개에 들면 리랭커는 거의 놓치지 않아(세금 1.000, 노동 0.977), 성능은 임베딩의 상위 10개 적중(R@10 노동 0.956 · 세금 0.940)이 정한다. 하위법령 첨부 수는 k=2→3에서 첨부율이 노동 +2.0p · 세금 +0.8p 오르지만 프롬프트가 질문당 약 270~620토큰 늘어난다.** 답변 생성은 하지 않았다 (B단계).
 
-- 계획: [plans/v5-tax-scope.md](../plans/v5-tax-scope.md) 4단계 A (사용자 승인 2026-11-04)
+- 계획: [archives/v5-tax-scope.md](../archives/v5-tax-scope.md) 4단계 A (사용자 승인 2026-11-04)
 - 결과 파일: `results/v5/retrieval_pro_concise_rr_dec_val.csv`, `dqretrieval_pro_concise_rr_dec_val.csv`, `summary_pro_concise_rr_dec_val.csv`, `run_pro_concise_rr_dec_val.json`
 - 기준선: `results/v4/*_pro_concise_rr_dec_val.csv` (v4 데이터, 같은 val 노동 문항)
 

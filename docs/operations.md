@@ -38,8 +38,8 @@ uv sync
 
 ```
 data/v5/
-├── articles_v5.csv                    # 비삭제 법률 조문 705개
-├── law_articles_v5_decree.csv          # 법률·하위법령 비삭제 1,497개
+├── articles_v5.csv                    # 비삭제 법률 조문 812개
+├── law_articles_v5_decree.csv          # 법률·하위법령 비삭제 1,859개
 ├── manifest.json
 ├── manifest_law_articles_v5_decree.json
 ├── system_v5_concise.txt               # Pro 기본 간결형
@@ -131,7 +131,7 @@ v5 Pro는 간결형에 `data/v5/system_v5_concise.txt`를 쓰고, 화면에서 "
 | `LAWBOT_MODEL_TOKEN` | 예 | 모델 서버 토큰 (16자 이상, `openssl rand -hex 32`). 웹앱과 모델 서버가 같은 값 |
 | `LAWBOT_MODEL_SERVER_WAIT` | 아니요 | 시작할 때 모델 서버 준비를 기다리는 최대 초 (기본 `300`) |
 | `LAWBOT_MODEL_READ_TIMEOUT` | 아니요 | 질문 처리 중(질문 임베딩·리랭크·생성) 응답 조각 사이 최대 대기 초 (기본 `300`). 넘으면 "모델 서버 응답이 없습니다", 요청 로그 `model_server_timeout`. 시작할 때 조문 인덱스 인코딩에는 걸지 않음 |
-| `LAWBOT_PROFILE` | 아니요 | `v4` (생략 시 기본값) 또는 `v5` (노동·근로소득 세금·4대보험 범위, Pro 전용) |
+| `LAWBOT_PROFILE` | 아니요 | `v4` (생략 시 기본값) 또는 `v5` (노동·소득세법 전체와 세금·4대보험 선택 범위, Pro 전용) |
 | `LAWBOT_EMB_MODEL` | 아니요 | 검색 임베딩 모델 id (v4 기본 `lawbot-emb-v4`, v5 기본 `lawbot-emb-v5b`) |
 | `LAWBOT_FAST_MODEL` / `LAWBOT_PRO_MODEL` | 아니요 | 답변 모델 id (기본 `lawbot-fast-v4` / `qwen3.8-27b-4bit`). 외부 API면 그쪽 모델 이름 |
 | `LAWBOT_MODELS` | 아니요 | 쓸 답변 모델 key를 쉼표로 (`pro`, `fast`, `fast,pro`). 첫 번째가 기본 선택. 비우면 프로필이 지원하는 모델 모두 |
@@ -140,7 +140,7 @@ v5 Pro는 간결형에 `data/v5/system_v5_concise.txt`를 쓰고, 화면에서 "
 | `LAWBOT_V4_ARTICLES` / `LAWBOT_V4_SYSTEM` | 아니요 | v4 조문 CSV / 4B system 파일 (기본 `data/v4/articles_v4.csv`, `data/v4/system_v4.txt`) |
 | `LAWBOT_V5_ARTICLES` / `LAWBOT_V5_DECREE_ARTICLES` | 아니요 | v5 법률 / 법률·하위법령 CSV (기본 `data/v5/articles_v5.csv`, `data/v5/law_articles_v5_decree.csv`). 각 매니페스트 필수 |
 | `LAWBOT_V5_SYSTEM` | 아니요 | v5 전체 답변 system (기본 `data/v5/system_v5.txt`) |
-| `LAWBOT_MAX_SEQ` / `LAWBOT_DECREE_MAX_SEQ` | 아니요 | 법률 / 하위법령의 인코딩 최대 토큰 (v4 2,304 / 3,072, v5 4,352 / 5,120) |
+| `LAWBOT_MAX_SEQ` / `LAWBOT_DECREE_MAX_SEQ` | 아니요 | 법률 / 하위법령의 인코딩 최대 토큰 (v4 2,304 / 3,072, v5 4,352 / 12,032) |
 | `LAWBOT_RERANKER_ENABLED` | 아니요 | `1`이면 임베딩 상위 후보를 Qwen3-Reranker-4B로 다시 정렬해 상위 3개를 씀 (기본 `0`: 기존 임베딩 상위 3개). |
 | `LAWBOT_RERANK_MODEL` | 아니요 | 리랭커 모델 id (기본 `qwen3-reranker-4b`) |
 | `LAWBOT_RERANKER_CANDIDATES` | 아니요 | 리랭커에 넘길 임베딩 후보 수 (기본 `10`, 실험값. 3 이상) |
@@ -196,7 +196,7 @@ LAWBOT_RERANKER_ENABLED=0 uv run lawbot-app    # 한 번만 끄고 실행
 
 ## 시행령·시행규칙 첨부 (선택)
 
-켜면(`LAWBOT_DECREE_ENABLED=1`, `.env.example`은 켜짐) 법률 검색과 별도로 하위법령을 검색해 붙입니다. v5 초기 데이터는 법률 705개와 하위법령 792개입니다.
+켜면(`LAWBOT_DECREE_ENABLED=1`, `.env.example`은 켜짐) 법률 검색과 별도로 하위법령을 검색해 붙입니다. v5 기본 데이터는 법률 812개와 하위법령 1,047개입니다.
 
 ```
 법률: 임베딩 상위 10개 → 리랭커 → 상위 3개 (꺼짐과 같은 순위·점수·프롬프트)
@@ -206,7 +206,7 @@ LAWBOT_RERANKER_ENABLED=0 uv run lawbot-app    # 한 번만 끄고 실행
 
 - 통과한 하위법령이 없으면 붙이지 않고, 프롬프트는 꺼짐과 글자 단위로 같습니다. 참고 조문 형식은 법률과 같은 `[n] 법령명 제N조(제목)`입니다(예: `[4] 근로기준법 시행령 제2조(…)`).
 - 첨부는 `LAWBOT_DECREE_MODELS`의 모델만(기본 Pro) 받습니다. Fast는 하위법령을 찾지도 않으므로 지금과 같습니다.
-- 법률과 하위법령은 별도로 인코딩합니다. 최대 길이는 v5에서 4,352·5,120토큰, v4에서 2,304·3,072토큰입니다.
+- 법률과 하위법령은 별도로 인코딩합니다. 최대 길이는 v5에서 4,352·12,032토큰, v4에서 2,304·3,072토큰입니다.
 - 리랭커가 꺼져 있으면 모델 서버에 접속하기 전에 실행을 거부합니다. 하위법령 리랭킹 오류도 법률과 같이 화면에 오류로 표시합니다(되돌리지 않음).
 - 화면: 하위법령 카드는 `〔시행령〕`·`〔시행규칙〕` 표시와 함께 법률 카드 뒤에 놓이고, 인용한 조문은 펼치고 나머지는 접습니다. 간결형 근거 줄·경고는 법률과 같은 규칙입니다. 측정 줄에 하위법령 시간과 첨부 수, 요청 로그에 `decree_search_ms`·`decree_rerank_ms`·`decree`·`n_decree`가 남습니다.
 - 812조문 매니페스트는 `data/v4/manifest_decree.json`(데이터 `v4-decree`)입니다. 기존 `data/v4/manifest.json`은 415조문 그대로입니다.

@@ -198,7 +198,7 @@ def test_refused_caveat_sentence(answer, expected):
 
 
 def test_parse_tax_and_insurance_laws_and_their_short_names():
-    """v5 세금·보험 법령 (docs/plans/v5-tax-scope.md 3-2). 줄임말은 정식 이름으로"""
+    """v5 세금·보험 법령 (docs/archives/v5-tax-scope.md 3-2). 줄임말은 정식 이름으로"""
     text = '소득세법 제59조의2, 같은 법 시행령 제118조의4는 아니고 조특법 제95조의2와 보험료징수법 제13조, 건강보험법 제69조'
     assert ci.parse(text)[:1] == [('소득세법', '제59조의2')]
     assert ('조세특례제한법', '제95조의2') in ci.parse(text)

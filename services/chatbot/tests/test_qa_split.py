@@ -1,4 +1,4 @@
-# tests/test_qa_split.py  →  질문 분할 도구 (lawbot_tools.qa_split, 계획 docs/plans/v5-tax-scope.md 3-1)
+# tests/test_qa_split.py  →  질문 분할 도구 (lawbot_tools.qa_split, 계획 docs/archives/v5-tax-scope.md 3-1)
 # v4 노트북(lawbot_v4_emb_1.ipynb 셀 ①)의 신규 질문 분할 규칙을 옮긴 것이 맞는지 레포의 v4 데이터로 확인한다
 import pandas as pd
 import pytest

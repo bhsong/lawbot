@@ -132,7 +132,7 @@ def reranker(profile, env=None):
 # 필터(val로 고른 same1+other0.9): 법률 1위와 같은 법의 하위법령은 그대로, 다른 법은 리랭커 점수 ≥ τ일 때만 (lawbot.decree)
 DECREE_CANDIDATES = 10  # 하위법령 임베딩 후보 수 (실험과 같음)
 DECREE_MAX_SEQ = 3072  # 하위법령 인코딩 최대 토큰 (최장 3,017토큰 · 실험과 같음). 법률은 프로필 max_seq 그대로
-# 다른 조문 CSV는 LAWBOT_MAX_SEQ·LAWBOT_DECREE_MAX_SEQ (lawbot-max-seq가 같은 규칙으로 계산, v5: 4,352 · 5,120)
+# 다른 조문 CSV는 LAWBOT_MAX_SEQ·LAWBOT_DECREE_MAX_SEQ (lawbot-max-seq가 같은 규칙으로 계산, v5: 4,352 · 12,032)
 DECREE_TAU, DECREE_K, DECREE_MODELS = 0.9, 2, ('pro',)
 
 
@@ -148,7 +148,7 @@ class DecreeConfig:
 def decree_max_seq(env=None):
     """하위법령 인코딩 최대 토큰 (LAWBOT_DECREE_MAX_SEQ, 없으면 DECREE_MAX_SEQ). 웹앱과 캐시(lawbot-reindex)가 같이 쓴다"""
     env = os.environ if env is None else env
-    default = 5120 if profile_name(env) == 'v5' else DECREE_MAX_SEQ
+    default = 12_032 if profile_name(env) == 'v5' else DECREE_MAX_SEQ
     return _positive_int('LAWBOT_DECREE_MAX_SEQ', default, env)
 
 

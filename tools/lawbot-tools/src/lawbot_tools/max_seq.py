@@ -1,4 +1,4 @@
-"""조문 CSV의 임베딩 최대 토큰 (계획: docs/plans/v5-tax-scope.md 3-2)
+"""조문 CSV의 임베딩 최대 토큰 (계획: docs/archives/v5-tax-scope.md 3-2)
 
     uv run lawbot-max-seq data/v5/law_articles_v5_decree.csv --tokenizer models/v4/emb_v4_fp16/tokenizer.json
 
