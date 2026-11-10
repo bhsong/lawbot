@@ -34,10 +34,12 @@ _MIDYEAR_LABELS = {
     'gross_pay': '총급여액',
     'pension_premium': '연금보험료',
     'health_premium': '건강보험료',
+    'long_term_care_premium': '장기요양보험료',
     'employment_premium': '고용보험료',
     'withheld_income_tax': '기납부 소득세',
     'withheld_local_tax': '기납부 개인지방소득세',
 }
+_SPECIAL_PREMIUMS = ('health_premium', 'long_term_care_premium', 'employment_premium')
 INPUT_FIELDS = {
     MEDICAL: (*_MEDICAL_LABELS, *_EXPENSE_FIELDS, *_REIMBURSEMENT_FIELDS),
     MIDYEAR: tuple(_MIDYEAR_LABELS),
@@ -339,6 +341,35 @@ def _settle(label: str, tax: int, withheld: int, article: str) -> tuple[Step, Re
     return _step(item, formula, value, article), {'label': item, 'value': value}
 
 
+def _midyear_tax_case(
+    common_base: Fraction | int, pay: int, special: int | None, standard: int, rules: dict, prefix: str = ''
+) -> tuple[int, list[Step]]:
+    basis = max(int(common_base - (special or 0)), 0)
+    formula = 'max(총급여액 − 근로소득공제 − 본인 기본공제 − 연금보험료'
+    if special is not None:
+        formula += ' − 건강·장기요양·고용보험료'
+    formula += ', 0원), 원 미만 절사'
+    steps = [_step(f'{prefix}과세표준', formula, basis, '소득세법 제14조')]
+
+    tax_rule, credit_rule = rules['income_tax'], rules['earned_income_credit']
+    tax, formula = _progressive(basis, tax_rule['brackets'])
+    steps.append(_step(f'{prefix}산출세액', formula, tax, tax_rule['article']))
+    earned, formula = _progressive(tax, credit_rule['brackets'])
+    cap, cap_formula = _credit_cap(pay, credit_rule['caps'])
+    earned = min(earned, cap)
+    steps.append(_step(f'{prefix}근로소득세액공제 한도', cap_formula, cap, credit_rule['article']))
+    steps.append(_step(f'{prefix}근로소득세액공제', f'min({formula}, {_won(cap)})', earned, credit_rule['article']))
+
+    formula = (
+        '특별소득공제 신청 시 적용 제외' if special is not None else '특별소득공제·특별세액공제·월세액 세액공제 미신청'
+    )
+    steps.append(_step(f'{prefix}표준세액공제', formula, standard, rules['standard_credit']['article']))
+    national = max(int(tax - earned - standard), 0)
+    formula = 'max(산출세액 − 근로소득세액공제 − 표준세액공제, 0원), 원 미만 절사'
+    steps.append(_step(f'{prefix}결정세액', formula, national, '소득세법 제61조'))
+    return national, steps
+
+
 def _midyear(result: Calculation, amounts: dict[str, int], rules: dict) -> Calculation:
     pay = amounts['gross_pay']
     deduction_rule = rules['income_deduction']
@@ -356,37 +387,41 @@ def _midyear(result: Calculation, amounts: dict[str, int], rules: dict) -> Calcu
         ),
         _step('본인 기본공제', f'본인 1명 × {_won(personal)}', personal, personal_rule['article']),
     ]
-    for key, article in (
-        ('pension_premium', '소득세법 제51조의3'),
-        ('health_premium', '소득세법 제52조'),
-        ('employment_premium', '소득세법 제52조'),
-    ):
-        if key in amounts:
-            steps.append(
-                _step(f'{_MIDYEAR_LABELS[key]} 공제', '해당 과세기간의 근로자 본인 부담 납입액', amounts[key], article)
-            )
     pension = amounts.get('pension_premium', 0)
-    special = amounts.get('health_premium', 0) + amounts.get('employment_premium', 0)
-    basis = max(int(pay - deduction - personal - pension - special), 0)
-    formula = 'max(총급여액 − 근로소득공제 − 본인 기본공제 − 연금·건강·고용보험료, 0원), 원 미만 절사'
-    steps.append(_step('과세표준', formula, basis, '소득세법 제14조'))
-
-    tax_rule, credit_rule = rules['income_tax'], rules['earned_income_credit']
-    tax, formula = _progressive(basis, tax_rule['brackets'])
-    steps.append(_step('산출세액', formula, tax, tax_rule['article']))
-    earned, formula = _progressive(tax, credit_rule['brackets'])
-    cap, cap_formula = _credit_cap(pay, credit_rule['caps'])
-    earned = min(earned, cap)
-    steps.append(_step('근로소득세액공제 한도', cap_formula, cap, credit_rule['article']))
-    steps.append(_step('근로소득세액공제', f'min({formula}, {_won(cap)})', earned, credit_rule['article']))
-
+    premium_formula = '해당 과세기간의 근로자 본인 부담 납입액'
+    if 'pension_premium' in amounts:
+        steps.append(_step('연금보험료 공제', premium_formula, pension, '소득세법 제51조의3'))
+    common_base = pay - deduction - personal - pension
     standard_rule = rules['standard_credit']
-    standard = 0 if special else standard_rule['value']
-    formula = '특별소득공제 신청 시 적용 제외' if special else '특별소득공제·특별세액공제·월세액 세액공제 미신청'
-    steps.append(_step('표준세액공제', formula, standard, standard_rule['article']))
-    national = max(int(tax - earned - standard), 0)
-    formula = 'max(산출세액 − 근로소득세액공제 − 표준세액공제, 0원), 원 미만 절사'
-    steps.append(_step('결정세액', formula, national, '소득세법 제61조'))
+    special_premiums = {key: amounts[key] for key in _SPECIAL_PREMIUMS if key in amounts}
+    if special_premiums:
+        steps.extend(
+            _step(f'A 공제 대상 {_MIDYEAR_LABELS[key]}', premium_formula, value, '소득세법 제52조')
+            for key, value in special_premiums.items()
+        )
+        tax_a, steps_a = _midyear_tax_case(
+            common_base, pay, sum(special_premiums.values()), 0, rules, 'A 보험료 공제 적용 · '
+        )
+        tax_b, steps_b = _midyear_tax_case(
+            common_base, pay, None, standard_rule['value'], rules, 'B 표준세액공제 적용 · '
+        )
+        steps.extend(steps_a)
+        steps.extend(steps_b)
+        national = min(tax_a, tax_b)
+        selected = 'A' if tax_a <= tax_b else 'B'
+        detail = '결정세액 동일' if tax_a == tax_b else '세액이 적은 쪽'
+        steps.append(
+            {
+                'label': '선택',
+                'formula': 'A·B 중 결정세액이 낮은 경우 적용, 동률이면 A',
+                'value': f'{selected} ({detail})',
+                'article': standard_rule['article'],
+            }
+        )
+    else:
+        national, tax_steps = _midyear_tax_case(common_base, pay, None, standard_rule['value'], rules)
+        steps.extend(tax_steps)
+
     local_rule = rules['local_tax']
     local_rate = Fraction(local_rule['rate'])
     local = int(national * local_rate)

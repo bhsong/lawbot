@@ -94,13 +94,13 @@ def test_medical_credit_hand_calculated(extra, expected):
         ('2000만원', {}, 146_750, 14_675),
         # §51-3 연금 100만. §55 과표 925만 × 6% = 555,000 − §59 305,250 − 표준 130,000.
         ('2000만원', {'pension_premium': '100만원'}, 119_750, 11_975),
-        # §51-3 100만, §52 70만. §55 과표 855만 × 6% = 513,000 − §59 282,150.
-        # §59-4(9)1: §52의 보험료 공제 신청 시 표준세액공제 없음.
+        # §51-3 100만, §52 70만. 보험료 공제 시 과표 855만 × 6% = 513,000 − §59 282,150.
+        # 표준세액공제 적용 시 과표 925만 × 6% = 555,000 − §59 305,250 − §59-4(9) 130,000.
         (
             '2000만원',
             {'pension_premium': '100만원', 'health_premium': '50만원', 'employment_premium': '20만원'},
-            230_850,
-            23_085,
+            119_750,
+            11_975,
         ),
         # §47 1020만. §55 과표 2130만: 84만 + 730만 × 15% = 193.5만 − §59 한도 74만 − 표준 13만.
         ('3300만원', {}, 1_065_000, 106_500),
@@ -130,6 +130,94 @@ def test_midyear_tax_hand_calculated(pay, extra, national, local):
     # 지방세법 §103-15(1): 지방세는 결정세액 × 10%.
     assert result['results'] == [{'label': '결정세액', 'value': national}, {'label': '개인지방소득세', 'value': local}]
     assert all(step['article'] in ARTICLE_HASHES[MIDYEAR] for step in result['steps'])
+
+
+@pytest.mark.parametrize(
+    'inputs,a,b,selected',
+    [
+        # CR025, §52 120만. §55 84만 + (과표 − 1400만) × 15%. §59 한도 684,000원.
+        # A 2,647,500 − 684,000. B 2,827,500 − 684,000 − §59-4(9) 130,000.
+        (
+            {'gross_pay': '4000만원', 'health_premium': '120만원'},
+            (26_050_000, 2_647_500, 1_963_500),
+            (27_250_000, 2_827_500, 2_013_500),
+            'A',
+        ),
+        # CR026, §52 19만. §55 84만 + (과표 − 1400만) × 15%. §59 산출세액의 55% 공제.
+        # A 886,500 − 487,575. B 915,000 − 503,250 − §59-4(9) 130,000.
+        (
+            {'gross_pay': '2500만원', 'employment_premium': '19만원'},
+            (14_310_000, 886_500, 398_925),
+            (14_500_000, 915_000, 281_750),
+            'B',
+        ),
+        # CR029, §51-3 250만 양쪽 공제, §52 250만은 A에 공제.
+        # §55 624만 + (과표 − 5000만) × 24%. §59 한도 50만, B만 §59-4(9) 13만 추가 공제.
+        (
+            {
+                'gross_pay': '8000만원',
+                'pension_premium': '250만원',
+                'health_premium': '200만원',
+                'employment_premium': '50만원',
+            },
+            (59_750_000, 8_580_000, 8_080_000),
+            (62_250_000, 9_180_000, 8_550_000),
+            'A',
+        ),
+        # §55 40% 구간. §52 325,000원 공제로 산출세액이 130,000원 감소.
+        # §59 한도 20만. §59-4(9) 13만원과 절세액이 같아 A를 선택한다.
+        (
+            {'gross_pay': '4억원', 'health_premium': '325,000원'},
+            (378_175_000, 125_330_000, 125_130_000),
+            (378_500_000, 125_460_000, 125_130_000),
+            'A',
+        ),
+    ],
+)
+def test_midyear_compares_both_claims(inputs, a, b, selected):
+    result = calculate(MIDYEAR, inputs, year=YEAR).as_dict()
+    steps = {step['label']: step for step in result['steps']}
+    for option, expected in (('A 보험료 공제 적용', a), ('B 표준세액공제 적용', b)):
+        assert tuple(steps[f'{option} · {name}']['value'] for name in ('과세표준', '산출세액', '결정세액')) == expected
+    detail = '세액이 적은 쪽' if a[2] != b[2] else '결정세액 동일'
+    assert steps['선택']['value'] == f'{selected} ({detail})'
+    national = min(a[2], b[2])
+    assert result['results'] == [
+        {'label': '결정세액', 'value': national},
+        {'label': '개인지방소득세', 'value': national // 10},
+    ]
+
+
+def test_midyear_separate_long_term_care_premium_and_selected_settlement():
+    result = calculate(
+        MIDYEAR,
+        {
+            'gross_pay': '2000만원',
+            'pension_premium': '100만원',
+            'health_premium': '50만원',
+            'long_term_care_premium': '5만원',
+            'employment_premium': '20만원',
+            'withheld_income_tax': '15만원',
+            'withheld_local_tax': '1만원',
+        },
+        year=YEAR,
+    ).as_dict()
+    rows = {row['label']: row for row in result['inputs']}
+    assert rows['장기요양보험료'] == {'label': '장기요양보험료', 'value': 50_000, 'source': '질문: 5만원'}
+    steps = {step['label']: step for step in result['steps']}
+    # §51-3 연금 100만 양쪽 공제. §52 건강 50만 + 장기요양 5만 + 고용 20만.
+    # A: 과표 850만 × 6% = 510,000원 − §59 280,500원.
+    # B: 과표 925만 × 6% = 555,000원 − §59 305,250원 − §59-4(9) 130,000원.
+    assert steps['A 보험료 공제 적용 · 과세표준']['value'] == 8_500_000
+    assert steps['A 보험료 공제 적용 · 결정세액']['value'] == 229_500
+    assert steps['B 표준세액공제 적용 · 과세표준']['value'] == 9_250_000
+    # §137 15만 − 119,750원. 지방세법 §103-15의 결정세액 × 10%에서 기납부세액을 뺀다.
+    assert result['results'] == [
+        {'label': '결정세액', 'value': 119_750},
+        {'label': '개인지방소득세', 'value': 11_975},
+        {'label': '소득세 환급액', 'value': 30_250},
+        {'label': '개인지방소득세 추가납부액', 'value': 1_975},
+    ]
 
 
 def test_settlement_refund_and_additional_payment_have_separate_tax_bases():

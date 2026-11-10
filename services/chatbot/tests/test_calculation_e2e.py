@@ -20,6 +20,8 @@ pytestmark = pytest.mark.e2e_stub
 MEDICAL = '2026년 귀속 총급여 5천만 원, 의료비 300만 원이면 의료비 세액공제액을 계산해 주세요.'
 MISSING = '2026년 귀속 의료비 300만 원이면 의료비 세액공제액을 계산해 주세요.'
 UNSUPPORTED = '월급 300만 원에 2년 일했습니다. 퇴직금을 계산해 주세요.'
+MIDYEAR = '2026년 중도퇴사 총급여 2000만원, 건강보험료 50만원, 장기요양보험료 5만원입니다. 소득세는 얼마인가요?'
+LOOKUP = '2026년 근로소득자의 표준세액공제 법정 금액은 얼마인가요?'
 
 
 @pytest.fixture(scope='module')
@@ -126,9 +128,28 @@ def test_calculation_and_guidance_cards(calculation_stack, ui, width):
         if question == MISSING:
             expect(guidance.get_by_text('소득세법 제59조의4', exact=True)).to_be_visible()
 
-    rows = e2e.request_log(calculation_stack.request_log)[-3:]
-    assert len(rows) == 3
+    events = ask_with_events(ui, calculation_stack, MIDYEAR)
+    assert [event for event in events if event in relevant] == relevant, events
+    midyear = ui.get_by_role('region', name='계산 결과').last
+    expect(midyear.get_by_text('146,750원', exact=True).first).to_be_visible()
+    midyear.get_by_text('입력과 계산 단계', exact=True).click()
+    steps = midyear.get_by_role('table', name='단계별 계산')
+    expect(steps.get_by_role('row', name=re.compile('A 보험료 공제 적용 · 결정세액'))).to_contain_text('261,900원')
+    expect(steps.get_by_role('row', name=re.compile('B 표준세액공제 적용 · 결정세액'))).to_contain_text('146,750원')
+    expect(steps.get_by_role('row', name=re.compile('^선택 '))).to_contain_text('B (세액이 적은 쪽)')
+    expect(midyear.get_by_role('alert')).to_have_count(0)
+
+    events = ask_with_events(ui, calculation_stack, LOOKUP)
+    assert [event for event in events if event in relevant] == ['answer', 'done'], events
+    expect(e2e.answer(ui)).to_contain_text('가짜 모델 답변입니다.')
+    expect(ui.get_by_role('region', name='계산 안내')).to_have_count(2)
+    expect(ui.get_by_role('region', name='계산 결과')).to_have_count(2)
+
+    rows = e2e.request_log(calculation_stack.request_log)[-5:]
+    assert len(rows) == 5
     for row in rows:
         assert row['cache_reason'] == 'calculation_question' and row['response_source'] == 'rag'
         assert row['cache_eligible'] is False and row['exact_lookup_ms'] is None
         assert row['call_counts']['router'] == row['call_counts']['llm'] == 1
+    assert rows[-2]['calculation_check'] == 'match'
+    assert rows[-1]['router_reason'] == 'lookup_question'

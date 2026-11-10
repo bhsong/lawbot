@@ -8,6 +8,7 @@ from collections import Counter
 from datetime import datetime, time
 from hashlib import sha256
 from pathlib import Path
+from statistics import median, quantiles
 from zoneinfo import ZoneInfo
 
 import httpx
@@ -17,13 +18,14 @@ from lawbot.api_client import ModelServerClient
 from lawbot.calc_corpus import calculator_compatibility
 from lawbot.calc_gate import is_calculation_question
 from lawbot.calc_router import ROUTER_SYSTEM, route_calculation
-from lawbot.llm import ROUTER_MAX_TOKENS, ROUTER_TIMEOUT, TEMPERATURE
+from lawbot.llm import ROUTER_MAX_TOKENS, TEMPERATURE
 from lawbot.paths import ROOT
 from lawbot_common.api import HEALTH_PATH
 
 VAL = ROOT / 'services/chatbot/tests/fixtures/calc_router_val.json'
-SAMPLES = {'CR001', 'CR005', 'CR009', 'CR021', 'CR025', 'CR028', 'CR081', 'CR091'}
+SAMPLES = {'CR001', 'CR005', 'CR021', 'CR025', 'CR028', 'CR079', 'CR081', 'CR091'}
 SEOUL = ZoneInfo('Asia/Seoul')
+ANSWER_TIMINGS = ('ttft', 'first_text')
 
 
 def _time_guard():
@@ -57,7 +59,7 @@ def _configuration(cfg, client):
         'router_sha256': sha256(ROUTER_SYSTEM.encode()).hexdigest(),
         'temperature': TEMPERATURE,
         'router_max_tokens': ROUTER_MAX_TOKENS,
-        'router_timeout_s': ROUTER_TIMEOUT,
+        'router_timeout_s': cfg.read_timeout,
         'answer_max_tokens': 1024,
         'embedding_max_seq': cfg.profile.max_seq,
         'models': {key: advertised[key].get('revision') for key in (pro.model, cfg.profile.emb_model)},
@@ -69,6 +71,69 @@ def _configuration(cfg, client):
         else None,
         'decree': vars(cfg.decree) if cfg.decree else None,
     }
+
+
+def _latency_summary(values):
+    """Report inclusive percentiles in milliseconds, excluding unavailable values."""
+    measured = [value for value in values if value is not None]
+    if not measured:
+        return {'n': 0, 'p50': None, 'p95': None}
+    p95 = quantiles(measured, n=100, method='inclusive')[94] if len(measured) > 1 else measured[0]
+    return {'n': len(measured), 'p50': round(median(measured), 3), 'p95': round(p95, 3)}
+
+
+def _answer(app, question, *, routed):
+    _time_guard()
+    try:
+        for stage, hits, raw, timing in service.ask(app, question, 'pro', calculation_candidate=routed):
+            if stage == 'done':
+                return {
+                    'answer': raw,
+                    'calculation': timing.get('_calculation'),
+                    'checks': timing.get('calculation_metrics'),
+                    'articles': [f'{hit["law"]} {hit["article_id"]}' for hit in hits],
+                } | {
+                    f'{key}_ms': round(value * 1000, 3) if (value := timing.get(key)) is not None else None
+                    for key in ANSWER_TIMINGS
+                }
+    except service.AskError as exc:
+        return {'error_type': exc.kind}
+    raise RuntimeError('Answer did not emit a final event.')
+
+
+def _answer_pair(app, case, *, routed_first):
+    order = (True, False) if routed_first else (False, True)
+    responses = {routed: _answer(app, case['question'], routed=routed) for routed in order}
+    routed, baseline = responses[True], responses[False]
+    deltas = {}
+    for key in ANSWER_TIMINGS:
+        current, original = routed.get(f'{key}_ms'), baseline.get(f'{key}_ms')
+        deltas[f'{key}_delta_ms'] = round(current - original, 3) if None not in (current, original) else None
+    return (
+        {
+            'id': case['id'],
+            'question': case['question'],
+            'baseline': baseline,
+            'routed_first': routed_first,
+        }
+        | routed
+        | deltas
+    )
+
+
+def _latency_report(routes, answers):
+    metrics = {
+        'router_ms': _latency_summary(row['router_ms'] for row in routes),
+        'gated_router_ms': _latency_summary(row['router_ms'] for row in routes if row['gate']),
+    }
+    for key in ANSWER_TIMINGS:
+        field = f'{key}_ms'
+        metrics[f'answer_{field}'] = {
+            'routed': _latency_summary(row.get(field) for row in answers),
+            'baseline': _latency_summary(row['baseline'].get(field) for row in answers),
+            'delta': _latency_summary(row[f'{key}_delta_ms'] for row in answers),
+        }
+    return metrics
 
 
 def _live(cases, output):
@@ -92,6 +157,8 @@ def _live(cases, output):
         routed = route_calculation(case['question'], pro.route_calculation, compatibility, reference_year=2026)
         calculator = routed.payload['calculator'] or 'none'
         status = routed.payload['status']
+        results = {row['label']: row['value'] for row in routed.payload.get('results', [])}
+        expected_results = case.get('expected_results')
         routes.append(
             {
                 'id': case['id'],
@@ -102,26 +169,27 @@ def _live(cases, output):
                 'expected_status': case['status'],
                 'reason': routed.reason,
                 'router_ms': routed.elapsed_ms,
+                'results': results,
+                'expected_results': expected_results,
+                'results_match': all(results.get(key) == value for key, value in expected_results.items())
+                if expected_results is not None
+                else None,
             }
         )
     for case in cases:
         if case['id'] not in SAMPLES:
             continue
-        _time_guard()
-        for stage, hits, raw, timing in service.ask(app, case['question'], 'pro', calculation_candidate=True):
-            if stage == 'done':
-                answers.append(
-                    {
-                        'id': case['id'],
-                        'question': case['question'],
-                        'answer': raw,
-                        'calculation': timing.get('_calculation'),
-                        'checks': timing.get('calculation_metrics'),
-                        'articles': [f'{hit["law"]} {hit["article_id"]}' for hit in hits],
-                    }
-                )
+        # Alternate order to balance warm-up and time-of-run effects across the pairs.
+        answers.append(_answer_pair(app, case, routed_first=len(answers) % 2 == 1))
     after = _configuration(cfg, client)
-    report = {'before': before, 'after': after, 'valid': before == after, 'routes': routes, 'answers': answers}
+    report = {
+        'before': before,
+        'after': after,
+        'valid': before == after,
+        'routes': routes,
+        'answers': answers,
+        'latency': _latency_report(routes, answers),
+    }
     with output.open('x', encoding='utf-8') as stream:
         json.dump(report, stream, ensure_ascii=False, indent=2)
         stream.write('\n')

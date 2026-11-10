@@ -7,7 +7,7 @@ import types
 import httpx
 import openai
 
-from lawbot.api_client import ModelServerError, ModelServerTimeout, error_from_body, request_headers
+from lawbot.api_client import ModelServerError, ModelServerTimeout, RouterTimeout, error_from_body, request_headers
 from lawbot.hits import Hit
 
 
@@ -37,7 +37,6 @@ GEN_FIELDS = (
 )
 TEMPERATURE = 0  # 탐욕적 생성 (평가·웹앱 공통, 모델 서버 기본값과 같음)
 ROUTER_MAX_TOKENS = 128
-ROUTER_TIMEOUT = 25
 
 
 def response(text='', **kw):
@@ -99,7 +98,7 @@ class LLM:
         ]
 
     def route_calculation(self, question: str) -> str | None:
-        """Classify once via the same chat endpoint as the Pro answer model."""
+        """Classify once with the Pro client's endpoint and configured read timeout."""
         from lawbot.calc_router import ROUTER_SYSTEM
 
         try:
@@ -109,10 +108,11 @@ class LLM:
                 max_tokens=ROUTER_MAX_TOKENS,
                 temperature=TEMPERATURE,
                 stream=False,
-                timeout=ROUTER_TIMEOUT,
                 extra_body={'chat_template_kwargs': {'enable_thinking': False}},
                 **({'extra_headers': h} if (h := request_headers()) else {}),
             )
+        except openai.APITimeoutError as exc:
+            raise RouterTimeout(exc.__cause__) from exc
         except openai.OpenAIError as exc:
             converted = convert_error(exc)
             if type(converted) is RuntimeError:

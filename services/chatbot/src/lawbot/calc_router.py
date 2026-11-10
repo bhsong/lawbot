@@ -10,13 +10,16 @@ from typing import Any, Literal
 from zoneinfo import ZoneInfo
 
 from lawbot.answer_format import sections
-from lawbot.api_client import ModelLoadError, ModelServerError, ModelServerTimeout
+from lawbot.api_client import ModelLoadError, ModelServerError, ModelServerTimeout, RouterTimeout
 from lawbot.calc_numbers import amount_spans, complete_amount_span, parse_year
 from lawbot.calculators import ARTICLE_HASHES, INPUT_FIELDS, MEDICAL, MEDICAL_GROUPING, calculate
+from lawbot_common.api import SERVER_BUSY
 
-ROUTER_SYSTEM = """계산 질문 분류기. JSON 한 개만 출력한다: {"calculator":"이름 또는 none","inputs":{}}.
+ROUTER_SYSTEM = """계산 질문 분류기. JSON 한 개만 출력한다.
+법령이 정한 기한·일수·비율·금액·요건·절차를 조회하는 질문은 {"calculator":"none","kind":"lookup"}.
+질문의 금액·날짜 등으로 결과를 산출해야 하지만 미지원인 경우(일반 연말정산, 퇴직소득세 등)는 {"calculator":"none","kind":"calculation"}.
+지원 계산의 형식은 {"calculator":"계산기 이름","inputs":{}}.
 지원: medical_expense_credit(의료비 세액공제), midyear_income_tax(중도퇴사 근로소득세 기본 공제).
-다른 계산, 일반 법률 질문, 일반 연말정산 또는 퇴직소득세는 none이고 inputs는 {}.
 지원 계산이면 필수 값이 없어도 계산기 이름을 선택한다. inputs 값은 질문에 있는 정확한 연속 문자열이다.
 금액은 전체 숫자와 단위만 복사한다. 숫자를 바꾸거나 추론하지 않는다. 없는 값은 생략한다.
 두 계산기 공통: gross_pay(해당 귀속연도 근무기간의 총급여, 월급·계약 연봉 제외), year(귀속연도).
@@ -25,7 +28,8 @@ insurance_reimbursement(총 실손보험금), medical_category(의료비 대상 
 구분별 금액이 있으면 general_expenses(일반), unlimited_expenses(본인·65세 이상·장애인·6세 이하 등),
 premature_expenses(미숙아·선천성이상아), infertility_expenses(난임). 같은 구분의 실손보험금은
 general_reimbursement, unlimited_reimbursement, premature_reimbursement, infertility_reimbursement.
-중도정산: pension_premium(연금보험료), health_premium(건강보험료), employment_premium(고용보험료),
+중도정산: pension_premium(연금보험료), health_premium(건강보험료), long_term_care_premium(별도 장기요양보험료),
+employment_premium(고용보험료). 건강·장기요양보험료 합계만 있으면 health_premium에 한 번만 넣는다.
 withheld_income_tax(기납부 소득세), withheld_local_tax(기납부 지방소득세).
 수치가 범위이거나 소득·보험금·세액 구분이 불명확하면 ambiguity에 불명확한 원문 구간을 복사한다."""
 
@@ -65,12 +69,14 @@ _OPTIONAL_EVIDENCE = {
     ),
     'midyear_income_tax': (
         (r'국민연금|연금보험료', ('pension_premium',), '연금보험료'),
-        (r'건강보험료|장기요양보험료', ('health_premium',), '건강·장기요양보험료'),
+        (r'건강\s*보험료', ('health_premium',), '건강보험료'),
+        (r'(?<![·/])장기\s*요양\s*보험료', ('long_term_care_premium',), '장기요양보험료'),
         (r'고용보험료', ('employment_premium',), '고용보험료'),
         (r'기납부\s*(?:근로)?소득세|소득세\s*기납부', ('withheld_income_tax',), '기납부 소득세'),
         (r'기납부\s*지방소득세|지방소득세\s*기납부', ('withheld_local_tax',), '기납부 지방소득세'),
     ),
 }
+_STATED_WON = r'(?:[0-9０-９][0-9０-９,.]*\s*[조억만천백십원]|[영공일이삼사오육칠팔구십백천만억조]+\s*원)'
 _SPECIAL_MEDICAL = {
     'infertility_expenses': re.compile(r'난임|보조생식술|시험관|인공수정'),
     'premature_expenses': re.compile(r'미숙아|선천성\s*이상아'),
@@ -102,9 +108,7 @@ def _unaccounted_optional(question: str, calculator: str, inputs: dict[str, str]
     for label_pattern, fields, label in _OPTIONAL_EVIDENCE[calculator]:
         if any(field in inputs for field in fields):
             continue
-        amount_after_label = (
-            rf'(?:{label_pattern})\s*(?:은|는|이|가|을|를|로|:)?\s*[0-9０-９][0-9０-９,.]*\s*[조억만천백십원]'
-        )
+        amount_after_label = rf'(?:{label_pattern})\s*(?:은|는|이|가|을|를|로|:)?\s*{_STATED_WON}'
         if re.search(amount_after_label, question):
             return label
     return None
@@ -167,26 +171,37 @@ def route_calculation(
     if classify is None:
         return none('pro_unavailable')
     started = time.perf_counter()
+    error = None
+    raw = None
     try:
         raw = classify(question)
+    except RouterTimeout as exc:
+        error = exc.reason
     except ModelServerTimeout:
-        elapsed_ms = round((time.perf_counter() - started) * 1000)
-        return none('timeout')
-    except ModelServerError, ModelLoadError, ConnectionError:
-        elapsed_ms = round((time.perf_counter() - started) * 1000)
-        return none('model_error')
+        error = 'timeout'
+    except ModelServerError as exc:
+        error = 'queue_full' if exc.status == 503 and exc.kind == SERVER_BUSY else 'model_error'
+    except ModelLoadError, ConnectionError:
+        error = 'model_error'
     elapsed_ms = round((time.perf_counter() - started) * 1000)
+    if error is not None:
+        return none(error)
     if not isinstance(raw, str) or len(raw) > 4096:
         return none('invalid_json')
     try:
         obj = json.loads(raw, object_pairs_hook=_unique_object)
     except ValueError, RecursionError:
         return none('invalid_json')
-    if not isinstance(obj, dict) or obj.keys() != {'calculator', 'inputs'}:
+    if not isinstance(obj, dict):
+        return none('invalid_schema')
+    if obj.get('calculator') == 'none' and obj.keys() == {'calculator', 'kind'}:
+        if obj['kind'] == 'lookup':
+            return Routing({'calculator': None, 'status': 'lookup'}, 'lookup_question', elapsed_ms)
+        if obj['kind'] == 'calculation':
+            return none('unsupported_question')
+    if obj.keys() != {'calculator', 'inputs'}:
         return none('invalid_schema')
     name, inputs = obj['calculator'], obj['inputs']
-    if name == 'none' and inputs == {}:
-        return none('unsupported_question')
     if not isinstance(name, str) or name not in INPUT_FIELDS or not isinstance(inputs, dict):
         return none('invalid_schema')
     calculator = name

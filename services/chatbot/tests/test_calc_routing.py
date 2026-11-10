@@ -2,12 +2,14 @@ import json
 from decimal import Decimal
 from pathlib import Path
 
+import httpx
 import pytest
 
-from lawbot.api_client import ModelServerTimeout
+from lawbot.api_client import ModelServerError, ModelServerTimeout, RouterTimeout
 from lawbot.calc_gate import is_calculation_question
 from lawbot.calc_numbers import amount_spans, parse_amount, parse_quantity, parse_year
 from lawbot.calc_router import check_conclusion, route_calculation
+from lawbot_common.api import SERVER_BUSY
 
 MEDICAL = 'medical_expense_credit'
 QUESTION = '2026년 의료비 300만 원, 실손보험금 100만 원, 총급여 5천만 원입니다. 의료비 세액공제액은 얼마인가요?'
@@ -68,9 +70,32 @@ def test_gate_on_synthetic_val():
     data = Path(__file__).with_name('fixtures') / 'calc_router_val.json'
     cases = json.loads(data.read_text(encoding='utf-8'))
     assert len(cases) == 100 and len({case['question'] for case in cases}) == len(cases)
-    assert {case['kind'] for case in cases} == {'medical', 'midyear', 'unsupported', 'general', 'missing', 'ambiguous'}
+    assert {case['kind'] for case in cases} == {
+        'medical',
+        'midyear',
+        'unsupported',
+        'general',
+        'lookup',
+        'missing',
+        'ambiguous',
+    }
     misses = [case['id'] for case in cases if is_calculation_question(case['question']) != (case['kind'] != 'general')]
     assert misses == []
+
+
+def test_gate_positive_lookup_cases_route_to_rag():
+    cases = json.loads((Path(__file__).with_name('fixtures') / 'calc_router_val.json').read_text(encoding='utf-8'))
+    lookups = [case for case in cases if case['kind'] == 'lookup']
+    assert len(lookups) == 6
+
+    def classify_lookup(_):
+        return '{"calculator":"none","kind":"lookup"}'
+
+    for case in lookups:
+        assert is_calculation_question(case['question'])
+        routed = route_calculation(case['question'], classify_lookup, {})
+        assert routed.payload == {'calculator': None, 'status': 'lookup'}
+        assert routed.reason == 'lookup_question'
 
 
 def classify(inputs, calculator=MEDICAL):
@@ -91,7 +116,9 @@ def test_routing_uses_original_spans_and_explicit_year():
     [
         ('{"calculator":', 'invalid_json'),
         ('{"calculator":"none","calculator":"none","inputs":{}}', 'invalid_json'),
-        ('{"calculator":"none","inputs":{}}', 'unsupported_question'),
+        ('{"calculator":"none","kind":"calculation"}', 'unsupported_question'),
+        ('{"calculator":"none","inputs":{}}', 'invalid_schema'),
+        ('{"calculator":"none","kind":"lookup","inputs":{"gross_pay":"5천만 원"}}', 'invalid_schema'),
         ('{"calculator":"other","inputs":{}}', 'invalid_schema'),
         ('{"calculator":"medical_expense_credit","inputs":{"gross_pay":50000000}}', 'invalid_schema'),
         (classify(INPUTS | {'gross_pay': '50000000'})(None), 'span_not_in_question'),
@@ -112,15 +139,23 @@ def test_router_fails_closed_once(response, reason):
     assert calls == [QUESTION]
 
 
-def test_router_times_out_without_retry():
+@pytest.mark.parametrize(
+    ('error', 'reason'),
+    [
+        (ModelServerTimeout('test'), 'timeout'),
+        (RouterTimeout(httpx.ReadTimeout('test')), 'read_timeout'),
+        (ModelServerError('test', 503, SERVER_BUSY), 'queue_full'),
+    ],
+)
+def test_router_timeout_and_queue_rejection_without_retry(error, reason):
     calls = []
 
     def timeout(question):
         calls.append(question)
-        raise ModelServerTimeout('test')
+        raise error
 
     result = route_calculation(QUESTION, timeout, {MEDICAL: ()})
-    assert result.reason == 'timeout' and result.payload['status'] == 'none'
+    assert result.reason == reason and result.payload['status'] == 'none'
     assert calls == [QUESTION]
 
 
@@ -166,6 +201,37 @@ def test_amount_cannot_be_a_year_or_month_excerpt():
     question = '2026\n년 중 12개월 의료비 300만원의 세액공제액은 얼마인가요?'
     result = route_calculation(question, classify({'gross_pay': '12', 'medical_expenses': '300만원'}), {MEDICAL: ()})
     assert result.reason == 'incomplete_amount_span'
+
+
+@pytest.mark.parametrize(('amount', 'excerpt'), [('삼백만 원', '백만 원'), ('삼백오십만 원', '삼백')])
+def test_hangul_amount_must_not_be_truncated(amount, excerpt):
+    question = f'2026년 총급여 오천만 원, 의료비 {amount}입니다. 의료비 세액공제액은 얼마인가요?'
+    inputs = {'gross_pay': '오천만 원', 'medical_expenses': excerpt}
+    incomplete = route_calculation(question, classify(inputs), {MEDICAL: ()})
+    assert incomplete.payload['status'] == 'none'
+    assert incomplete.reason == 'incomplete_amount_span'
+    complete = route_calculation(question, classify(inputs | {'medical_expenses': amount}), {MEDICAL: ()})
+    assert complete.payload['status'] == 'calculated'
+
+
+@pytest.mark.parametrize('care', ['5만원', '오만 원'])
+def test_separate_long_term_care_premium_must_be_extracted(care):
+    calculator = 'midyear_income_tax'
+    question = (
+        f'2026년 중도퇴사까지 총급여 2000만원, 건강보험료 50만원, 장기요양보험료 {care}입니다. 소득세는 얼마인가요?'
+    )
+    inputs = {'gross_pay': '2000만원', 'health_premium': '50만원'}
+    incomplete = route_calculation(question, classify(inputs, calculator), {calculator: ()})
+    assert incomplete.payload['status'] == 'guidance'
+    assert '장기요양보험료' in incomplete.payload['message']
+    complete = route_calculation(
+        question, classify(inputs | {'long_term_care_premium': care}, calculator), {calculator: ()}
+    )
+    assert complete.payload['status'] == 'calculated'
+    assert any(
+        row['label'] == '장기요양보험료' and row['value'] == 50_000 and row['source'] == f'질문: {care}'
+        for row in complete.payload['inputs']
+    )
 
 
 @pytest.mark.parametrize(

@@ -528,6 +528,49 @@ def test_web_noncalculation_prompt_and_calls_unchanged(env, real_server, capsys)
     assert posts == ['/v1/embeddings', '/v1/rerank', '/v1/chat/completions']
 
 
+def test_gated_lookup_uses_identical_rag_messages_and_no_calculation_event(env, real_server, tmp_path, capsys):
+    from lawbot import web
+    from lawbot.calc_gate import is_calculation_question
+
+    question = '2026년 근로소득자의 표준세액공제 법정 금액은 얼마인가요?'
+    assert is_calculation_question(question)
+    original_stream = Chat.stream
+
+    def stream(self, messages, **kwargs):
+        if kwargs['max_tokens'] == 128:
+            self.calls.append((messages, kwargs))
+            yield types.SimpleNamespace(text='{"calculator":"none","kind":"lookup"}', finish_reason='stop')
+        else:
+            yield from original_stream(self, messages, **kwargs)
+
+    env.setattr(Chat, 'stream', stream)
+    path = tmp_path / 'requests.jsonl'
+    env.setenv('LAWBOT_REQUEST_LOG', str(path))
+    env.setenv('LAWBOT_RERANKER_ENABLED', '1')
+    app = service.load_app()
+    list(service.ask(app, question, 'pro', fmt='concise'))
+    chat = real_server.chat[app.models.specs['pro'].model]
+    [(baseline, baseline_kwargs)] = chat.calls
+
+    def unexpected_lookup(*args):
+        pytest.fail('cache gate must also apply to router lookups')
+
+    app.exact_cache = types.SimpleNamespace(lookup=unexpected_lookup)
+    capsys.readouterr()
+    events = list(web.chat_events(app, question, 'pro', 'concise'))
+    assert 'done' in dict(events)
+    assert all(event not in {'calculation', 'calculation_check'} for event, _ in events)
+    _, (router, router_kwargs), (answer, answer_kwargs) = chat.calls
+    assert router[1]['content'] == question and router_kwargs['max_tokens'] == 128
+    assert [message['content'].encode() for message in answer] == [message['content'].encode() for message in baseline]
+    assert answer_kwargs == baseline_kwargs
+    posts = [line.split()[2] for line in capsys.readouterr().out.splitlines() if ' POST ' in line]
+    assert posts == ['/v1/chat/completions', '/v1/embeddings', '/v1/rerank', '/v1/chat/completions']
+    row = json.loads(path.read_text(encoding='utf-8').splitlines()[-1])
+    assert row['cache_reason'] == 'calculation_question' and row['exact_lookup_ms'] is None
+    assert row['router_reason'] == 'lookup_question' and row['calculation_status'] == 'none'
+
+
 def test_request_id_reaches_model_server_log(env, real_server, capsys):
     # 질문 하나의 임베딩·리랭크·생성 요청이 같은 X-Request-Id를 보내고, 모델 서버 접근 로그 줄에 남는다 (질문 내용은 없음)
 

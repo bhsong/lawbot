@@ -36,12 +36,22 @@ def answer_chunks(prompt):
 def calculation_chunks(prompt, system, kw):
     if system.startswith('계산 질문 분류기'):
         assert kw['max_tokens'] == 128 and kw['temperature'] == 0 and not kw['enable_thinking']
-        calculator = 'medical_expense_credit' if '의료비 300만 원이면 의료비 세액공제액' in prompt else 'none'
-        spans = {'gross_pay': '5천만 원', 'medical_expenses': '300만 원', 'year': '2026년'}
-        inputs = {field: span for field, span in spans.items() if calculator != 'none' and span in prompt}
+        if '표준세액공제 법정 금액' in prompt:
+            return ['{"calculator":"none","kind":"lookup"}']
+        if '장기요양보험료 5만원' in prompt:
+            calculator = 'midyear_income_tax'
+            spans = {'gross_pay': '2000만원', 'health_premium': '50만원', 'long_term_care_premium': '5만원'}
+        elif '의료비 300만 원이면 의료비 세액공제액' in prompt:
+            calculator = 'medical_expense_credit'
+            spans = {'gross_pay': '5천만 원', 'medical_expenses': '300만 원', 'year': '2026년'}
+        else:
+            return ['{"calculator":"none","kind":"calculation"}']
+        inputs = {field: span for field, span in spans.items() if span in prompt}
         return [json.dumps({'calculator': calculator, 'inputs': inputs}, ensure_ascii=False)]
     cite = '\n【근거 조문】\n소득세법 제59조의4'
     if '계산 결과의 숫자를 그대로 쓰고 다시 계산하지 말' in prompt:
+        if '장기요양보험료 5만원' in prompt:
+            return ['【결론】', '결정세액은 146,750원이고 개인지방소득세는 14,675원입니다.', cite]
         return ['【결론】', '의료비 세액공제액은 1원입니다.', cite]
     if '직접 계산하지 말고' in prompt:
         return ['【결론】', '계산에 필요한 자료와 근거 조문을 확인해 주세요.', cite]
