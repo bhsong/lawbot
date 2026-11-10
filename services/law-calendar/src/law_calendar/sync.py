@@ -10,7 +10,8 @@ from datetime import datetime
 from pathlib import Path
 
 from law_calendar.assembly_ingest import ASSEMBLY_TYPES, import_assembly
-from law_calendar.db import write_database
+from law_calendar.db import read_database, write_database
+from law_calendar.import_failures import ImportInputError, error_message, record_import_failure
 from law_calendar.ingest import ARTICLE, Diff, import_files, inside
 from law_calendar.notice_content import synchronize_notice_content
 from law_calendar.validation import timestamp
@@ -42,64 +43,93 @@ def registrations(home: Path) -> tuple[sqlite3.Row | None, dict, dict[str, list[
     return run, collectors, grouped
 
 
+def _recorded_ids(database: Path, source: str) -> set[str]:
+    """Read source IDs already committed by the importer, including old Assembly revisions."""
+    query = (
+        'SELECT upstream_id FROM event_sources WHERE source=?'
+        if source == LAW_SOURCE
+        else 'SELECT id FROM assembly_snapshots WHERE source=?'
+    )
+    with read_database(database) as conn:
+        return {row[0] for row in conn.execute(query, (source,))}
+
+
 def source_snapshot(
+    database: Path,
     home: Path,
     source: str,
     run: sqlite3.Row | None,
     collectors: dict,
     rows: list[sqlite3.Row],
     scope: tuple[LawScope, ...],
-) -> tuple[str, list[tuple[Path, dict]], int]:
-    if not run or not run['finished_at'] or run['status'] not in ('ok', 'partial'):
-        raise ValueError(f'No completed successful {source} collection is available')
-    if collectors.get(source, {}).get('status') != 'ok':
-        raise ValueError(f'The latest {source} collector did not succeed')
-    collected_at = timestamp(run['finished_at'])
-    folders = {law.folder for law in scope}
-    law_titles = {normalize_law_text(law.name + kind) for law in scope for kind in ('', ' 시행령', ' 시행규칙')}
-    keywords = tuple(map(normalize_law_text, scope_keywords(scope)))
-    events = []
-    skipped = 0
-    for row in rows:
-        if not row['json_path']:
-            raise ValueError('Registered event has no saved JSON path')
-        path = inside(home, home / row['json_path'])
-        event = json.loads(path.read_text(encoding='utf-8'))
-        if (
-            not isinstance(event, dict)
-            or event.get('event_id') != row['event_id']
-            or event.get('source') != row['source']
-            or event.get('change_type') != row['change_type']
-        ):
-            raise ValueError('Saved event does not match its monitor registration')
-        if event.get('replay'):
-            raise ValueError('Replay output cannot be used as a scheduled collection result')
-        target = event.get('target')
-        if not isinstance(target, dict) or not isinstance(title := target.get('law_name'), str) or not title.strip():
-            raise ValueError('Registered event has no law name')
-        normalized_title = normalize_law_text(title)
-        if source == LAW_SOURCE:
-            item_id = target.get('item_id', '')
-            parts = item_id.split('/') if isinstance(item_id, str) else []
-            in_scope = parts[1] in folders if len(parts) == 3 and parts[0] == 'kr' else normalized_title in law_titles
-            if not in_scope:
-                skipped += 1
+) -> tuple[str, list[tuple[Path, dict]], int, int]:
+    event_id = None
+    try:
+        if not run or not run['finished_at'] or run['status'] not in ('ok', 'partial'):
+            raise ImportInputError(f'No completed successful {source} collection is available')
+        if collectors.get(source, {}).get('status') != 'ok':
+            raise ImportInputError(f'The latest {source} collector did not succeed')
+        collected_at = timestamp(run['finished_at'])
+        recorded = _recorded_ids(database, source)
+        folders = {law.folder for law in scope}
+        law_titles = {normalize_law_text(law.name + kind) for law in scope for kind in ('', ' 시행령', ' 시행규칙')}
+        keywords = tuple(map(normalize_law_text, scope_keywords(scope)))
+        events = []
+        skipped = unchanged = 0
+        for row in rows:
+            event_id = row['event_id']
+            if event_id in recorded:
+                unchanged += 1
                 continue
-            diff = Diff.model_validate(event.get('diff'))
-            if not any(ARTICLE.fullmatch('##### ' + chunk.article) for chunk in diff.chunks):
-                skipped += 1
+            path, event = _read_registration(home, row)
+            title = normalize_law_text(event['target']['law_name'])
+            if source == LAW_SOURCE:
+                item_id = event['target'].get('item_id', '')
+                parts = item_id.split('/') if isinstance(item_id, str) else []
+                in_scope = parts[1] in folders if len(parts) == 3 and parts[0] == 'kr' else title in law_titles
+                if not in_scope:
+                    skipped += 1
+                    continue
+                diff = Diff.model_validate(event.get('diff'))
+                if not any(ARTICLE.fullmatch('##### ' + chunk.article) for chunk in diff.chunks):
+                    skipped += 1
+                    continue
+            elif not any(word in title for word in keywords):
                 continue
-        elif not any(word in normalized_title for word in keywords):
-            continue
-        events.append((path, event))
-    return collected_at, events, skipped
+            events.append((path, event))
+    except (OSError, ValueError) as exc:
+        record_import_failure(database, source, event_id, exc)
+        raise
+    return collected_at, events, skipped, unchanged
+
+
+def _read_registration(home: Path, row: sqlite3.Row) -> tuple[Path, dict]:
+    if not row['json_path']:
+        raise ImportInputError('Registered event has no saved JSON path')
+    path = inside(home, home / row['json_path'])
+    event = json.loads(path.read_text(encoding='utf-8'))
+    if (
+        not isinstance(event, dict)
+        or event.get('event_id') != row['event_id']
+        or event.get('source') != row['source']
+        or event.get('change_type') != row['change_type']
+    ):
+        raise ImportInputError('Saved event does not match its monitor registration')
+    if event.get('replay'):
+        raise ImportInputError('Replay output cannot be used as a scheduled collection result')
+    target = event.get('target')
+    if not isinstance(target, dict) or not isinstance(title := target.get('law_name'), str) or not title.strip():
+        raise ImportInputError('Registered event has no law name')
+    return path, event
 
 
 def _synchronize_laws(
-    database: Path, monitor_home: Path, snapshot: tuple[str, list[tuple[Path, dict]], int]
+    database: Path, monitor_home: Path, snapshot: tuple[str, list[tuple[Path, dict]], int, int]
 ) -> dict[str, int]:
-    collected_at, events, skipped = snapshot
-    result = import_files(database, monitor_home, [path for path, _ in events])
+    collected_at, events, skipped, unchanged = snapshot
+    event_ids = {path: event['event_id'] for path, event in events}
+    result = import_files(database, monitor_home, list(event_ids), event_ids=event_ids)
+    result['unchanged'] += unchanged
     result['skipped'] = skipped
     if not result['failed']:
         with write_database(database) as conn:
@@ -123,7 +153,7 @@ def synchronize(database: Path, monitor_home: Path) -> dict[str, int]:
     assembly = [source for source in ASSEMBLY_TYPES if source in collectors]
     result = {'imported': 0, 'unchanged': 0, 'failed': 0, 'skipped': 0}
     try:
-        snapshot = source_snapshot(monitor_home, LAW_SOURCE, run, collectors, rows[LAW_SOURCE], scope)
+        snapshot = source_snapshot(database, monitor_home, LAW_SOURCE, run, collectors, rows[LAW_SOURCE], scope)
         result = _synchronize_laws(database, monitor_home, snapshot)
     except (OSError, ValueError, sqlite3.Error) as exc:
         if not assembly:
@@ -133,8 +163,13 @@ def synchronize(database: Path, monitor_home: Path) -> dict[str, int]:
 
     for source in assembly:
         try:
-            stamp, events, _ = source_snapshot(monitor_home, source, run, collectors, rows[source], scope)
-            imported, unchanged = import_assembly(database, source, stamp, [event for _, event in events])
+            stamp, events, _, recorded = source_snapshot(
+                database, monitor_home, source, run, collectors, rows[source], scope
+            )
+            imported, unchanged = import_assembly(
+                database, source, stamp, [event for _, event in events], record_failures=True
+            )
+            unchanged += recorded
         except (OSError, ValueError, sqlite3.Error) as exc:
             result[f'{source}_failed'] = 1
             result['failed'] += 1
@@ -146,6 +181,7 @@ def synchronize(database: Path, monitor_home: Path) -> dict[str, int]:
             result.update(synchronize_notice_content(database))
         except (OSError, ValueError, sqlite3.Error) as exc:
             result['failed'] += 1
+            record_import_failure(database, 'assembly_notice', None, exc)
             print(f'calendar sync notice content failed: {type(exc).__name__}', file=sys.stderr)
     return result
 
@@ -160,7 +196,7 @@ def main() -> int:
     try:
         result = synchronize(args.database, args.monitor_home)
     except (OSError, ValueError, sqlite3.Error) as exc:
-        print(f'calendar sync failed: {type(exc).__name__}: {exc}', file=sys.stderr)
+        print(f'calendar sync failed: {type(exc).__name__}: {error_message(exc)}', file=sys.stderr)
         return 2
     print('calendar sync ' + ' '.join(f'{key}={value}' for key, value in result.items()))
     if result['failed']:

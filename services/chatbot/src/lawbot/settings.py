@@ -2,7 +2,7 @@
 # 각 값의 규칙(기본값·범위·오류 문구)은 원래 모듈(security·deploy·service·app·feedback)의 함수에 그대로 있고,
 # 여기서는 그 함수들에 같은 환경 변수 묶음(env)을 넘겨 모은다. 실행 경로(app.main·load_app·평가 명령)는 이 객체를 쓴다
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from lawbot.auth import AdminCredentials, admin_credentials
@@ -37,6 +37,7 @@ class Settings:
     db: Path | None = None
     admin: AdminCredentials | None = None
     calendar_api_url: str | None = None
+    calendar_admin_token: str | None = field(default=None, repr=False)
     corpus: str = 'csv'
     exact_cache_db: Path | None = None
     exact_cache_bundle: Path | None = None
@@ -122,6 +123,7 @@ def load(env=None, web=False):
         take('auth', lambda: security.auth(env))
         take('admin', lambda: admin_credentials(env, db_configured=bool(db)))
         take('calendar_api_url', lambda: security.calendar_api_url(env))
+        take('calendar_admin_token', lambda: security.calendar_admin_token(env))
         take('port', lambda: security.server_port(env))
         take('instance', lambda: security.instance_name(env))
         take('chat_concurrency', lambda: view.chat_concurrency(env))

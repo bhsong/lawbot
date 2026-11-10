@@ -410,6 +410,7 @@ def create_app(
     db: Path | None = None,
     protected=None,
     calendar_url: str | None = None,
+    calendar_token: str | None = None,
 ):
     """app: service.load_app() 결과, auth: (사용자, 비밀번호), fb: feedback.Feedback 또는 None, dist: SPA 빌드 폴더"""
     if admin is not None and db is None:
@@ -546,7 +547,9 @@ def create_app(
     if admin is not None:
         from lawbot.admin import router
 
-        api.include_router(router(db, app, protected=protected, calendar_url=calendar_url))
+        api.include_router(
+            router(db, app, protected=protected, calendar_url=calendar_url, calendar_token=calendar_token)
+        )
 
         @api.exception_handler(StarletteHTTPException)
         async def admin_route_error(request: Request, exc: StarletteHTTPException):
@@ -604,6 +607,7 @@ def main(argv=None):
         db=cfg.db,
         protected=protected,
         calendar_url=cfg.calendar_api_url,
+        calendar_token=cfg.calendar_admin_token,
     )
     log.info(f'웹앱: http://{security.SERVER_NAME}:{port}')
     uvicorn.run(api, host=security.SERVER_NAME, port=port, log_level='warning')

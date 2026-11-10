@@ -64,7 +64,11 @@ uv run --project services/law-calendar law-calendar --database services/law-cale
 
 import는 명확한 최신 부칙의 절대 날짜·공포일 시행 또는 조문 전체의 구조화 시행 메타데이터를 자동 판정한다. 날짜가 확정되면 규칙 기반 요약과 함께 달력에 표시한다. 위임 표현·복잡한 부칙·부분 시행·상충·근거 부족은 보류한다. 자동 확인은 시행일에 한정되며 Git 구판·신판의 법적 효력 비교는 미검증으로 표시한다.
 
-화면 상단의 **보류 목록** 버튼은 날짜와 무관한 보류 조문·사유·공식 원문 링크를 읽기 전용 dialog로 표시한다. 보류는 달력 건수에 포함되지 않는다. 빈 목록·로딩·오류 재시도·페이지 이동을 지원하며 수정·확정 기능은 제공하지 않는다. 조회 API는 `/api/law-holds?page=1&page_size=20`이다.
+공개 화면의 **보류 목록**은 날짜와 무관한 보류 조문·사유·공식 원문 링크를 표시한다. 보류는 달력 건수에 포함되지 않는다. 조회 API는 `/api/law-holds?page=1&page_size=20`이다.
+
+웹앱의 **피드백 & 법령 관리 → 법령 캘린더 → 보류 목록**에서는 저장 원문과 공식 근거를 대조하고 시행일 보류를 승인할 수 있다. 같은 이벤트에 저장된 공포일이 있으면 다음 조문의 검토 양식에 그 값을 채운다. 시행일 이벤트 전체의 반려·철회는 아래 CLI에서 처리한다. 입법예고 검토 대기에서는 승인·반려·철회를 저장할 수 있다.
+
+관리자 검토와 실패 조회를 사용하려면 웹앱의 레포 최상위 `.env`와 `services/law-calendar/.env` 두 곳의 `LAWBOT_CALENDAR_ADMIN_TOKEN`에 사용자가 같은 값을 직접 입력한다. 두 파일은 소유자만 읽고 쓸 수 있게 한다. 캘린더 서버는 `law-calendar` 실행 파일을 직접 호출해도 서비스 폴더의 `.env`를 시작할 때 읽는다. 프로세스 환경에 같은 변수가 있으면 그 값을 우선 사용한다.
 
 아래 변수는 캘린더 전용 개발 DB, 저장된 monitor home과 이벤트 JSON 파일, 검토자 식별자로 직접 지정한다. monitor home은 `old/new.file` 상대 경로의 기준 디렉터리다. import는 원천 파일을 읽기만 하며 외부 수집이나 모델 호출을 하지 않는다.
 
@@ -82,7 +86,7 @@ uv run --project services/law-calendar python -m law_calendar.manage --database 
 uv run --project services/law-calendar python -m law_calendar.manage --database $CALENDAR_DB review $REVIEW_JSON --reviewer $REVIEWER_ID
 ```
 
-`decision`은 `approve`, `reject`, `withdraw`다. 반려·철회에는 현재 `event_id`, `snapshot_id`, `note`, `decision`만 있는 JSON을 사용할 수 있다. 수정한 원천을 재입력하면 새 snapshot으로 다시 판정하며 이전 snapshot의 검토 파일은 거절된다. 명시적으로 반려·철회한 이벤트는 재입력으로 자동 공개하지 않는다. 검토 이력과 원문 버전은 DB에 보존한다. 승인 도구는 신뢰하는 관리자의 로컬 DB 접근 권한으로만 실행하며 공개 HTTP 쓰기 API는 제공하지 않는다.
+`decision`은 `approve`, `reject`, `withdraw`다. 반려·철회에는 현재 `event_id`, `snapshot_id`, `note`, `decision`만 있는 JSON을 사용할 수 있다. 수정한 원천을 재입력하면 새 snapshot으로 다시 판정하며 이전 snapshot의 검토 파일은 거절된다. 명시적으로 반려·철회한 이벤트는 재입력으로 자동 공개하지 않는다. 검토 이력과 원문 버전은 DB에 보존한다.
 
 동일 파일 재입력은 중복을 만들지 않는다. import 실패가 하나라도 있으면 종료 코드 1을 반환하고 `runs`에 원인을 기록한다. 수정 후 같은 명령을 다시 실행할 수 있다. 수집 시각은 가져온 원천의 감지 시각이며 import 실행 시각으로 갱신하지 않는다. 입법예고·행정규칙·서식 이벤트는 이 어댑터가 지원하지 않는다.
 
@@ -96,9 +100,9 @@ uv run --project services/law-calendar python -m law_calendar.db $CALENDAR_DB
 uv run --project services/law-calendar --frozen --no-sync python -m law_calendar.sync --monitor-home $MONITOR_HOME --database $CALENDAR_DB
 ```
 
-sync는 monitor state.db의 최신 수집 결과와 등록된 이벤트 파일을 읽기 전용으로 가져온다. 법령은 공통 법령 범위의 Legalize KR 폴더를, 국회 의안과 입법예고는 정규화한 제목 키워드를 대조해 입력을 고른다. 이 필터는 정기 sync에 적용된다. 기존 일정과 스냅숏을 보존하며 명시적으로 지정한 이벤트의 오프라인 import도 지원한다. [공통 법령 범위](../../packages/lawbot-common/src/lawbot_common/law_scope.json)
+sync는 monitor state.db의 최신 수집 결과를 읽고, 캘린더에 기록된 이벤트 ID는 JSON을 열기 전에 건너뛴다. 미등록 이벤트는 공통 법령 범위의 Legalize KR 폴더나 국회 제목 키워드를 대조해 가져온다. 기존 일정과 스냅숏을 보존하며 명시적으로 지정한 이벤트의 오프라인 import도 지원한다. [공통 법령 범위](../../packages/lawbot-common/src/lawbot_common/law_scope.json)
 
-법령·의안·예고 출처별로 검증하고 변경이 0건인 정상 실행도 각 마지막 수집 시각을 기록한다. 실패한 출처는 시각과 기존 데이터를 보존하고 다른 출처의 입력은 진행한다. 입력 실패는 종료 코드 2, 입법예고 검토 대기나 PDF 재시도는 종료 코드 1로 점검 결과에 표시된다.
+법령·의안·예고 출처별로 검증하고 변경이 0건인 정상 실행도 각 마지막 수집 시각을 기록한다. 실패한 출처는 시각과 기존 데이터를 보존하고 다른 출처의 입력은 진행한다. 다음 실행에서 실패한 이벤트를 재시도하며 웹앱 관리자 캘린더의 **가져오기 실패**에서 실패 기록을 확인할 수 있다. 입력 실패는 종료 코드 2, 입법예고 검토 대기나 PDF 재시도는 종료 코드 1로 점검 결과에 표시된다.
 
 ### 국회 이벤트 공개 검토
 

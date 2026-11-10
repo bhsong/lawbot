@@ -1,5 +1,7 @@
 """Administrator API through the real ASGI app and temporary SQLite."""
 
+import json
+import secrets
 from concurrent.futures import ThreadPoolExecutor
 from threading import Barrier
 from types import SimpleNamespace
@@ -25,6 +27,7 @@ from lawbot.db.connection import connect
 ROOT = '/api/admin'
 ORIGIN = {'Origin': 'http://testserver'}
 USER = ('fixture-user', 'fixture-password')
+CALENDAR_REVIEW = '/calendar/law-holds/effective/law-change-1'
 
 
 @pytest.fixture
@@ -80,6 +83,9 @@ def test_admin_routes_require_role(app):
         ('GET', '/feedbacks/f1'),
         ('GET', '/articles'),
         ('GET', '/calendar/law-calendar'),
+        ('GET', CALENDAR_REVIEW),
+        ('GET', '/calendar/import-failures'),
+        ('POST', CALENDAR_REVIEW),
         ('POST', '/feedbacks/f1/review'),
         ('POST', '/feedbacks/promote-up'),
         ('POST', '/feedbacks/f1/promote-down'),
@@ -483,6 +489,8 @@ def test_calendar_proxy_filters_paths_and_credentials(db, admin_hash, monkeypatc
             assert client.get(ROOT + '/calendar/' + path).status_code == 404
         res = client.post(ROOT + '/calendar/law-calendar', json={})
         assert (res.status_code, res.json()['code']) == (405, 'method_not_allowed')
+        res = post(client, CALENDAR_REVIEW, {'idempotency_key': 'disabled', 'decision': 'approve'})
+        assert (res.status_code, res.json()['code']) == (503, 'calendar_review_disabled')
         assert len(requests) == 6 and all(req.method == 'GET' for req in requests)
 
 
@@ -522,6 +530,63 @@ def test_calendar_unconfigured_and_disallowed(admin):
         assert (res.status_code, res.json()['code']) == (503, 'calendar_not_configured')
     res = admin.get(ROOT + '/calendar/law-holds/anything')
     assert (res.status_code, res.json()['code']) == (404, 'not_found')
+
+
+def test_calendar_review_post_guards(admin):
+    body = {'idempotency_key': 'same-key', 'decision': 'approve'}
+    for headers in ({}, {'Origin': 'http://elsewhere'}):
+        response = admin.post(ROOT + CALENDAR_REVIEW, json=body, headers=headers)
+        assert (response.status_code, response.json()['code']) == (403, 'bad_origin')
+    assert post(admin, '/calendar/law-holds/other/item', body).status_code == 404
+    assert post(admin, '/calendar/import-failures', body).status_code == 405
+
+
+def test_calendar_review_proxies_only_service_credentials_and_audits_once(db, admin_hash, monkeypatch):
+    import httpx
+
+    from lawbot import admin as api
+
+    requests = []
+    token = secrets.token_urlsafe()
+    client_type = httpx.AsyncClient
+
+    def upstream(request):
+        requests.append(request)
+        return httpx.Response(200, json={'ok': True})
+
+    monkeypatch.setattr(api, 'AsyncClient', lambda **kw: client_type(transport=httpx.MockTransport(upstream), **kw))
+    application = web.create_app(
+        SimpleNamespace(retriever=SimpleNamespace(ids=[], laws=[], titles=[], kinds=[], docs=[])),
+        USER,
+        dist=None,
+        calendar_url='http://127.0.0.1:8765',
+        calendar_token=token,
+        admin=auth.AdminCredentials(ADMIN_USER, auth.parse_password_hash(admin_hash)),
+        db=db,
+    )
+    headers = ORIGIN | {'Authorization': 'Bearer untrusted-browser-header'}
+    body = {'idempotency_key': 'same-key', 'decision': 'approve', 'note': '확인', 'reviewer': 'forged'}
+    with TestClient(application) as client:
+        login(client)
+        failures = client.get(ROOT + '/calendar/import-failures?page=2', headers=headers)
+        assert failures.status_code == 200
+        assert requests[-1].url.path == '/api/admin/import-failures' and requests[-1].url.query == b'page=2'
+        for _ in range(2):
+            result = client.post(ROOT + CALENDAR_REVIEW, json=body, headers=headers)
+            assert (result.status_code, result.json()) == (200, {'ok': True})
+        conflict = post(client, CALENDAR_REVIEW, body | {'decision': 'reject'})
+        assert (conflict.status_code, conflict.json()['code']) == (409, 'idempotency_conflict')
+    assert len(requests) == 2
+    request = requests[-1]
+    assert request.method == 'POST' and request.url.path == '/api/admin/law-holds/effective/law-change-1'
+    assert json.loads(request.content) == {'reviewer': ADMIN_USER, 'decision': 'approve', 'note': '확인'}
+    assert all(
+        req.headers.get('authorization') == f'Bearer {token}' and 'cookie' not in req.headers for req in requests
+    )
+    with connect(db) as conn:
+        assert conn.execute(
+            "SELECT actor,target_type,target_id,summary FROM audit_events WHERE action='calendar_review'"
+        ).fetchall() == [(ADMIN_USER, 'effective', 'law-change-1', '{"decision": "approve"}')]
 
 
 @pytest.mark.parametrize(
