@@ -145,6 +145,16 @@ def test_router_cannot_treat_omitted_special_medical_cost_as_general():
     assert included.payload['results'][0]['value'] == 450_000
 
 
+@pytest.mark.parametrize(('total', 'status'), [('700만원', 'guidance'), ('100만원', 'calculated')])
+def test_combined_medical_cost_with_different_rates(total, status):
+    question = f'2026년 총급여 5000만원, 난임시술비와 일반 의료비를 합쳐서 {total}인데 세액공제액은 얼마인가요?'
+    inputs = {'gross_pay': '5000만원', 'medical_expenses': total, 'medical_category': '난임시술비'}
+    result = route_calculation(question, classify(inputs), {MEDICAL: ()})
+    assert result.payload['status'] == status
+    if status == 'calculated':
+        assert result.payload['results'][0]['value'] == 0
+
+
 def test_optional_reimbursement_stated_in_question_cannot_default_to_zero():
     unaccounted = route_calculation(
         QUESTION, classify({'gross_pay': '5천만 원', 'medical_expenses': '300만 원'}), {MEDICAL: ()}

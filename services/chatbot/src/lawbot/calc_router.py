@@ -12,7 +12,7 @@ from zoneinfo import ZoneInfo
 from lawbot.answer_format import sections
 from lawbot.api_client import ModelLoadError, ModelServerError, ModelServerTimeout
 from lawbot.calc_numbers import amount_spans, complete_amount_span, parse_year
-from lawbot.calculators import ARTICLE_HASHES, INPUT_FIELDS, MEDICAL, calculate
+from lawbot.calculators import ARTICLE_HASHES, INPUT_FIELDS, MEDICAL, MEDICAL_GROUPING, calculate
 
 ROUTER_SYSTEM = """계산 질문 분류기. JSON 한 개만 출력한다: {"calculator":"이름 또는 none","inputs":{}}.
 지원: medical_expense_credit(의료비 세액공제), midyear_income_tax(중도퇴사 근로소득세 기본 공제).
@@ -75,6 +75,8 @@ _SPECIAL_MEDICAL = {
     'infertility_expenses': re.compile(r'난임|보조생식술|시험관|인공수정'),
     'premature_expenses': re.compile(r'미숙아|선천성\s*이상아'),
 }
+_ORDINARY_MEDICAL = re.compile(r'(?:일반|본인)\s*(?:부양가족\s*)?(?:의료비|치료비|병원비)')
+_MEDICAL_BREAKDOWN = {*_SPECIAL_MEDICAL, 'general_expenses', 'unlimited_expenses'}
 
 
 @dataclass(frozen=True)
@@ -114,6 +116,24 @@ def _missing_medical_category(question: str, inputs: dict[str, str]) -> bool:
         marker.search(question) and field not in inputs and not marker.search(category)
         for field, marker in _SPECIAL_MEDICAL.items()
     )
+
+
+def _combined_medical_span(question: str, inputs: dict[str, str]) -> str | None:
+    if _MEDICAL_BREAKDOWN.intersection(inputs):
+        return None
+    for sentence in re.findall(r'[^.!?\n]+', question):
+        grouping = MEDICAL_GROUPING.search(sentence)
+        if grouping is None:
+            continue
+        categories = [
+            found
+            for pattern in (*_SPECIAL_MEDICAL.values(), _ORDINARY_MEDICAL)
+            if (found := pattern.search(sentence)) is not None
+        ]
+        if len(categories) > 1:
+            spans = [grouping, *categories]
+            return sentence[min(span.start() for span in spans) : max(span.end() for span in spans)]
+    return None
 
 
 def route_calculation(
@@ -186,6 +206,8 @@ def route_calculation(
             '계산기의 적용 범위를 벗어난 항목이 있습니다. 해당 항목의 공제 요건과 공제 대상 금액을 확인해 주세요.',
             'unsupported_input',
         )
+    if calculator == MEDICAL and (combined := _combined_medical_span(question, inputs)):
+        inputs['medical_category'] = combined
     year_source = inputs.pop('year', None)
     reference = reference_year if reference_year is not None else datetime.now(_KST).year
     years = {match[0]: _year_value(match[0], reference) for match in _YEARS.finditer(question)}

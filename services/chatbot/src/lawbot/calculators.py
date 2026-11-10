@@ -18,6 +18,7 @@ _RULES = _STATUTES['years']
 GROSS_PAY_ARTICLE = '소득세법 제20조'
 MEDICAL_DECREE = '소득세법 시행령 제118조의5'
 SETTLEMENT_ARTICLE = '소득세법 제137조'
+MEDICAL_GROUPING = re.compile(r'합쳐|합산|합계|포함|(?:의료비|시술비|치료비|병원비)[와과]')
 
 _CATEGORY_IDS = ('general', 'unlimited', 'premature', 'infertility')
 _EXPENSE_FIELDS = tuple(f'{name}_expenses' for name in _CATEGORY_IDS)
@@ -117,7 +118,7 @@ def _possible_categories(span: str, limits: dict) -> tuple[str, ...]:
     if re.search(r'미숙아|선천성이상아', text):
         explicit.append('premature')
     # A procedure-specific rate takes precedence over the patient's category.
-    uncertain = re.search(r'또는|혹은|인지|아니|여부|미정', text)
+    uncertain = MEDICAL_GROUPING.search(text) or re.search(r'또는|혹은|인지|아니|여부|미정', text)
     if explicit and not uncertain:
         return tuple(explicit)
     if re.search(r'본인|제의료비|제병원비|장애인|중증질환|희귀난치|결핵환자|한도없', text):
