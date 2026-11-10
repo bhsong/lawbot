@@ -175,10 +175,21 @@ cp data/v5/manifest.json data/v5/manifest_law_articles_v5_decree.json "$out/"
 for csv in articles_v5.csv law_articles_v5_decree.csv; do
   uv run lawbot-reindex "$out/$csv" --dataset-version v5 --reference-date 2026-11-03 --collected-date 2026-11-10 --source-ref bcb7aea7782e81c21fbeb08382c442f7c2041690 --no-cache
 done
-uv run lawbot-max-seq "$out/law_articles_v5_decree.csv" --tokenizer models/v5/emb_v5b_fp16/tokenizer.json --counts "$out/doc_tokens_v5.csv"
+uv run lawbot-max-seq "$out/law_articles_v5_decree.csv" --tokenizer models/v5/emb_v5b_fp16/tokenizer.json --training-max-seq 5120 --counts "$out/doc_tokens_v5.csv"
 ```
 
-새로 들어온 소득세법 시행령 제88조·제164조와 시행규칙 제100조에는 2027-01-01 시행 예정 개정이 섞여 있어 주의 표시가 붙었다. 두 매니페스트는 새 조문 수와 해시를 기록한다. 모델 학습 기준은 v5다. 법률 최대 토큰 기본값은 4,352이고 하위법령은 12,032다. 기존 질문과 분할로 범위 확장 전후 val을 비교할 예정이다.
+새로 들어온 소득세법 시행령 제88조·제164조와 시행규칙 제100조에는 2027-01-01 시행 예정 개정이 섞여 있어 주의 표시가 붙었다. 두 매니페스트는 새 조문 수와 해시를 기록한다. 모델 학습 기준은 v5다. 법률·하위법령 임베딩 기본값은 4,352·5,120이다. 기존 질문과 분할로 범위 확장 전후 val을 비교할 예정이다.
+
+emb-v5b는 5,120토큰으로 학습했다. 리랭커의 2,560토큰 상한은 질문과 지시문을 포함한 별도 입력에 적용된다. 아래 비율은 전체 임베딩 문서 토큰 중 5,120을 초과하는 몫이다. 첨부된 조문은 전체 본문을 답변 프롬프트에 제공하므로 긴 조문이 첨부되면 생성 입력도 길어질 수 있다. [임베딩 학습 기록](evals/2026-11-05-v5-embedding-train.md)
+
+| 조문 | 전체 토큰 | 5,120 초과 토큰 | 잘림 비율 |
+| --- | ---: | ---: | ---: |
+| 소득세법 시행령 제167조의3 | 11,863 | 6,743 | 56.84% |
+| 소득세법 시행령 제155조 | 10,017 | 4,897 | 48.89% |
+| 소득세법 시행규칙 제100조 | 6,242 | 1,122 | 17.98% |
+| 소득세법 시행령 제156조의2 | 5,628 | 508 | 9.03% |
+
+`lawbot-max-seq --training-max-seq 5120 --counts`는 실제 최장 길이와 조문별 토큰 수를 그대로 기록한다. 권장값은 최장 길이의 256 단위 올림과 학습 상한 중 작은 값이며, 학습 상한을 넘는 모든 비삭제 조문의 잘림을 보고한다. 옵션을 생략하면 기존의 올림 규칙을 적용한다.
 
 ## 7. 한계
 

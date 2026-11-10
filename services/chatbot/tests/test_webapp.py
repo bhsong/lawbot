@@ -397,7 +397,7 @@ def test_env_example_is_complete_without_secrets(env):
     assert p.system_file == paths.V5_SYSTEM
     assert all(manifest.check(csv)['dataset_version'] == 'v5' for csv in (law, combined))
     assert deploy.reranker(p) == deploy.RerankerConfig('qwen3-reranker-4b', 10)
-    assert deploy.decree(p) == deploy.DecreeConfig(0.9, 2, ('pro',), max_seq=12_032)
+    assert deploy.decree(p) == deploy.DecreeConfig(0.9, 2, ('pro',), max_seq=5120)
     assert paths.V5_SYSTEM_CONCISE.is_file()  # Pro 간결형 system은 저장소에 있음
     from lawbot_model_server.config import parse_models
 
@@ -422,7 +422,7 @@ def test_env_dev_example_is_valid(env):
     p = deploy.get_profile()
     assert (p.name, p.emb_model, p.max_seq) == ('v5', 'lawbot-emb-v5b', 4352)
     assert deploy.reranker(p) == deploy.RerankerConfig('qwen3-reranker-4b', 10)
-    assert deploy.decree(p) == deploy.DecreeConfig(0.9, 2, ('pro',), max_seq=12_032)
+    assert deploy.decree(p) == deploy.DecreeConfig(0.9, 2, ('pro',), max_seq=5120)
     assert [m.model for m in p.models] == ['qwen3.8-27b-4bit']
 
 
@@ -632,7 +632,7 @@ def test_v5_profile_uses_v5b_and_v5_systems(env):
     p = deploy.get_profile()
     assert p.articles.name == 'law_articles_v5_decree.csv'
     assert p.emb_model == 'lawbot-emb-v5b'
-    assert p.max_seq == 4352 and deploy.decree(p).max_seq == 12_032
+    assert p.max_seq == 4352 and deploy.decree(p).max_seq == 5120
     assert [(m.key, m.model, m.fmt) for m in p.models] == [('pro', 'qwen3.8-27b-4bit', 'concise')]
     concise_system = service.system_text(p, p.models[0])
     full = p.system_file.read_text(encoding='utf-8')

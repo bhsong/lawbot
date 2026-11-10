@@ -1,10 +1,11 @@
 """조문 CSV의 임베딩 최대 토큰 (계획: docs/archives/v5-tax-scope.md 3-2)
 
-    uv run lawbot-max-seq data/v5/law_articles_v5_decree.csv --tokenizer models/v4/emb_v4_fp16/tokenizer.json
+    uv run lawbot-max-seq data/v5/law_articles_v5_decree.csv --tokenizer models/v5/emb_v5b_fp16/tokenizer.json --training-max-seq 5120
 
 v4 노트북 규칙: 검색 문서(retriever.doc_text, '법령명 제N조(제목)\\n본문')의 최장 토큰 수를 256 단위로 올린다. 법률과
 하위법령(시행령·시행규칙)을 따로 센다 (웹앱이 따로 인코딩). 출력은 .env에 넣을 두 줄 (LAWBOT_MAX_SEQ, LAWBOT_DECREE_MAX_SEQ).
-v4 CSV면 deploy 기본값(2,304 · 3,072)이 나온다. 토크나이저 파일은 모델 서버가 읽는 임베딩 모델 폴더의 tokenizer.json
+`--training-max-seq`를 주면 권장값은 학습 상한까지만 올리고, 초과 조문과 잘리는 비율을 출력한다.
+최장 길이와 `--counts`는 전체 문서 토큰 수다. 토크나이저 파일은 임베딩 모델 폴더의 tokenizer.json
 """
 
 from __future__ import annotations
@@ -64,7 +65,11 @@ def main(argv=None):
     p.add_argument('csv', type=Path)
     p.add_argument('--tokenizer', required=True, type=Path, help='임베딩 모델의 tokenizer.json')
     p.add_argument('--counts', type=Path, help='조문별 토큰 수 CSV도 쓴다 (평가 요약의 길이 구간용)')
+    p.add_argument('--training-max-seq', type=int, help='임베딩 모델 학습 상한. 권장값을 제한하고 잘리는 조문을 출력')
     a = p.parse_args(argv)
+    cap = a.training_max_seq
+    if cap is not None and cap < 1:
+        p.error('--training-max-seq는 양의 정수여야 합니다')
     from tokenizers import Tokenizer  # 모델 서버 의존성으로 설치됨. 이 명령에서만 쓴다
 
     tok = Tokenizer.from_file(str(a.tokenizer))
@@ -78,10 +83,16 @@ def main(argv=None):
     for group, (key, n) in longest(df, count).items():
         print(f'# {group} 최장: {key} {n:,}토큰')
     for name, value in settings(df, count).items():
-        print(f'{name}={value}')
-    if a.counts:
-        counts(df, count).to_csv(a.counts, index=False, encoding='utf-8-sig', lineterminator='\n')
-        print(f'# 조문별 토큰 수: {a.counts}')
+        print(f'{name}={value if cap is None else min(value, cap)}')
+    if cap is not None or a.counts:
+        measured = counts(df, count)
+        if cap is not None:
+            for article, group, n in measured.loc[measured['tokens'] > cap].itertuples(index=False, name=None):
+                clipped = n - cap
+                print(f'# {group} 잘림: {article} {n:,}토큰 중 {clipped:,}토큰 ({clipped / n:.2%})')
+        if a.counts:
+            measured.to_csv(a.counts, index=False, encoding='utf-8-sig', lineterminator='\n')
+            print(f'# 조문별 토큰 수: {a.counts}')
     return 0
 
 
