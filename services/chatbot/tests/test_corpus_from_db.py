@@ -265,7 +265,10 @@ def test_check_deploy_checks_db_bytes(corpus_db, env, tmp_path):
     checks = check_deploy.run()
     assert not any(level == 'FAIL' for level, _ in checks), checks
     summary = next(msg for level, msg in checks if level == 'PASS' and RELEASE in msg)
-    assert all(text in summary for text in (metadata['dataset_version'], metadata['articles_sha256'][:12], '1859'))
+    assert all(
+        text in summary
+        for text in (metadata['dataset_version'], metadata['articles_sha256'][:12], str(metadata['articles_total']))
+    )
     assert any(level == 'OK' and '하위법령 조문' in msg for level, msg in checks)
     assert any(level == 'OK' and '법률 검색·임베딩 그대로' in msg for level, msg in checks)
     assert any(level == 'OK' and '법령별 조문 수 일치' in msg for level, msg in checks)

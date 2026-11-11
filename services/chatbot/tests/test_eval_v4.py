@@ -2,6 +2,7 @@
 # 실제 모델 대신 가짜 검색기·리랭커·sLLM으로 모든 단계를 끝까지 돌린다 (data/는 읽기만)
 import json
 import types
+from unittest.mock import Mock
 
 import numpy as np
 import pandas as pd
@@ -10,6 +11,7 @@ import pytest
 import lawbot_tools.eval_v4 as ev
 from lawbot import deploy, service
 from lawbot.paths import DATA
+from lawbot.reranker import Reranker
 
 E = dict(encoding='utf-8-sig')
 
@@ -594,6 +596,181 @@ def test_decree_retrieval_stage_runs_without_answers(env, monkeypatch, tmp_path)
     monkeypatch.setattr('sys.argv', ['lawbot-eval-v4', 'decree-retrieval', '--split', 'val', '--dataset', 'v5'])
     ev.main()
     assert calls == [('dqr', len(ev.load_decree_questions('val', 'v5')), 'dqretrieval_pro_concise_rr_dec_val.csv')]
+
+
+@pytest.fixture
+def candidate_app():
+    laws = [{'law': '시험법', 'article_id': f'제{i}조', 'doc': f'법률 본문 {i}'} for i in range(1, 13)]
+    decrees = [
+        {'law': law, 'article_id': f'제{i}조', 'doc': f'하위법령 본문 {i}', 'parent_law': parent}
+        for i, (law, parent) in enumerate(
+            [('시험법 시행령', '시험법'), ('다른법 시행규칙', '다른법'), ('시험법 시행규칙', '시험법')], 1
+        )
+    ]
+    retriever = types.SimpleNamespace(
+        laws=[h['law'] for h in laws],
+        ids=[h['article_id'] for h in laws],
+        rank_all=Mock(return_value=np.array([list(range(2, 12)) + [0, 1]])),
+        search=Mock(side_effect=lambda q, k: laws[:k]),
+        search_decrees=Mock(side_effect=lambda q, k: decrees[:k]),
+    )
+    client = Mock()
+    client.rerank.side_effect = lambda model, q, docs, task, **kwargs: [
+        (i + 1) / (len(docs) + 1) for i in range(len(docs))
+    ]
+    return types.SimpleNamespace(
+        retriever=retriever,
+        reranker=Reranker(client, 'stub', candidates=12),
+        decree=types.SimpleNamespace(candidates=3, tau=0.9, k=2, models=('pro',)),
+    )
+
+
+def test_retrieval_records_top_ten_without_extra_calls(candidate_app, tmp_path):
+    app = candidate_app
+    path = tmp_path / 'retrieval.csv'
+    questions = pd.DataFrame([{'id': 'a', 'question': '질문', 'article_id': '시험법 제1조'}])
+
+    ev.run_retrieval(app, questions, path, decree=True)
+
+    app.retriever.rank_all.assert_called_once()
+    assert app.retriever.rank_all.call_args.args[0].tolist() == ['질문']
+    app.retriever.search.assert_called_once_with('질문', k=12)
+    app.retriever.search_decrees.assert_called_once_with('질문', k=3)
+    assert [call.args[2] for call in app.reranker.client.rerank.call_args_list] == [
+        [f'법률 본문 {i}' for i in range(1, 13)],
+        [f'하위법령 본문 {i}' for i in range(1, 4)],
+    ]
+
+    rows = pd.read_csv(path, **E)
+    assert list(rows.columns) == [
+        'id',
+        'emb_rank',
+        'rerank_sec',
+        'rr_rank',
+        'rr_top3',
+        'dec_attached',
+        'dec_n',
+        'dec_other',
+        'dec_rerank_sec',
+        'emb_top10',
+        'rr_top10',
+    ]
+    row = rows.iloc[0]
+    assert (row['emb_rank'], row['rr_rank']) == (11, 12)
+    assert row['emb_top10'].split('|') == [f'시험법 제{i}조' for i in range(3, 13)]
+    assert row['rr_top10'].split('|') == [f'시험법 제{i}조' for i in range(12, 2, -1)]
+    assert row['rr_top3'].split('|') == ['시험법 제12조', '시험법 제11조', '시험법 제10조']
+    assert row['dec_attached'].split('|') == ['시험법 시행규칙 제3조', '시험법 시행령 제1조']
+
+
+def test_decree_retrieval_records_candidates_without_extra_calls(candidate_app, tmp_path):
+    app = candidate_app
+    path = tmp_path / 'dqretrieval.csv'
+    questions = pd.DataFrame(
+        [{'id': 'a', 'question': '질문', 'article_id': '시험법 시행령 제1조', 'question_type': 'keyword'}]
+    )
+
+    ev.run_decree_retrieval(app, 'pro', questions, path)
+
+    app.retriever.rank_all.assert_not_called()
+    app.retriever.search.assert_called_once_with('질문', k=12)
+    app.retriever.search_decrees.assert_called_once_with('질문', k=3)
+    assert [call.args[2] for call in app.reranker.client.rerank.call_args_list] == [
+        [f'법률 본문 {i}' for i in range(1, 13)],
+        [f'하위법령 본문 {i}' for i in range(1, 4)],
+    ]
+
+    rows = pd.read_csv(path, **E)
+    assert list(rows.columns) == [
+        'id',
+        'question_type',
+        'gold',
+        'top1_law',
+        'in_cands',
+        'emb_rank',
+        'cand_rank',
+        'attached',
+        'n_att',
+        'in_attached',
+        'decree_rerank_sec',
+        'decree_candidates',
+    ]
+    row = rows.iloc[0]
+    assert (row['emb_rank'], row['cand_rank'], row['n_att']) == (1, 3, 2)
+    assert row['attached'].split('|') == ['시험법 시행규칙 제3조', '시험법 시행령 제1조']
+    assert json.loads(row['decree_candidates']) == [
+        {'article_id': '시험법 시행규칙 제3조', 'emb_rank': 3, 'rr_rank': 1},
+        {'article_id': '다른법 시행규칙 제2조', 'emb_rank': 2, 'rr_rank': 2},
+        {'article_id': '시험법 시행령 제1조', 'emb_rank': 1, 'rr_rank': 3},
+    ]
+
+
+def test_retrieval_records_embedding_candidates_with_reranking_disabled(candidate_app, tmp_path):
+    path = tmp_path / 'retrieval.csv'
+    questions = pd.DataFrame([{'id': 'a', 'question': '질문', 'article_id': '시험법 제1조'}])
+
+    ev.run_retrieval(candidate_app, questions, path, rerank=False)
+
+    rows = pd.read_csv(path, **E)
+    assert list(rows.columns) == ['id', 'emb_rank', 'emb_top10']
+    assert len(rows.loc[0, 'emb_top10'].split('|')) == 10
+    candidate_app.retriever.rank_all.assert_called_once()
+    candidate_app.retriever.search.assert_called_once_with('질문', k=10)
+    candidate_app.reranker.client.rerank.assert_not_called()
+
+
+def test_retrieval_requires_a_fresh_tag_before_calling_inference(candidate_app, tmp_path):
+    path = tmp_path / 'retrieval.csv'
+    legacy = b'id,emb_rank,rr_rank\na,1,1\n'
+    path.write_bytes(legacy)
+    questions = pd.DataFrame([{'id': 'a', 'question': '질문', 'article_id': '시험법 제1조'}])
+
+    with pytest.raises(SystemExit, match='다른 --tag'):
+        ev.run_retrieval(candidate_app, questions, path)
+
+    candidate_app.retriever.rank_all.assert_not_called()
+    candidate_app.reranker.client.rerank.assert_not_called()
+    assert path.read_bytes() == legacy
+
+
+def test_decree_retrieval_records_embedding_rank_before_reranking(tmp_path, monkeypatch):
+    gold = '가법 시행령 제1조'
+    other = '나법 시행령 제2조'
+    dq = pd.DataFrame(
+        {
+            'id': ['a', 'b'],
+            'question': ['질문', '다른 질문'],
+            'article_id': [gold, other],
+            'question_type': ['keyword'] * 2,
+        }
+    )
+
+    def retrieve(app, question, k, st, model):
+        candidate = {'law': '가법 시행령', 'article_id': '제1조', 'emb_rank': 4}
+        st.update(decree_candidates=[candidate], decree_rerank=0.1)
+        return [{'law': '가법'}], [candidate]
+
+    monkeypatch.setattr(service, 'retrieve', retrieve)
+    path = tmp_path / 'dqretrieval.csv'
+    ev.run_decree_retrieval(None, 'pro', dq, path)
+    ev.run_decree_retrieval(None, 'pro', dq, path)
+    rows = pd.read_csv(path, **E)
+    assert rows['id'].tolist() == ['a', 'b']
+    assert rows['emb_rank'].tolist() == [4, 999]
+    assert rows['cand_rank'].tolist() == [1, 999]
+    assert rows['in_attached'].tolist() == [True, False]
+
+
+def test_decree_retrieval_requires_a_fresh_tag_for_legacy_csv(tmp_path):
+    path = tmp_path / 'dqretrieval.csv'
+    legacy = b'id,emb_rank,cand_rank\nold,2,1\n'
+    path.write_bytes(legacy)
+    questions = pd.DataFrame(
+        [{'id': 'old', 'question': '질문', 'article_id': '시험법 시행령 제1조', 'question_type': 'keyword'}]
+    )
+    with pytest.raises(SystemExit, match='다른 --tag'):
+        ev.run_decree_retrieval(None, 'pro', questions, path)
+    assert path.read_bytes() == legacy
 
 
 def test_summary_attach_rate_by_number_of_attachments(tmp_path, monkeypatch):

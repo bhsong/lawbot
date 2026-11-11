@@ -555,13 +555,114 @@ def test_expiry_clauses_read_article_and_paragraphs():
         '제3조 (유효기간) 제16조의 개정규정은 2007년 6월 30일까지 효력을 가진다.\n\n'
         '제4조(경과조치) 종전의 최저임금은 1994년 8월 31일까지 효력을 가진다.\n'  # 개정규정이 아니고 유효기간 조도 아님
     )
-    assert b.expiry_clauses(add) == [('제53조', [3, 6], '2022-12-31'), ('제16조', [], '2007-06-30')]
+    assert b.expiry_clauses(add) == ([('제53조', [3, 6], '2022-12-31'), ('제16조', [], '2007-06-30')], [])
+
+
+def test_expiry_clauses_do_not_expand_a_qualified_target_to_the_entire_article():
+    addendum = (
+        '제2조(유효기간) 제1조(제3호 및 별지 제4호서식에 관한 부분으로 한정한다), '
+        '제2조제2항 및 제3조의 개정규정은 2020년 12월 31일까지 효력을 가진다.'
+    )
+    clauses, unhandled = b.expiry_clauses(addendum)
+    assert clauses == [('제2조', [2], '2020-12-31'), ('제3조', [], '2020-12-31')]
+    assert len(unhandled) == 1 and '제1조(제3호' in unhandled[0]
+
+
+def test_expiry_reads_all_paragraphs_of_a_title_containing_expiry():
+    addendum = (
+        '제2조(지원의 유효기간) ① 제3조 및 제4조의 개정 규정은\n2020년 12월 31일까지 그 효력을 가진다.\n\n'
+        '② 제5조제2항의 개정규정은 2021년 12월 31일까지 효력을 가진다.\n\n'
+        '제3조(적용례) 제6조의 개정규정은 2020년 12월 31일까지 효력을 가진다.'
+    )
+    assert b.expiry_clauses(addendum) == (
+        [('제3조', [], '2020-12-31'), ('제4조', [], '2020-12-31'), ('제5조', [2], '2021-12-31')],
+        ['제3조 제6조의 개정규정은 2020년 12월 31일까지 효력을 가진다.'],
+    )
+
+
+def test_expiry_reports_amended_provisions_without_an_expiry_heading():
+    deadline = '제151조제1항제4호의 개정규정은 2026년 12월 31일까지 효력을 가진다.'
+    other = '① 제6조의 개정 규정은 다음 각 호에서 정한 날까지 그 효력을 갖는다.'
+    addendum = (
+        f'제1조의2(적용시한) {deadline} <개정 2024.12.31>\n'
+        f'제2조(지원) {other}\n'
+        '② 종전의 규정은 2026년 12월 31일까지 효력을 가진다.\n'
+        '제3조(경과조치) 종전의 감면은 2026년 12월 31일까지 그 효력을 갖는다.'
+    )
+    assert b.expiry_clauses(addendum) == ([], [f'제1조의2 {deadline}', f'제2조 {other}'])
+
+
+def test_expiry_reports_dates_in_items_relative_dates_and_partial_targets():
+    addendum = (
+        '제2조(지원의 유효기간) ① 제1조의 개정규정은 다음 각 호의 구분에 따른 날까지 효력을 가진다.\n'
+        '1. 소규모 사업장: 2020년 12월 31일\n\n'
+        '② 제2조의 개정규정은 시행일부터 2년간 효력을 가진다.\n\n'
+        '③ 제3조제1항 단서, 제4조제1항 본문, 제5조제1항 후단 및 제6조제1항제2호의 개정규정은 '
+        '2020년 12월 31일까지 효력을 가진다.'
+    )
+    clauses, unhandled = b.expiry_clauses(addendum)
+    assert clauses == []
+    assert len(unhandled) == 3
+    assert '다음 각 호' in unhandled[0]
+    assert '시행일부터 2년간' in unhandled[1]
+    assert '제3조제1항 단서' in unhandled[2]
+
+
+def test_expiry_reports_qualified_ranges_and_external_articles_without_applying_them():
+    addendum = (
+        '제2조(유효기간) ① 제1조부터 제3조까지의 개정규정은 2020년 12월 31일까지 효력을 가진다.\n'
+        '② 제2조 및 「다른 법」 제3조의 개정규정은 2020년 12월 31일까지 효력을 가진다.'
+    )
+    clauses, unhandled = b.expiry_clauses(addendum)
+    assert clauses == []
+    assert len(unhandled) == 2
+
+
+def test_expiry_compares_titles_for_articles_and_text_for_paragraphs():
+    first = (
+        article('제1조', '제목', '① 첫째 항.\n② 한시 규정.')
+        + article('제2조', '제목', '한시 조문.')
+        + article('제3조', '제목', '계속 남아 있는 한시 조문.')
+        + article('제4조', '제목', '① 첫째 항.\n② 계속 남아 있는 한시 규정.\n1. 한시 규정의 세부 내용')
+        + article('제5조', '제목', '① 첫째 항.\n② 교체하기 전의 한시 규정.')
+        + article('제6조', '이전 제도', '다시 쓰이는 번호의 조문.')
+    )
+    addendum = (
+        '부칙 <제100호,2020.1.1>\n\n제1조(시행일) 이 법은 공포한 날부터 시행한다.\n\n'
+        '제2조(유효기간) 제1조제2항, 제2조, 제3조, 제4조제2항, 제5조제2항 및 제6조의 개정규정은 '
+        '2020년 12월 31일까지 효력을 가진다.'
+    )
+    second = (
+        article('제1조', '제목', '항 구분이 없는 개정 본문.')
+        + article('제2조', '제목', '다시 개정된 본문.')
+        + article('제3조', '제목', '계속 남아 있는 한시 조문.')
+        + article('제4조', '제목', '① 개정된 첫째 항.\n② 계속 남아 있는 한시 규정.\n1. 한시 규정의 세부 내용')
+        + article('제5조', '제목', '① 첫째 항.\n② 다시 개정된 둘째 항.')
+        + article('제6조', '새 제도', '다시 쓰이는 번호의 조문.')
+    )
+    history = [('a' * 40, '2020-01-01', '제정'), ('b' * 40, '2021-01-01', '일부개정')]
+    documents = [
+        md('100', '2020-01-01', '2020-01-01', first, addendum),
+        md('200', '2021-01-01', '2021-01-01', second, addendum),
+    ]
+    articles, _ = b._compose_history(PATH, '2026-11-03', history, documents)
+    got = {row['no']: row for row in articles}
+    assert got['제1조']['text'] == '항 구분이 없는 개정 본문.'
+    assert got['제2조']['expired']
+    assert not got['제6조'].get('expired')
+    assert got['제3조']['expired']
+    assert got['제4조']['text'].endswith('1. 한시 규정의 세부 내용 [실효: 2020.12.31.까지 유효]')
+    assert got['제5조']['text'].endswith('② 다시 개정된 둘째 항.')
 
 
 def test_expire_marks_paragraphs_and_deletes_whole_articles():
     text = '① 첫째 항.\n② 둘째 항.\n1. 호 하나\n2. 대상 근로자의 범위\n③ 셋째 항. <신설 2018.3.20>'
     arts = [{'no': '제53조', 'text': text}, {'no': '제16조', 'text': '본문'}, {'no': '제9조', 'text': '① 항.'}]
-    exp = [('제53조', [2, 3], '2022-12-31'), ('제16조', [], '2007-06-30'), ('제9조', [1], '2030-01-01')]
+    exp = [
+        ('제53조', [2, 3], '2022-12-31', arts[0].copy()),
+        ('제16조', [], '2007-06-30', arts[1].copy()),
+        ('제9조', [1], '2030-01-01', arts[2].copy()),
+    ]
     b.expire(arts, exp, '2026-10-20', 'kr/시험법/법률.md')
     assert arts[0]['text'] == (
         '① 첫째 항.\n② 둘째 항.\n1. 호 하나\n2. 대상 근로자의 범위 [실효: 2022.12.31.까지 유효]\n'
@@ -570,7 +671,8 @@ def test_expire_marks_paragraphs_and_deletes_whole_articles():
     assert arts[1].get('expired') is True
     assert arts[2] == {'no': '제9조', 'text': '① 항.'}  # 아직 유효
     with pytest.raises(ValueError, match='찾지 못했습니다'):
-        b.expire([{'no': '제1조', 'text': '① 항.'}], [('제1조', [4], '2020-01-01')], '2026-10-20', 'x')
+        article = {'no': '제1조', 'text': '① 항.'}
+        b.expire([article], [('제1조', [4], '2020-01-01', article.copy())], '2026-10-20', 'x')
 
 
 # ── 파일 찾기 ────────────────────────────────────────────────────────
@@ -987,28 +1089,36 @@ def test_build_rejects_missing_or_ambiguous_required_subordinate_document(law_wi
         b.build(repo.path, '2026-10-20')
 
 
-def test_income_tax_full_corpus_matches_the_union_and_preserves_other_rows(tmp_path, monkeypatch):
-    """Exercise the checked-in scope on a small source with all three income tax documents."""
-    income, other_tax, labor = '소득세법', '지방세법', '시험법'
-    legacy = {(income, kind): {'제1조'} for kind in b.KINDS}
+@pytest.mark.parametrize(
+    ('expanded', 'decrees', 'selected_no'),
+    [
+        ('소득세법', ('시행령', '시행규칙'), '제1조'),
+        ('농어촌특별세법', ('시행령',), '제2조'),
+    ],
+)
+def test_full_corpus_matches_the_union_and_preserves_other_rows(tmp_path, monkeypatch, expanded, decrees, selected_no):
+    """Exercise the checked-in scope on a small source with the declared subordinate documents."""
+    other_tax, labor = '지방세법', '시험법'
+    kinds = ('법률', *decrees)
+    legacy = {(expanded, kind): {selected_no} for kind in kinds}
     legacy[(other_tax, '법률')] = {'제85조'}
     configured = b.load_scope(b.TAX_SCOPE)
     current = {key: numbers & configured[key] for key, numbers in legacy.items() if key in configured}
     entries = tuple(
         law_scope.LawScope(
-            name=law, folder=law, category=1, keywords=(law,), decrees=tuple(b.KINDS[1:]) if law == income else ()
+            name=law, folder=law, category=1, keywords=(law,), decrees=decrees if law == expanded else ()
         )
-        for law in (labor, income, other_tax)
+        for law in (labor, expanded, other_tax)
     )
     monkeypatch.setattr(law_scope, 'load_law_scope', lambda: entries)
     source = tmp_path / 'source'
     subprocess.run(['git', 'init', '-q', str(source)], check=True)
     date = '2020-01-01'
-    body = article('제1조', '목적', '선택 조문') + article('제800조', '전체', '제1조에 따른 본문')
+    body = article(selected_no, '목적', '선택 조문') + article('제800조', '전체', f'{selected_no}에 따른 본문')
     body += article('제801조', '', '삭제 <2019.1.1>')
     files = {
-        f'kr/{income}/{kind}.md': md('100', date, date, body).replace('시험법', b.doc_name(income, kind))
-        for kind in b.KINDS
+        f'kr/{expanded}/{kind}.md': md('100', date, date, body).replace('시험법', b.doc_name(expanded, kind))
+        for kind in kinds
     }
     files[f'kr/{other_tax}/법률.md'] = md(
         '100', date, date, article('제85조', '목적', '선택 조문') + article('제86조', '다른 조문', '범위 밖')
@@ -1022,16 +1132,16 @@ def test_income_tax_full_corpus_matches_the_union_and_preserves_other_rows(tmp_p
         return list(csv.DictReader(io.StringIO(combined)))
 
     before, after = build_rows(legacy), build_rows(current)
-    selected = {row['article_id'] for row in before if row['parent_law'] == income}
-    remaining = {f'{b.doc_name(income, kind)} 제800조' for kind in b.KINDS}
-    assert {row['article_id'] for row in after if row['parent_law'] == income and row['deleted'] == '0'} == (
+    selected = {row['article_id'] for row in before if row['parent_law'] == expanded}
+    remaining = {f'{b.doc_name(expanded, kind)} 제800조' for kind in kinds}
+    assert {row['article_id'] for row in after if row['parent_law'] == expanded and row['deleted'] == '0'} == (
         selected | remaining
     )
-    assert {row['article_id'] for row in after if row['parent_law'] == income and row['deleted'] == '1'} == {
-        f'{b.doc_name(income, kind)} 제801조' for kind in b.KINDS
+    assert {row['article_id'] for row in after if row['parent_law'] == expanded and row['deleted'] == '1'} == {
+        f'{b.doc_name(expanded, kind)} 제801조' for kind in kinds
     }
-    assert [row for row in after if row['parent_law'] != income] == [
-        row for row in before if row['parent_law'] != income
+    assert [row for row in after if row['parent_law'] != expanded] == [
+        row for row in before if row['parent_law'] != expanded
     ]
 
 

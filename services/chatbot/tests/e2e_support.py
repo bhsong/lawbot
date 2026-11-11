@@ -176,6 +176,7 @@ def login(page, url, user=USER, pw=PW):
 
 def ask(page, question):
     textbox(page).fill(question)
+    page.get_by_role('button', name='보내기', exact=True).wait_for(state='visible', timeout=ANSWER_TIMEOUT)
     textbox(page).press('Enter')
 
 
