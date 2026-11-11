@@ -12,7 +12,7 @@ from zoneinfo import ZoneInfo
 from lawbot.answer_format import sections
 from lawbot.api_client import ModelLoadError, ModelServerError, ModelServerTimeout, RouterTimeout
 from lawbot.calc_numbers import amount_spans, complete_amount_span, parse_year
-from lawbot.calculators import ARTICLE_HASHES, INPUT_FIELDS, MEDICAL, MEDICAL_GROUPING, calculate
+from lawbot.calculators import ARTICLE_HASHES, INPUT_FIELDS, MEDICAL, MEDICAL_GROUPING, MIDYEAR, calculate
 from lawbot_common.api import SERVER_BUSY
 
 ROUTER_SYSTEM = """계산 질문 분류기. JSON 한 개만 출력한다.
@@ -36,6 +36,7 @@ withheld_income_tax(기납부 소득세), withheld_local_tax(기납부 지방소
 CALCULATED_INSTRUCTION = '계산 결과의 숫자를 그대로 쓰고 다시 계산하지 말 것. 결론에는 결과 항목과 금액(원)을 표의 순서대로 쓰고 중간 금액은 설명에 둘 것.'
 GUIDANCE_INSTRUCTION = '직접 계산하지 말고 계산에 필요한 정보와 근거 조문만 안내할 것.'
 NO_CALCULATOR_MESSAGE = '이 질문은 계산 결과를 제공할 수 없습니다. 계산에 필요한 정보와 근거 조문을 확인해 주세요.'
+TEMPORARY_ROUTER_MESSAGE = '계산 판정을 일시적으로 하지 못했습니다. 계산에 필요한 정보와 근거 조문을 확인해 주세요.'
 _KST = ZoneInfo('Asia/Seoul')
 _RELATIVE_YEARS = {'재작년': -2, '작년': -1, '지난해': -1, '올해': 0, '내년': 1}
 _YEARS = re.compile(
@@ -52,6 +53,8 @@ _UNSUPPORTED_DETAILS = {
     'medical_expense_credit': re.compile(r'미용\s*성형|안경|콘택트렌즈|산후조리원'),
     'midyear_income_tax': re.compile(r'(?:배우자|부양가족|자녀)\s*(?:기본|인적)?\s*공제|세액\s*감면'),
 }
+_COMBINED_HEALTH_LABEL = '건강·장기요양보험료'
+_COMBINED_HEALTH_LABEL_VARIANTS = re.compile(r'건강[ \t]*(?:[·/／]|및)?[ \t]*장기\s*요양\s*보험료')
 _OPTIONAL_EVIDENCE = {
     'medical_expense_credit': (
         (
@@ -67,10 +70,11 @@ _OPTIONAL_EVIDENCE = {
             '실손보험금 수령액',
         ),
     ),
-    'midyear_income_tax': (
+    MIDYEAR: (
         (r'국민연금|연금보험료', ('pension_premium',), '연금보험료'),
+        (rf'{_COMBINED_HEALTH_LABEL}(?:\s*(?:합계|합산액|총액))?', ('health_premium',), _COMBINED_HEALTH_LABEL),
         (r'건강\s*보험료', ('health_premium',), '건강보험료'),
-        (r'(?<![·/])장기\s*요양\s*보험료', ('long_term_care_premium',), '장기요양보험료'),
+        (r'(?<!건강·)장기\s*요양\s*보험료', ('long_term_care_premium',), '장기요양보험료'),
         (r'고용보험료', ('employment_premium',), '고용보험료'),
         (r'기납부\s*(?:근로)?소득세|소득세\s*기납부', ('withheld_income_tax',), '기납부 소득세'),
         (r'기납부\s*지방소득세|지방소득세\s*기납부', ('withheld_local_tax',), '기납부 지방소득세'),
@@ -105,6 +109,9 @@ def _year_value(source: str, reference: int) -> int:
 
 
 def _unaccounted_optional(question: str, calculator: str, inputs: dict[str, str]) -> str | None:
+    if calculator == MIDYEAR:
+        # Match a combined label once even if the original includes spaces around the separator.
+        question = _COMBINED_HEALTH_LABEL_VARIANTS.sub(_COMBINED_HEALTH_LABEL, question)
     for label_pattern, fields, label in _OPTIONAL_EVIDENCE[calculator]:
         if any(field in inputs for field in fields):
             continue
@@ -150,10 +157,8 @@ def route_calculation(
     elapsed_ms = None
     calculator = None
 
-    def none(reason: str) -> Routing:
-        return Routing(
-            {'calculator': calculator, 'status': 'none', 'message': NO_CALCULATOR_MESSAGE}, reason, elapsed_ms
-        )
+    def none(reason: str, *, message: str = NO_CALCULATOR_MESSAGE) -> Routing:
+        return Routing({'calculator': calculator, 'status': 'none', 'message': message}, reason, elapsed_ms)
 
     def guidance(message: str, reason='ambiguous_input') -> Routing:
         assert calculator is not None
@@ -185,7 +190,7 @@ def route_calculation(
         error = 'model_error'
     elapsed_ms = round((time.perf_counter() - started) * 1000)
     if error is not None:
-        return none(error)
+        return none(error, message=TEMPORARY_ROUTER_MESSAGE)
     if not isinstance(raw, str) or len(raw) > 4096:
         return none('invalid_json')
     try:
@@ -250,7 +255,7 @@ def route_calculation(
     payload = calculation.as_dict()
     if payload['status'] == 'calculated':
         if label := _unaccounted_optional(question, calculator, inputs):
-            return guidance(f'{label}을 확인해 주시면 계산할 수 있습니다.', 'unresolved_input')
+            return guidance(f'계산에 사용할 {label} 항목을 확인해 주세요.', 'unresolved_input')
         if calculator == MEDICAL and _missing_medical_category(question, inputs):
             return guidance('의료비의 대상 구분과 구분별 금액을 알려 주시면 계산할 수 있습니다.', 'unresolved_input')
     return Routing(payload, calculation.reason or 'selected', elapsed_ms)

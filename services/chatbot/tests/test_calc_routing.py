@@ -145,6 +145,7 @@ def test_router_fails_closed_once(response, reason):
         (ModelServerTimeout('test'), 'timeout'),
         (RouterTimeout(httpx.ReadTimeout('test')), 'read_timeout'),
         (ModelServerError('test', 503, SERVER_BUSY), 'queue_full'),
+        (ModelServerError('test', 500, 'server_error'), 'model_error'),
     ],
 )
 def test_router_timeout_and_queue_rejection_without_retry(error, reason):
@@ -156,6 +157,7 @@ def test_router_timeout_and_queue_rejection_without_retry(error, reason):
 
     result = route_calculation(QUESTION, timeout, {MEDICAL: ()})
     assert result.reason == reason and result.payload['status'] == 'none'
+    assert result.payload['message'].startswith('계산 판정을 일시적으로 하지 못했습니다.')
     assert calls == [QUESTION]
 
 
@@ -232,6 +234,24 @@ def test_separate_long_term_care_premium_must_be_extracted(care):
         row['label'] == '장기요양보험료' and row['value'] == 50_000 and row['source'] == f'질문: {care}'
         for row in complete.payload['inputs']
     )
+
+
+@pytest.mark.parametrize(
+    'label', ['건강·장기요양보험료', '건강 / 장기요양 보험료', '건강 및 장기요양보험료 합계는', '건강장기요양보험료']
+)
+def test_combined_health_and_long_term_care_premium_must_be_extracted_once(label):
+    calculator = 'midyear_income_tax'
+    question = f'올해 총급여 4천만원, {label} 200만원일 때 중도퇴사 근로소득세 계산해줘'
+    inputs = {'gross_pay': '4천만원'}
+    incomplete = route_calculation(question, classify(inputs, calculator), {calculator: ()}, reference_year=2026)
+    assert incomplete.payload['status'] == 'guidance' and incomplete.reason == 'unresolved_input'
+    assert '건강·장기요양보험료' in incomplete.payload['message']
+    complete = route_calculation(
+        question, classify(inputs | {'health_premium': '200만원'}, calculator), {calculator: ()}, reference_year=2026
+    )
+    assert complete.payload['status'] == 'calculated'
+    # At ₩40M gross, A deducts the single ₩2M premium under §52 and determines ₩1,843,500.
+    assert complete.payload['results'][0] == {'label': '결정세액', 'value': 1_843_500}
 
 
 @pytest.mark.parametrize(

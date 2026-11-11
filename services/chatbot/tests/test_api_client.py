@@ -571,6 +571,44 @@ def test_gated_lookup_uses_identical_rag_messages_and_no_calculation_event(env, 
     assert row['router_reason'] == 'lookup_question' and row['calculation_status'] == 'none'
 
 
+def test_router_queue_full_shows_temporary_guidance_and_continues_rag(env, real_server, tmp_path):
+    from lawbot import web
+    from lawbot_model_server.scheduler import QueueFull, Scheduler
+
+    question = '2026년 총급여 5천만 원, 의료비 300만 원이면 세액공제액은 얼마인가요?'
+    diagnostic = 'fixture 내부 대기열 진단'
+    original_chat = Scheduler.chat
+    chat_tokens = []
+
+    def chat(self, model_id, messages, options):
+        chat_tokens.append(options['max_tokens'])
+        if options['max_tokens'] == 128:
+            raise QueueFull(diagnostic)
+        return original_chat(self, model_id, messages, options)
+
+    env.setattr(Scheduler, 'chat', chat)
+    path = tmp_path / 'requests.jsonl'
+    env.setenv('LAWBOT_REQUEST_LOG', str(path))
+    app = service.load_app()
+    events = dict(web.chat_events(app, question, 'pro', 'concise'))
+
+    assert events['calculation']['status'] == 'none'
+    assert events['calculation']['message'].startswith('계산 판정을 일시적으로 하지 못했습니다.')
+    assert diagnostic not in events['calculation']['message']
+    assert events['done']['response_source'] == 'rag'
+    assert events['done']['text'].startswith('예고해야 합니다.')
+    assert 'error' not in events
+    assert chat_tokens == [128, 1024]
+    [(messages, _)] = real_server.chat[app.models.specs['pro'].model].calls
+    assert messages[1]['content'].startswith('[참고 조문]\n')
+    assert '직접 계산하지 말고 계산에 필요한 정보와 근거 조문만 안내할 것.' in messages[1]['content']
+    logged = path.read_text(encoding='utf-8')
+    record = json.loads(logged)
+    assert record['router_reason'] == 'queue_full'
+    assert record['calculation_status'] == 'none'
+    assert diagnostic not in logged and question not in logged
+
+
 def test_request_id_reaches_model_server_log(env, real_server, capsys):
     # 질문 하나의 임베딩·리랭크·생성 요청이 같은 X-Request-Id를 보내고, 모델 서버 접근 로그 줄에 남는다 (질문 내용은 없음)
 
