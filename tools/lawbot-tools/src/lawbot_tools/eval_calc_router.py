@@ -52,7 +52,7 @@ def _evaluation_cases(suite):
             row['expected_results'] = {result['label']: result['value'] for result in row['results']}
     old_answer = _read(FIXTURES / 'labor_severance_cr041.json')
     overrides = {
-        'CR041': ('severance_pay', 'calculated', {'평균임금 기준 퇴직금 추정': 9_000_000}),
+        'CR041': ('severance_pay', 'calculated', old_answer['expected_results']),
         'CR042': ('weekly_holiday_pay', 'guidance', None),
         'CR043': ('monthly_minimum_wage', 'calculated', {'월 최저임금': 2_156_880}),
         'CR045': ('premium_pay', 'guidance', None),

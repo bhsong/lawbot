@@ -75,6 +75,7 @@ class Result(TypedDict):
     label: str
     value: int | str
     unit: NotRequired[str]
+    condition: NotRequired[str]
 
 
 @dataclass(frozen=True)

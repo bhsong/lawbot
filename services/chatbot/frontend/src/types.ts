@@ -28,7 +28,7 @@ export type Calculation = {
   year?: number
   inputs?: (CalculationRow & { source: string })[]
   steps?: (CalculationRow & { formula: string; article: string })[]
-  results?: CalculationRow[]
+  results?: (CalculationRow & { condition?: string })[]
   articles?: string[]
   message?: string
 }

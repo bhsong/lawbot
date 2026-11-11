@@ -52,6 +52,10 @@ ROUTER_SYSTEM = (
 
 CALCULATED_INSTRUCTION = '계산 결과의 숫자를 그대로 쓰고 다시 계산하지 말 것. 결론에는 결과 항목과 금액(원)을 표의 순서대로 쓰고 중간 금액은 설명에 둘 것.'
 CALCULATED_UNITS_INSTRUCTION = '표의 결과 항목과 숫자·단위를 결론에 그대로 쓰고 다시 계산하지 말 것.'
+CONDITIONAL_INSTRUCTION = (
+    '계산 결과의 숫자를 그대로 쓰고 다시 계산하지 말 것. '
+    '결론에는 message의 조건과 두 금액을 그대로 쓰고, 가정에 따른 추정임을 명시할 것.'
+)
 GUIDANCE_INSTRUCTION = '직접 계산하지 말고 계산에 필요한 정보와 근거 조문만 안내할 것.'
 NO_CALCULATOR_MESSAGE = '이 질문은 계산 결과를 제공할 수 없습니다. 계산에 필요한 정보와 근거 조문을 확인해 주세요.'
 TEMPORARY_ROUTER_MESSAGE = '계산 판정을 일시적으로 하지 못했습니다. 계산에 필요한 정보와 근거 조문을 확인해 주세요.'
@@ -346,9 +350,15 @@ def _calculation_years(question: str, inputs: dict[str, str], reference: int, ca
 
 
 def prompt_suffix(payload: dict[str, Any]) -> str:
-    instruction = CALCULATED_INSTRUCTION if payload['status'] == 'calculated' else GUIDANCE_INSTRUCTION
-    if payload['status'] == 'calculated' and any(row.get('unit', '원') != '원' for row in payload['results']):
-        instruction = CALCULATED_UNITS_INSTRUCTION
+    instruction = GUIDANCE_INSTRUCTION
+    if payload['status'] == 'calculated':
+        results = payload['results']
+        if any(row.get('condition') for row in results):
+            instruction = CONDITIONAL_INSTRUCTION
+        elif any(row.get('unit', '원') != '원' for row in results):
+            instruction = CALCULATED_UNITS_INSTRUCTION
+        else:
+            instruction = CALCULATED_INSTRUCTION
     return f'\n\n[계산 결과]\n{json.dumps(payload, ensure_ascii=False, separators=(",", ":"))}\n{instruction}'
 
 

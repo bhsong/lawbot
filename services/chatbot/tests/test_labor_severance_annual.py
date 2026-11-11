@@ -19,7 +19,9 @@ def test_labor_calculation_cases(case):
     assert all(span in case['question'] for span in case['inputs'].values())
     result = calculate(case['calculator'], case['inputs'], year=2026)
     assert result.status == case['status']
-    assert list(result.results) == case.get('results', [])
+    assert [{key: value for key, value in row.items() if key != 'condition'} for row in result.results] == case.get(
+        'results', []
+    )
     if result.status == 'guidance':
         assert result.message
 
@@ -28,12 +30,51 @@ def test_cr041_estimates_from_monthly_wages_and_flags_historical_answer():
     case = json.loads((FIXTURES / 'labor_severance_cr041.json').read_text(encoding='utf-8'))
     result = calculate('severance_pay', case['inputs'], year=2026)
     assert result.status == 'calculated'
-    assert list(result.results) == [{'label': '평균임금 기준 퇴직금 추정', 'value': 9_000_000}]
+    assert {row['label']: row['value'] for row in result.results} == case['expected_results']
+    assert all(row.get('condition') for row in result.results)
     assert {row['source'] for row in result.inputs} >= {'질문: 300만원', '질문: 3년'}
     assert sum(row['source'] == '미입력(0)' for row in result.inputs) >= 2
-    assert {row['value'] for row in result.steps} >= {9_000_000, 100_000, 1095, 90}
-    assert '추정' in (result.message or '')
+    assert {row['value'] for row in result.steps} >= {9_000_000, 10_334_928, 100_000, '114832.5359', 1095, 90}
+    ordinary = next(step for step in result.steps if '1일 통상임금' in step['label'])
+    assert ordinary['article'] == '근로기준법 시행령 제6조'
+    assert '209시간' in ordinary['formula'] and '8시간' in ordinary['formula']
+    assert '반올림' in result.steps[-1]['formula']
+    message = result.message or ''
+    assert '월급이 기본급만으로 구성돼 모두 통상임금이라면' in message
+    assert '10,334,928원' in message and '9,000,000원 이상' in message
+    assert '209시간' in message and '8시간' in message and '법정 지급 요건' in message
     assert check_conclusion(case['answer'], result.as_dict()) == 'mismatch'
+    assert check_conclusion(message, result.as_dict()) == 'match'
+
+
+def test_monthly_estimate_uses_supplied_ordinary_wage_without_hypothetical_result():
+    result = calculate(
+        'severance_pay',
+        {'monthly_wage': '300만원', 'service_period': '3년', 'ordinary_daily_wage': '12만원'},
+        year=2026,
+    )
+
+    assert list(result.results) == [{'label': '퇴직금 추정', 'value': 10_800_000}]
+    assert any(row['label'] == '1일 통상임금' and row['source'] == '질문: 12만원' for row in result.inputs)
+    assert all('209시간' not in step['formula'] for step in result.steps)
+
+
+def test_monthly_estimate_never_lowers_the_average_wage_to_the_conditional_ordinary_wage():
+    result = calculate(
+        'severance_pay',
+        {'monthly_wage': '300만원', 'service_period': '3년', 'annual_bonus': '1200만원'},
+        year=2026,
+    )
+
+    assert [row['value'] for row in result.results] == [12_000_000, 12_000_000]
+
+
+def test_monthly_estimate_rounds_the_conditional_amount_after_proration():
+    result = calculate('severance_pay', {'monthly_wage': '3,000,086원', 'service_period': '3년'}, year=2026)
+
+    # 2,160,061,920 / 209 is below the half-won boundary. Rounding the displayed
+    # daily wage 114,835.8278 first would move the total above that boundary.
+    assert result.results[-1]['value'] == 10_335_224
 
 
 @pytest.mark.parametrize(

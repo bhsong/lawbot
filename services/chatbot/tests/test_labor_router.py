@@ -73,6 +73,25 @@ def test_calculation_suffix_avoids_json_whitespace_in_the_generation_prompt():
     assert len(encoded) < len(json.dumps(payload, ensure_ascii=False))
 
 
+def test_conditional_estimate_instructs_the_model_to_keep_both_conditions():
+    conclusion = '기본급만이면 약 10,334,928원, 그 외에는 평균임금 기준 약 9,000,000원 이상입니다.'
+    payload = {
+        'status': 'calculated',
+        'message': conclusion,
+        'results': [
+            {'label': '평균임금 기준', 'value': 9_000_000, 'condition': '평균임금 기준'},
+            {'label': '통상임금 하한 적용', 'value': 10_334_928, 'condition': '월급 전액이 통상임금'},
+        ],
+        'inputs': [],
+        'steps': [],
+    }
+    suffix = prompt_suffix(payload)
+    assert json.loads(suffix.splitlines()[3])['message'] == conclusion
+    assert 'message' in suffix.splitlines()[-1] and '조건' in suffix.splitlines()[-1]
+    assert check_conclusion(f'【결론】{conclusion}', payload) == 'match'
+    assert check_conclusion('【결론】퇴직금은 9,000,000원입니다.', payload) == 'mismatch'
+
+
 def test_evaluation_keeps_pr1_labels_and_counts_pr2_unsupported():
     from lawbot_tools.eval_calc_router import _evaluation_cases
 
@@ -81,7 +100,10 @@ def test_evaluation_keeps_pr1_labels_and_counts_pr2_unsupported():
     original = {case['id']: case for case in groups['pr1']}
     regression = {case['id']: case for case in groups['pr2_regression']}
     assert original['CR041']['calculator'] == 'none'
-    assert regression['CR041']['expected_results'] == {'평균임금 기준 퇴직금 추정': 9_000_000}
+    assert regression['CR041']['expected_results'] == {
+        '평균임금 기준 퇴직금 추정': 9_000_000,
+        '통상임금 하한 적용 퇴직금 추정': 10_334_928,
+    }
     assert regression['CR050']['status'] == 'guidance'
     assert len([case for case in groups['labor'] if case['kind'] == 'unsupported']) == 20
     assert len(samples) == 13 and '2,700만원' in next(case for case in samples if case['id'] == 'CR041')['prior_answer']

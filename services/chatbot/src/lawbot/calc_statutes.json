@@ -180,6 +180,18 @@
           "value": 12,
           "article": "근로자퇴직급여 보장법 제8조",
           "assumption": "정확한 날짜가 없는 계속근로기간 환산용"
+        },
+        "estimate_monthly_basis_hours": {
+          "value": 209,
+          "article": "근로기준법 시행령 제6조",
+          "assumption": "주 40시간·유급주휴 8시간의 표준 월 환산",
+          "source": "https://www.minimumwage.go.kr/minWage/policy/decisionMain.do",
+          "checked_on": "2026-11-11"
+        },
+        "estimate_daily_hours": {
+          "value": 8,
+          "article": "근로기준법 시행령 제6조",
+          "assumption": "표준 근무의 1일 소정근로시간"
         }
       },
       "annual_leave_days": {

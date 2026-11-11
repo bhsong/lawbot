@@ -138,6 +138,79 @@ def _guidance(base: Calculation, message: str, reason: str = 'missing_required')
     return replace(base, message=message, reason=reason)
 
 
+def _monthly_estimates(
+    base: Calculation,
+    steps: list[Step],
+    *,
+    monthly: int,
+    average: Fraction,
+    factor: Fraction,
+    factor_formula: str,
+    rules: Mapping[str, Any],
+) -> Calculation:
+    monthly_hours = int(rules['estimate_monthly_basis_hours']['value'])
+    daily_rule = rules['estimate_daily_hours']
+    daily_hours = int(daily_rule['value'])
+    conditional_ordinary = Fraction(monthly * daily_hours, monthly_hours)
+    average_amount = average * factor
+    conditional_amount = max(average, conditional_ordinary) * factor
+    if conditional_amount > _MAX_SAFE_INTEGER:
+        raise ValueError('amount exceeds the supported precision')
+    average_shown = _format_value(average_amount)
+    # Round only the presented conditional total, with halves rounded up.
+    conditional_shown = int(conditional_amount + Fraction(1, 2))
+
+    average_label = '평균임금 기준 퇴직금 추정'
+    conditional_label = '통상임금 하한 적용 퇴직금 추정'
+    average_formula = f'추정 1일 평균임금 {factor_formula}'
+    if isinstance(average_shown, str):
+        average_formula += ' (소수 넷째 자리까지 표시)'
+    steps.extend(
+        (
+            _step(average_label, average_formula, average_amount, _SEVERANCE),
+            _step(
+                '1일 통상임금 추정 (가정)',
+                f'{monthly:,}원 ÷ {monthly_hours}시간 × {daily_hours}시간 (소수 넷째 자리까지 표시)',
+                conditional_ordinary,
+                daily_rule['article'],
+            ),
+            _step(
+                conditional_label,
+                f'평균임금과 가정한 통상임금 중 큰 일급 {factor_formula} (최종 표시 금액만 원 단위 반올림)',
+                conditional_shown,
+                _SEVERANCE,
+            ),
+        )
+    )
+    average_result: Result = {
+        'label': average_label,
+        'value': average_shown,
+        'condition': '최근 3개월 월급이 일정하고 평균임금을 적용한 경우',
+    }
+    if isinstance(average_shown, str):
+        average_result['unit'] = '원'
+    schedule = f'월 {monthly_hours}시간·1일 {daily_hours}시간'
+    conditional_result: Result = {
+        'label': conditional_label,
+        'value': conditional_shown,
+        'condition': f'월급 전액이 통상임금이고 {schedule}인 경우',
+    }
+    average_text = (
+        f'{average_shown:,}' if isinstance(average_shown, int) else f'{average_amount:,.4f}'.rstrip('0').rstrip('.')
+    )
+    minimum_years = rules['minimum_service_years']['value']
+    minimum_hours = rules['minimum_weekly_hours']['value']
+    message = (
+        f'{schedule}을 기준으로 하고 월급이 기본급만으로 구성돼 모두 통상임금이라면 {conditional_shown:,}원, '
+        f'그 외에는 평균임금 기준 {average_text}원 이상으로 추정합니다. 최근 3개월 월급이 일정하다고 가정했습니다. '
+        f'실제 역일수와 계속근로 {minimum_years}년 이상·4주 평균 주 소정근로시간 {minimum_hours}시간 이상 등 '
+        '법정 지급 요건을 확인해 주세요.'
+    )
+    return replace(
+        base, status='calculated', steps=tuple(steps), results=(average_result, conditional_result), message=message
+    )
+
+
 def calculate(base: Calculation, inputs: Mapping[str, str], rules: Mapping[str, Any]) -> Calculation:
     money = {
         field: parse_amount(inputs[field]) for field, kind in FIELDS.items() if kind == 'money' and field in inputs
@@ -286,6 +359,8 @@ def calculate(base: Calculation, inputs: Mapping[str, str], rules: Mapping[str, 
     else:
         average = None
 
+    factor = pay_days * service_days / year_days
+    factor_formula = f'× {pay_days}일 × 인정 계속근로일수 ÷ {year_days}일'
     if adjusted is not None:
         if (ordinary is not None and adjusted < ordinary) or (average is not None and adjusted < average):
             return _guidance(base, '산정용 일급과 평균임금·통상임금 하한을 다시 확인해 주세요.', 'ambiguous_input')
@@ -296,24 +371,20 @@ def calculate(base: Calculation, inputs: Mapping[str, str], rules: Mapping[str, 
     elif ordinary is None:
         if not estimate:
             return _guidance(base, '퇴직일 기준 1일 통상임금을 알려 주세요.')
-        daily = average
-        daily_formula = '추정 1일 평균임금 (통상임금 하한 미확인)'
+        assert monthly is not None
+        return _monthly_estimates(
+            base, steps, monthly=monthly, average=average, factor=factor, factor_formula=factor_formula, rules=rules
+        )
     else:
         daily = max(average, Fraction(ordinary))
         daily_formula = '1일 평균임금과 1일 통상임금 중 큰 금액'
 
     steps.append(_step('퇴직금 산정용 일급', daily_formula, daily, _AVERAGE))
-    amount = daily * pay_days * service_days / year_days
+    amount = daily * factor
     if amount > _MAX_SAFE_INTEGER:
         raise ValueError('amount exceeds the supported precision')
-    label = (
-        '평균임금 기준 퇴직금 추정'
-        if estimate and ordinary is None
-        else '퇴직금 추정'
-        if estimate
-        else '법정 최소 퇴직금'
-    )
-    formula = f'산정용 일급 × {pay_days}일 × 인정 계속근로일수 ÷ {year_days}일'
+    label = '퇴직금 추정' if estimate else '법정 최소 퇴직금'
+    formula = f'산정용 일급 {factor_formula}'
     shown = _format_value(amount)
     result: Result = {'label': label, 'value': shown}
     if isinstance(shown, str):

@@ -26,6 +26,7 @@ export function CalculationCard({ calculation, check }: { calculation: Calculati
 
   const { year, inputs = [], steps = [], results = [] } = calculation
   const omitted = inputs.filter(({ source }) => source === NOT_ENTERED).length
+  const conditional = results.some(({ condition }) => condition)
   const valueLabel = results.some(({ unit }) => unit === '일') ? '일수' : '금액'
   const tax = calculation.calculator === 'medical_expense_credit' || calculation.calculator === 'midyear_income_tax'
   return (
@@ -35,15 +36,17 @@ export function CalculationCard({ calculation, check }: { calculation: Calculati
         {year !== undefined && <span>{year}년 {tax ? '귀속' : '기준'}</span>}
       </header>
       <dl className="calculation-results">
-        {results.map(({ label, value, unit }) => (
+        {results.map(({ label, value, unit, condition }) => (
           <div key={label}>
             <dt>{label}</dt>
             <dd>
               <strong>{formatValue(value, unit)}</strong>
+              {condition && <span className="calculation-condition">{condition}</span>}
             </dd>
           </div>
         ))}
       </dl>
+      {conditional && calculation.message && <p>{calculation.message}</p>}
       <details>
         <summary>
           <span>입력과 계산 단계</span>

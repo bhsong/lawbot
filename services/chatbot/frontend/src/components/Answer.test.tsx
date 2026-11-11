@@ -81,3 +81,24 @@ test('renders labor day and time units and an assumed salary source', () => {
   fireEvent.click(within(card).getByText('입력과 계산 단계'))
   expect(within(card).getByText('40시간')).toBeVisible()
 })
+
+test('shows the condition on each monthly severance estimate', () => {
+  const calculated: Turn = {
+    ...turn,
+    calculation: {
+      calculator: 'severance_pay', status: 'calculated',
+      results: [
+        { label: '평균임금 기준 퇴직금 추정', value: 9000000, condition: '평균임금 기준 하한' },
+        { label: '통상임금 하한 적용 퇴직금 추정', value: 10334928, condition: '월급 전액이 통상임금인 경우' },
+      ],
+      message: '기본급만이면 약 10,334,928원, 그 외에는 평균임금 기준 약 9,000,000원 이상입니다.',
+    },
+  }
+  render(<TurnView turn={calculated} selected reasons={null} onSelect={vi.fn()} onRetry={vi.fn()} onFeedback={vi.fn()} onShowSources={vi.fn()} />)
+  const card = screen.getByRole('region', { name: '계산 결과' })
+  const lower = within(card).getByText('9,000,000원', { selector: 'strong' }).closest('dd')!
+  const ordinary = within(card).getByText('10,334,928원', { selector: 'strong' }).closest('dd')!
+  expect(within(lower).getByText('평균임금 기준 하한')).toBeVisible()
+  expect(within(ordinary).getByText('월급 전액이 통상임금인 경우')).toBeVisible()
+  expect(within(card).getByText(/기본급만이면 약 10,334,928원/)).toBeVisible()
+})
