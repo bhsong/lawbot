@@ -18,7 +18,11 @@ from lawbot.calc_numbers import (
     can_assign_spans,
     complete_amount_spans,
     complete_labor_spans,
+    labor_amount_spans,
+    labor_hour_context_matches,
+    parse_count,
     parse_year,
+    restore_labor_unit,
 )
 from lawbot.calculators import (
     ARTICLE_HASHES,
@@ -31,6 +35,7 @@ from lawbot.calculators import (
     calculate,
 )
 from lawbot.labor_dates import parse_labor_date
+from lawbot.labor_language import is_uncertain
 from lawbot_common.api import SERVER_BUSY
 
 PR1_ROUTER_SYSTEM = """계산 질문 분류기. JSON 한 개만 출력한다.
@@ -60,6 +65,13 @@ GUIDANCE_INSTRUCTION = '직접 계산하지 말고 계산에 필요한 정보와
 NO_CALCULATOR_MESSAGE = '이 질문은 계산 결과를 제공할 수 없습니다. 계산에 필요한 정보와 근거 조문을 확인해 주세요.'
 TEMPORARY_ROUTER_MESSAGE = '계산 판정을 일시적으로 하지 못했습니다. 계산에 필요한 정보와 근거 조문을 확인해 주세요.'
 _AMBIGUOUS_INPUT_MESSAGE = '계산에 사용할 금액과 그 금액이 어떤 항목에 해당하는지 확인해 주세요.'
+_LABOR_AMBIGUOUS_MESSAGE = '계산에 필요한 근로 조건과 수량을 확인해 주세요.'
+_WORKFORCE_FIELDS = ('staff_count', 'workplace_size')
+_LABOR_FACT_LABELS = {
+    'attendance': '해당 주 소정근로일 개근 여부',
+    'employment': '해당 주 근로관계 존속 여부',
+    'employed_at_accrual': '해당 연차 발생일 재직 여부',
+}
 _KST = ZoneInfo('Asia/Seoul')
 _RELATIVE_YEARS = {'재작년': -2, '작년': -1, '지난해': -1, '올해': 0, '내년': 1}
 _YEARS = re.compile(
@@ -174,6 +186,26 @@ def _combined_medical_span(question: str, inputs: dict[str, str]) -> str | None:
     return None
 
 
+def _reconcile_workforce(inputs: dict[str, str], allowed: set[str]) -> bool:
+    for field, alias in (_WORKFORCE_FIELDS, _WORKFORCE_FIELDS[::-1]):
+        if field in allowed or (source := inputs.pop(field, None)) is None:
+            continue
+        if alias not in allowed:
+            continue
+        if (existing := inputs.get(alias)) is None:
+            inputs[alias] = source
+            continue
+        if existing == source:
+            continue
+        try:
+            if parse_count(existing, '명') == parse_count(source, '명'):
+                continue
+        except ValueError:
+            pass
+        return False
+    return True
+
+
 def route_calculation(
     question: str,
     classify: Callable[[str], str | None] | None,
@@ -246,22 +278,42 @@ def route_calculation(
     calculator = name
     labor = LABOR_CALCULATORS.get(calculator)
     allowed = set(INPUT_FIELDS[calculator]) | {'year', 'ambiguity'}
+    allowed_extras = set(_WORKFORCE_FIELDS) if labor is not None else set()
     top_ambiguity = obj.get('ambiguity')
-    spans = [*inputs.values()]
-    if 'ambiguity' in obj:
-        spans.append(top_ambiguity)
-    if not inputs.keys() <= allowed or any(not isinstance(span, str) or not span.strip() for span in spans):
+    if not inputs.keys() <= allowed | allowed_extras or any(
+        not isinstance(span, str) or not span.strip() for span in inputs.values()
+    ):
         return none('invalid_schema')
+    if 'ambiguity' in obj and (not isinstance(top_ambiguity, str) or not top_ambiguity.strip()):
+        return none('invalid_schema')
+    workforce_conflict = False
     if labor is None:
         # The tax year is derived from the question. Older responses may still carry a year.
         inputs.pop('year', None)
-        spans = [*inputs.values()]
-        if top_ambiguity is not None:
-            spans.append(top_ambiguity)
-
+    else:
+        workforce_conflict = not _reconcile_workforce(inputs, allowed)
+        if reconcile := getattr(labor, 'reconcile_inputs', None):
+            inputs = reconcile(question, inputs)
+    spans = [*inputs.values()]
+    if top_ambiguity is not None:
+        spans.append(top_ambiguity)
+    uncertain_labor_fact = (
+        next(
+            (
+                field
+                for field, source in inputs.items()
+                if labor.FIELDS.get(field) == 'fact' and source in question and is_uncertain(source)
+            ),
+            None,
+        )
+        if labor is not None
+        else None
+    )
     ambiguous = (
         _AMOUNT_RANGE.search(question) is not None
         or _AMBIGUOUS_AMOUNT.search(question) is not None
+        or workforce_conflict
+        or uncertain_labor_fact is not None
         or any(span is not None and span in question for span in (top_ambiguity, inputs.get('ambiguity')))
     )
     # Guidance for an ambiguous question does not use the extracted inputs.
@@ -272,7 +324,9 @@ def route_calculation(
         return none('corpus_mismatch')
 
     if ambiguous:
-        return guidance(_AMBIGUOUS_INPUT_MESSAGE)
+        if label := _LABOR_FACT_LABELS.get(uncertain_labor_fact or ''):
+            return guidance(f'{label}를 확인해 주세요.')
+        return guidance(_LABOR_AMBIGUOUS_MESSAGE if labor is not None else _AMBIGUOUS_INPUT_MESSAGE)
     if calculator in _UNSUPPORTED_DETAILS and _UNSUPPORTED_DETAILS[calculator].search(question):
         return guidance(
             '계산기의 적용 범위를 벗어난 항목이 있습니다. 해당 항목의 공제 요건과 공제 대상 금액을 확인해 주세요.',
@@ -282,6 +336,12 @@ def route_calculation(
         inputs['medical_category'] = combined
     reference = reference_year if reference_year is not None else datetime.now(_KST).year
     if labor is not None:
+        for field, source in inputs.items():
+            if (kind := labor.FIELDS.get(field)) is not None:
+                restored = restore_labor_unit(question, source, field, kind)
+                if restored is None or (kind == 'hours' and not labor_hour_context_matches(field, restored)):
+                    return guidance(_LABOR_AMBIGUOUS_MESSAGE)
+                inputs[field] = restored
         check_question = getattr(labor, 'question_issue', None)
         if check_question is not None and (issue := check_question(question, inputs)):
             return guidance(issue)
@@ -307,7 +367,7 @@ def route_calculation(
             inputs['year'] = year_source
 
     candidates = [
-        tuple(complete_amount_spans(question, source))
+        tuple(labor_amount_spans(question, source, field) if labor else complete_amount_spans(question, source))
         for field, source in inputs.items()
         if (labor.FIELDS.get(field) == 'money' if labor else field != 'medical_category')
     ]

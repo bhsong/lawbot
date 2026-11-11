@@ -5,7 +5,7 @@ import unicodedata
 from calendar import monthrange
 from datetime import date
 
-from lawbot.calc_numbers import parse_count
+from lawbot.calc_numbers import parse_count, strip_service_period_context
 
 _DATE = re.compile(r'(\d{4})([-./])\s*(\d{1,2})\2\s*(\d{1,2})\.?')
 _KOREAN_DATE = re.compile(r'(\d{4})\s*년\s*(\d{1,2})\s*월\s*(\d{1,2})\s*일')
@@ -23,7 +23,7 @@ def parse_labor_date(text: str) -> date:
 
 
 def parse_service_period(text: str) -> tuple[int, int, int]:
-    source = unicodedata.normalize('NFKC', text).strip()
+    source = strip_service_period_context(text)
     values = [0, 0, 0]
     previous_index = -1
     end = 0

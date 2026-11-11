@@ -1,7 +1,6 @@
 """Calculate statutory annual-leave accrual in days for ordinary work schedules."""
 
 import re
-import unicodedata
 from collections.abc import Mapping
 from dataclasses import replace
 from typing import TYPE_CHECKING, Any
@@ -14,6 +13,7 @@ from lawbot.labor_dates import (
     parse_labor_date,
     parse_service_period,
 )
+from lawbot.labor_language import classify_employment, is_uncertain, normalize_fact
 
 if TYPE_CHECKING:
     from lawbot.calculators import Calculation, InputRow, Step
@@ -56,11 +56,30 @@ _UNSUPPORTED = re.compile(
     r'회계\s*연도|단시간\s*(?:근로|근무)|시간제|파트타임|교대근무|근로시간\s*단축|'
     r'잔여\s*(?:연차|일수)|남은\s*연차|연차\s*(?:미사용\s*)?수당|사용\s*촉진|연차\s*대체'
 )
-_AFFIRMATIVE = re.compile(r'(?:연차)?(?:발생일|다음날)(?:에|에도|도)?(?:계속)?(?:재직|근로관계존속)(?:중|합니다|했다)?')
-_NEGATIVE = re.compile(
-    r'(?:연차)?(?:발생일|다음날)(?:(?:전에|전)(?:근로관계)?(?:종료|퇴사)|(?:에|에도|도)?(?:미재직|재직하지않음))'
-)
 _INPUT_RANGE = re.compile(r'\d+(?:\.\d+)?\s*(?:%|시간|명)?\s*(?:[~～∼–-]|또는)\s*\d+(?:\.\d+)?\s*(?:%|시간|명)')
+_FIRST_YEAR_SUM = re.compile(r'(?:첫해|첫1년|최초1년)[^.!?,]{0,36}(?:합산|합쳐|더해|더하면|포함)(?!하지(?:않|말))')
+_ACCRUAL_EMPLOYMENT = re.compile(
+    r'(?:발생일|다음날|1주년)[^.!?]{0,28}(?:재직|근로관계|고용관계|근로계약|고용계약|퇴사|근무중)'
+)
+_ACCRUAL_MESSAGE = '해당 연차 발생일에 재직했는지 알려 주세요.'
+
+
+def requests_first_year_sum(text: str) -> bool:
+    return _FIRST_YEAR_SUM.search(normalize_fact(text)) is not None and not is_uncertain(text)
+
+
+def has_annual_scope_request(text: str) -> bool:
+    return '누적' in text or _FIRST_YEAR_SUM.search(normalize_fact(text)) is not None
+
+
+def reconcile_inputs(question: str, inputs: Mapping[str, str]) -> dict[str, str]:
+    result = dict(inputs)
+    scope = result.get('include_first_year')
+    if isinstance(scope, str) and (
+        scope.strip().casefold() in {'true', 'false'} or (scope in question and not has_annual_scope_request(question))
+    ):
+        del result['include_first_year']
+    return result
 
 
 def question_issue(question: str, inputs: Mapping[str, str]) -> str | None:
@@ -74,24 +93,18 @@ def question_issue(question: str, inputs: Mapping[str, str]) -> str | None:
         return '상시 근로자수, 주 소정근로시간과 출근율을 확인해 주세요.'
     if 'full_attendance_months' in inputs and not re.search(r'개근|빠짐없이\s*출근|결근\s*없이', question):
         return '근속기간 중 개근하고 그 다음 날에도 재직한 월 수를 알려 주세요.'
-    if re.search(r'누적|첫해[^.!?\n]{0,20}(?:합산|더해|포함)', question) and 'include_first_year' not in inputs:
+    if has_annual_scope_request(question) and not requests_first_year_sum(inputs.get('include_first_year', '')):
         return '발생일별 연차와 합산할 기간을 확인해 주세요.'
+    if (source := inputs.get('employed_at_accrual')) and (fact := classify_employment(source)) is not None:
+        evidence = [
+            clause for clause in re.split(r'[.!?\n]', question) if _ACCRUAL_EMPLOYMENT.search(normalize_fact(clause))
+        ]
+        has_dates = 'hire_date' in inputs and bool({'as_of_date', 'last_employed_date'} & inputs.keys())
+        if any(classify_employment(clause) != fact for clause in evidence) or (
+            not has_dates and not any(source in clause for clause in evidence)
+        ):
+            return _ACCRUAL_MESSAGE
     return None
-
-
-def _compact(text: str) -> str:
-    return re.sub(r'\s+', '', unicodedata.normalize('NFKC', text))
-
-
-def _employed_fact(inputs: Mapping[str, str]) -> bool | None:
-    if (source := inputs.get('employed_at_accrual')) is None:
-        return None
-    source = _compact(source)
-    if _AFFIRMATIVE.fullmatch(source):
-        return True
-    if _NEGATIVE.fullmatch(source):
-        return False
-    raise ValueError('uncertain employment on accrual day')
 
 
 def _guidance(base: Calculation, message: str, reason: str = 'missing_required') -> Calculation:
@@ -119,10 +132,11 @@ def calculate(base: Calculation, inputs: Mapping[str, str], rules: Mapping[str, 
     attendance = parse_quantity(inputs['attendance_rate'], '%') if 'attendance_rate' in inputs else None
     if (hours is not None and hours > 168) or (attendance is not None and not 0 <= attendance <= 100):
         raise ValueError('invalid annual leave input')
+    include_first = requests_first_year_sum(inputs.get('include_first_year', ''))
     count_rows = {'workplace_size': (workers, '명'), 'full_attendance_months': (full_months, '개월')}
     rows: list[InputRow] = []
     for field, label in _LABELS.items():
-        if (source := inputs.get(field)) is None:
+        if (source := inputs.get(field)) is None or (field == 'include_first_year' and not include_first):
             continue
         row: InputRow = {'label': label, 'value': source, 'source': f'질문: {source}'}
         if field in count_rows:
@@ -151,7 +165,10 @@ def calculate(base: Calculation, inputs: Mapping[str, str], rules: Mapping[str, 
     active_on = parse_labor_date(inputs['as_of_date']) if 'as_of_date' in inputs else None
     last = parse_labor_date(inputs['last_employed_date']) if 'last_employed_date' in inputs else None
     end = active_on or last
-    fact = _employed_fact(inputs)
+    employment = inputs.get('employed_at_accrual')
+    fact = classify_employment(employment) if employment is not None else None
+    if employment is not None and fact is None:
+        return _guidance(base, _ACCRUAL_MESSAGE, 'ambiguous_input')
     if (active_on is not None and last is not None and active_on > last) or (
         start is not None and end is not None and start > end
     ):
@@ -192,11 +209,8 @@ def calculate(base: Calculation, inputs: Mapping[str, str], rules: Mapping[str, 
     annual_completed = completed_years > 0
     first_year = not annual_completed or (completed_years == 1 and employed_at_accrual is False)
     low_attendance = attendance is not None and attendance < threshold
-    include_first = 'include_first_year' in inputs
-    if include_first:
-        requested = _compact(inputs['include_first_year'])
-        if not re.search(r'(?:첫해|첫1년|최초1년).*?(?:합산|포함|더해)', requested) or completed_years != 1:
-            return _guidance(base, '합산할 최초 1년 월단위 연차와 1주년 발생분을 확인해 주세요.', 'ambiguous_input')
+    if include_first and completed_years != 1:
+        return _guidance(base, '합산할 최초 1년 월단위 연차와 1주년 발생분을 확인해 주세요.', 'ambiguous_input')
     if not first_year and attendance is None:
         return _guidance(base, '연차 산정 대상 1년의 출근율을 알려 주세요.')
     if not first_year and not low_attendance and employed_at_accrual is None:

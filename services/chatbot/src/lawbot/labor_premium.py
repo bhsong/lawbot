@@ -7,7 +7,8 @@ from fractions import Fraction
 from math import ceil
 from typing import TYPE_CHECKING, Any
 
-from lawbot.calc_numbers import can_assign_spans, complete_labor_spans, parse_amount, parse_count, parse_hours
+from lawbot.calc_numbers import can_assign_spans, complete_labor_spans, parse_count, parse_hours, parse_labor_amount
+from lawbot.labor_language import premium_pay_scope
 
 if TYPE_CHECKING:
     from lawbot.calculators import Calculation, InputRow, Result, Step
@@ -43,10 +44,6 @@ _HOURS_LABELS = {
 }
 _HOLIDAY_SPLIT = {'holiday_within_hours', 'holiday_excess_hours'}
 _HOURS_PER_DAY = 24
-_BASE_REQUEST = re.compile(
-    r'기본\s*임금(?:을)?\s*(?:까지|포함(?!하지\s*(?:않|말))|합산)|총\s*(?:지급액|임금)|임금\s*총액'
-)
-_PREMIUM_ONLY = re.compile(r'(?:가산|추가)\s*(?:수당|분|액)\s*만(?!\s*아니)|기본\s*임금\s*(?:제외|빼고)')
 _SPECIAL_SCOPE = re.compile(
     r'(?:제\s*56\s*조|근로시간|휴일)\s*(?:의\s*)?적용\s*제외'
     r'|감시\s*(?:[·ㆍ/]\s*|및\s*)?단속|감시적|단속적|관리\s*[·ㆍ/]?\s*감독\s*(?:업무|근로)'
@@ -65,22 +62,93 @@ _STAFF_UNCERTAIN = re.compile(
 _MULTIPLE_HOLIDAYS = re.compile(
     r'휴일\s*(?:의\s*)?(?:이틀|사흘|나흘|여러\s*날|[두세네]\s*(?:날|번)|(?:[2-9]|[1-9][0-9]+)\s*(?:일|번))'
     r'|휴일\s*마다|휴일\s*(?:근로\s*)?(?:전체|합산|합계|총)|(?:이틀|사흘|나흘)\s*(?:의\s*)?휴일'
+    r'|(?:[두세네]|[2-9]|[1-9][0-9]+)\s*(?:개(?:의)?|번(?:의)?)?\s*휴일'
 )
 _HOLIDAY_OVERTIME = re.compile(r'휴일\s*(?:근로(?:의)?\s*)?연장|휴일[^.!?\n]{0,40}그\s*중\s*연장')
 _BREAK_INCLUDED = re.compile(r'휴게(?:시간)?[^.!?\n]{0,15}(?:포함|안\s*뺀)')
 _BREAK_EXCLUDED = re.compile(r'휴게(?:시간)?[^.!?\n]{0,8}(?:제외|빼고|(?<!안 )뺀)')
 _UNCERTAIN_TIME = re.compile(r'(야간|연장|휴일)[^.!?\n]{0,24}(?:인지|는지)\s*(?:모르|몰라|불명확)')
-_HOURS_TOKEN = r'(?:[0-9０-９]+(?:[.．][0-9０-９]+)?|[영공일이삼사오육칠팔구십백천]+)\s*(?:시간|분)'
-_LABELED_HOURS = rf'\s*(?:실?근로|근무)?\s*(?:시간\s*)?(?:은|는|이|가|를|을|에|:)?\s*{_HOURS_TOKEN}'
+_HOURS_NUMBER = r'(?:[0-9０-９]+(?:[.．][0-9０-９]+)?|[영공일이삼사오육칠팔구십백천]+)'
+_HOURS_TOKEN = rf'{_HOURS_NUMBER}\s*(?:시간|분)'
+_HOURS_SEPARATOR = r'\s*(?:은|는|이|가|를|을|에|[:：])?\s*'
+_LABELED_HOURS = rf'\s*(?:실?근로|근무)?\s*(?:시간)?{_HOURS_SEPARATOR}{_HOURS_TOKEN}'
 _HOUR_EVIDENCE = {
     'overtime_hours': re.compile(rf'(?:연장|초과){_LABELED_HOURS}'),
     'night_hours': re.compile(rf'야간{_LABELED_HOURS}'),
     'holiday_hours': re.compile(rf'휴일(?:(?!야간|연장)[^.!?\n,]){{0,22}}?{_HOURS_TOKEN}'),
 }
+_DURATION = rf'(?P<duration>{_HOURS_NUMBER}\s*(?:시간(?:\s*{_HOURS_NUMBER}\s*분)?|분))'
+_WORK_HOURS = r'(?:실제\s*)?(?:(?:실?근로|근무)(?:한)?\s*(?:시간)?|일한\s*시간)'
+_TOTAL_MARK = r'(?:총|전체|합계)'
+_DISTINCT_HOURS = r'중복\s*(?:없는|없이|제외한)\s*'
+_TOTAL_HOURS = re.compile(
+    rf'(?:{_TOTAL_MARK}\s*{_WORK_HOURS}{_HOURS_SEPARATOR}(?:{_DISTINCT_HOURS})?'
+    rf'|{_WORK_HOURS}{_HOURS_SEPARATOR}(?:{_DISTINCT_HOURS})?{_TOTAL_MARK}{_HOURS_SEPARATOR}(?:{_DISTINCT_HOURS})?'
+    rf'|{_DISTINCT_HOURS}{_WORK_HOURS}{_HOURS_SEPARATOR}){_DURATION}'
+)
+_SINGLE_HOLIDAY_HOURS = re.compile(
+    r'(?:휴일\s*(?:하루|한\s*날|[1１]\s*일)|(?:단일|한\s*번의|하루의)\s*휴일)'
+    r'\s*(?:에(?:는|만)?|동안|만|의)?\s*(?:[,，]\s*)?'
+    r'(?:휴게(?:시간)?\s*(?:를|을|은)?\s*(?:제외(?:한|하고)?|빼고)\s*)?'
+    rf'(?:{_WORK_HOURS}{_HOURS_SEPARATOR})?(?:실제(?:로)?\s*)?{_DURATION}'
+)
+_EXPLICIT_HOLIDAY_SPLIT = re.compile(rf'(?:이내|이하|초과)\s*(?:분|시간|실?근로|근무)?{_HOURS_SEPARATOR}{_HOURS_TOKEN}')
+_CHECK_SCOPE = '기본임금을 포함한 총액이 필요한지 확인해 주세요.'
 
 
 def _special_scope(text: str) -> bool:
     return any(not _SCOPE_NEGATION.match(text, match.end()) for match in _SPECIAL_SCOPE.finditer(text))
+
+
+def _duration_spans(question: str, pattern: re.Pattern[str]) -> list[tuple[int, int]]:
+    return [
+        match.span('duration')
+        for match in pattern.finditer(question)
+        if match.span('duration') in complete_labor_spans(question, match['duration'], 'hours')
+    ]
+
+
+def _hour_positions(question: str, inputs: Mapping[str, str]) -> list[tuple[tuple[int, int], ...]]:
+    return [
+        tuple(complete_labor_spans(question, source, 'hours'))
+        for field, source in inputs.items()
+        if field in _HOURS_LABELS
+    ]
+
+
+def _unique_disjoint_duration(question: str, pattern: re.Pattern[str], inputs: Mapping[str, str]) -> str | None:
+    spans = _duration_spans(question, pattern)
+    if len(spans) == 1 and can_assign_spans([*_hour_positions(question, inputs), tuple(spans)]):
+        start, end = spans[0]
+        return question[start:end]
+    return None
+
+
+def reconcile_inputs(question: str, inputs: Mapping[str, str]) -> dict[str, str]:
+    """Recover scope and hours only when original wording determines their roles."""
+    reconciled = dict(inputs)
+    scope, evidence = premium_pay_scope(question)
+    flag = inputs.get('include_base')
+    if evidence is not None and (flag is None or (flag in question and premium_pay_scope(flag)[0] == 'unspecified')):
+        reconciled['include_base'] = evidence
+
+    if (
+        _HOLIDAY_SPLIT & inputs.keys()
+        and not _MULTIPLE_HOLIDAYS.search(question)
+        and not _EXPLICIT_HOLIDAY_SPLIT.search(question)
+    ):
+        remaining = {
+            field: source for field, source in reconciled.items() if field not in _HOLIDAY_SPLIT | {'holiday_hours'}
+        }
+        source = _unique_disjoint_duration(question, _SINGLE_HOLIDAY_HOURS, remaining)
+        if source is not None and inputs.get('holiday_hours', source) == source:
+            reconciled = remaining | {'holiday_hours': source}
+
+    if scope == 'base' and 'total_hours' not in reconciled:
+        source = _unique_disjoint_duration(question, _TOTAL_HOURS, reconciled)
+        if source is not None:
+            reconciled['total_hours'] = source
+    return reconciled
 
 
 def question_issue(question: str, inputs: Mapping[str, str]) -> str | None:
@@ -98,15 +166,27 @@ def question_issue(question: str, inputs: Mapping[str, str]) -> str | None:
     holiday_overtime = _HOLIDAY_OVERTIME.search(question) is not None
     if holiday_overtime and ('overtime_hours' in inputs or not {'holiday_hours', *_HOLIDAY_SPLIT} & inputs.keys()):
         return '휴일 근로에 포함된 연장시간과 별도의 평일 연장시간을 구분해 주세요.'
-    if _BASE_REQUEST.search(question) and 'include_base' not in inputs and 'total_hours' not in inputs:
-        return '기본임금을 포함하려면 중복 없는 총 실근로시간을 확인해 주세요.'
-    if not can_assign_spans(
-        [
-            tuple(complete_labor_spans(question, source, 'hours'))
-            for field, source in inputs.items()
-            if field in _HOURS_LABELS
-        ]
+    scope, _ = premium_pay_scope(question)
+    if scope == 'ambiguous':
+        return _CHECK_SCOPE
+    if (
+        (flag := inputs.get('include_base')) is not None
+        and scope != 'unspecified'
+        and premium_pay_scope(flag)[0] != scope
     ):
+        return _CHECK_SCOPE
+    if scope == 'base':
+        if 'include_base' not in inputs and 'total_hours' not in inputs:
+            return '기본임금을 포함하려면 중복 없는 총 실근로시간을 확인해 주세요.'
+        total_spans = _duration_spans(question, _TOTAL_HOURS)
+        total_source = inputs.get('total_hours')
+        if len(total_spans) > 1 or (
+            total_source is not None
+            and total_spans
+            and total_spans[0] not in complete_labor_spans(question, total_source, 'hours')
+        ):
+            return '중복 없는 총 실근로시간을 하나로 확인해 주세요.'
+    if not can_assign_spans(_hour_positions(question, inputs)):
         return '연장·야간·휴일에 해당하는 시간을 각각 확인해 주세요.'
     for field, pattern in _HOUR_EVIDENCE.items():
         if field in inputs or (field == 'overtime_hours' and holiday_overtime):
@@ -144,10 +224,10 @@ def _result(label: str, value: Fraction | int) -> Result:
 def _base_requested(inputs: Mapping[str, str]) -> bool | None:
     if (flag := inputs.get('include_base')) is None:
         return 'total_hours' in inputs
-    has_base, only_premium = _BASE_REQUEST.search(flag) is not None, _PREMIUM_ONLY.search(flag) is not None
-    if has_base == only_premium or re.search(r'인지|모르|불명확|또는', flag):
+    scope, _ = premium_pay_scope(flag)
+    if scope in ('ambiguous', 'unspecified'):
         return None
-    return has_base
+    return scope == 'base'
 
 
 def calculate(base: Calculation, inputs: Mapping[str, str], rules: Mapping[str, Any]) -> Calculation:
@@ -169,7 +249,7 @@ def calculate(base: Calculation, inputs: Mapping[str, str], rules: Mapping[str, 
 
     include_base = _base_requested(inputs)
     if include_base is None:
-        return replace(base, reason='ambiguous_input', message='기본임금을 포함한 총액이 필요한지 확인해 주세요.')
+        return replace(base, reason='ambiguous_input', message=_CHECK_SCOPE)
     if include_base and 'total_hours' not in inputs:
         return replace(
             base, reason='missing_required', message='기본임금 산정에 필요한 중복 없는 총 실근로시간을 알려 주세요.'
@@ -177,7 +257,7 @@ def calculate(base: Calculation, inputs: Mapping[str, str], rules: Mapping[str, 
 
     staff_source = inputs['staff_count']
     staff = parse_count(staff_source, '인' if staff_source.strip().endswith('인') else '명')
-    wage = parse_amount(inputs['ordinary_hourly_wage'])
+    wage = parse_labor_amount(inputs['ordinary_hourly_wage'])
     if staff <= 0 or wage <= 0:
         return replace(base, reason='ambiguous_input', message='상시 근로자 수와 통상시급을 확인해 주세요.')
 

@@ -1194,3 +1194,51 @@ CR041은 계산표에 평균임금 기준 **9,000,000원**과 월급 전액이 �
 근로기준법 제56조(연장ㆍ야간 및 휴일 근로)
 근로기준법 시행령 제6조(통상임금)
 ~~~
+
+## 보완 후
+
+held-out 60문항은 구현 전에 별도 커밋 `19b20ef`에 고정했다. fixture SHA-256은 `1bb1e9624beb7dd818d7ad08fe046602776cac344fa778a94f583f88f2f445ac`이다.
+두 라우터 system 해시는 첫 실행과 같다. 첫 글자 추가 지연 증가분 p50 +1.172초·p95 +0.204초는 **사용자 수용**이다. CR057의 미지원 기대값은 유지했고 조회 오분류는 **미달**이다.
+
+### 오프라인 재채점
+
+첫 실행의 임시 JSON은 평가 기록을 옮긴 뒤 삭제했다. 위 직접 평가 판정 원문에 남은 46건을 재생했다. 238건 중 나머지 192건의 원출력은 보존되지 않았다. 기존 코드에 46건을 재생한 판정·사유·결과는 기록과 모두 일치했다.
+보존 자료에는 기존 실패 사례가 집중돼 있다. 아래 수치는 보완 확인용이며 전체 val 추정이나 통과 판정에 사용하지 않았다. 모델 호출 0회, 출력한 계산 21/21 검산 일치다.
+
+| 문항군 | 보존 원출력 | 이전 일치 | 이후 일치 | 개선 | 악화 | 유지 |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| PR1 목록 | 13 | 9 | 9 | 0 | 0 | 13 |
+| PR2 대조 | 11 | 10 | 10 | 0 | 0 | 11 |
+| 노동 val | 22 | 0 | 20 | 20 | 0 | 2 |
+| 합계 | 46 | 19 | 39 | 20 | 0 | 26 |
+
+| 개선 문항 | 이전 상태·사유 | 이후 상태·사유 | 독립 검산 |
+| --- | --- | --- | --- |
+| MW002 | `guidance/ambiguous_input` | `calculated/selected` | 월 최저임금 2,096,270 |
+| WH005 | `guidance/ambiguous_input` | `calculated/selected` | 주휴수당 36,000 |
+| WH008 | `none/invalid_schema` | `calculated/selected` | 주휴수당 94,500 |
+| WH010 | `guidance/ambiguous_input` | `calculated/selected` | 주휴수당 0 |
+| AL01 | `none/span_not_in_question` | `calculated/selected` | 연차유급휴가 일수 6 |
+| AL02 | `guidance/ambiguous_input` | `calculated/selected` | 연차유급휴가 일수 11 |
+| AL03 | `guidance/ambiguous_input` | `calculated/selected` | 연차유급휴가 일수 15 |
+| AL12 | `none/conversion_failed` | `calculated/selected` | 연차유급휴가 일수 0 |
+| AL13 | `none/conversion_failed` | `guidance/missing_required` | 계산 없음 |
+| AL14 | `none/conversion_failed` | `guidance/missing_required` | 계산 없음 |
+| AL16 | `none/conversion_failed` | `guidance/ambiguous_input` | 계산 없음 |
+| AL17 | `none/span_not_in_question` | `guidance/ambiguous_input` | 계산 없음 |
+| AL18 | `none/conversion_failed` | `guidance/ambiguous_input` | 계산 없음 |
+| LP002 | `guidance/ambiguous_input` | `calculated/selected` | 법정 가산수당 30,000 |
+| LP003 | `guidance/missing_required` | `calculated/selected` | 법정 가산수당 40,000 |
+| LP004 | `none/span_not_in_question` | `calculated/selected` | 법정 가산수당 72,000 |
+| LP005 | `guidance/missing_required` | `calculated/selected` | 법정 가산수당 96,000 |
+| LP006 | `guidance/missing_required` | `calculated/selected` | 법정 가산수당 37,500, 기본임금 60,000, 기본임금 포함 합계 97,500 |
+| LP008 | `guidance/ambiguous_input` | `calculated/selected` | 법정 가산수당 104,000 |
+| LP012 | `guidance/missing_required` | `calculated/selected` | 법정 가산수당 60,000, 기본임금 96,000, 기본임금 포함 합계 156,000 |
+
+유지 26건의 판정·사유·결과는 모두 동일했다.
+
+- PR1 목록 13건 — CR023·CR030·CR033·CR041·CR043·CR048·CR050·CR052·CR057·CR077·CR088·CR092·CR100
+- PR2 대조 11건 — CR023·CR030·CR041·CR043·CR048·CR050·CR052·CR057·CR077·CR088·CR092
+- 노동 val 2건 — LU06·WH004
+
+노동 val에서 WH004는 조회, LU06은 퇴직금 계산기에서 적용 범위 확인 안내로 남았다.

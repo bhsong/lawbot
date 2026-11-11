@@ -9,26 +9,35 @@ from datetime import datetime, time
 from hashlib import sha256
 from pathlib import Path
 from statistics import median, quantiles
+from tempfile import NamedTemporaryFile
 from time import perf_counter
 from unittest.mock import patch
 from zoneinfo import ZoneInfo
 
 import httpx
+from openai import OpenAI
 
-from lawbot import envfile, manifest, service, settings
-from lawbot.api_client import ModelServerClient
+from lawbot import deploy, envfile, manifest, security, service, settings
+from lawbot.api_client import ModelServerClient, request_timeout
 from lawbot.calc_corpus import calculator_compatibility
 from lawbot.calc_gate import is_calculation_question
 from lawbot.calc_router import PR1_ROUTER_SYSTEM, ROUTER_SYSTEM, route_calculation
-from lawbot.llm import ROUTER_MAX_TOKENS, TEMPERATURE
+from lawbot.llm import LLM, ROUTER_MAX_TOKENS, TEMPERATURE
 from lawbot.paths import ROOT
-from lawbot_common.api import HEALTH_PATH
+from lawbot_common.api import CHAT_PATH, HEALTH_PATH, MODELS_PATH, ModelsResponse
 
 VAL = ROOT / 'services/chatbot/tests/fixtures/calc_router_val.json'
 FIXTURES = VAL.parent
 SAMPLES = {'CR001', 'CR005', 'CR021', 'CR025', 'CR028', 'CR079', 'CR081', 'CR091'}
 UNSUPPORTED_PR1 = {'CR041', 'CR043', 'CR048', 'CR050', 'CR052', 'CR057'}
 POST_LIMITS = {'pr1': 190, 'labor-pr2': 383}
+HELDOUT_SUITE = 'labor-pr2-heldout'
+HELDOUT = FIXTURES / 'labor_router_heldout_test.json'
+HELDOUT_SHA256 = '1bb1e9624beb7dd818d7ad08fe046602776cac344fa778a94f583f88f2f445ac'
+HELDOUT_CORPUS = ROOT / 'data/v5/law_articles_v5_decree.csv'
+HELDOUT_POST_LIMIT = 60
+HELDOUT_READ_TIMEOUT = 300
+GUIDANCE_REASONS = {'missing': 'missing_required', 'ambiguous': 'ambiguous_input'}
 SEOUL = ZoneInfo('Asia/Seoul')
 ANSWER_TIMINGS = ('ttft', 'first_text')
 STAGE_TIMINGS = ('search', 'rerank', 'decree_search', 'decree_rerank', 'total')
@@ -132,7 +141,7 @@ def _configuration(cfg, client):
 
 
 def _latency_summary(values):
-    """Report inclusive percentiles in milliseconds, excluding unavailable values."""
+    """Report inclusive percentiles, excluding unavailable values."""
     measured = [value for value in values if value is not None]
     if not measured:
         return {'n': 0, 'p50': None, 'p95': None}
@@ -264,7 +273,7 @@ def _quality(routes):
         group = groups.setdefault(row['group'], {})
         key = (
             f'{row["expected_calculator"]}/{row["kind"]}'
-            if row['group'] == 'labor' and row['kind'] not in ('general', 'unsupported')
+            if row['group'] in ('labor', HELDOUT_SUITE) and row['kind'] not in ('general', 'unsupported')
             else row['kind']
         )
         totals = group.setdefault(key, {'matched': 0, 'total': 0})
@@ -323,16 +332,287 @@ def _live(groups, samples, output, post_limit):
     return 0 if report['valid'] else 2
 
 
+class _HeldoutStop(RuntimeError):
+    """A stable reason that can be reported without exposing connection details."""
+
+
+def _heldout_guard(now=None):
+    if time(6, 20) <= (now or datetime.now(SEOUL)).time() < time(6, 50):
+        raise _HeldoutStop('maintenance_window')
+    try:
+        level = int(
+            subprocess.check_output(
+                ['/usr/sbin/sysctl', '-n', 'kern.memorystatus_vm_pressure_level'],
+                text=True,
+                timeout=5,
+                stderr=subprocess.DEVNULL,
+            )
+        )
+    except OSError, ValueError, subprocess.SubprocessError:
+        raise _HeldoutStop('memory_pressure_unavailable') from None
+    # XNU exposes userspace dispatch flags: normal 1, warning 2, critical 4.
+    if level == 4:
+        raise _HeldoutStop('critical_memory_pressure')
+    if level not in (1, 2):
+        raise _HeldoutStop('memory_pressure_unavailable')
+    return level
+
+
+def _heldout_settings():
+    try:
+        envfile.load()
+        profile = deploy.get_profile()
+        server = security.model_server_url()
+        token = security.model_token()
+        endpoint, _, external = security.llm_endpoint(server)
+    except OSError, ValueError, RuntimeError:
+        raise _HeldoutStop('configuration_error') from None
+    pro = next((spec for spec in profile.models if spec.key == 'pro'), None)
+    if not server or external or endpoint != f'{server}/v1' or profile.name != 'v5' or pro is None:
+        raise _HeldoutStop('configuration_error')
+    return server, token, pro.model
+
+
+def _webapp_commit():
+    return subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=ROOT, text=True, timeout=5).strip()
+
+
+def _heldout_configuration(client, model, fixture_sha256, articles_sha256):
+    try:
+        health = client.get(f'{HEALTH_PATH}?runtime=true').raise_for_status().json()
+        if (
+            not isinstance(health, dict)
+            or health.get('ready') is not True
+            or type(health.get('max_concurrent')) is not int
+            or health['max_concurrent'] != 1
+            or not isinstance(health.get('commit'), str)
+            or not health['commit']
+        ):
+            raise _HeldoutStop('server_not_ready')
+        cards = ModelsResponse.model_validate(client.get(MODELS_PATH).raise_for_status().json()).data
+        pro = next((card for card in cards if card.id == model and card.type == 'chat'), None)
+        if pro is None or not pro.loaded or not pro.revision:
+            raise _HeldoutStop('pro_not_ready')
+        webapp_commit = _webapp_commit()
+    except httpx.HTTPError, OSError, ValueError, subprocess.SubprocessError:
+        raise _HeldoutStop('configuration_probe_failed') from None
+    return {
+        'webapp_commit': webapp_commit,
+        'model_server_commit': health['commit'],
+        'server_max_concurrent': health['max_concurrent'],
+        'model': {'id': pro.id, 'revision': pro.revision, 'loaded': pro.loaded},
+        'fixture_sha256': fixture_sha256,
+        'articles_sha256': articles_sha256,
+        'router_sha256': sha256(ROUTER_SYSTEM.encode()).hexdigest(),
+        'router_max_tokens': ROUTER_MAX_TOKENS,
+        'router_timeout_s': HELDOUT_READ_TIMEOUT,
+        'temperature': TEMPERATURE,
+        'max_retries': 0,
+    }
+
+
+def _heldout_cases(raw, expected_hash):
+    if sha256(raw).hexdigest() != expected_hash:
+        raise _HeldoutStop('fixture_hash_mismatch')
+    try:
+        rows = json.loads(raw)
+    except ValueError, RecursionError:
+        raise _HeldoutStop('fixture_invalid') from None
+    if not isinstance(rows, list) or len(rows) != HELDOUT_POST_LIMIT:
+        raise _HeldoutStop('fixture_invalid')
+    for row in rows:
+        if not isinstance(row, dict) or any(
+            not isinstance(row.get(key), str) or not row[key]
+            for key in ('id', 'question', 'calculator', 'kind', 'status')
+        ):
+            raise _HeldoutStop('fixture_invalid')
+        results = row.get('expected_results')
+        if row['kind'] == 'calculated':
+            if row['status'] != 'calculated' or not isinstance(results, dict) or not results:
+                raise _HeldoutStop('fixture_invalid')
+        elif row['kind'] not in GUIDANCE_REASONS or row['status'] != 'guidance' or results is not None:
+            raise _HeldoutStop('fixture_invalid')
+    if len({row['id'] for row in rows}) != HELDOUT_POST_LIMIT:
+        raise _HeldoutStop('fixture_invalid')
+    return rows
+
+
+def _heldout_score(case, row):
+    expected_reason = GUIDANCE_REASONS.get(case['kind'])
+    if expected_reason is None:
+        return row
+    return row | {
+        'expected_reason': expected_reason,
+        'classification_match': (
+            row['classification_match'] and row['reason'] == expected_reason and not row['results']
+        ),
+        'results_match': False if row['results'] else row.get('results_match'),
+    }
+
+
+def _checkpoint(output, report, *, initialize=False):
+    """Keep a readable, private snapshot even if the process stops mid-request."""
+
+    def dump(stream):
+        json.dump(report, stream, ensure_ascii=False, indent=2)
+        stream.write('\n')
+        stream.flush()
+        os.fsync(stream.fileno())
+
+    if initialize:
+        descriptor = os.open(output, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        with os.fdopen(descriptor, 'w', encoding='utf-8') as stream:
+            dump(stream)
+        return
+    with NamedTemporaryFile(mode='w', encoding='utf-8', dir=output.parent, delete=False) as stream:
+        temporary = Path(stream.name)
+        try:
+            dump(stream)
+        except BaseException:
+            temporary.unlink(missing_ok=True)
+            raise
+    try:
+        temporary.replace(output)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
+def _check_heldout_response(response):
+    if not response.is_success:
+        raise _HeldoutStop('http_error')
+    try:
+        response.read()
+        choices = response.json()['choices']
+        if not isinstance(choices, list) or len(choices) != 1:
+            raise ValueError
+        choice = choices[0]
+        if not isinstance(choice['message']['content'], str) or choice.get('finish_reason') not in ('stop', 'length'):
+            raise ValueError
+    except ValueError, KeyError, IndexError, TypeError:
+        raise _HeldoutStop('invalid_response') from None
+
+
+def _live_heldout(fixture, expected_hash, output):
+    report = {
+        'suite': HELDOUT_SUITE,
+        'status': 'running',
+        'valid': False,
+        'stop_reason': None,
+        'before': None,
+        'after': None,
+        'inference_posts': 0,
+        'pending_case_id': None,
+        'routes': [],
+    }
+    _checkpoint(output, report, initialize=True)
+    failure = None
+
+    def on_request(request):
+        nonlocal failure
+        try:
+            if request.method != 'POST' or request.url != endpoint or report['inference_posts'] >= HELDOUT_POST_LIMIT:
+                raise _HeldoutStop('request_out_of_scope')
+            report['memory_pressure_level'] = _heldout_guard()
+            report['inference_posts'] += 1
+            _checkpoint(output, report)
+        except _HeldoutStop as exc:
+            failure = exc
+            raise
+
+    def on_response(response):
+        nonlocal failure
+        try:
+            _check_heldout_response(response)
+        except _HeldoutStop as exc:
+            if not response.is_success:
+                report['http_status'] = response.status_code
+            failure = exc
+            raise
+
+    try:
+        cases = _heldout_cases(fixture.read_bytes(), expected_hash)
+        report['memory_pressure_level'] = _heldout_guard()
+        server, token, model = _heldout_settings()
+        endpoint = httpx.URL(f'{server}{CHAT_PATH}')
+        articles = HELDOUT_CORPUS.read_bytes()
+        compatibility = calculator_compatibility(articles)
+        if not compatibility or any(compatibility.values()):
+            raise _HeldoutStop('corpus_mismatch')
+        with httpx.Client(
+            base_url=server, headers={'Authorization': f'Bearer {token}'}, timeout=5, trust_env=False
+        ) as checks:
+            report['before'] = _heldout_configuration(checks, model, expected_hash, sha256(articles).hexdigest())
+            transport = httpx.Client(trust_env=False, event_hooks={'request': [on_request], 'response': [on_response]})
+            with OpenAI(
+                base_url=f'{server}/v1',
+                api_key=token,
+                max_retries=0,
+                timeout=request_timeout(HELDOUT_READ_TIMEOUT),  # pyright: ignore[reportArgumentType]
+                http_client=transport,  # pyright: ignore[reportArgumentType]
+            ) as client:
+                pro = LLM(model, client, '')
+                for case in cases:
+                    report['pending_case_id'] = case['id']
+                    row = _route_case(case, pro, compatibility, HELDOUT_SUITE)
+                    if failure is not None:
+                        raise failure
+                    if row['reason'] in (
+                        'timeout',
+                        'connect_timeout',
+                        'read_timeout',
+                        'write_timeout',
+                        'pool_timeout',
+                        'queue_full',
+                        'model_error',
+                    ):
+                        raise _HeldoutStop(row['reason'])
+                    report['routes'].append(_heldout_score(case, row))
+                    report['pending_case_id'] = None
+                    _checkpoint(output, report)
+            report['memory_pressure_level'] = _heldout_guard()
+            report['after'] = _heldout_configuration(
+                checks, model, manifest.sha256(fixture), manifest.sha256(HELDOUT_CORPUS)
+            )
+        report['status'] = 'completed'
+        report['valid'] = report['before'] == report['after']
+        if not report['valid']:
+            report['stop_reason'] = 'configuration_changed'
+    except _HeldoutStop as exc:
+        report['status'], report['stop_reason'] = 'stopped', str(exc)
+        if report['stop_reason'] == 'critical_memory_pressure':
+            report['memory_pressure_level'] = 4
+    except OSError:
+        report['status'], report['stop_reason'] = 'stopped', 'local_io_error'
+    except KeyboardInterrupt:
+        report['status'], report['stop_reason'] = 'stopped', 'interrupted'
+    finally:
+        report['quality'] = _quality(report['routes'])
+        report['latency'] = {
+            key: _latency_summary(row[key] for row in report['routes']) for key in ('router_ms', 'router_validation_ms')
+        }
+        report['tokens'] = {
+            key: _latency_summary(row.get(key) for row in report['routes'])
+            for key in ('router_prompt_tokens', 'router_completion_tokens')
+        }
+        _checkpoint(output, report)
+    return 0 if report['valid'] else 2
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         '--live', action='store_true', help='Call the shared Pro model on the synthetic val and samples.'
     )
-    parser.add_argument('--suite', choices=POST_LIMITS, default='pr1')
+    parser.add_argument('--suite', choices=(*POST_LIMITS, HELDOUT_SUITE), default='pr1')
     parser.add_argument('--output', type=Path, help='New JSON output file for the live run.')
     args = parser.parse_args(argv)
     if args.live and (args.output is None or args.output.exists() or not args.output.parent.is_dir()):
         parser.error('--live requires --output pointing to a new file in an existing directory')
+    if args.suite == HELDOUT_SUITE:
+        if args.live:
+            return _live_heldout(HELDOUT, HELDOUT_SHA256, args.output)
+        print(json.dumps({'suite': HELDOUT_SUITE, 'post_limit': HELDOUT_POST_LIMIT, 'fixture_sha256': HELDOUT_SHA256}))
+        return 0
     groups, samples = _evaluation_cases(args.suite)
     cases = [row for group in groups.values() for row in group]
     misses = [row['id'] for row in cases if is_calculation_question(row['question']) != (row['kind'] != 'general')]

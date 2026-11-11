@@ -7,7 +7,8 @@ from dataclasses import replace
 from fractions import Fraction
 from typing import TYPE_CHECKING
 
-from lawbot.calc_numbers import parse_amount, parse_count, parse_hours
+from lawbot.calc_numbers import parse_count, parse_hours, parse_labor_amount
+from lawbot.labor_language import classify_employment, is_uncertain, normalize_fact
 
 if TYPE_CHECKING:
     from lawbot.calculators import Calculation, InputRow, Step
@@ -45,15 +46,9 @@ _LABELS = {
     'attendance': '해당 주 소정근로일 개근 여부',
     'employment': '해당 주 근로관계 존속 여부',
 }
-_UNCERTAIN = re.compile(r'인지|는지|여부|모르|불명확|미정|또는|혹은')
-_TENTATIVE_ATTENDANCE = re.compile(r'것같|보기어렵')
 _NO_ABSENCE = re.compile(r'결근(?:하지않|이?없)|개근을?(?:하지)?못한적(?:이|은|도)?없')
 _ABSENCE = re.compile(r'개근(?:을?(?:하지(?:않|못)|못)|이?아니)|미개근|결근')
 _ATTENDED = re.compile(r'개근|소정근로일(?:을|에)?(?:모두|전부)출근')
-_FULL_WEEK = re.compile(r'(?<!\d)7일|일주일|한주(?:간|동안)')
-_EARLY_END = re.compile(r'되기전|되기이전|미만|채우지못|유지(?:하지않|되지않|못)|유지안|미유지')
-_RELATION = re.compile(r'근로관계|고용관계|재직|근로계약')
-_KEPT = re.compile(r'유지|존속|계속|재직|끝까지')
 _HOUR_TEXT = r'\d+(?:\.\d+)?\s*시간(?:\s*\d+(?:\.\d+)?\s*분)?'
 _HOUR_EVIDENCE = {
     'paid_holiday_hours': re.compile(rf'(?:유급\s*)?주휴(?:\s*시간)?\s*(?:은|는|이|:)?\s*({_HOUR_TEXT})'),
@@ -63,14 +58,10 @@ _HOUR_EVIDENCE = {
 }
 
 
-def _normalized(text: str) -> str:
-    return re.sub(r'\s+', '', unicodedata.normalize('NFKC', text))
-
-
 def _attendance(source: str) -> bool | None:
-    text = _normalized(source)
-    if _UNCERTAIN.search(text) or _TENTATIVE_ATTENDANCE.search(text):
+    if is_uncertain(source):
         return None
+    text = normalize_fact(source)
     text, no_absence = _NO_ABSENCE.subn(' ', text)
     text, absence = _ABSENCE.subn(' ', text)
     attended = no_absence > 0 or _ATTENDED.search(text) is not None
@@ -82,12 +73,7 @@ def _attendance(source: str) -> bool | None:
 
 
 def _employment(source: str) -> bool | None:
-    text = _normalized(source)
-    if _UNCERTAIN.search(text) or not _FULL_WEEK.search(text) or not _RELATION.search(text):
-        return None
-    if _EARLY_END.search(text):
-        return False
-    return True if _KEPT.search(text) else None
+    return classify_employment(source, weekly=True)
 
 
 def question_issue(question: str, inputs: Mapping[str, str]) -> str | None:
@@ -102,8 +88,14 @@ def question_issue(question: str, inputs: Mapping[str, str]) -> str | None:
                     return f'{_LABELS[field]}를 확인해 주세요.'
     normalized_question = unicodedata.normalize('NFKC', question)
     for field, evidence in _HOUR_EVIDENCE.items():
-        stated = {_normalized(match[1]) for match in evidence.finditer(normalized_question)}
-        if stated and stated != {_normalized(inputs.get(field, ''))}:
+        stated = {parse_hours(match[1]) for match in evidence.finditer(normalized_question)}
+        if not stated:
+            continue
+        try:
+            extracted = parse_hours(inputs.get(field, ''))
+        except ValueError:
+            extracted = None
+        if stated != {extracted}:
             return f'질문에 적힌 {_LABELS[field]}을 확인해 주세요.'
     return None
 
@@ -128,7 +120,7 @@ def calculate(base: Calculation, inputs: Mapping[str, str], rules: dict) -> Calc
                 days[key] = value = parse_count(source, '일')
                 rows.append({'label': _LABELS[key], 'value': value, 'unit': '일', 'source': f'질문: {source}'})
             elif key == 'hourly_wage':
-                hourly_wage = parse_amount(source)
+                hourly_wage = parse_labor_amount(source)
                 rows.append({'label': _LABELS[key], 'value': hourly_wage, 'unit': '원', 'source': f'질문: {source}'})
             elif field_type == 'fact':
                 facts[key] = (_attendance if key == 'attendance' else _employment)(source)

@@ -112,6 +112,113 @@ def test_premium_route_requires_each_explicit_work_duration(omitted, guidance):
         assert not outcome.payload.get('results')
 
 
+def _route_premium(question, **spans):
+    question = f'상시 7명이며 통상시급은 13,000원입니다. {question}'
+    inputs = {'staff_count': '7명', 'ordinary_hourly_wage': '13,000원'} | spans
+    raw = json.dumps({'calculator': 'premium_pay', 'inputs': inputs})
+    return route_calculation(question, lambda _: raw, {'premium_pay': ()}, reference_year=2026)
+
+
+def test_premium_only_request_does_not_use_the_available_total_for_base_pay():
+    outcome = _route_premium(
+        '야간 근무가 3시간, 중복 없는 전체 실근로시간은 5시간입니다. 법정 가산분이 얼마인가요?',
+        night_hours='3시간',
+        total_hours='5시간',
+        include_base='법정 가산분',
+    )
+    assert outcome.payload['status'] == 'calculated'
+    assert outcome.payload['results'] == [{'label': '법정 가산수당', 'value': 19_500, 'unit': '원'}]
+
+
+def test_total_pay_recovers_only_explicit_total_hours():
+    outcome = _route_premium(
+        '야간 근무가 3시간, 중복 없는 전체 실근로시간은 5시간입니다. 기본임금까지 더한 실제 지급액은 얼마인가요?',
+        night_hours='3시간',
+    )
+    assert outcome.payload['status'] == 'calculated'
+    assert {row['label']: row['value'] for row in outcome.payload['results']} == {
+        '법정 가산수당': 19_500,
+        '기본임금': 65_000,
+        '기본임금 포함 합계': 84_500,
+    }
+    assert any(row['source'] == '질문: 5시간' for row in outcome.payload['inputs'])
+
+
+@pytest.mark.parametrize(
+    'work',
+    ['실제 일한 시간은 중복 없이 총 6시간 15분입니다.', '전체 실제 근무시간은 중복 없이 6시간 15분입니다.'],
+)
+def test_total_hours_accepts_a_modifier_after_the_particle(work):
+    outcome = _route_premium(
+        f'야간근무 3시간입니다. {work} 기본임금을 합산한 지급액이 얼마인가요?', night_hours='3시간'
+    )
+    assert outcome.payload['status'] == 'calculated'
+    assert outcome.payload['results'][-1]['value'] == 100_750
+    assert any(row['source'] == '질문: 6시간 15분' for row in outcome.payload['inputs'])
+
+
+@pytest.mark.parametrize(
+    'work',
+    [
+        '야간 근무 3시간입니다.',
+        '총 실근로시간은 3시간이고 이 시간이 전부 야간입니다.',
+        '야간 근무 3시간이며 첫 기록의 총 실근로시간은 5시간, 둘째 기록의 총 근무시간은 6시간입니다.',
+    ],
+)
+def test_total_pay_requires_an_independent_unique_total(work):
+    outcome = _route_premium(f'{work} 기본임금까지 더한 실제 지급액은 얼마인가요?', night_hours='3시간')
+    assert outcome.payload['status'] == 'guidance'
+    assert '총 실근로시간' in outcome.payload['message']
+
+
+@pytest.mark.parametrize(
+    'pay_question',
+    [
+        '가산분만 계산해 주시되 기본임금도 더한 총지급액이 얼마인가요?',
+        '가산분만인지 기본임금 포함 지급액인지 정하지 못했습니다. 얼마인가요?',
+    ],
+)
+def test_premium_request_with_conflicting_pay_scope_guides(pay_question):
+    outcome = _route_premium(
+        f'야간 근무 3시간, 총 실근로시간 5시간입니다. {pay_question}', night_hours='3시간', total_hours='5시간'
+    )
+    assert outcome.payload['status'] == 'guidance'
+    assert outcome.reason == 'ambiguous_input'
+
+
+def test_single_holiday_uses_the_actual_original_duration_instead_of_invented_splits():
+    outcome = _route_premium(
+        '휴일 하루에 휴게를 빼고 실제 9시간 30분 근무했는데 휴일 가산분은 얼마인가요?',
+        holiday_within_hours='8시간',
+        holiday_excess_hours='1.5시간',
+    )
+    assert outcome.payload['status'] == 'calculated'
+    assert outcome.payload['results'] == [{'label': '법정 가산수당', 'value': 71_500, 'unit': '원'}]
+    holiday = next(row for row in outcome.payload['inputs'] if row['label'] == '휴일 실근로시간')
+    assert holiday['source'] == '질문: 9시간 30분'
+
+
+def test_a_holiday_duration_can_be_qualified_by_a_single_day():
+    outcome = _route_premium(
+        '휴일 한 날의 근무시간은 10시간 45분입니다. 법정 가산분이 얼마나 되나요?',
+        holiday_within_hours='8시간',
+        holiday_excess_hours='2.75시간',
+    )
+    assert outcome.payload['status'] == 'calculated'
+    assert outcome.payload['results'] == [{'label': '법정 가산수당', 'value': 87_750, 'unit': '원'}]
+
+
+@pytest.mark.parametrize(
+    'work',
+    ['휴일 사흘에 합쳐 9시간 30분 일했습니다.', '휴일에 9시간 30분 일했습니다.'],
+)
+def test_absent_single_holiday_does_not_convert_the_split_to_one_day(work):
+    outcome = _route_premium(
+        f'{work} 휴일 가산분은 얼마인가요?', holiday_within_hours='8시간', holiday_excess_hours='1.5시간'
+    )
+    assert outcome.payload['status'] != 'calculated'
+
+
 @pytest.mark.parametrize(
     'extra',
     [
