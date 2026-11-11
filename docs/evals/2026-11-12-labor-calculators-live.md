@@ -1503,4 +1503,371 @@ val 계산 출력은 21/21, held-out 계산형 출력은 34/34가 고정 fixture
 
 기본 pytest 전체 **1,781 passed, 13 deselected**(138.89초), Ruff 검사·포맷(412파일), Pyright, 캘린더 스키마, Python 문법 검사가 통과했다. 챗봇 화면 44건·캘린더 화면 19건의 단위 테스트와 두 화면 타입 검사·빌드가 통과했다. 단위·계약·통합·대역 E2E에 실제 모델 호출은 없으며, 신규 변환 오류 안내는 390px·1280px에서 검증했다. `e2e_live`·`models`는 실행 안 함이다.
 
-실행 명령은 `.venv/bin/pytest -q --tb=short`, `ruff check`, `ruff format --check`, `pyright`, `pyright services/law-calendar/src`, `python -m law_calendar.schema --check`, `python -m compileall -q services packages tools`이며, 각 화면에서 `npm run typecheck && npm test && npm run build`를 실행했다. CI 통과 뒤 후속 실제 라우터 평가를 수행한다.
+실행 명령은 `.venv/bin/pytest -q --tb=short`, `ruff check`, `ruff format --check`, `pyright`, `pyright services/law-calendar/src`, `python -m law_calendar.schema --check`, `python -m compileall -q services packages tools`이며, 각 화면에서 `npm run typecheck && npm test && npm run build`를 실행했다. CI 통과 뒤 아래 후속 실제 라우터 평가를 수행했다.
+
+
+### 리뷰 수정 후 동일 held-out 실제 재평가
+
+사용자의 후속 평가 요청으로 고정 60문항을 한 번 재실행했다. **새로운 미공개 test가 아니라, 이미 결과를 확인한 동일 held-out의 반복 평가**다. 최초 실측 52/60을 대체하지 않는다. 구현과 기본 검증을 끝낸 `41d70323e731d7d0ad1b5f8707a633c770004238`의 [CI Green](https://github.com/bhsong/lawbot/actions/runs/43115590659/job/130842617235)을 확인한 뒤 실행했다.
+
+2026-11-12 **08:04:14–08:14:29 KST**, 614.831초(약 10분 15초). Pro 직접 라우터 **60회**, 동시 1개, 자동 재시도 0회다. temperature 0, 출력 상한 128토큰, 읽기 상한 300초를 유지했다. 명령은 `python -m lawbot_tools.eval_calc_router --suite labor-pr2-heldout --live --output <레포 밖 임시 JSON>`이다. 답변 생성·임베딩·리랭크·`e2e_live`·`models`는 실행 안 함이다. 06:20–06:50 KST에 호출하지 않았다.
+
+- 시작·종료 웹앱 커밋은 `41d70323e731d7d0ad1b5f8707a633c770004238`, 모델 서버 커밋은 `69a2dd338ec289176046ab343f6f27bb9eb6fd78`로 동일했다.
+- Pro `qwen3.8-27b-4bit`의 revision은 `sha256:3117f3d1ce819e8b`, 시작·종료 모두 상주 상태이며 서버 동시 생성 상한은 1이었다.
+- 라우터 system SHA-256은 `591fab311fc7eaaa904d5c77c829e03b2bcd2c6fe8584f17d56a27080e9efe49`, fixture SHA-256은 `1bb1e9624beb7dd818d7ad08fe046602776cac344fa778a94f583f88f2f445ac`, 개발 CSV SHA-256은 `4ac8fe346a906788ad958503ff23fa34bb169659f10803d9fc5459f872e1894a`다. 시작·종료 구성은 모두 일치했다. 직전 실측과 비교하면 웹앱 커밋이 바뀌었고, 세 해시와 모델·추론 설정은 같다.
+- 실행 전 부하 점검에서 CPU 10% 이상 프로세스는 없었다. 메모리 압력은 사전 점검 2, 종료 1이었다. 응답 실패나 메모리 압력 4로 인한 중단은 없었고 `completed`, `valid=true`로 종료했다. 모델 서버·운영 트리·운영 데이터는 변경하지 않았다.
+
+#### 재평가 판정
+
+| 계산기 | 최초 계산형 | 재평가 계산형 (≥7/8) | 최초 누락 | 재평가 누락 (2/2) | 최초 모호 | 재평가 모호 (2/2) |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| 퇴직금 | 8/8 | 8/8 | 2/2 | 2/2 | 1/2 | 1/2 |
+| 연차 | 7/8 | 7/8 | 2/2 | 2/2 | 2/2 | 2/2 |
+| 주휴수당 | 8/8 | 8/8 | 2/2 | 2/2 | 2/2 | 2/2 |
+| 최저임금 월 환산 | 6/8 | 6/8 | 2/2 | 2/2 | 2/2 | 2/2 |
+| 가산수당 | 5/8 | 5/8 | 2/2 | 2/2 | 1/2 | 2/2 |
+| 합계 | 34/40 | 34/40 | 10/10 | 10/10 | 8/10 | 9/10 |
+
+판정·값 일치는 **53/60**, 최초 52/60보다 1건 늘었다. 라우터 원출력은 60/60 모두 최초 실측과 문자열 단위로 동일했고, 계산기 및 계산값도 60/60 동일했다. 상태·사유 변경은 `labor-heldout-059`의 `none/conversion_failed → guidance/ambiguous_input` 한 건이다. 개선 1건, 악화 0건, 유지 59건이다. 수정 후 오프라인 재생과도 원출력·계산기·상태·사유·값이 60/60 일치했다.
+
+계산형 문항 34건의 출력은 독립 검산값과 모두 일치했다. 그러나 모호 문항 `labor-heldout-012`의 퇴직금 **8,833,496원** 출력이 유지됐다. 따라서 출력한 계산 총 35건 중 평가상 틀린 계산 1건이며, 비계산형 계산 결과도 1건이다. 퇴직금 모호 1/2, 최저임금 계산형 6/8, 가산 계산형 5/8과 비계산형 계산 결과 0건 기준이 미달이다. 전체 통과나 오산 0건으로 판정하지 않는다. 이번 결과를 근거로 추가 조정하거나 다시 호출하지 않았다.
+
+#### 직접 라우터 지연
+
+| 측정 | 최초 p50 | 재평가 p50 | 최초 p95 | 재평가 p95 |
+| --- | ---: | ---: | ---: | ---: |
+| 직접 라우터 왕복 | 10.281초 | 10.280초 | 13.931초 | 13.954초 |
+| 코드 검증·계산 | 1.121ms | 1.419ms | 2.485ms | 4.210ms |
+
+재평가 프롬프트 토큰 p50/p95는 1,250/1,288.35, 출력 토큰은 58/91.05다. 이 실행은 라우터 직접 호출만 측정했다. 답변 첫 글자 지연의 증감으로 해석하지 않으며, 이전 답변 평가의 증가분 p50 +1.172초·p95 +0.204초에 대한 사용자 수용 기록은 그대로다.
+
+#### 재평가 실패 문항
+
+##### 재평가 labor-heldout-012
+
+~~~text
+퇴직금 명세를 보니 입사일은 2024년 5월 14일, 첫 비재직일은 2026년 9월 21일로 돼 있어요. 같은 명세에 인정 계속근로일수는 812일로 찍혀 있습니다. 중간에 근속에서 뺀 기간은 없고 4주 평균 주 소정근로시간은 31시간, 통상임금 하한 반영 산정용 일급은 124,970원인데 어느 쪽으로 계산해야 하나요?
+~~~
+
+기대 `severance_pay/guidance` · 기대 사유 `ambiguous_input` · 실제 `severance_pay/calculated` · 실제 사유 `selected`.
+
+기대 결과 `null` · 실제 결과 `{"법정 최소 퇴직금": 8833496}`.
+
+~~~text
+{
+  "calculator": "severance_pay",
+  "inputs": {
+    "hire_date": "2024년 5월 14일",
+    "retirement_date": "2026년 9월 21일",
+    "weekly_hours": "31시간",
+    "adjusted_daily_wage": "124,970원"
+  }
+}
+~~~
+
+##### 재평가 labor-heldout-014
+
+~~~text
+이번 입사기념일로 근속 7년을 채웠습니다. 연차가 생기는 날에도 계속 회사에 다니고 있어요. 직전 1년 출근율은 86.5%, 상시 직원은 정확히 23명이고 4주 평균 주 소정근로시간은 37시간입니다. 이번에 발생하는 법정 연차는 며칠이죠?
+~~~
+
+기대 `annual_leave_days/calculated` · 실제 `annual_leave_days/guidance` · 실제 사유 `ambiguous_input`.
+
+기대 결과 `{"연차유급휴가 일수": 18}` · 실제 결과 `{}`.
+
+~~~text
+{"calculator":"annual_leave_days","inputs":{"workplace_size":"23명","weekly_hours":"37시간","service_period":"7년","attendance_rate":"86.5%","employed_at_accrual":"연차가 생기는 날에도 계속 회사에 다니고 있어요"}}
+~~~
+
+##### 재평가 labor-heldout-041
+
+~~~text
+147.25시간이 유급주휴까지 반영한 월 최저임금 적용기준시간입니다. 이 근로조건에 2026년 최저임금을 전액 적용했을 때 월 최저임금은 얼마인가요?
+~~~
+
+기대 `monthly_minimum_wage/calculated` · 실제 `monthly_minimum_wage/guidance` · 실제 사유 `ambiguous_input`.
+
+기대 결과 `{"월 최저임금": 1519620}` · 실제 결과 `{}`.
+
+~~~text
+{"calculator":"monthly_minimum_wage","inputs":{"year":"2026년","monthly_basis_hours":"147.25시간"}}
+~~~
+
+##### 재평가 labor-heldout-042
+
+~~~text
+2027년분 계약서 검토 중입니다. 월 최저임금 적용기준시간: 183시간 12분. 유급주휴가 들어 있는 숫자예요. 최저임금 월 환산액을 알려 주세요.
+~~~
+
+기대 `monthly_minimum_wage/calculated` · 실제 `monthly_minimum_wage/guidance` · 실제 사유 `ambiguous_input`.
+
+기대 결과 `{"월 최저임금": 1960240}` · 실제 결과 `{}`.
+
+~~~text
+{"calculator":"monthly_minimum_wage","inputs":{"year":"2027년","monthly_basis_hours":"183시간 12분","applicability":"유급주휴가 들어 있는 숫자예요"}}
+~~~
+
+##### 재평가 labor-heldout-051
+
+~~~text
+휴일 하루 출근해서 쉬는 시간 빼고 7시간 40분 일했습니다. 상시 근로자 9명이고 제 통상시급은 16,578원입니다. 휴일 가산분만 계산하면 얼마예요?
+~~~
+
+기대 `premium_pay/calculated` · 실제 `premium_pay/guidance` · 실제 사유 `missing_required`.
+
+기대 결과 `{"법정 가산수당": 63549}` · 실제 결과 `{}`.
+
+~~~text
+{"calculator":"premium_pay","inputs":{"staff_count":"9명","ordinary_hourly_wage":"16,578원","holiday_within_hours":"7시간 40분","include_base":"휴일 가산분만"}}
+~~~
+
+##### 재평가 labor-heldout-052
+
+~~~text
+통상시급 17,136원, 상시 근로자 21명입니다. 휴일 하루에 휴게시간을 뺀 실근로가 10시간 30분이고 그중 야간근로가 2시간 45분이에요. 중복 없이 센 총 실근로도 10.5시간입니다. 기본임금까지 포함한 총 지급액을 구해 주세요.
+~~~
+
+기대 `premium_pay/calculated` · 실제 `premium_pay/guidance` · 실제 사유 `missing_required`.
+
+기대 결과 `{"법정 가산수당": 134946, "기본임금": 179928, "기본임금 포함 합계": 314874}` · 실제 결과 `{}`.
+
+~~~text
+{"calculator":"premium_pay","inputs":{"ordinary_hourly_wage":"17,136원","staff_count":"21명","holiday_within_hours":"10시간 30분","night_hours":"2시간 45분","total_hours":"10.5시간","include_base":"기본임금까지 포함한 총 지급액"}}
+~~~
+
+##### 재평가 labor-heldout-056
+
+~~~text
+기본임금까지 합쳐 총 얼마인지 계산 부탁드려요. 상시 인원 39명, 통상시급 16,652원입니다. 휴게를 빼고 평일 연장근로 1시간 45분, 휴일 하루 근로 8시간입니다. 그 휴일 근로 중 야간근로 1시간 15분이 포함돼 있습니다. 별도로 평일 소정근로 15분까지 합해 중복 없는 실근로는 총 10시간입니다.
+~~~
+
+기대 `premium_pay/calculated` · 실제 `premium_pay/guidance` · 실제 사유 `ambiguous_input`.
+
+기대 결과 `{"법정 가산수당": 91586, "기본임금": 166520, "기본임금 포함 합계": 258106}` · 실제 결과 `{}`.
+
+~~~text
+{"calculator":"premium_pay","inputs":{"staff_count":"39명","ordinary_hourly_wage":"16,652원","overtime_hours":"1시간 45분","holiday_hours":"8시간","night_hours":"1시간 15분","include_base":"기본임금까지 합쳐 총 얼마인지","total_hours":"10시간"}}
+~~~
+
+#### 재평가 실행 메타데이터 보존
+
+생성 결과 JSON의 `routes` 외 모든 필드, 실행 시간과 사전 부하 점검을 보존한다. `routes` 전체는 다음 JSONL에 별도로 보존했다.
+
+~~~json
+{
+  "report_without_routes": {
+    "suite": "labor-pr2-heldout",
+    "status": "completed",
+    "valid": true,
+    "stop_reason": null,
+    "before": {
+      "webapp_commit": "41d70323e731d7d0ad1b5f8707a633c770004238",
+      "model_server_commit": "69a2dd338ec289176046ab343f6f27bb9eb6fd78",
+      "server_max_concurrent": 1,
+      "model": {
+        "id": "qwen3.8-27b-4bit",
+        "revision": "sha256:3117f3d1ce819e8b",
+        "loaded": true
+      },
+      "fixture_sha256": "1bb1e9624beb7dd818d7ad08fe046602776cac344fa778a94f583f88f2f445ac",
+      "articles_sha256": "4ac8fe346a906788ad958503ff23fa34bb169659f10803d9fc5459f872e1894a",
+      "router_sha256": "591fab311fc7eaaa904d5c77c829e03b2bcd2c6fe8584f17d56a27080e9efe49",
+      "router_max_tokens": 128,
+      "router_timeout_s": 300,
+      "temperature": 0,
+      "max_retries": 0
+    },
+    "after": {
+      "webapp_commit": "41d70323e731d7d0ad1b5f8707a633c770004238",
+      "model_server_commit": "69a2dd338ec289176046ab343f6f27bb9eb6fd78",
+      "server_max_concurrent": 1,
+      "model": {
+        "id": "qwen3.8-27b-4bit",
+        "revision": "sha256:3117f3d1ce819e8b",
+        "loaded": true
+      },
+      "fixture_sha256": "1bb1e9624beb7dd818d7ad08fe046602776cac344fa778a94f583f88f2f445ac",
+      "articles_sha256": "4ac8fe346a906788ad958503ff23fa34bb169659f10803d9fc5459f872e1894a",
+      "router_sha256": "591fab311fc7eaaa904d5c77c829e03b2bcd2c6fe8584f17d56a27080e9efe49",
+      "router_max_tokens": 128,
+      "router_timeout_s": 300,
+      "temperature": 0,
+      "max_retries": 0
+    },
+    "inference_posts": 60,
+    "pending_case_id": null,
+    "memory_pressure_level": 1,
+    "quality": {
+      "groups": {
+        "labor-pr2-heldout": {
+          "severance_pay/calculated": {
+            "matched": 8,
+            "total": 8
+          },
+          "severance_pay/missing": {
+            "matched": 2,
+            "total": 2
+          },
+          "severance_pay/ambiguous": {
+            "matched": 1,
+            "total": 2
+          },
+          "annual_leave_days/calculated": {
+            "matched": 7,
+            "total": 8
+          },
+          "annual_leave_days/missing": {
+            "matched": 2,
+            "total": 2
+          },
+          "annual_leave_days/ambiguous": {
+            "matched": 2,
+            "total": 2
+          },
+          "weekly_holiday_pay/calculated": {
+            "matched": 8,
+            "total": 8
+          },
+          "weekly_holiday_pay/missing": {
+            "matched": 2,
+            "total": 2
+          },
+          "weekly_holiday_pay/ambiguous": {
+            "matched": 2,
+            "total": 2
+          },
+          "monthly_minimum_wage/calculated": {
+            "matched": 6,
+            "total": 8
+          },
+          "monthly_minimum_wage/missing": {
+            "matched": 2,
+            "total": 2
+          },
+          "monthly_minimum_wage/ambiguous": {
+            "matched": 2,
+            "total": 2
+          },
+          "premium_pay/calculated": {
+            "matched": 5,
+            "total": 8
+          },
+          "premium_pay/missing": {
+            "matched": 2,
+            "total": 2
+          },
+          "premium_pay/ambiguous": {
+            "matched": 2,
+            "total": 2
+          }
+        }
+      },
+      "wrong_calculations": [
+        "labor-pr2-heldout/labor-heldout-012"
+      ]
+    },
+    "latency": {
+      "router_ms": {
+        "n": 60,
+        "p50": 10279.5,
+        "p95": 13953.6
+      },
+      "router_validation_ms": {
+        "n": 60,
+        "p50": 1.419,
+        "p95": 4.21
+      }
+    },
+    "tokens": {
+      "router_prompt_tokens": {
+        "n": 60,
+        "p50": 1250.0,
+        "p95": 1288.35
+      },
+      "router_completion_tokens": {
+        "n": 60,
+        "p50": 58.0,
+        "p95": 91.05
+      }
+    }
+  },
+  "timing": {
+    "started": "2026-11-12T08:04:14.673487+09:00",
+    "ended": "2026-11-12T08:14:29.507513+09:00",
+    "elapsed_seconds": 614.831,
+    "exit_code": 0
+  },
+  "precheck": {
+    "checked_at": "2026-11-12T07:54:57.770158+09:00",
+    "memory_pressure": 2,
+    "processes_at_least_10_percent_cpu": []
+  }
+}
+~~~
+
+#### 재평가 직접 원출력과 채점 전체 보존
+
+60건의 질문·원출력·판정·독립 기대값·토큰·지연을 생성 결과의 필드 그대로 보존했다. 아래 JSONL을 읽은 60개 객체가 원본 `routes`와 완전히 같음을 확인한 뒤에만 임시 결과를 정리한다.
+
+~~~jsonl
+{"group": "labor-pr2-heldout", "kind": "calculated", "id": "labor-heldout-001", "question": "직전 석 달 임금 합계는 12,934,880원, 하루 통상임금은 139,600원입니다. 마지막 재직일은 2026년 9월 17일이고 2022년 4월 23일에 입사했어요. 4주 평균 주 소정근로시간 36시간이면 법정 퇴직금이 얼마인가요?", "raw": "{\"calculator\":\"severance_pay\",\"inputs\":{\"wage_total\":\"12,934,880원\",\"ordinary_daily_wage\":\"139,600원\",\"last_employed_date\":\"2026년 9월 17일\",\"hire_date\":\"2022년 4월 23일\",\"weekly_hours\":\"36시간\"}}", "gate": true, "calculator": "severance_pay", "status": "calculated", "expected_calculator": "severance_pay", "expected_status": "calculated", "reason": "selected", "router_ms": 14315, "router_validation_ms": 5.75, "results": {"법정 최소 퇴직금": 18593409}, "expected_results": {"법정 최소 퇴직금": 18593409}, "results_match": true, "classification_match": true, "router_system_chars": 2795, "router_prompt_tokens": 1270, "router_completion_tokens": 82}
+{"group": "labor-pr2-heldout", "kind": "calculated", "id": "labor-heldout-002", "question": "통상임금 하한을 반영한 퇴직금 산정용 일급이 134,780원이라고 인사팀에서 확인해 줬습니다. 인정 계속근로기간은 총 937일, 4주 평균 주 소정근로시간은 27시간 30분이에요. 법정 최소 퇴직금 계산 부탁드립니다.", "raw": "{\"calculator\":\"severance_pay\",\"inputs\":{\"adjusted_daily_wage\":\"134,780원\",\"service_period\":\"937일\",\"weekly_hours\":\"27시간 30분\"}}", "gate": true, "calculator": "severance_pay", "status": "calculated", "expected_calculator": "severance_pay", "expected_status": "calculated", "reason": "selected", "router_ms": 8798, "router_validation_ms": 4.193, "results": {"법정 최소 퇴직금": 10379906}, "expected_results": {"법정 최소 퇴직금": 10379906}, "results_match": true, "classification_match": true, "router_system_chars": 2795, "router_prompt_tokens": 1255, "router_completion_tokens": 44}
+{"group": "labor-pr2-heldout", "kind": "calculated", "id": "labor-heldout-003", "question": "2026년 8월 13일이 첫 비재직일이고 입사일은 2021년 7월 19일입니다. 4주 평균 주 소정근로시간은 38시간이에요. 퇴직 직전 3개월 임금 총액 11,268,500원에는 회사 사정으로 휴업한 산정 제외 9일의 임금 742,000원이 들어 있습니다. 이 총액 밖에서 평균임금에 별도 산입할 적격 연간 상여는 1,736,000원입니다. 1일 통상임금이 127,300원일 때 법정 퇴직금은요?", "raw": "{\"calculator\":\"severance_pay\",\"inputs\":{\"retirement_date\":\"2026년 8월 13일\",\"hire_date\":\"2021년 7월 19일\",\"weekly_hours\":\"38시간\",\"wage_total\":\"11,268,500원\",\"excluded_days\":\"9일\",\"excluded_wages\":\"742,000원\",\"annual_bonus\":\"1,736,000원\",\"ordinary_daily_wage\":\"127,300원\"}}", "gate": true, "calculator": "severance_pay", "status": "calculated", "expected_calculator": "severance_pay", "expected_status": "calculated", "reason": "selected", "router_ms": 16442, "router_validation_ms": 2.934, "results": {"법정 최소 퇴직금": 20090331}, "expected_results": {"법정 최소 퇴직금": 20090331}, "results_match": true, "classification_match": true, "router_system_chars": 2795, "router_prompt_tokens": 1333, "router_completion_tokens": 116}
+{"group": "labor-pr2-heldout", "kind": "calculated", "id": "labor-heldout-004", "question": "2025년 12월 2일에 들어갔고 마지막 재직일은 2026년 10월 16일입니다. 계약상 근로시간은 4주 평균 주 39시간이에요. 법으로 정한 퇴직금이 발생하나요? 금액이 궁금합니다.", "raw": "{\"calculator\":\"severance_pay\",\"inputs\":{\"hire_date\":\"2025년 12월 2일\",\"last_employed_date\":\"2026년 10월 16일\",\"weekly_hours\":\"4주 평균 주 39시간\"}}", "gate": true, "calculator": "severance_pay", "status": "calculated", "expected_calculator": "severance_pay", "expected_status": "calculated", "reason": "selected", "router_ms": 10256, "router_validation_ms": 1.736, "results": {"법정 최소 퇴직금": 0}, "expected_results": {"법정 최소 퇴직금": 0}, "results_match": true, "classification_match": true, "router_system_chars": 2795, "router_prompt_tokens": 1243, "router_completion_tokens": 58}
+{"group": "labor-pr2-heldout", "kind": "calculated", "id": "labor-heldout-005", "question": "인정 계속근로기간은 1,063일인데, 계약상 4주 평균으로 주에 14시간 45분 일했습니다. 통상임금 하한을 반영한 산정용 일급은 89,740원으로 나와 있어요. 이 경우 법정 퇴직금은 얼마로 보나요?", "raw": "{\"calculator\":\"severance_pay\",\"inputs\":{\"service_period\":\"1,063일\",\"weekly_hours\":\"14시간 45분\",\"adjusted_daily_wage\":\"89,740원\"}}", "gate": true, "calculator": "severance_pay", "status": "calculated", "expected_calculator": "severance_pay", "expected_status": "calculated", "reason": "selected", "router_ms": 8874, "router_validation_ms": 1.182, "results": {"법정 최소 퇴직금": 0}, "expected_results": {"법정 최소 퇴직금": 0}, "results_match": true, "classification_match": true, "router_system_chars": 2795, "router_prompt_tokens": 1249, "router_completion_tokens": 45}
+{"group": "labor-pr2-heldout", "kind": "calculated", "id": "labor-heldout-006", "question": "퇴직금 대략 얼마나 나오는지 보고 싶습니다. 월급은 지난 석 달 내내 342만 7,500원이었고, 인정 근속은 2년 7개월 9일입니다. 4주 평균 주 소정근로시간은 40시간이에요.", "raw": "{\"calculator\":\"severance_pay\",\"inputs\":{\"monthly_wage\":\"342만 7,500원\",\"service_period\":\"2년 7개월 9일\",\"weekly_hours\":\"40시간\"}}", "gate": true, "calculator": "severance_pay", "status": "calculated", "expected_calculator": "severance_pay", "expected_status": "calculated", "reason": "selected", "router_ms": 9005, "router_validation_ms": 4.541, "results": {"평균임금 기준 퇴직금 추정": 8938889, "통상임금 하한 적용 퇴직금 추정": 10264753}, "expected_results": {"평균임금 기준 퇴직금 추정": 8938889, "통상임금 하한 적용 퇴직금 추정": 10264753}, "results_match": true, "classification_match": true, "router_system_chars": 2795, "router_prompt_tokens": 1241, "router_completion_tokens": 46}
+{"group": "labor-pr2-heldout", "kind": "calculated", "id": "labor-heldout-007", "question": "입사일 2025년 4월 26일, 첫 비재직일 2026년 4월 26일입니다. 퇴직 전 3개월 임금 합계가 8,532,750원이고 하루 통상임금은 101,370원이래요. 소정근로는 4주 평균 주 35시간이었습니다. 딱 1년 채운 제 법정 퇴직금을 알려 주세요.", "raw": "{\"calculator\":\"severance_pay\",\"inputs\":{\"hire_date\":\"2025년 4월 26일\",\"retirement_date\":\"2026년 4월 26일\",\"wage_total\":\"8,532,750원\",\"ordinary_daily_wage\":\"101,370원\",\"weekly_hours\":\"4주 평균 주 35시간\"}}", "gate": true, "calculator": "severance_pay", "status": "calculated", "expected_calculator": "severance_pay", "expected_status": "calculated", "reason": "selected", "router_ms": 13080, "router_validation_ms": 1.7, "results": {"법정 최소 퇴직금": 3041100}, "expected_results": {"법정 최소 퇴직금": 3041100}, "results_match": true, "classification_match": true, "router_system_chars": 2795, "router_prompt_tokens": 1279, "router_completion_tokens": 85}
+{"group": "labor-pr2-heldout", "kind": "calculated", "id": "labor-heldout-008", "question": "법정 퇴직금을 확인 중입니다. 인정 계속근로기간이 786일이고 4주 평균 주 소정근로는 32시간이었습니다. 마지막 3개월은 역일수 91일, 임금 합계 9,776,192원이에요. 그 합계에 들어 있지 않은 별도 산입 대상 연간 미사용 연차수당은 524,640원, 하루 통상임금은 105,610원입니다.", "raw": "{\"calculator\":\"severance_pay\",\"inputs\":{\"service_period\":\"786일\",\"weekly_hours\":\"32시간\",\"wage_days\":\"91일\",\"wage_total\":\"9,776,192원\",\"annual_unused_leave_pay\":\"524,640원\",\"ordinary_daily_wage\":\"105,610원\"}}", "gate": false, "calculator": "severance_pay", "status": "calculated", "expected_calculator": "severance_pay", "expected_status": "calculated", "reason": "selected", "router_ms": 12373, "router_validation_ms": 2.974, "results": {"법정 최소 퇴직금": 7033429}, "expected_results": {"법정 최소 퇴직금": 7033429}, "results_match": true, "classification_match": true, "router_system_chars": 2795, "router_prompt_tokens": 1284, "router_completion_tokens": 77}
+{"group": "labor-pr2-heldout", "kind": "missing", "id": "labor-heldout-009", "question": "법정 퇴직금 계산해 주세요. 계속근로는 1,124일이고, 4주 평균 주 소정근로시간은 33시간, 퇴직 직전 3개월 임금 총액은 10,758,200원입니다. 그 3개월의 역일수는 92일이에요.", "raw": "{\"calculator\":\"severance_pay\",\"inputs\":{\"service_period\":\"1,124일\",\"weekly_hours\":\"33시간\",\"wage_total\":\"10,758,200원\",\"wage_days\":\"92일\"}}", "gate": true, "calculator": "severance_pay", "status": "guidance", "expected_calculator": "severance_pay", "expected_status": "guidance", "reason": "missing_required", "router_ms": 9622, "router_validation_ms": 2.731, "results": {}, "expected_results": null, "results_match": null, "classification_match": true, "router_system_chars": 2795, "router_prompt_tokens": 1251, "router_completion_tokens": 52, "expected_reason": "missing_required"}
+{"group": "labor-pr2-heldout", "kind": "missing", "id": "labor-heldout-010", "question": "하루 통상임금 하한까지 반영한 퇴직금 산정용 일급이 118,260원이라고 합니다. 4주 평균 주 소정근로시간은 29시간이었어요. 법정 최소 퇴직금이 얼마인지 계산할 수 있나요?", "raw": "{\"calculator\":\"severance_pay\",\"inputs\":{\"adjusted_daily_wage\":\"118,260원\",\"weekly_hours\":\"29시간\"}}", "gate": true, "calculator": "severance_pay", "status": "guidance", "expected_calculator": "severance_pay", "expected_status": "guidance", "reason": "missing_required", "router_ms": 7554, "router_validation_ms": 1.677, "results": {}, "expected_results": null, "results_match": null, "classification_match": true, "router_system_chars": 2795, "router_prompt_tokens": 1238, "router_completion_tokens": 32, "expected_reason": "missing_required"}
+{"group": "labor-pr2-heldout", "kind": "ambiguous", "id": "labor-heldout-011", "question": "2023년 2월 17일에 입사했고 회사 서류에는 퇴사일이 2026년 7월 23일이라고만 적혀 있습니다. 그날까지 직원이었던 건지 그날부터 퇴직 처리된 건지는 모르겠어요. 4주 평균 주 소정근로시간은 37시간, 통상임금 하한 반영 산정용 일급은 119,840원인데 법정 퇴직금은 얼마죠?", "raw": "{\"calculator\":\"severance_pay\",\"inputs\":{\"hire_date\":\"2023년 2월 17일\",\"retirement_date\":\"2026년 7월 23일\",\"weekly_hours\":\"37시간\",\"adjusted_daily_wage\":\"119,840원\"}}", "gate": true, "calculator": "severance_pay", "status": "guidance", "expected_calculator": "severance_pay", "expected_status": "guidance", "reason": "ambiguous_input", "router_ms": 11151, "router_validation_ms": 0.896, "results": {}, "expected_results": null, "results_match": null, "classification_match": true, "router_system_chars": 2795, "router_prompt_tokens": 1283, "router_completion_tokens": 65, "expected_reason": "ambiguous_input"}
+{"group": "labor-pr2-heldout", "kind": "ambiguous", "id": "labor-heldout-012", "question": "퇴직금 명세를 보니 입사일은 2024년 5월 14일, 첫 비재직일은 2026년 9월 21일로 돼 있어요. 같은 명세에 인정 계속근로일수는 812일로 찍혀 있습니다. 중간에 근속에서 뺀 기간은 없고 4주 평균 주 소정근로시간은 31시간, 통상임금 하한 반영 산정용 일급은 124,970원인데 어느 쪽으로 계산해야 하나요?", "raw": "{\n  \"calculator\": \"severance_pay\",\n  \"inputs\": {\n    \"hire_date\": \"2024년 5월 14일\",\n    \"retirement_date\": \"2026년 9월 21일\",\n    \"weekly_hours\": \"31시간\",\n    \"adjusted_daily_wage\": \"124,970원\"\n  }\n}", "gate": true, "calculator": "severance_pay", "status": "calculated", "expected_calculator": "severance_pay", "expected_status": "guidance", "reason": "selected", "router_ms": 14193, "router_validation_ms": 1.696, "results": {"법정 최소 퇴직금": 8833496}, "expected_results": null, "results_match": false, "classification_match": false, "router_system_chars": 2795, "router_prompt_tokens": 1297, "router_completion_tokens": 94, "expected_reason": "ambiguous_input"}
+{"group": "labor-pr2-heldout", "kind": "calculated", "id": "labor-heldout-013", "question": "입사한 지 8개월이고 상시 근로자 16명인 곳에서 일합니다. 4주 평균 주 소정근로시간은 36시간이에요. 8개월 중 정해진 근무일에 빠짐없이 출근하고 그 달이 끝난 다음 날까지도 재직한 건 6개월입니다. 입사일 기준 법정 연차가 지금까지 며칠 생겼나요?", "raw": "{\"calculator\":\"annual_leave_days\",\"inputs\":{\"workplace_size\":\"16명\",\"weekly_hours\":\"36시간\",\"service_period\":\"8개월\",\"full_attendance_months\":\"6개월\",\"include_first_year\":\"true\"}}", "gate": true, "calculator": "annual_leave_days", "status": "calculated", "expected_calculator": "annual_leave_days", "expected_status": "calculated", "reason": "selected", "router_ms": 8941, "router_validation_ms": 4.618, "results": {"연차유급휴가 일수": 6}, "expected_results": {"연차유급휴가 일수": 6}, "results_match": true, "classification_match": true, "router_system_chars": 2795, "router_prompt_tokens": 1258, "router_completion_tokens": 45}
+{"group": "labor-pr2-heldout", "kind": "calculated", "id": "labor-heldout-014", "question": "이번 입사기념일로 근속 7년을 채웠습니다. 연차가 생기는 날에도 계속 회사에 다니고 있어요. 직전 1년 출근율은 86.5%, 상시 직원은 정확히 23명이고 4주 평균 주 소정근로시간은 37시간입니다. 이번에 발생하는 법정 연차는 며칠이죠?", "raw": "{\"calculator\":\"annual_leave_days\",\"inputs\":{\"workplace_size\":\"23명\",\"weekly_hours\":\"37시간\",\"service_period\":\"7년\",\"attendance_rate\":\"86.5%\",\"employed_at_accrual\":\"연차가 생기는 날에도 계속 회사에 다니고 있어요\"}}", "gate": true, "calculator": "annual_leave_days", "status": "guidance", "expected_calculator": "annual_leave_days", "expected_status": "calculated", "reason": "ambiguous_input", "router_ms": 10386, "router_validation_ms": 2.284, "results": {}, "expected_results": {"연차유급휴가 일수": 18}, "results_match": null, "classification_match": false, "router_system_chars": 2795, "router_prompt_tokens": 1255, "router_completion_tokens": 59}
+{"group": "labor-pr2-heldout", "kind": "calculated", "id": "labor-heldout-015", "question": "입사일은 2025년 8월 22일이고 계약이 끝난 2026년 8월 21일이 마지막 재직일이에요. 1년 출근율은 91.4%였고 개근한 달을 마친 다음 날에도 재직한 건 10개월입니다. 상시 근로자 12명, 4주 평균 주 소정근로시간 37시간인 경우 입사일 기준 이 계약에서 법정 연차가 며칠 발생했나요?", "raw": "{\"calculator\":\"annual_leave_days\",\"inputs\":{\"hire_date\":\"2025년 8월 22일\",\"last_employed_date\":\"2026년 8월 21일\",\"attendance_rate\":\"91.4%\",\"full_attendance_months\":\"10개월\",\"workplace_size\":\"12명\",\"weekly_hours\":\"37시간\"}}", "gate": true, "calculator": "annual_leave_days", "status": "calculated", "expected_calculator": "annual_leave_days", "expected_status": "calculated", "reason": "selected", "router_ms": 12466, "router_validation_ms": 1.835, "results": {"연차유급휴가 일수": 10}, "expected_results": {"연차유급휴가 일수": 10}, "results_match": true, "classification_match": true, "router_system_chars": 2795, "router_prompt_tokens": 1288, "router_completion_tokens": 77}
+{"group": "labor-pr2-heldout", "kind": "calculated", "id": "labor-heldout-016", "question": "상시 47명이 일하는 직장입니다. 2003년 8월 19일 입사했고 2026년 8월 19일 현재 재직 중입니다. 4주 평균 주 소정근로시간은 39시간, 이번 연차 산정에 해당하는 1년 출근율은 96.2%예요. 올해 입사일 기준으로 새로 생기는 연차 일수는 얼마인가요?", "raw": "{\"calculator\":\"annual_leave_days\",\"inputs\":{\"workplace_size\":\"47명\",\"hire_date\":\"2003년 8월 19일\",\"as_of_date\":\"2026년 8월 19일\",\"weekly_hours\":\"39시간\",\"attendance_rate\":\"96.2%\"}}", "gate": true, "calculator": "annual_leave_days", "status": "calculated", "expected_calculator": "annual_leave_days", "expected_status": "calculated", "reason": "selected", "router_ms": 11290, "router_validation_ms": 1.119, "results": {"연차유급휴가 일수": 25}, "expected_results": {"연차유급휴가 일수": 25}, "results_match": true, "classification_match": true, "router_system_chars": 2795, "router_prompt_tokens": 1272, "router_completion_tokens": 67}
+{"group": "labor-pr2-heldout", "kind": "calculated", "id": "labor-heldout-017", "question": "지금 계속근로기간 4년 8개월입니다. 해당 1년 출근율이 77.4%였고, 그 1년 안에 개근하고 해당 월을 끝낸 다음 날에도 재직한 달은 7개월이에요. 상시 근로자 수는 19명, 4주 평균 주 소정근로시간은 34시간입니다. 그 1년 근로로 발생하는 입사일 기준 법정 연차가 며칠인가요?", "raw": "{\"calculator\":\"annual_leave_days\",\"inputs\":{\"workplace_size\":\"19명\",\"weekly_hours\":\"34시간\",\"service_period\":\"4년 8개월\",\"attendance_rate\":\"77.4%\",\"full_attendance_months\":\"7개월\",\"include_first_year\":\"true\"}}", "gate": true, "calculator": "annual_leave_days", "status": "calculated", "expected_calculator": "annual_leave_days", "expected_status": "calculated", "reason": "selected", "router_ms": 10241, "router_validation_ms": 1.625, "results": {"연차유급휴가 일수": 7}, "expected_results": {"연차유급휴가 일수": 7}, "results_match": true, "classification_match": true, "router_system_chars": 2795, "router_prompt_tokens": 1273, "router_completion_tokens": 57}
+{"group": "labor-pr2-heldout", "kind": "calculated", "id": "labor-heldout-018", "question": "2025년 10월 11일에 입사했고 2026년 10월 11일 현재 재직하고 있습니다. 상시 근로자 31명, 4주 평균 주 소정근로시간 38시간, 첫 1년 출근율 87.8%입니다. 첫해에 개근하고 그 달이 끝난 다음 날까지 재직한 달은 9개월인데요. 첫해 월 단위 연차도 합산하면 1주년까지 총 며칠 발생한 건가요?", "raw": "{\"calculator\":\"annual_leave_days\",\"inputs\":{\"workplace_size\":\"31명\",\"weekly_hours\":\"38시간\",\"hire_date\":\"2025년 10월 11일\",\"as_of_date\":\"2026년 10월 11일\",\"attendance_rate\":\"87.8%\",\"full_attendance_months\":\"9개월\",\"include_first_year\":\"첫해 월 단위 연차도 합산\"}}", "gate": true, "calculator": "annual_leave_days", "status": "calculated", "expected_calculator": "annual_leave_days", "expected_status": "calculated", "reason": "selected", "router_ms": 13941, "router_validation_ms": 2.016, "results": {"연차유급휴가 일수": 24}, "expected_results": {"연차유급휴가 일수": 24}, "results_match": true, "classification_match": true, "router_system_chars": 2795, "router_prompt_tokens": 1295, "router_completion_tokens": 91}
+{"group": "labor-pr2-heldout", "kind": "calculated", "id": "labor-heldout-019", "question": "상시 일하는 직원이 딱 4명인 작업장입니다. 근속 2년 4개월이고 최근 연차 산정 대상 1년 출근율은 94.3%, 4주 평균 주 소정근로시간은 40시간이에요. 법에 따라 입사일 기준 연차가 며칠 생기나요?", "raw": "{\"calculator\":\"annual_leave_days\",\"inputs\":{\"workplace_size\":\"4명\",\"service_period\":\"2년 4개월\",\"weekly_hours\":\"40시간\",\"attendance_rate\":\"94.3%\"}}", "gate": true, "calculator": "annual_leave_days", "status": "calculated", "expected_calculator": "annual_leave_days", "expected_status": "calculated", "reason": "selected", "router_ms": 8662, "router_validation_ms": 1.055, "results": {"연차유급휴가 일수": 0}, "expected_results": {"연차유급휴가 일수": 0}, "results_match": true, "classification_match": true, "router_system_chars": 2795, "router_prompt_tokens": 1248, "router_completion_tokens": 42}
+{"group": "labor-pr2-heldout", "kind": "calculated", "id": "labor-heldout-020", "question": "재직 3년 2개월이고, 상시 근로자 수는 26명입니다. 해당 1년 출근율은 92.7%였고 계약에 따른 4주 평균 주 소정근로시간은 14시간 50분입니다. 입사일 기준 법정 연차 발생 일수를 알고 싶어요.", "raw": "{\"calculator\":\"annual_leave_days\",\"inputs\":{\"workplace_size\":\"26명\",\"weekly_hours\":\"14시간 50분\",\"service_period\":\"3년 2개월\",\"attendance_rate\":\"92.7%\"}}", "gate": false, "calculator": "annual_leave_days", "status": "calculated", "expected_calculator": "annual_leave_days", "expected_status": "calculated", "reason": "selected", "router_ms": 9169, "router_validation_ms": 1.362, "results": {"연차유급휴가 일수": 0}, "expected_results": {"연차유급휴가 일수": 0}, "results_match": true, "classification_match": true, "router_system_chars": 2795, "router_prompt_tokens": 1248, "router_completion_tokens": 47}
+{"group": "labor-pr2-heldout", "kind": "missing", "id": "labor-heldout-021", "question": "2023년 6월 13일 입사해서 2026년 6월 13일 현재도 재직합니다. 산정 대상 1년 출근율이 88.7%이고 4주 평균 주 소정근로시간은 38시간입니다. 입사일 기준으로 이번 법정 연차는 며칠 생기나요?", "raw": "{\"calculator\":\"annual_leave_days\",\"inputs\":{\"hire_date\":\"2023년 6월 13일\",\"as_of_date\":\"2026년 6월 13일\",\"attendance_rate\":\"88.7%\",\"weekly_hours\":\"38시간\"}}", "gate": true, "calculator": "annual_leave_days", "status": "guidance", "expected_calculator": "annual_leave_days", "expected_status": "guidance", "reason": "missing_required", "router_ms": 10415, "router_validation_ms": 1.244, "results": {}, "expected_results": null, "results_match": null, "classification_match": true, "router_system_chars": 2795, "router_prompt_tokens": 1255, "router_completion_tokens": 59, "expected_reason": "missing_required"}
+{"group": "labor-pr2-heldout", "kind": "missing", "id": "labor-heldout-022", "question": "상시 근로자 17명, 4주 평균 주 소정근로시간 33시간으로 5년 3개월째 계속 다니고 있어요. 입사일 기준으로 가장 최근에 발생한 법정 연차 일수를 계산해 주실 수 있나요?", "raw": "{\"calculator\":\"annual_leave_days\",\"inputs\":{\"workplace_size\":\"17명\",\"weekly_hours\":\"33시간\",\"service_period\":\"5년 3개월\"}}", "gate": true, "calculator": "annual_leave_days", "status": "guidance", "expected_calculator": "annual_leave_days", "expected_status": "guidance", "reason": "missing_required", "router_ms": 7789, "router_validation_ms": 1.508, "results": {}, "expected_results": null, "results_match": null, "classification_match": true, "router_system_chars": 2795, "router_prompt_tokens": 1230, "router_completion_tokens": 34, "expected_reason": "missing_required"}
+{"group": "labor-pr2-heldout", "kind": "ambiguous", "id": "labor-heldout-023", "question": "상시 직원 수를 두고 한쪽에서는 4명, 다른 쪽에서는 6명이라고 합니다. 4주 평균 주 소정근로시간은 39시간이고 3년 6개월째 재직 중입니다. 해당 1년 출근율이 90.4%면 입사일 기준 법정 연차가 며칠 발생하나요?", "raw": "{\"calculator\":\"annual_leave_days\",\"inputs\":{\"workplace_size\":\"4명\",\"weekly_hours\":\"39시간\",\"service_period\":\"3년 6개월\",\"attendance_rate\":\"90.4%\",\"ambiguity\":\"상시 직원 수를 두고 한쪽에서는 4명, 다른 쪽에서는 6명이라고 합니다.\"}}", "gate": true, "calculator": "annual_leave_days", "status": "guidance", "expected_calculator": "annual_leave_days", "expected_status": "guidance", "reason": "ambiguous_input", "router_ms": 11458, "router_validation_ms": 0.122, "results": {}, "expected_results": null, "results_match": null, "classification_match": true, "router_system_chars": 2795, "router_prompt_tokens": 1252, "router_completion_tokens": 69, "expected_reason": "ambiguous_input"}
+{"group": "labor-pr2-heldout", "kind": "ambiguous", "id": "labor-heldout-024", "question": "계약상 근속은 정확히 1년이고 1년 출근율은 88.1%였어요. 개근한 달이 끝난 다음 날까지 재직한 것은 9개월입니다. 연차 발생일에도 근로관계가 이어졌는지 아니면 그 전날 종료됐는지는 인사 기록을 다시 확인 중이에요. 상시 근로자 28명, 4주 평균 주 소정근로시간 36시간일 때 입사일 기준 연차가 며칠 생기나요?", "raw": "{\"calculator\":\"annual_leave_days\",\"inputs\":{\"workplace_size\":\"28명\",\"weekly_hours\":\"36시간\",\"service_period\":\"1년\",\"attendance_rate\":\"88.1%\",\"full_attendance_months\":\"9개월\",\"employed_at_accrual\":\"인사 기록을 다시 확인 중이에요\"}}", "gate": true, "calculator": "annual_leave_days", "status": "guidance", "expected_calculator": "annual_leave_days", "expected_status": "guidance", "reason": "ambiguous_input", "router_ms": 10863, "router_validation_ms": 2.031, "results": {}, "expected_results": null, "results_match": null, "classification_match": true, "router_system_chars": 2795, "router_prompt_tokens": 1281, "router_completion_tokens": 63, "expected_reason": "ambiguous_input"}
+{"group": "labor-pr2-heldout", "kind": "calculated", "id": "labor-heldout-025", "question": "통상시급이 14,760원이고 유급주휴시간은 7시간 15분입니다. 계약상 4주 평균 주 소정근로시간이 36시간 15분이고 이번 주 소정근로일에 전부 출근했어요. 그 주 7일 내내 근로관계를 유지했습니다. 주휴수당 한 주치 얼마인가요?", "raw": "{\"calculator\":\"weekly_holiday_pay\",\"inputs\":{\"hourly_wage\":\"14,760원\",\"paid_holiday_hours\":\"7시간 15분\",\"weekly_scheduled_hours\":\"36시간 15분\",\"attendance\":\"이번 주 소정근로일에 전부 출근했어요\",\"employment\":\"그 주 7일 내내 근로관계를 유지했습니다\"}}", "gate": true, "calculator": "weekly_holiday_pay", "status": "calculated", "expected_calculator": "weekly_holiday_pay", "expected_status": "calculated", "reason": "selected", "router_ms": 12410, "router_validation_ms": 2.391, "results": {"주휴수당": 107010}, "expected_results": {"주휴수당": 107010}, "results_match": true, "classification_match": true, "router_system_chars": 2795, "router_prompt_tokens": 1262, "router_completion_tokens": 78}
+{"group": "labor-pr2-heldout", "kind": "calculated", "id": "labor-heldout-026", "question": "이번 주에 해당하는 주휴수당 계산 좀 해주세요. 비교 통상근로자는 주 소정근로일이 6일이고, 저는 4주 평균으로 주 소정근로시간 25시간 30분입니다. 이번 주 소정근로일은 개근했고 한 주 동안 근로관계가 계속됐습니다. 제 통상시급은 13,684원이에요.", "raw": "{\"calculator\":\"weekly_holiday_pay\",\"inputs\":{\"hourly_wage\":\"13,684원\",\"weekly_scheduled_hours\":\"25시간 30분\",\"reference_days_per_week\":\"6일\",\"attendance\":\"개근\",\"employment\":\"한 주 동안 근로관계가 계속\"}}", "gate": true, "calculator": "weekly_holiday_pay", "status": "calculated", "expected_calculator": "weekly_holiday_pay", "expected_status": "calculated", "reason": "selected", "router_ms": 10541, "router_validation_ms": 1.45, "results": {"주휴수당": 58157}, "expected_results": {"주휴수당": 58157}, "results_match": true, "classification_match": true, "router_system_chars": 2795, "router_prompt_tokens": 1264, "router_completion_tokens": 60}
+{"group": "labor-pr2-heldout", "kind": "calculated", "id": "labor-heldout-027", "question": "4주 동안 제 소정근로시간 합계가 103시간이고, 같은 4주간 비교 통상근로자의 소정근로일수는 모두 19일입니다. 이번 주 소정근로일은 결근하지 않았고 일주일 내내 재직했습니다. 통상시급 12,943원으로 주휴수당 1회분이 얼마나 되나요?", "raw": "{\"calculator\":\"weekly_holiday_pay\",\"inputs\":{\"hourly_wage\":\"12,943원\",\"four_week_scheduled_hours\":\"103시간\",\"four_week_reference_days\":\"19일\",\"attendance\":\"이번 주 소정근로일은 결근하지 않았고\",\"employment\":\"일주일 내내 재직했습니다\"}}", "gate": true, "calculator": "weekly_holiday_pay", "status": "calculated", "expected_calculator": "weekly_holiday_pay", "expected_status": "calculated", "reason": "selected", "router_ms": 11484, "router_validation_ms": 1.305, "results": {"주휴수당": "70164.6842"}, "expected_results": {"주휴수당": "70164.6842"}, "results_match": true, "classification_match": true, "router_system_chars": 2795, "router_prompt_tokens": 1261, "router_completion_tokens": 69}
+{"group": "labor-pr2-heldout", "kind": "calculated", "id": "labor-heldout-028", "question": "비교할 통상근로자의 주 소정근로일수는 고정 5일입니다. 제 4주간 소정근로시간 합계는 딱 60시간이에요. 이번 주는 소정근로일을 개근했고 그 주 7일간 고용관계가 유지됐습니다. 통상시급이 12,190원이면 이 주의 주휴수당이 얼마인가요?", "raw": "{\"calculator\":\"weekly_holiday_pay\",\"inputs\":{\"reference_days_per_week\":\"5일\",\"four_week_scheduled_hours\":\"60시간\",\"attendance\":\"개근\",\"employment\":\"7일간 고용관계가 유지\",\"hourly_wage\":\"12,190원\"}}", "gate": true, "calculator": "weekly_holiday_pay", "status": "calculated", "expected_calculator": "weekly_holiday_pay", "expected_status": "calculated", "reason": "selected", "router_ms": 10109, "router_validation_ms": 1.383, "results": {"주휴수당": 36570}, "expected_results": {"주휴수당": 36570}, "results_match": true, "classification_match": true, "router_system_chars": 2795, "router_prompt_tokens": 1261, "router_completion_tokens": 56}
+{"group": "labor-pr2-heldout", "kind": "calculated", "id": "labor-heldout-029", "question": "통상시급 15,318원 받고 있습니다. 이번 주 소정근로일을 개근했고 7일 내내 재직했지만 4주 평균 주 소정근로시간은 14시간 54분입니다. 법에 따라 주휴수당이 얼마 생기나요?", "raw": "{\"calculator\":\"weekly_holiday_pay\",\"inputs\":{\"hourly_wage\":\"15,318원\",\"weekly_scheduled_hours\":\"14시간 54분\",\"attendance\":\"이번 주 소정근로일을 개근\",\"employment\":\"7일 내내 재직\"}}", "gate": true, "calculator": "weekly_holiday_pay", "status": "calculated", "expected_calculator": "weekly_holiday_pay", "expected_status": "calculated", "reason": "selected", "router_ms": 10303, "router_validation_ms": 1.608, "results": {"주휴수당": 0}, "expected_results": {"주휴수당": 0}, "results_match": true, "classification_match": true, "router_system_chars": 2795, "router_prompt_tokens": 1241, "router_completion_tokens": 58}
+{"group": "labor-pr2-heldout", "kind": "calculated", "id": "labor-heldout-030", "question": "소정근로시간은 4주 평균 주 29시간 30분이고 통상시급은 13,762원입니다. 그 주에 7일 내내 재직했는데 소정근로일에 하루 결근했어요. 이번 주 법정 주휴수당이 얼마인지 봐 주세요.", "raw": "{\"calculator\":\"weekly_holiday_pay\",\"inputs\":{\"weekly_scheduled_hours\":\"4주 평균 주 29시간 30분\",\"hourly_wage\":\"13,762원\",\"employment\":\"7일 내내 재직\",\"attendance\":\"소정근로일에 하루 결근\"}}", "gate": true, "calculator": "weekly_holiday_pay", "status": "calculated", "expected_calculator": "weekly_holiday_pay", "expected_status": "calculated", "reason": "selected", "router_ms": 10728, "router_validation_ms": 1.253, "results": {"주휴수당": 0}, "expected_results": {"주휴수당": 0}, "results_match": true, "classification_match": true, "router_system_chars": 2795, "router_prompt_tokens": 1244, "router_completion_tokens": 62}
+{"group": "labor-pr2-heldout", "kind": "calculated", "id": "labor-heldout-031", "question": "정해진 근무일에는 전부 출근해서 이번 주 소정근로일은 개근입니다. 다만 이번 주 7일이 되기 전에 근로관계가 종료됐습니다. 4주 평균 주 소정근로시간은 28시간이고 통상시급 13,412원인데 이 주 주휴수당이 나오나요?", "raw": "{\"calculator\":\"weekly_holiday_pay\",\"inputs\":{\"weekly_scheduled_hours\":\"28시간\",\"hourly_wage\":\"13,412원\",\"attendance\":\"정해진 근무일에는 전부 출근해서 이번 주 소정근로일은 개근입니다\",\"employment\":\"이번 주 7일이 되기 전에 근로관계가 종료됐습니다\"}}", "gate": false, "calculator": "weekly_holiday_pay", "status": "calculated", "expected_calculator": "weekly_holiday_pay", "expected_status": "calculated", "reason": "selected", "router_ms": 11660, "router_validation_ms": 1.15, "results": {"주휴수당": 0}, "expected_results": {"주휴수당": 0}, "results_match": true, "classification_match": true, "router_system_chars": 2795, "router_prompt_tokens": 1249, "router_completion_tokens": 71}
+{"group": "labor-pr2-heldout", "kind": "calculated", "id": "labor-heldout-032", "question": "이번 주 소정근로일에 한 번도 결근하지 않았고 한 주 내내 근로계약이 유지됐어요. 통상시급은 11,854원입니다. 저의 4주간 소정근로시간은 합해서 127시간이고 비교 통상근로자는 주마다 소정근로일이 5일이에요. 법정 주휴수당 한 주분을 알려 주세요.", "raw": "{\"calculator\":\"weekly_holiday_pay\",\"inputs\":{\"hourly_wage\":\"11,854원\",\"four_week_scheduled_hours\":\"127시간\",\"reference_days_per_week\":\"5일\",\"attendance\":\"한 번도 결근하지 않았고\",\"employment\":\"한 주 내내 근로계약이 유지됐어요\"}}", "gate": false, "calculator": "weekly_holiday_pay", "status": "calculated", "expected_calculator": "weekly_holiday_pay", "expected_status": "calculated", "reason": "selected", "router_ms": 11272, "router_validation_ms": 1.892, "results": {"주휴수당": "75272.9"}, "expected_results": {"주휴수당": "75272.9"}, "results_match": true, "classification_match": true, "router_system_chars": 2795, "router_prompt_tokens": 1265, "router_completion_tokens": 67}
+{"group": "labor-pr2-heldout", "kind": "missing", "id": "labor-heldout-033", "question": "이번 주 소정근로일을 개근했고 7일 동안 근로관계가 유지됐습니다. 4주 평균 주 소정근로시간은 34시간 30분이고 유급주휴시간은 6시간 54분입니다. 제 주휴수당은 얼마인가요?", "raw": "{\"calculator\":\"weekly_holiday_pay\",\"inputs\":{\"weekly_scheduled_hours\":\"34시간 30분\",\"paid_holiday_hours\":\"6시간 54분\",\"attendance\":\"이번 주 소정근로일을 개근\",\"employment\":\"7일 동안 근로관계가 유지\"}}", "gate": true, "calculator": "weekly_holiday_pay", "status": "guidance", "expected_calculator": "weekly_holiday_pay", "expected_status": "guidance", "reason": "missing_required", "router_ms": 10305, "router_validation_ms": 1.289, "results": {}, "expected_results": null, "results_match": null, "classification_match": true, "router_system_chars": 2795, "router_prompt_tokens": 1240, "router_completion_tokens": 58, "expected_reason": "missing_required"}
+{"group": "labor-pr2-heldout", "kind": "missing", "id": "labor-heldout-034", "question": "통상시급 14,238원이고 4주 평균 주 소정근로시간은 27시간 30분입니다. 이번 주 소정근로일을 개근했고 이번 주 7일 동안 근로관계가 계속됐어요. 이번 주 주휴수당이 얼마인가요?", "raw": "{\"calculator\":\"weekly_holiday_pay\",\"inputs\":{\"hourly_wage\":\"14,238원\",\"weekly_scheduled_hours\":\"27시간 30분\",\"attendance\":\"이번 주 소정근로일을 개근\",\"employment\":\"이번 주 7일 동안 근로관계가 계속\"}}", "gate": true, "calculator": "weekly_holiday_pay", "status": "guidance", "expected_calculator": "weekly_holiday_pay", "expected_status": "guidance", "reason": "missing_required", "router_ms": 10737, "router_validation_ms": 1.265, "results": {}, "expected_results": null, "results_match": null, "classification_match": true, "router_system_chars": 2795, "router_prompt_tokens": 1242, "router_completion_tokens": 62, "expected_reason": "missing_required"}
+{"group": "labor-pr2-heldout", "kind": "ambiguous", "id": "labor-heldout-035", "question": "통상시급 12,786원이고 4주 평균 주 소정근로시간은 32시간입니다. 유급주휴시간은 6시간 24분이고 해당 주 7일 동안 근로관계가 유지됐어요. 나머지 날은 모두 출근했는데 하루가 결근으로 찍힌 건지 출근으로 정정됐는지 아직 모릅니다. 이 주 주휴수당을 계산해 주실 수 있나요?", "raw": "{\"calculator\":\"weekly_holiday_pay\",\"inputs\":{\"hourly_wage\":\"12,786원\",\"weekly_scheduled_hours\":\"32시간\",\"paid_holiday_hours\":\"6시간 24분\",\"employment\":\"해당 주 7일 동안 근로관계가 유지됐어요\",\"attendance\":\"나머지 날은 모두 출근했는데 하루가 결근으로 찍힌 건지 출근으로 정정됐는지 아직 모릅니다\"}}", "gate": true, "calculator": "weekly_holiday_pay", "status": "guidance", "expected_calculator": "weekly_holiday_pay", "expected_status": "guidance", "reason": "ambiguous_input", "router_ms": 13898, "router_validation_ms": 0.039, "results": {}, "expected_results": null, "results_match": null, "classification_match": true, "router_system_chars": 2795, "router_prompt_tokens": 1273, "router_completion_tokens": 92, "expected_reason": "ambiguous_input"}
+{"group": "labor-pr2-heldout", "kind": "ambiguous", "id": "labor-heldout-036", "question": "계약서 사본에서 4주 평균 주 소정근로시간 칸에 24라고만 보여서 시간인지 분인지 확인이 안 됩니다. 이번 주 소정근로일은 개근했고 7일간 근로관계는 유지됐어요. 통상시급이 14,327원이고 유급주휴시간은 4시간 48분으로 적혀 있는데 주휴수당이 얼마인가요?", "raw": "{\"calculator\":\"weekly_holiday_pay\",\"inputs\":{\"hourly_wage\":\"14,327원\",\"weekly_scheduled_hours\":\"24\",\"paid_holiday_hours\":\"4시간 48분\",\"attendance\":\"개근\",\"employment\":\"7일간 근로관계는 유지됐어요\"}}", "gate": true, "calculator": "weekly_holiday_pay", "status": "guidance", "expected_calculator": "weekly_holiday_pay", "expected_status": "guidance", "reason": "ambiguous_input", "router_ms": 10553, "router_validation_ms": 0.319, "results": {}, "expected_results": null, "results_match": null, "classification_match": true, "router_system_chars": 2795, "router_prompt_tokens": 1267, "router_completion_tokens": 60, "expected_reason": "ambiguous_input"}
+{"group": "labor-pr2-heldout", "kind": "calculated", "id": "labor-heldout-037", "question": "2025년 당시 근로계약이 하루 소정근로 8시간씩 주 5일이었습니다. 고시 기준으로 그해 월 최저임금을 얼마로 보면 되나요?", "raw": "{\"calculator\":\"monthly_minimum_wage\",\"inputs\":{\"year\":\"2025년\",\"daily_scheduled_hours\":\"8시간\",\"weekly_workdays\":\"5일\"}}", "gate": true, "calculator": "monthly_minimum_wage", "status": "calculated", "expected_calculator": "monthly_minimum_wage", "expected_status": "calculated", "reason": "selected", "router_ms": 7644, "router_validation_ms": 1.227, "results": {"월 최저임금": 2096270}, "expected_results": {"월 최저임금": 2096270}, "results_match": true, "classification_match": true, "router_system_chars": 2795, "router_prompt_tokens": 1215, "router_completion_tokens": 34}
+{"group": "labor-pr2-heldout", "kind": "calculated", "id": "labor-heldout-038", "question": "급여표를 확인하려고요. 한 주에 소정근로 40시간, 주 유급주휴 8시간이면 2026년 최저시급을 월급으로 바꾼 법정 기준이 얼마예요?", "raw": "{\"calculator\":\"monthly_minimum_wage\",\"inputs\":{\"year\":\"2026년\",\"weekly_scheduled_hours\":\"40시간\",\"weekly_paid_holiday_hours\":\"8시간\"}}", "gate": true, "calculator": "monthly_minimum_wage", "status": "calculated", "expected_calculator": "monthly_minimum_wage", "expected_status": "calculated", "reason": "selected", "router_ms": 8090, "router_validation_ms": 1.388, "results": {"월 최저임금": 2156880}, "expected_results": {"월 최저임금": 2156880}, "results_match": true, "classification_match": true, "router_system_chars": 2795, "router_prompt_tokens": 1224, "router_completion_tokens": 37}
+{"group": "labor-pr2-heldout", "kind": "calculated", "id": "labor-heldout-039", "question": "2027년 월 최저임금을 계산해 주세요. 근로계약상 주 5일이고 1일 소정근로시간은 8시간입니다. 고시에 따른 월 환산액이 궁금합니다.", "raw": "{\"calculator\":\"monthly_minimum_wage\",\"inputs\":{\"year\":\"2027년\",\"weekly_workdays\":\"주 5일\",\"daily_scheduled_hours\":\"8시간\"}}", "gate": true, "calculator": "monthly_minimum_wage", "status": "calculated", "expected_calculator": "monthly_minimum_wage", "expected_status": "calculated", "reason": "selected", "router_ms": 7995, "router_validation_ms": 1.375, "results": {"월 최저임금": 2236300}, "expected_results": {"월 최저임금": 2236300}, "results_match": true, "classification_match": true, "router_system_chars": 2795, "router_prompt_tokens": 1222, "router_completion_tokens": 36}
+{"group": "labor-pr2-heldout", "kind": "calculated", "id": "labor-heldout-040", "question": "2025년 급여를 월 최저임금으로 환산해 보고 싶어요. 유급주휴가 반영된 계약서의 월 최저임금 적용기준시간은 162시간 45분입니다. 얼마가 기준이었나요?", "raw": "{\"calculator\":\"monthly_minimum_wage\",\"inputs\":{\"year\":\"2025년\",\"monthly_basis_hours\":\"162시간 45분\"}}", "gate": true, "calculator": "monthly_minimum_wage", "status": "calculated", "expected_calculator": "monthly_minimum_wage", "expected_status": "calculated", "reason": "selected", "router_ms": 7579, "router_validation_ms": 1.051, "results": {"월 최저임금": "1632382.5"}, "expected_results": {"월 최저임금": "1632382.5"}, "results_match": true, "classification_match": true, "router_system_chars": 2795, "router_prompt_tokens": 1229, "router_completion_tokens": 32}
+{"group": "labor-pr2-heldout", "kind": "calculated", "id": "labor-heldout-041", "question": "147.25시간이 유급주휴까지 반영한 월 최저임금 적용기준시간입니다. 이 근로조건에 2026년 최저임금을 전액 적용했을 때 월 최저임금은 얼마인가요?", "raw": "{\"calculator\":\"monthly_minimum_wage\",\"inputs\":{\"year\":\"2026년\",\"monthly_basis_hours\":\"147.25시간\"}}", "gate": true, "calculator": "monthly_minimum_wage", "status": "guidance", "expected_calculator": "monthly_minimum_wage", "expected_status": "calculated", "reason": "ambiguous_input", "router_ms": 7460, "router_validation_ms": 0.906, "results": {}, "expected_results": {"월 최저임금": 1519620}, "results_match": null, "classification_match": false, "router_system_chars": 2795, "router_prompt_tokens": 1225, "router_completion_tokens": 31}
+{"group": "labor-pr2-heldout", "kind": "calculated", "id": "labor-heldout-042", "question": "2027년분 계약서 검토 중입니다. 월 최저임금 적용기준시간: 183시간 12분. 유급주휴가 들어 있는 숫자예요. 최저임금 월 환산액을 알려 주세요.", "raw": "{\"calculator\":\"monthly_minimum_wage\",\"inputs\":{\"year\":\"2027년\",\"monthly_basis_hours\":\"183시간 12분\",\"applicability\":\"유급주휴가 들어 있는 숫자예요\"}}", "gate": true, "calculator": "monthly_minimum_wage", "status": "guidance", "expected_calculator": "monthly_minimum_wage", "expected_status": "calculated", "reason": "ambiguous_input", "router_ms": 9042, "router_validation_ms": 0.986, "results": {}, "expected_results": {"월 최저임금": 1960240}, "results_match": null, "classification_match": false, "router_system_chars": 2795, "router_prompt_tokens": 1227, "router_completion_tokens": 46}
+{"group": "labor-pr2-heldout", "kind": "calculated", "id": "labor-heldout-043", "question": "근태표에는 이번 달 실근로가 173시간이라고 나옵니다. 별도로 월 최저임금 적용기준시간은 191시간이라고 회사에서 확인해 줬어요. 2026년 월 최저임금이 얼마인지 그 기준으로 계산해 주세요.", "raw": "{\"calculator\":\"monthly_minimum_wage\",\"inputs\":{\"year\":\"2026년\",\"monthly_basis_hours\":\"191시간\"}}", "gate": true, "calculator": "monthly_minimum_wage", "status": "calculated", "expected_calculator": "monthly_minimum_wage", "expected_status": "calculated", "reason": "selected", "router_ms": 7177, "router_validation_ms": 0.84, "results": {"월 최저임금": 1971120}, "expected_results": {"월 최저임금": 1971120}, "results_match": true, "classification_match": true, "router_system_chars": 2795, "router_prompt_tokens": 1236, "router_completion_tokens": 28}
+{"group": "labor-pr2-heldout", "kind": "calculated", "id": "labor-heldout-044", "question": "예전에 받은 자료에 적용연도가 2025년으로 적혀 있습니다. 월 최저임금 적용기준시간이 134.35시간으로 확정돼 있어요. 이 경우 월 환산한 최저임금액이 어떻게 되나요?", "raw": "{\"calculator\":\"monthly_minimum_wage\",\"inputs\":{\"year\":\"2025년\",\"monthly_basis_hours\":\"134.35시간\"}}", "gate": true, "calculator": "monthly_minimum_wage", "status": "calculated", "expected_calculator": "monthly_minimum_wage", "expected_status": "calculated", "reason": "selected", "router_ms": 7473, "router_validation_ms": 0.956, "results": {"월 최저임금": "1347530.5"}, "expected_results": {"월 최저임금": "1347530.5"}, "results_match": true, "classification_match": true, "router_system_chars": 2795, "router_prompt_tokens": 1230, "router_completion_tokens": 31}
+{"group": "labor-pr2-heldout", "kind": "missing", "id": "labor-heldout-045", "question": "주 소정근로시간이 40시간인 계약입니다. 2026년 최저임금을 월급으로 환산하면 얼마인가요?", "raw": "{\"calculator\":\"monthly_minimum_wage\",\"inputs\":{\"year\":\"2026년\",\"weekly_scheduled_hours\":\"40시간\"}}", "gate": true, "calculator": "monthly_minimum_wage", "status": "guidance", "expected_calculator": "monthly_minimum_wage", "expected_status": "guidance", "reason": "missing_required", "router_ms": 7003, "router_validation_ms": 0.366, "results": {}, "expected_results": null, "results_match": null, "classification_match": true, "router_system_chars": 2795, "router_prompt_tokens": 1209, "router_completion_tokens": 28, "expected_reason": "missing_required"}
+{"group": "labor-pr2-heldout", "kind": "missing", "id": "labor-heldout-046", "question": "유급주휴 포함 월 최저임금 적용기준시간은 156시간 30분이라고 합니다. 이 계약 조건에서 최저시급을 월 최저임금으로 환산해 주세요.", "raw": "{\"calculator\":\"monthly_minimum_wage\",\"inputs\":{\"monthly_basis_hours\":\"156시간 30분\"}}", "gate": true, "calculator": "monthly_minimum_wage", "status": "guidance", "expected_calculator": "monthly_minimum_wage", "expected_status": "guidance", "reason": "missing_required", "router_ms": 6738, "router_validation_ms": 1.452, "results": {}, "expected_results": null, "results_match": null, "classification_match": true, "router_system_chars": 2795, "router_prompt_tokens": 1219, "router_completion_tokens": 24, "expected_reason": "missing_required"}
+{"group": "labor-pr2-heldout", "kind": "ambiguous", "id": "labor-heldout-047", "question": "2026년 급여를 보는데 유급주휴 포함 월 최저임금 적용기준시간이 168시간인지 176시간인지 자료 두 곳이 다릅니다. 월 최저임금 하나로 계산 가능할까요?", "raw": "{\"calculator\":\"monthly_minimum_wage\",\"inputs\":{\"year\":\"2026년\",\"monthly_basis_hours\":\"168시간\",\"applicability\":\"유급주휴 포함\"}}", "gate": false, "calculator": "monthly_minimum_wage", "status": "guidance", "expected_calculator": "monthly_minimum_wage", "expected_status": "guidance", "reason": "ambiguous_input", "router_ms": 8118, "router_validation_ms": 0.779, "results": {}, "expected_results": null, "results_match": null, "classification_match": true, "router_system_chars": 2795, "router_prompt_tokens": 1226, "router_completion_tokens": 37, "expected_reason": "ambiguous_input"}
+{"group": "labor-pr2-heldout", "kind": "ambiguous", "id": "labor-heldout-048", "question": "2027년 월 최저임금 적용기준시간은 178시간입니다. 회사에서 수습 감액을 적용하는 대상인지 아직 답을 못 받았는데 제게 적용되는 월 최저임금이 얼마인가요?", "raw": "{\n  \"calculator\": \"monthly_minimum_wage\",\n  \"inputs\": {\n    \"year\": \"2027년\",\n    \"monthly_basis_hours\": \"178시간\",\n    \"applicability\": \"회사에서 수습 감액을 적용하는 대상인지 아직 답을 못 받았는데 제게 적용되는 월 최저임금이 얼마인가요?\"\n  }\n}", "gate": true, "calculator": "monthly_minimum_wage", "status": "guidance", "expected_calculator": "monthly_minimum_wage", "expected_status": "guidance", "reason": "ambiguous_input", "router_ms": 12910, "router_validation_ms": 0.294, "results": {}, "expected_results": null, "results_match": null, "classification_match": true, "router_system_chars": 2795, "router_prompt_tokens": 1223, "router_completion_tokens": 83, "expected_reason": "ambiguous_input"}
+{"group": "labor-pr2-heldout", "kind": "calculated", "id": "labor-heldout-049", "question": "상시 14명이 일하는 회사에서 평일 연장근로를 했습니다. 휴게 빼고 3시간 45분, 통상시급 15,364원이에요. 가산수당만 얼마인지 계산해 주세요.", "raw": "{\"calculator\":\"premium_pay\",\"inputs\":{\"staff_count\":\"14명\",\"overtime_hours\":\"3시간 45분\",\"ordinary_hourly_wage\":\"15,364원\",\"include_base\":\"가산수당만\"}}", "gate": true, "calculator": "premium_pay", "status": "calculated", "expected_calculator": "premium_pay", "expected_status": "calculated", "reason": "selected", "router_ms": 9478, "router_validation_ms": 2.123, "results": {"법정 가산수당": "28807.5"}, "expected_results": {"법정 가산수당": "28807.5"}, "results_match": true, "classification_match": true, "router_system_chars": 2795, "router_prompt_tokens": 1230, "router_completion_tokens": 50}
+{"group": "labor-pr2-heldout", "kind": "calculated", "id": "labor-heldout-050", "question": "통상시급은 18,227원이고 사업장 상시 근로자는 26명입니다. 평일 통상 근무 중 오후 10시 이후 야간 실근로가 2시간 20분이었어요. 휴게시간은 뺀 상태고, 기본임금 빼고 야간에 붙는 돈만 알려 주세요.", "raw": "{\"calculator\":\"premium_pay\",\"inputs\":{\"ordinary_hourly_wage\":\"18,227원\",\"staff_count\":\"26명\",\"night_hours\":\"2시간 20분\",\"include_base\":\"기본임금 빼고\"}}", "gate": false, "calculator": "premium_pay", "status": "calculated", "expected_calculator": "premium_pay", "expected_status": "calculated", "reason": "selected", "router_ms": 9378, "router_validation_ms": 1.911, "results": {"법정 가산수당": "21264.8333"}, "expected_results": {"법정 가산수당": "21264.8333"}, "results_match": true, "classification_match": true, "router_system_chars": 2795, "router_prompt_tokens": 1255, "router_completion_tokens": 49}
+{"group": "labor-pr2-heldout", "kind": "calculated", "id": "labor-heldout-051", "question": "휴일 하루 출근해서 쉬는 시간 빼고 7시간 40분 일했습니다. 상시 근로자 9명이고 제 통상시급은 16,578원입니다. 휴일 가산분만 계산하면 얼마예요?", "raw": "{\"calculator\":\"premium_pay\",\"inputs\":{\"staff_count\":\"9명\",\"ordinary_hourly_wage\":\"16,578원\",\"holiday_within_hours\":\"7시간 40분\",\"include_base\":\"휴일 가산분만\"}}", "gate": true, "calculator": "premium_pay", "status": "guidance", "expected_calculator": "premium_pay", "expected_status": "calculated", "reason": "missing_required", "router_ms": 9471, "router_validation_ms": 1.507, "results": {}, "expected_results": {"법정 가산수당": 63549}, "results_match": null, "classification_match": false, "router_system_chars": 2795, "router_prompt_tokens": 1232, "router_completion_tokens": 50}
+{"group": "labor-pr2-heldout", "kind": "calculated", "id": "labor-heldout-052", "question": "통상시급 17,136원, 상시 근로자 21명입니다. 휴일 하루에 휴게시간을 뺀 실근로가 10시간 30분이고 그중 야간근로가 2시간 45분이에요. 중복 없이 센 총 실근로도 10.5시간입니다. 기본임금까지 포함한 총 지급액을 구해 주세요.", "raw": "{\"calculator\":\"premium_pay\",\"inputs\":{\"ordinary_hourly_wage\":\"17,136원\",\"staff_count\":\"21명\",\"holiday_within_hours\":\"10시간 30분\",\"night_hours\":\"2시간 45분\",\"total_hours\":\"10.5시간\",\"include_base\":\"기본임금까지 포함한 총 지급액\"}}", "gate": true, "calculator": "premium_pay", "status": "guidance", "expected_calculator": "premium_pay", "expected_status": "calculated", "reason": "missing_required", "router_ms": 11922, "router_validation_ms": 1.771, "results": {}, "expected_results": {"법정 가산수당": 134946, "기본임금": 179928, "기본임금 포함 합계": 314874}, "results_match": null, "classification_match": false, "router_system_chars": 2795, "router_prompt_tokens": 1266, "router_completion_tokens": 73}
+{"group": "labor-pr2-heldout", "kind": "calculated", "id": "labor-heldout-053", "question": "직원은 상시 32명이고 통상시급 14,265원 받습니다. 휴게 제외하고 평일 연장을 4시간 40분 했고 그 안에서 야간 근로는 2시간 10분입니다. 연장과 야간을 합친 가산분만 얼마인지 보고 싶어요.", "raw": "{\"calculator\":\"premium_pay\",\"inputs\":{\"staff_count\":\"32\",\"ordinary_hourly_wage\":\"14,265원\",\"overtime_hours\":\"4시간 40분\",\"night_hours\":\"2시간 10분\",\"include_base\":\"가산분만\"}}", "gate": true, "calculator": "premium_pay", "status": "calculated", "expected_calculator": "premium_pay", "expected_status": "calculated", "reason": "selected", "router_ms": 10328, "router_validation_ms": 2.267, "results": {"법정 가산수당": "48738.75"}, "expected_results": {"법정 가산수당": "48738.75"}, "results_match": true, "classification_match": true, "router_system_chars": 2795, "router_prompt_tokens": 1248, "router_completion_tokens": 58}
+{"group": "labor-pr2-heldout", "kind": "calculated", "id": "labor-heldout-054", "question": "휴일 이틀의 실근로를 휴일별로 나눠 보니 하루 8시간 이내에 해당하는 부분의 합계가 14시간 45분이고, 하루 8시간을 넘는 부분 합계는 3시간 30분입니다. 모두 휴게 제외고 야간에 일한 시간은 없어요. 상시 근로자 18명, 통상시급 14,392원이면 휴일 가산분만 얼마인가요?", "raw": "{\"calculator\":\"premium_pay\",\"inputs\":{\"staff_count\":\"18명\",\"ordinary_hourly_wage\":\"14,392원\",\"holiday_within_hours\":\"14시간 45분\",\"holiday_excess_hours\":\"3시간 30분\",\"include_base\":\"휴일 가산분만\"}}", "gate": true, "calculator": "premium_pay", "status": "calculated", "expected_calculator": "premium_pay", "expected_status": "calculated", "reason": "selected", "router_ms": 10969, "router_validation_ms": 2.018, "results": {"법정 가산수당": 156513}, "expected_results": {"법정 가산수당": 156513}, "results_match": true, "classification_match": true, "router_system_chars": 2795, "router_prompt_tokens": 1272, "router_completion_tokens": 64}
+{"group": "labor-pr2-heldout", "kind": "calculated", "id": "labor-heldout-055", "question": "상시 직원은 4명인 사업장이에요. 통상시급 11,936원이고 평일 연장근로가 휴게 제외 3시간 30분, 중복 없는 총 실근로는 3.5시간입니다. 이 시간에 법에서 정한 기본임금 포함 총액과 가산수당을 알려 주세요.", "raw": "{\"calculator\":\"premium_pay\",\"inputs\":{\"staff_count\":\"4명\",\"ordinary_hourly_wage\":\"11,936원\",\"overtime_hours\":\"3시간 30분\",\"total_hours\":\"3.5시간\",\"include_base\":\"기본임금 포함 총액\"}}", "gate": true, "calculator": "premium_pay", "status": "calculated", "expected_calculator": "premium_pay", "expected_status": "calculated", "reason": "selected", "router_ms": 10313, "router_validation_ms": 1.703, "results": {"법정 가산수당": 0, "기본임금": 41776, "기본임금 포함 합계": 41776}, "expected_results": {"법정 가산수당": 0, "기본임금": 41776, "기본임금 포함 합계": 41776}, "results_match": true, "classification_match": true, "router_system_chars": 2795, "router_prompt_tokens": 1251, "router_completion_tokens": 58}
+{"group": "labor-pr2-heldout", "kind": "calculated", "id": "labor-heldout-056", "question": "기본임금까지 합쳐 총 얼마인지 계산 부탁드려요. 상시 인원 39명, 통상시급 16,652원입니다. 휴게를 빼고 평일 연장근로 1시간 45분, 휴일 하루 근로 8시간입니다. 그 휴일 근로 중 야간근로 1시간 15분이 포함돼 있습니다. 별도로 평일 소정근로 15분까지 합해 중복 없는 실근로는 총 10시간입니다.", "raw": "{\"calculator\":\"premium_pay\",\"inputs\":{\"staff_count\":\"39명\",\"ordinary_hourly_wage\":\"16,652원\",\"overtime_hours\":\"1시간 45분\",\"holiday_hours\":\"8시간\",\"night_hours\":\"1시간 15분\",\"include_base\":\"기본임금까지 합쳐 총 얼마인지\",\"total_hours\":\"10시간\"}}", "gate": true, "calculator": "premium_pay", "status": "guidance", "expected_calculator": "premium_pay", "expected_status": "calculated", "reason": "ambiguous_input", "router_ms": 12472, "router_validation_ms": 0.291, "results": {}, "expected_results": {"법정 가산수당": 91586, "기본임금": 166520, "기본임금 포함 합계": 258106}, "results_match": null, "classification_match": false, "router_system_chars": 2795, "router_prompt_tokens": 1286, "router_completion_tokens": 77}
+{"group": "labor-pr2-heldout", "kind": "missing", "id": "labor-heldout-057", "question": "평일 연장근로가 휴게 빼고 2시간 35분입니다. 통상시급은 17,483원이고 가산수당만 계산하려는데 얼마인가요?", "raw": "{\"calculator\":\"premium_pay\",\"inputs\":{\"overtime_hours\":\"2시간 35분\",\"ordinary_hourly_wage\":\"17,483원\",\"include_base\":\"가산수당만\"}}", "gate": true, "calculator": "premium_pay", "status": "guidance", "expected_calculator": "premium_pay", "expected_status": "guidance", "reason": "missing_required", "router_ms": 8723, "router_validation_ms": 1.466, "results": {}, "expected_results": null, "results_match": null, "classification_match": true, "router_system_chars": 2795, "router_prompt_tokens": 1220, "router_completion_tokens": 43, "expected_reason": "missing_required"}
+{"group": "labor-pr2-heldout", "kind": "missing", "id": "labor-heldout-058", "question": "상시 근로자 24명인 곳에서 야간 실근로를 3시간 10분 했습니다. 휴게시간은 이미 제외했어요. 기본임금 빼고 법정 야간 가산분만 계산해 주세요.", "raw": "{\"calculator\":\"premium_pay\",\"inputs\":{\"staff_count\":\"24명\",\"night_hours\":\"3시간 10분\",\"include_base\":\"기본임금 빼고 법정 야간 가산분만\"}}", "gate": true, "calculator": "premium_pay", "status": "guidance", "expected_calculator": "premium_pay", "expected_status": "guidance", "reason": "missing_required", "router_ms": 8650, "router_validation_ms": 1.293, "results": {}, "expected_results": null, "results_match": null, "classification_match": true, "router_system_chars": 2795, "router_prompt_tokens": 1224, "router_completion_tokens": 42, "expected_reason": "missing_required"}
+{"group": "labor-pr2-heldout", "kind": "ambiguous", "id": "labor-heldout-059", "question": "상시 인원은 5명 안팎인데 상시 근로자 산정에 포함되는 사람이 누군지 회사도 확인 중입니다. 통상시급 15,743원에 휴게 제외 평일 연장근로 3시간 20분이면 법정 가산분만 얼마예요?", "raw": "{\"calculator\":\"premium_pay\",\"inputs\":{\"staff_count\":\"5명 안팎\",\"ordinary_hourly_wage\":\"15,743원\",\"overtime_hours\":\"3시간 20분\",\"include_base\":\"법정 가산분만\"}}", "gate": true, "calculator": "premium_pay", "status": "guidance", "expected_calculator": "premium_pay", "expected_status": "guidance", "reason": "ambiguous_input", "router_ms": 9819, "router_validation_ms": 0.472, "results": {}, "expected_results": null, "results_match": null, "classification_match": true, "router_system_chars": 2795, "router_prompt_tokens": 1240, "router_completion_tokens": 53, "expected_reason": "ambiguous_input"}
+{"group": "labor-pr2-heldout", "kind": "ambiguous", "id": "labor-heldout-060", "question": "상시 근로자 27명이고 통상시급은 16,913원입니다. 휴일 이틀에 나가서 쉬는 시간 빼고 합쳐 15시간 30분 일했어요. 날짜별로 몇 시간씩인지 기록을 아직 못 봤습니다. 휴일 가산수당만 얼마인지 계산해 주실 수 있나요?", "raw": "{\"calculator\":\"premium_pay\",\"inputs\":{\"staff_count\":\"27명\",\"ordinary_hourly_wage\":\"16,913원\",\"holiday_within_hours\":\"15시간 30분\",\"include_base\":\"휴일 가산수당만\"}}", "gate": true, "calculator": "premium_pay", "status": "guidance", "expected_calculator": "premium_pay", "expected_status": "guidance", "reason": "ambiguous_input", "router_ms": 9811, "router_validation_ms": 0.662, "results": {}, "expected_results": null, "results_match": null, "classification_match": true, "router_system_chars": 2795, "router_prompt_tokens": 1254, "router_completion_tokens": 53, "expected_reason": "ambiguous_input"}
+~~~
