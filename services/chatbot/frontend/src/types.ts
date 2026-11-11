@@ -21,6 +21,20 @@ export type Config = {
 
 export type Feedback = { label: 'like' | 'flag'; reason?: string } | null
 
+type CalculationRow = { label: string; value: number | string }
+export type Calculation = {
+  calculator: string | null
+  status: 'calculated' | 'guidance' | 'none'
+  year?: number
+  inputs?: (CalculationRow & { source: string })[]
+  steps?: (CalculationRow & { formula: string; article: string })[]
+  results?: { label: string; value: number }[]
+  articles?: string[]
+  message?: string
+}
+
+export type CalculationCheck = 'match' | 'mismatch' | 'missing'
+
 export type Turn = {
   id: string
   question: string
@@ -29,6 +43,8 @@ export type Turn = {
   status?: string
   text: string
   sources?: Sources
+  calculation?: Calculation
+  calculationCheck?: CalculationCheck
   stats?: string
   done: boolean
   stopped?: boolean

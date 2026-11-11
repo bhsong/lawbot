@@ -6,7 +6,16 @@ from fastapi.testclient import TestClient
 
 from admin_test_data import seed_qa
 from conftest import ADMIN_PW, ADMIN_USER
-from lawbot import auth, cache_admin, cache_release_store, cache_review_store, cache_runtime, corpus_store, web
+from lawbot import (
+    auth,
+    cache_admin,
+    cache_release_store,
+    cache_review_store,
+    cache_runtime,
+    cache_store,
+    corpus_store,
+    web,
+)
 from lawbot.cache_carry import classify, corpus_changes
 from lawbot.cache_release_store import apply_release
 from lawbot.cache_seed import Bundle, Protection, load_protection
@@ -14,7 +23,7 @@ from lawbot.cache_store import Draft, Store, init, revoke_in
 from lawbot.db.connection import connect, transaction
 from lawbot.db.migrate import init as init_corpus
 from lawbot.exact_cache import DISPLAY_VERSION, Snapshot, digest
-from test_exact_cache import ID, QUESTION, RAW
+from test_exact_cache import CALCULATION, ID, QUESTION, RAW
 
 BASE = {
     'a': ('법 A', '제1조', '조문', '법률', '본문', '0'),
@@ -131,6 +140,41 @@ def test_release_projection_and_runtime(prepared, tmp_path, monkeypatch, changes
     assert (
         apply_release(store.path, tmp_path / 'corpus.db', token, target, snapshot, tmp_path / 'fixture.zip') == counts
     )
+
+
+@pytest.mark.parametrize('mixed', [False, True])
+def test_release_projection_does_not_restore_legacy_calculation_links(prepared, tmp_path, monkeypatch, mixed):
+    store, _, previous, ordinary = prepared
+    namespace = previous.namespace.id
+    calculation = replace(ordinary, source_id='calculation', question=CALCULATION)
+    store.set_mode('off', 'test', 'legacy review')
+    with monkeypatch.context() as before_policy:
+        before_policy.setattr(cache_store, 'is_calculation_question', lambda question: False)
+        store.stage(previous.namespace, [calculation], 'test', 'legacy draft')
+        selected = (ordinary, calculation) if mixed else (calculation,)
+        store.approve(
+            namespace,
+            1,
+            'protected',
+            {draft.query_id(namespace): draft.answer_id(namespace) for draft in selected},
+            actor='test',
+            reason='legacy review',
+        )
+    if not mixed:
+        store.revoke('query', ordinary.query_id(namespace), 'test', 'ordinary link withdrawn')
+    target = release('after')
+    snapshot = Snapshot.load(target, system='synthetic', combined=True, attach_decrees=True)
+    token = ('after', 2)
+    monkeypatch.setattr(corpus_store, 'active_token', lambda *args: token)
+    counts = apply_release(store.path, tmp_path / 'corpus.db', token, target, snapshot, tmp_path / 'fixture.zip')
+    assert counts == {'keep': int(mixed), 'pending': 0, 'off': int(not mixed)}
+    with connect(store.path) as conn:
+        rows = dict(
+            conn.execute(
+                'SELECT source_id,exact_enabled FROM cache_queries WHERE namespace_id=?', (snapshot.namespace.id,)
+            )
+        )
+    assert rows == {'calculation': 0, 'fixture': int(mixed)}
 
 
 def test_failed_projection_leaves_control_and_rows_unchanged(prepared, tmp_path, monkeypatch):
@@ -278,6 +322,59 @@ def test_cache_api_guards_approval_and_idempotency(review_api):
         assert conn.execute(
             "SELECT reason FROM cache_audit_events WHERE actor=? AND action='approve'", (f'admin:{ADMIN_USER}',)
         ).fetchall() == [('표시본 확인',)]
+
+
+@pytest.mark.parametrize('mixed', [False, True])
+def test_calculation_links_are_off_and_only_other_links_can_be_approved(review_api, monkeypatch, mixed):
+    app, store, answer_id, state = review_api
+    namespace = state.exact_cache.snapshot.namespace
+    snapshot = state.exact_cache.snapshot
+    citations = [(ID, snapshot.articles[ID].text_hash)]
+    calculation = Draft(
+        'calculation', CALCULATION, 'fixture-answer', digest(RAW), snapshot.render(RAW, citations), citations, {}, RAW
+    )
+    with monkeypatch.context() as before_policy:
+        before_policy.setattr(cache_store, 'is_calculation_question', lambda question: False, raising=False)
+        assert store.stage(namespace, [calculation], 'test', 'legacy') == 1
+    if not mixed:
+        with connect(store.path, write=True) as conn, transaction(conn):
+            revoke_in(
+                conn,
+                'query',
+                conn.execute(
+                    'SELECT query_id FROM cache_queries WHERE answer_id=? AND source_id=?', (answer_id, 'fixture')
+                ).fetchone()[0],
+                'test',
+                'remove ordinary query',
+            )
+    protection = Protection(frozenset(), {'fixture': digest(QUESTION), 'calculation': digest(CALCULATION)}, 'protected')
+    monkeypatch.setattr(cache_review_store, 'verified_inputs', lambda *args: (protection, {}))
+    origin = {'Origin': 'http://testserver'}
+    with TestClient(app) as client:
+        assert client.post('/api/login', json={'user': ADMIN_USER, 'password': ADMIN_PW}).status_code == 200
+        data = client.get('/api/admin/cache').json()
+        assert data['calculation_excluded_count'] == 1
+        item = next(row for row in data['items'] if row['answer_id'] == answer_id)
+        assert item['status'] == ('pending' if mixed else 'off') and item['calculation_excluded_count'] == 1
+        detail = client.get(f'/api/admin/cache/answers/{answer_id}').json()
+        assert next(row for row in detail['questions'] if row['question'] == CALCULATION)['status'] == 'off'
+        path = '/api/admin/cache/actions'
+        action = dict(
+            action='approve',
+            target=answer_id,
+            generation=detail['generation'],
+            preview_sha256=detail['preview_sha256'] or '0' * 64,
+            idempotency_key='legacy',
+            reason='표시본 확인',
+        )
+        result = client.post(path, json=action, headers=origin)
+        if mixed:
+            assert result.status_code == 200, result.json()
+            assert store.lookup(namespace.id, QUESTION)[1] is not None
+        else:
+            assert detail['preview_sha256'] is None
+            assert result.status_code == 409 and result.json()['code'] == 'calculation_question'
+        assert store.lookup(namespace.id, CALCULATION)[1] is None
 
 
 def test_cache_api_missing_bundle_allows_off_and_withdrawal(review_api):

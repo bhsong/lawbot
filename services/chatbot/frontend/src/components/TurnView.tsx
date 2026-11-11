@@ -3,6 +3,7 @@ import Markdown from 'react-markdown'
 import remarkCjkFriendly from 'remark-cjk-friendly'
 import remarkGfm from 'remark-gfm'
 import type { Feedback, Option, Turn } from '../types'
+import { CalculationCard } from './CalculationCard'
 import { Book, Check, Copy, Flag, Retry, ThumbUp } from './icons'
 import { countSources } from './SourcesView'
 
@@ -33,6 +34,7 @@ export function TurnView({ turn, selected, reasons, onSelect, onRetry, onFeedbac
           {turn.question}
         </div>
       </div>
+      {turn.calculation && <CalculationCard calculation={turn.calculation} check={turn.calculationCheck} />}
       <div className="bot" data-testid="answer" onClick={onSelect}>
         {turn.status && (
           <p className="status" role="status">

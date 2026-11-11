@@ -83,6 +83,24 @@ def release_at_event(db: Path, profile: str, event_id: int) -> CorpusRelease:
         return _restore_release(conn, row)
 
 
+def active_article_bodies(db: Path, profile: str, ids: frozenset[str]) -> list[tuple[str, str, str | None]]:
+    """Read the requested article bodies and active pointer in a single SQLite snapshot."""
+    placeholders = ','.join('?' for _ in ids)
+    try:
+        with connect(db) as conn:
+            rows = conn.execute(
+                'SELECT v.article_id,v.deleted,v.text FROM active_corpus a '
+                'JOIN corpus_releases r ON r.release_id=a.release_id AND r.profile=a.profile '
+                'JOIN corpus_release_articles l ON l.release_id=r.release_id '
+                'JOIN article_versions v USING (version_id) '
+                f'WHERE a.profile=? AND v.article_id IN ({placeholders})',
+                (profile, *ids),
+            )
+            return [(article, deleted, body) for article, deleted, body in rows]
+    except sqlite3.Error as exc:
+        raise RuntimeError('활성 코퍼스 조문 조회 실패') from exc
+
+
 def release_by_id(db: Path, profile: str, release_id: str) -> CorpusRelease:
     with connect(db) as conn:
         conn.execute('BEGIN')

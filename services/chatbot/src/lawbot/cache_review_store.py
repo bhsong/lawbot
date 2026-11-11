@@ -1,6 +1,7 @@
 """Read and review cache revisions under the administrator's generation fence."""
 
 import json
+from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -8,8 +9,10 @@ from lawbot import corpus_store
 from lawbot.cache_carry import FIELDS, allowed_question, article_rows, verified_inputs
 from lawbot.cache_release_store import citations_for, preview, query_rows, raw_for
 from lawbot.cache_store import (
+    CALCULATION_EXCLUDED,
     Draft,
     audit,
+    calculation_exclusions,
     insert_answer,
     now,
     read_control,
@@ -17,6 +20,7 @@ from lawbot.cache_store import (
     set_mode_in,
     translate_sqlite_errors,
 )
+from lawbot.calc_gate import is_calculation_question
 from lawbot.db.connection import connect, transaction
 from lawbot.exact_cache import PROFILE, Snapshot, canonical, digest
 from lawbot.feedback_store import StoreError
@@ -36,9 +40,16 @@ def reviewable_query(query, protection, mode, state):
     """Pending answers in serving modes can only recover previously reviewed links."""
     return (
         query[7] != 'revoked'
+        and not is_calculation_question(query[2])
         and (state == 'draft' or mode == 'off' or query[9] is not None)
         and allowed_question(protection, query[1], query[2])
     )
+
+
+def calculation_links(queries):
+    active = [row for row in queries if row[7] != 'revoked']
+    excluded = {row[0] for row in active if is_calculation_question(row[2])}
+    return excluded, bool(excluded) and len(excluded) == len(active)
 
 
 class ApprovalError(StoreError):
@@ -100,23 +111,28 @@ class ReviewCatalog:
             token = corpus_store.active_token(self.corpus_db, PROFILE)
             namespace = control.namespace_id or self.snapshot.namespace.id
             rows = conn.execute(
-                'SELECT a.answer_id,a.answer_key,a.status,d.verdict,d.reason,d.release_id,count(q.query_id) '
+                'SELECT a.answer_id,a.answer_key,a.status,d.verdict,d.reason,d.release_id,count(q.query_id),'
+                "count(CASE WHEN q.status!='revoked' THEN 1 END) "
                 'FROM cache_answers a JOIN cache_queries q USING(answer_id) '
                 'LEFT JOIN cache_release_decisions d ON d.answer_id=a.answer_id AND d.activation_event=? '
                 'WHERE a.namespace_id=? GROUP BY a.answer_id ORDER BY a.answer_key,a.answer_id',
                 (control.activation_event, namespace),
             ).fetchall()
-        items = [
-            dict(
-                answer_id=answer,
-                answer_key=key,
-                status=disposition(state, verdict),
-                reason=reason,
-                release_id=release_id,
-                question_count=count,
+            excluded = Counter(row.answer_id for row in calculation_exclusions(conn, namespace))
+        items = []
+        for answer, key, state, verdict, reason, release_id, count, active_count in rows:
+            calculation_only = excluded[answer] > 0 and excluded[answer] == active_count
+            items.append(
+                dict(
+                    answer_id=answer,
+                    answer_key=key,
+                    status='off' if calculation_only else disposition(state, verdict),
+                    reason='calculation_question' if calculation_only else reason,
+                    release_id=release_id,
+                    question_count=count,
+                    calculation_excluded_count=excluded[answer],
+                )
             )
-            for answer, key, state, verdict, reason, release_id, count in rows
-        ]
         disabled = self.disabled(control, token)
         return dict(
             mode=control.mode,
@@ -125,6 +141,7 @@ class ReviewCatalog:
             active_release=token[0] if token else None,
             approval_id=control.approval_id,
             disabled_reason=disabled,
+            calculation_excluded_count=excluded.total(),
             items=[row for row in items if status in ('all', row['status'])],
         )
 
@@ -171,6 +188,9 @@ class ReviewCatalog:
         shown = None
         raw = raw_for(raw_hash, stored, {})
         state = disposition(status, verdict)
+        excluded, calculation_only = calculation_links(queries) if state != 'revoked' else (set(), False)
+        if calculation_only:
+            state, reason, disabled = 'off', 'calculation_question', CALCULATION_EXCLUDED
         if disabled is None and state in ('pending', 'draft'):
             try:
                 protection, originals = verified_inputs(self.corpus_db, self.bundle)
@@ -213,7 +233,7 @@ class ReviewCatalog:
             preview=shown,
             preview_sha256=digest(shown) if shown and disabled is None else None,
             disabled_reason=disabled,
-            questions=[dict(query_id=q[0], question=q[2], status=q[7]) for q in queries],
+            questions=[dict(query_id=q[0], question=q[2], status='off' if q[0] in excluded else q[7]) for q in queries],
             cards=[
                 dict(title=f'{a.law} {a.number} {a.title}', body=a.text, scores='', decree=a.kind != '법률')
                 for a in cards
@@ -374,9 +394,12 @@ class ReviewCatalog:
         state = disposition(status, verdict)
         if state == 'revoked':
             raise StoreError('invalid_state', '철회한 답변은 승인할 수 없습니다.', 409)
+        queries = query_rows(conn, target)
+        _, calculation_only = calculation_links(queries)
+        if calculation_only:
+            raise StoreError('calculation_question', CALCULATION_EXCLUDED, 409)
         if state not in ('draft', 'pending'):
             raise StoreError('invalid_state', '검토 대기 또는 초안 답변만 승인할 수 있습니다.', 409)
-        queries = query_rows(conn, target)
         query_ids = [q[0] for q in queries if reviewable_query(q, protection, control.mode, state)]
         if not query_ids:
             if queries and all(q[7] == 'revoked' for q in queries):

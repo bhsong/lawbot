@@ -158,6 +158,9 @@ def test_same_data_exit_0_and_nothing_written(live, tmp_path, monkeypatch, capsy
     assert last_line(capsys).startswith('articles updated=no same=yes')
     assert {p.name: p.read_bytes() for p in live.iterdir() if not p.name.startswith('.')} == before
     assert w.calls == ['build']
+    report = (tmp_path / 'reports' / '2026-11-27.md').read_text()
+    assert '계산기 medical_expense_credit 꺼짐' in report
+    assert '계산기 midyear_income_tax 꺼짐' in report
 
 
 def test_update_archives_switches_embeds_and_restarts(live, tmp_path, monkeypatch, capsys):

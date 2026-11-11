@@ -12,11 +12,12 @@ const reasons: Record<string, string> = {
   protected_question: '보호 질문과 겹칩니다.', render_unavailable: '원문 또는 표시본을 확인할 수 없습니다.',
   display_changed: '현재 조문으로 렌더링한 표시본이 달라졌습니다.', awaiting_approval: '이전 릴리스부터 검토가 필요합니다.',
   withdrawn: '철회한 답변입니다.',
+  calculation_question: '계산 질문이므로 캐시가 꺼졌습니다.',
 }
 type Verdict = Exclude<keyof typeof labels, 'all'>
 type Mode = 'off' | 'shadow' | 'on'
-type Item = { answer_id: string; answer_key: string; status: Verdict; reason: string | null; release_id: string | null; question_count: number }
-type Index = { mode: Mode; generation: number; namespace: string; active_release: string | null; approval_id: string | null; disabled_reason: string | null; items: Item[] }
+type Item = { answer_id: string; answer_key: string; status: Verdict; reason: string | null; release_id: string | null; question_count: number; calculation_excluded_count: number }
+type Index = { mode: Mode; generation: number; namespace: string; active_release: string | null; approval_id: string | null; disabled_reason: string | null; items: Item[]; calculation_excluded_count: number }
 type Article = { law: string; article_no: string; title: string; kind: string; text: string; deleted: string }
 type Detail = {
   answer_id: string; answer_key: string; status: Verdict; generation: number; mode: Mode; text: string; preview: string | null
@@ -166,6 +167,7 @@ export function CachePanel({ onUnauthorized }: { onUnauthorized: () => void }) {
           <div className="cache-approval-id"><dt>승인 묶음</dt><dd className="cache-id">{info.approval_id ?? '없음'}</dd></div>
         </dl>
         {info.disabled_reason && <p className="cache-inline-note">{info.disabled_reason}</p>}
+        {info.calculation_excluded_count > 0 && <p className="cache-inline-note">계산 질문 {info.calculation_excluded_count}개 제외</p>}
         <section className="cache-mode-controls" aria-label="캐시 모드 전환">
           <label className="cache-field">변경 사유
             <input value={reason} maxLength={2000} onChange={e => setReason(e.target.value)} />
@@ -221,6 +223,7 @@ export function CachePanel({ onUnauthorized }: { onUnauthorized: () => void }) {
               aria-current={item.answer_id === selected ? 'true' : undefined} onClick={() => openAnswer(item.answer_id)}>
               <span className="cache-answer-title"><strong>{item.answer_key}</strong><VerdictLabel status={item.status} /></span>
               <span className="cache-answer-meta">질문 {item.question_count}개 · {item.release_id ?? '판정 전'}</span>
+              {item.calculation_excluded_count > 0 && <span className="cache-answer-meta">계산 질문 {item.calculation_excluded_count}개 제외</span>}
               {item.reason && <span className="cache-answer-meta">{reasons[item.reason] ?? item.reason}</span>}
               {item.answer_id === failedId && <span className="cache-error-label">승인 실패</span>}
             </button>
@@ -259,6 +262,7 @@ export function CachePanel({ onUnauthorized }: { onUnauthorized: () => void }) {
           <ul className="cache-question-list" role="list" aria-label="연결 질문 목록">
             {answer.questions.map(query => <li key={query.query_id}>
               <span className="cache-question-text">{query.question}</span>
+              {query.status === 'off' && <span className="cache-badge" data-status="off">계산 질문 · 끔</span>}
               {query.status === 'revoked' ? <span className="cache-badge" data-status="revoked">철회됨</span> :
                 <button className="cache-button cache-button-quiet" type="button" disabled={blocked} aria-describedby={detailReasonHint}
                   onClick={() => void change('revoke_query', query.query_id, answer.generation)}>질문 철회</button>}

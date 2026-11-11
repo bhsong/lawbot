@@ -5,6 +5,7 @@ import json
 from lawbot import corpus_store
 from lawbot.cache_carry import allowed_question, article_rows, classify, corpus_changes, verified_inputs
 from lawbot.cache_store import Draft, audit, insert_answer, now, read_control
+from lawbot.calc_gate import is_calculation_question
 from lawbot.db.connection import connect, transaction
 from lawbot.exact_cache import PROFILE, canonical, corpus_version, digest
 
@@ -156,12 +157,16 @@ def apply_release(path, db, token, release, snapshot, bundle_file):
             dependencies = {key for key, _ in prior} | set(source.get('review_evidence_article_ids', []))
             raw = raw_for(raw_hash, stored, originals)
             shown, citations = preview(snapshot, raw, prior)
+            eligible = [q for q in queries if not is_calculation_question(q[2])]
+            excluded_ids = {q[0] for q in queries} - {q[0] for q in eligible}
             answer_guard = guard
-            if protection is not None and any(q[-1] and not allowed_question(protection, q[1], q[2]) for q in queries):
+            if protection is not None and any(q[-1] and not allowed_question(protection, q[1], q[2]) for q in eligible):
                 answer_guard = answer_guard or 'protected_question'
             verdict, reason, changes = classify(dependencies, before, changed, answer_guard, old_text, shown)
             if status == 'revoked':
                 verdict, reason = 'revoked', 'withdrawn'
+            elif excluded_ids and not any(q[7] != 'revoked' and q[9] is not None for q in eligible):
+                verdict, reason = 'off', 'calculation_question'
             elif status != 'approved' and verdict == 'keep':
                 verdict, reason = 'pending', 'awaiting_approval'
             draft = Draft(
@@ -187,7 +192,7 @@ def apply_release(path, db, token, release, snapshot, bundle_file):
             )
             for query in queries:
                 if query[9] is not None:
-                    _put_query(conn, namespace, new_id, query, keep)
+                    _put_query(conn, namespace, new_id, query, keep and query[0] not in excluded_ids)
             conn.execute(
                 'INSERT INTO cache_release_decisions VALUES (?,?,?,?,?,?,?,?)',
                 (token[1], new_id, old_id, token[0], baseline, verdict, reason, canonical(changes)),

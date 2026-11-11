@@ -1,0 +1,98 @@
+{
+  "article_hashes": {
+    "medical_expense_credit": {
+      "소득세법 제20조": "da38a4f10eabf3d41026ed72ebb62feba3fcc16319bd6ad11d3bcf6a62d62c4e",
+      "소득세법 제59조의4": "7c0bfc17fe04008c0374c174b84b542720f0c911406068fbcbd9a7a513242136",
+      "소득세법 시행령 제118조의5": "0fe4b1e50cd985d9f5c036211c519fe1e520b65b48c5982eadba3aaaba02668a"
+    },
+    "midyear_income_tax": {
+      "소득세법 제14조": "9b7ceba68cc3f363a25897465d184577304b993aa6d5769bbbe2040fc134913a",
+      "소득세법 제20조": "da38a4f10eabf3d41026ed72ebb62feba3fcc16319bd6ad11d3bcf6a62d62c4e",
+      "소득세법 제47조": "cd126463d1c46ec7423fa3b66d04db85d092c099224cc1bd55dd150a82bc7d30",
+      "소득세법 제50조": "6bdb894d2cd406704898749e745a6a0f77cdd6b3aff1c2b74c20c46ec6be6c80",
+      "소득세법 제51조의3": "f3e364543228dfc6fab44e888f5a25df5e0f88529dc2ac560bd5419235fbb874",
+      "소득세법 제52조": "5845e233c2c463b504c477122ef6fa21b6aa807b2dd75e3860dc60033127e6c5",
+      "소득세법 제55조": "2d5259d864627546c883953879cfa18e150423a597a2ff660bc925fdb03b7899",
+      "소득세법 제59조": "3ab843c5708b15aaad11136486cb12a1d5a79181cc8c9cb1d5c9d79ee971a554",
+      "소득세법 제59조의4": "7c0bfc17fe04008c0374c174b84b542720f0c911406068fbcbd9a7a513242136",
+      "소득세법 제61조": "faf3bb89cda701455935f4bfcb53305f77aecb1388829e574dbca34a71fe3489",
+      "소득세법 제137조": "8c0907e1e523bfee2ccb7144c0d3dfcd32a91cd52cf4c6e9a3ba424032bf9bfd",
+      "지방세법 제103조의15": "49d84b2bec62168e50aaf38e73a06d672b83b7a2ea1d88acc46a206c57acf4ad"
+    }
+  },
+  "years": {
+    "2026": {
+      "medical_expense_credit": {
+        "threshold": {
+          "article": "소득세법 제59조의4",
+          "rate": "0.03"
+        },
+        "categories": {
+          "article": "소득세법 제59조의4",
+          "values": [
+            {"id": "general", "label": "일반 부양가족", "rate": "0.15", "limit": 7000000},
+            {"id": "unlimited", "label": "본인 등 한도 없는 대상", "rate": "0.15", "limit": null},
+            {"id": "premature", "label": "미숙아·선천성이상아", "rate": "0.20", "limit": null},
+            {"id": "infertility", "label": "난임시술", "rate": "0.30", "limit": null}
+          ]
+        },
+        "recipient_age": {
+          "article": "소득세법 제59조의4",
+          "young_max": 6,
+          "senior_min": 65
+        }
+      },
+      "midyear_income_tax": {
+        "income_deduction": {
+          "article": "소득세법 제47조",
+          "limit": 20000000,
+          "brackets": [
+            {"up_to": 5000000, "base": 0, "rate": "0.70"},
+            {"up_to": 15000000, "base": 3500000, "rate": "0.40"},
+            {"up_to": 45000000, "base": 7500000, "rate": "0.15"},
+            {"up_to": 100000000, "base": 12000000, "rate": "0.05"},
+            {"up_to": null, "base": 14750000, "rate": "0.02"}
+          ]
+        },
+        "personal_deduction": {
+          "article": "소득세법 제50조",
+          "value": 1500000
+        },
+        "income_tax": {
+          "article": "소득세법 제55조",
+          "brackets": [
+            {"up_to": 14000000, "base": 0, "rate": "0.06"},
+            {"up_to": 50000000, "base": 840000, "rate": "0.15"},
+            {"up_to": 88000000, "base": 6240000, "rate": "0.24"},
+            {"up_to": 150000000, "base": 15360000, "rate": "0.35"},
+            {"up_to": 300000000, "base": 37060000, "rate": "0.38"},
+            {"up_to": 500000000, "base": 94060000, "rate": "0.40"},
+            {"up_to": 1000000000, "base": 174060000, "rate": "0.42"},
+            {"up_to": null, "base": 384060000, "rate": "0.45"}
+          ]
+        },
+        "earned_income_credit": {
+          "article": "소득세법 제59조",
+          "brackets": [
+            {"up_to": 1300000, "base": 0, "rate": "0.55"},
+            {"up_to": null, "base": 715000, "rate": "0.30"}
+          ],
+          "caps": [
+            {"up_to": 33000000, "base": 740000, "rate": "0", "floor": 740000},
+            {"up_to": 70000000, "base": 740000, "rate": "0.008", "floor": 660000},
+            {"up_to": 120000000, "base": 660000, "rate": "0.5", "floor": 500000},
+            {"up_to": null, "base": 500000, "rate": "0.5", "floor": 200000}
+          ]
+        },
+        "standard_credit": {
+          "article": "소득세법 제59조의4",
+          "value": 130000
+        },
+        "local_tax": {
+          "article": "지방세법 제103조의15",
+          "rate": "0.10"
+        }
+      }
+    }
+  }
+}

@@ -7,6 +7,7 @@ from datetime import UTC, datetime
 from importlib.resources import files
 from pathlib import Path
 
+from lawbot.calc_gate import is_calculation_question
 from lawbot.db import migrate as migrations
 from lawbot.db.connection import connect, transaction
 from lawbot.exact_cache import Namespace, canonical, digest, normalize
@@ -14,6 +15,7 @@ from lawbot.exact_cache import Namespace, canonical, digest, normalize
 MIGRATIONS = files('lawbot.db') / 'cache_migrations'
 SCHEMA = 2
 READ_TIMEOUT = 0.01
+CALCULATION_EXCLUDED = '계산 질문은 정확 일치 캐시에 저장하거나 승인할 수 없습니다.'
 
 
 class CacheDatabaseError(RuntimeError):
@@ -136,6 +138,31 @@ class CachedAnswer:
     control: Control
 
 
+@dataclass(frozen=True)
+class CalculationExclusion:
+    query_id: str
+    answer_id: str
+    namespace_id: str
+    source_id: str
+    status: str
+    exact_enabled: bool
+
+
+def calculation_exclusions(conn, namespace: str | None = None) -> list[CalculationExclusion]:
+    rows = conn.execute(
+        'SELECT q.query_id,q.answer_id,q.namespace_id,q.source_id,q.status,q.exact_enabled,q.original '
+        'FROM cache_queries q JOIN cache_answers a USING (namespace_id,answer_id) '
+        "WHERE q.status IN ('draft','approved') AND a.status!='revoked' "
+        'AND (? IS NULL OR q.namespace_id=?) ORDER BY q.namespace_id,q.source_id,q.query_id',
+        (namespace, namespace),
+    )
+    return [
+        CalculationExclusion(query_id, answer_id, scope, source_id, status, bool(enabled))
+        for query_id, answer_id, scope, source_id, status, enabled, original in rows
+        if is_calculation_question(original)
+    ]
+
+
 class Store:
     def __init__(self, path: Path):
         self.path = path
@@ -146,6 +173,23 @@ class Store:
 
     def check_schema(self) -> int:
         return migrations.check_schema(self.path, directory=MIGRATIONS)
+
+    def calculation_exclusions(self) -> list[CalculationExclusion]:
+        with connect(self.path) as conn:
+            read_control(conn)
+            return calculation_exclusions(conn)
+
+    def disable_calculations(self, actor: str, reason: str) -> tuple[list[CalculationExclusion], int]:
+        with connect(self.path, write=True) as conn, transaction(conn):
+            read_control(conn)
+            rows = calculation_exclusions(conn)
+            enabled = [row for row in rows if row.exact_enabled]
+            for row in enabled:
+                conn.execute('UPDATE cache_queries SET exact_enabled=0 WHERE query_id=?', (row.query_id,))
+                audit(conn, 'exclude_calculation', row.query_id, actor, reason)
+            if enabled:
+                conn.execute('UPDATE cache_control SET generation=generation+1 WHERE singleton=1')
+            return rows, len(enabled)
 
     def lookup(self, namespace_id: str, question: str) -> tuple[Control, CachedAnswer | None, str]:
         with connect(self.path, timeout=READ_TIMEOUT) as conn:
@@ -192,6 +236,8 @@ class Store:
                 (namespace_id, namespace.serialize(), now()),
             )
             for draft in drafts:
+                if is_calculation_question(draft.question):
+                    continue
                 question = normalize(draft.question)
                 if not question or not draft.answer_text.strip() or not draft.citations:
                     raise ValueError('빈 질문, 답변 또는 근거는 등록할 수 없습니다.')
@@ -267,6 +313,12 @@ class Store:
                 'UPDATE cache_queries SET exact_enabled=0 WHERE namespace_id=? AND exact_enabled=1', (namespace_id,)
             )
             for query_id, answer_id in selection.items():
+                row = conn.execute(
+                    'SELECT original FROM cache_queries WHERE query_id=? AND namespace_id=? AND answer_id=?',
+                    (query_id, namespace_id, answer_id),
+                ).fetchone()
+                if row and is_calculation_question(row[0]):
+                    raise ValueError(CALCULATION_EXCLUDED)
                 result = conn.execute(
                     "UPDATE cache_queries SET status='approved',exact_enabled=1,reviewed_by=?,reviewed_at=?, "
                     'valid_from=?,valid_until=?,expires_at=? WHERE query_id=? AND namespace_id=? AND answer_id=? '
@@ -306,6 +358,8 @@ class Store:
 
     def replace_answer(self, expected: Control, draft: Draft, previous: str, actor: str, reason: str) -> str:
         """Approve one corrected revision and move only the explicitly reviewed question."""
+        if is_calculation_question(draft.question):
+            raise ValueError(CALCULATION_EXCLUDED)
         namespace_id = expected.namespace_id
         if expected.mode != 'off' or namespace_id is None or expected.approval_id is None:
             raise ValueError('기존 승인 묶음을 off로 전환한 후 답변을 교체하세요.')
