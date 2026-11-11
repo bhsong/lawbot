@@ -1242,3 +1242,219 @@ held-out 60문항은 구현 전에 별도 커밋 `19b20ef`에 고정했다. fixt
 - 노동 val 2건 — LU06·WH004
 
 노동 val에서 WH004는 조회, LU06은 퇴직금 계산기에서 적용 범위 확인 안내로 남았다.
+
+### held-out 실제 라우터 평가
+
+2026-11-12 07:13:11–07:23:25 KST, 10분 14초. Pro 직접 라우터 60회, 동시 1개, 재시도 0회. 답변 생성·임베딩·리랭킹은 실행 안 함.
+실행 상태 `completed`, 구성 일치 예. 사전 기준 **미달**.
+
+- 웹앱 `67e51e9e2ae7cef2fd181c9f62405f6470e4e232` · 모델 서버 `69a2dd338ec289176046ab343f6f27bb9eb6fd78`.
+- 모델 `qwen3.8-27b-4bit` · revision `sha256:3117f3d1ce819e8b` · 동시 생성 상한 1.
+- 라우터 system SHA-256 `591fab311fc7eaaa904d5c77c829e03b2bcd2c6fe8584f17d56a27080e9efe49` · fixture SHA-256 `1bb1e9624beb7dd818d7ad08fe046602776cac344fa778a94f583f88f2f445ac`.
+- 개발 CSV SHA-256 `4ac8fe346a906788ad958503ff23fa34bb169659f10803d9fc5459f872e1894a` · temperature 0 · 128토큰 · 읽기 상한 300초.
+- 종료 구성은 시작 구성과 동일하다.
+
+시작 전 메모리 압력은 2, 종료 시 1이었다. 압력 2는 정상으로 처리했다. 직접 라우터 왕복 p50/p95는 10.281초·13.931초, 검증 p50/p95는 1.121ms·2.485ms였다.
+
+누락은 `guidance/missing_required`, 모호는 `guidance/ambiguous_input`과 일치해야 한다. 계산형은 계산기·상태·독립 검산값을 대조했다.
+
+| 계산기 | 계산형 (기준 ≥7/8) | 필수 누락 (기준 2/2) | 모호 (기준 2/2) |
+| --- | ---: | ---: | ---: |
+| 퇴직금 | 8/8 | 2/2 | 1/2 |
+| 연차 | 7/8 | 2/2 | 2/2 |
+| 주휴수당 | 8/8 | 2/2 | 2/2 |
+| 최저임금 월 환산 | 6/8 | 2/2 | 2/2 |
+| 가산수당 | 5/8 | 2/2 | 1/2 |
+
+판정·값 일치 52/60. 출력된 계산 35건 중 오산 1건, 비계산형 문항의 계산 출력 1건.
+
+독립 금액·일수 기대값이 있는 계산 34건은 모두 일치했다. `labor-heldout-012`는 날짜 간 860일과 명세의 812일이 충돌한다. 라우터가 812일을 추출하지 않았고 검사가 이를 확인하지 못해 8,833,496원을 출력했다. 이 문항은 계산 금지 기대에 어긋난 오산 1건과 비계산형 계산 1건에 함께 해당한다. 실패 8문항의 원문과 독립 검산을 다시 대조했고 test 오기는 확인되지 않았다.
+
+연차 014는 발생일에 회사를 계속 다닌다는 표현을 재직 사실로 확인하지 못했다. 최저임금 041은 시간과 적용기준시간 사이의 수식어 때문에 원문 검사가 실패했고, 042는 주휴 포함 설명이 적용 범위 입력으로 들어갔다. 가산 051·052는 단일 휴일 시간의 원문 표현을 재확인하지 못해 휴일시간을 요청했다. 056은 총액을 묻는 표현을 불확실한 사실로 분류했고, 059는 `5명 안팎`을 변환하지 못해 안내 상태를 반환하지 못했다.
+
+#### held-out 실패 문항
+
+##### labor-heldout-012
+
+~~~text
+퇴직금 명세를 보니 입사일은 2024년 5월 14일, 첫 비재직일은 2026년 9월 21일로 돼 있어요. 같은 명세에 인정 계속근로일수는 812일로 찍혀 있습니다. 중간에 근속에서 뺀 기간은 없고 4주 평균 주 소정근로시간은 31시간, 통상임금 하한 반영 산정용 일급은 124,970원인데 어느 쪽으로 계산해야 하나요?
+~~~
+
+기대 `severance_pay/guidance` · `ambiguous_input` · 실제 `severance_pay/calculated` · 사유 `selected`.
+
+기대 결과 `null` · 실제 결과 `{"법정 최소 퇴직금": 8833496}`.
+
+~~~text
+{
+  "calculator": "severance_pay",
+  "inputs": {
+    "hire_date": "2024년 5월 14일",
+    "retirement_date": "2026년 9월 21일",
+    "weekly_hours": "31시간",
+    "adjusted_daily_wage": "124,970원"
+  }
+}
+~~~
+
+##### labor-heldout-014
+
+~~~text
+이번 입사기념일로 근속 7년을 채웠습니다. 연차가 생기는 날에도 계속 회사에 다니고 있어요. 직전 1년 출근율은 86.5%, 상시 직원은 정확히 23명이고 4주 평균 주 소정근로시간은 37시간입니다. 이번에 발생하는 법정 연차는 며칠이죠?
+~~~
+
+기대 `annual_leave_days/calculated` · 실제 `annual_leave_days/guidance` · 사유 `ambiguous_input`.
+
+기대 결과 `{"연차유급휴가 일수": 18}` · 실제 결과 `{}`.
+
+~~~text
+{"calculator":"annual_leave_days","inputs":{"workplace_size":"23명","weekly_hours":"37시간","service_period":"7년","attendance_rate":"86.5%","employed_at_accrual":"연차가 생기는 날에도 계속 회사에 다니고 있어요"}}
+~~~
+
+##### labor-heldout-041
+
+~~~text
+147.25시간이 유급주휴까지 반영한 월 최저임금 적용기준시간입니다. 이 근로조건에 2026년 최저임금을 전액 적용했을 때 월 최저임금은 얼마인가요?
+~~~
+
+기대 `monthly_minimum_wage/calculated` · 실제 `monthly_minimum_wage/guidance` · 사유 `ambiguous_input`.
+
+기대 결과 `{"월 최저임금": 1519620}` · 실제 결과 `{}`.
+
+~~~text
+{"calculator":"monthly_minimum_wage","inputs":{"year":"2026년","monthly_basis_hours":"147.25시간"}}
+~~~
+
+##### labor-heldout-042
+
+~~~text
+2027년분 계약서 검토 중입니다. 월 최저임금 적용기준시간: 183시간 12분. 유급주휴가 들어 있는 숫자예요. 최저임금 월 환산액을 알려 주세요.
+~~~
+
+기대 `monthly_minimum_wage/calculated` · 실제 `monthly_minimum_wage/guidance` · 사유 `ambiguous_input`.
+
+기대 결과 `{"월 최저임금": 1960240}` · 실제 결과 `{}`.
+
+~~~text
+{"calculator":"monthly_minimum_wage","inputs":{"year":"2027년","monthly_basis_hours":"183시간 12분","applicability":"유급주휴가 들어 있는 숫자예요"}}
+~~~
+
+##### labor-heldout-051
+
+~~~text
+휴일 하루 출근해서 쉬는 시간 빼고 7시간 40분 일했습니다. 상시 근로자 9명이고 제 통상시급은 16,578원입니다. 휴일 가산분만 계산하면 얼마예요?
+~~~
+
+기대 `premium_pay/calculated` · 실제 `premium_pay/guidance` · 사유 `missing_required`.
+
+기대 결과 `{"법정 가산수당": 63549}` · 실제 결과 `{}`.
+
+~~~text
+{"calculator":"premium_pay","inputs":{"staff_count":"9명","ordinary_hourly_wage":"16,578원","holiday_within_hours":"7시간 40분","include_base":"휴일 가산분만"}}
+~~~
+
+##### labor-heldout-052
+
+~~~text
+통상시급 17,136원, 상시 근로자 21명입니다. 휴일 하루에 휴게시간을 뺀 실근로가 10시간 30분이고 그중 야간근로가 2시간 45분이에요. 중복 없이 센 총 실근로도 10.5시간입니다. 기본임금까지 포함한 총 지급액을 구해 주세요.
+~~~
+
+기대 `premium_pay/calculated` · 실제 `premium_pay/guidance` · 사유 `missing_required`.
+
+기대 결과 `{"법정 가산수당": 134946, "기본임금": 179928, "기본임금 포함 합계": 314874}` · 실제 결과 `{}`.
+
+~~~text
+{"calculator":"premium_pay","inputs":{"ordinary_hourly_wage":"17,136원","staff_count":"21명","holiday_within_hours":"10시간 30분","night_hours":"2시간 45분","total_hours":"10.5시간","include_base":"기본임금까지 포함한 총 지급액"}}
+~~~
+
+##### labor-heldout-056
+
+~~~text
+기본임금까지 합쳐 총 얼마인지 계산 부탁드려요. 상시 인원 39명, 통상시급 16,652원입니다. 휴게를 빼고 평일 연장근로 1시간 45분, 휴일 하루 근로 8시간입니다. 그 휴일 근로 중 야간근로 1시간 15분이 포함돼 있습니다. 별도로 평일 소정근로 15분까지 합해 중복 없는 실근로는 총 10시간입니다.
+~~~
+
+기대 `premium_pay/calculated` · 실제 `premium_pay/guidance` · 사유 `ambiguous_input`.
+
+기대 결과 `{"법정 가산수당": 91586, "기본임금": 166520, "기본임금 포함 합계": 258106}` · 실제 결과 `{}`.
+
+~~~text
+{"calculator":"premium_pay","inputs":{"staff_count":"39명","ordinary_hourly_wage":"16,652원","overtime_hours":"1시간 45분","holiday_hours":"8시간","night_hours":"1시간 15분","include_base":"기본임금까지 합쳐 총 얼마인지","total_hours":"10시간"}}
+~~~
+
+##### labor-heldout-059
+
+~~~text
+상시 인원은 5명 안팎인데 상시 근로자 산정에 포함되는 사람이 누군지 회사도 확인 중입니다. 통상시급 15,743원에 휴게 제외 평일 연장근로 3시간 20분이면 법정 가산분만 얼마예요?
+~~~
+
+기대 `premium_pay/guidance` · `ambiguous_input` · 실제 `premium_pay/none` · 사유 `conversion_failed`.
+
+~~~text
+{"calculator":"premium_pay","inputs":{"staff_count":"5명 안팎","ordinary_hourly_wage":"15,743원","overtime_hours":"3시간 20분","include_base":"법정 가산분만"}}
+~~~
+
+#### held-out 직접 원출력 보존
+
+질문·독립 검산은 고정 fixture의 문항 ID에 연결한다. 원출력은 JSON 문자열로 보존했다.
+
+~~~jsonl
+{"id": "labor-heldout-001", "raw": "{\"calculator\":\"severance_pay\",\"inputs\":{\"wage_total\":\"12,934,880원\",\"ordinary_daily_wage\":\"139,600원\",\"last_employed_date\":\"2026년 9월 17일\",\"hire_date\":\"2022년 4월 23일\",\"weekly_hours\":\"36시간\"}}", "calculator": "severance_pay", "status": "calculated", "reason": "selected", "results": {"법정 최소 퇴직금": 18593409}, "router_ms": 14253}
+{"id": "labor-heldout-002", "raw": "{\"calculator\":\"severance_pay\",\"inputs\":{\"adjusted_daily_wage\":\"134,780원\",\"service_period\":\"937일\",\"weekly_hours\":\"27시간 30분\"}}", "calculator": "severance_pay", "status": "calculated", "reason": "selected", "results": {"법정 최소 퇴직금": 10379906}, "router_ms": 8802}
+{"id": "labor-heldout-003", "raw": "{\"calculator\":\"severance_pay\",\"inputs\":{\"retirement_date\":\"2026년 8월 13일\",\"hire_date\":\"2021년 7월 19일\",\"weekly_hours\":\"38시간\",\"wage_total\":\"11,268,500원\",\"excluded_days\":\"9일\",\"excluded_wages\":\"742,000원\",\"annual_bonus\":\"1,736,000원\",\"ordinary_daily_wage\":\"127,300원\"}}", "calculator": "severance_pay", "status": "calculated", "reason": "selected", "results": {"법정 최소 퇴직금": 20090331}, "router_ms": 16443}
+{"id": "labor-heldout-004", "raw": "{\"calculator\":\"severance_pay\",\"inputs\":{\"hire_date\":\"2025년 12월 2일\",\"last_employed_date\":\"2026년 10월 16일\",\"weekly_hours\":\"4주 평균 주 39시간\"}}", "calculator": "severance_pay", "status": "calculated", "reason": "selected", "results": {"법정 최소 퇴직금": 0}, "router_ms": 10249}
+{"id": "labor-heldout-005", "raw": "{\"calculator\":\"severance_pay\",\"inputs\":{\"service_period\":\"1,063일\",\"weekly_hours\":\"14시간 45분\",\"adjusted_daily_wage\":\"89,740원\"}}", "calculator": "severance_pay", "status": "calculated", "reason": "selected", "results": {"법정 최소 퇴직금": 0}, "router_ms": 8893}
+{"id": "labor-heldout-006", "raw": "{\"calculator\":\"severance_pay\",\"inputs\":{\"monthly_wage\":\"342만 7,500원\",\"service_period\":\"2년 7개월 9일\",\"weekly_hours\":\"40시간\"}}", "calculator": "severance_pay", "status": "calculated", "reason": "selected", "results": {"평균임금 기준 퇴직금 추정": 8938889, "통상임금 하한 적용 퇴직금 추정": 10264753}, "router_ms": 9001}
+{"id": "labor-heldout-007", "raw": "{\"calculator\":\"severance_pay\",\"inputs\":{\"hire_date\":\"2025년 4월 26일\",\"retirement_date\":\"2026년 4월 26일\",\"wage_total\":\"8,532,750원\",\"ordinary_daily_wage\":\"101,370원\",\"weekly_hours\":\"4주 평균 주 35시간\"}}", "calculator": "severance_pay", "status": "calculated", "reason": "selected", "results": {"법정 최소 퇴직금": 3041100}, "router_ms": 13123}
+{"id": "labor-heldout-008", "raw": "{\"calculator\":\"severance_pay\",\"inputs\":{\"service_period\":\"786일\",\"weekly_hours\":\"32시간\",\"wage_days\":\"91일\",\"wage_total\":\"9,776,192원\",\"annual_unused_leave_pay\":\"524,640원\",\"ordinary_daily_wage\":\"105,610원\"}}", "calculator": "severance_pay", "status": "calculated", "reason": "selected", "results": {"법정 최소 퇴직금": 7033429}, "router_ms": 12401}
+{"id": "labor-heldout-009", "raw": "{\"calculator\":\"severance_pay\",\"inputs\":{\"service_period\":\"1,124일\",\"weekly_hours\":\"33시간\",\"wage_total\":\"10,758,200원\",\"wage_days\":\"92일\"}}", "calculator": "severance_pay", "status": "guidance", "reason": "missing_required", "results": {}, "router_ms": 9638}
+{"id": "labor-heldout-010", "raw": "{\"calculator\":\"severance_pay\",\"inputs\":{\"adjusted_daily_wage\":\"118,260원\",\"weekly_hours\":\"29시간\"}}", "calculator": "severance_pay", "status": "guidance", "reason": "missing_required", "results": {}, "router_ms": 7576}
+{"id": "labor-heldout-011", "raw": "{\"calculator\":\"severance_pay\",\"inputs\":{\"hire_date\":\"2023년 2월 17일\",\"retirement_date\":\"2026년 7월 23일\",\"weekly_hours\":\"37시간\",\"adjusted_daily_wage\":\"119,840원\"}}", "calculator": "severance_pay", "status": "guidance", "reason": "ambiguous_input", "results": {}, "router_ms": 11198}
+{"id": "labor-heldout-012", "raw": "{\n  \"calculator\": \"severance_pay\",\n  \"inputs\": {\n    \"hire_date\": \"2024년 5월 14일\",\n    \"retirement_date\": \"2026년 9월 21일\",\n    \"weekly_hours\": \"31시간\",\n    \"adjusted_daily_wage\": \"124,970원\"\n  }\n}", "calculator": "severance_pay", "status": "calculated", "reason": "selected", "results": {"법정 최소 퇴직금": 8833496}, "router_ms": 14194}
+{"id": "labor-heldout-013", "raw": "{\"calculator\":\"annual_leave_days\",\"inputs\":{\"workplace_size\":\"16명\",\"weekly_hours\":\"36시간\",\"service_period\":\"8개월\",\"full_attendance_months\":\"6개월\",\"include_first_year\":\"true\"}}", "calculator": "annual_leave_days", "status": "calculated", "reason": "selected", "results": {"연차유급휴가 일수": 6}, "router_ms": 8955}
+{"id": "labor-heldout-014", "raw": "{\"calculator\":\"annual_leave_days\",\"inputs\":{\"workplace_size\":\"23명\",\"weekly_hours\":\"37시간\",\"service_period\":\"7년\",\"attendance_rate\":\"86.5%\",\"employed_at_accrual\":\"연차가 생기는 날에도 계속 회사에 다니고 있어요\"}}", "calculator": "annual_leave_days", "status": "guidance", "reason": "ambiguous_input", "results": {}, "router_ms": 10398}
+{"id": "labor-heldout-015", "raw": "{\"calculator\":\"annual_leave_days\",\"inputs\":{\"hire_date\":\"2025년 8월 22일\",\"last_employed_date\":\"2026년 8월 21일\",\"attendance_rate\":\"91.4%\",\"full_attendance_months\":\"10개월\",\"workplace_size\":\"12명\",\"weekly_hours\":\"37시간\"}}", "calculator": "annual_leave_days", "status": "calculated", "reason": "selected", "results": {"연차유급휴가 일수": 10}, "router_ms": 12447}
+{"id": "labor-heldout-016", "raw": "{\"calculator\":\"annual_leave_days\",\"inputs\":{\"workplace_size\":\"47명\",\"hire_date\":\"2003년 8월 19일\",\"as_of_date\":\"2026년 8월 19일\",\"weekly_hours\":\"39시간\",\"attendance_rate\":\"96.2%\"}}", "calculator": "annual_leave_days", "status": "calculated", "reason": "selected", "results": {"연차유급휴가 일수": 25}, "router_ms": 11285}
+{"id": "labor-heldout-017", "raw": "{\"calculator\":\"annual_leave_days\",\"inputs\":{\"workplace_size\":\"19명\",\"weekly_hours\":\"34시간\",\"service_period\":\"4년 8개월\",\"attendance_rate\":\"77.4%\",\"full_attendance_months\":\"7개월\",\"include_first_year\":\"true\"}}", "calculator": "annual_leave_days", "status": "calculated", "reason": "selected", "results": {"연차유급휴가 일수": 7}, "router_ms": 10230}
+{"id": "labor-heldout-018", "raw": "{\"calculator\":\"annual_leave_days\",\"inputs\":{\"workplace_size\":\"31명\",\"weekly_hours\":\"38시간\",\"hire_date\":\"2025년 10월 11일\",\"as_of_date\":\"2026년 10월 11일\",\"attendance_rate\":\"87.8%\",\"full_attendance_months\":\"9개월\",\"include_first_year\":\"첫해 월 단위 연차도 합산\"}}", "calculator": "annual_leave_days", "status": "calculated", "reason": "selected", "results": {"연차유급휴가 일수": 24}, "router_ms": 13917}
+{"id": "labor-heldout-019", "raw": "{\"calculator\":\"annual_leave_days\",\"inputs\":{\"workplace_size\":\"4명\",\"service_period\":\"2년 4개월\",\"weekly_hours\":\"40시간\",\"attendance_rate\":\"94.3%\"}}", "calculator": "annual_leave_days", "status": "calculated", "reason": "selected", "results": {"연차유급휴가 일수": 0}, "router_ms": 8654}
+{"id": "labor-heldout-020", "raw": "{\"calculator\":\"annual_leave_days\",\"inputs\":{\"workplace_size\":\"26명\",\"weekly_hours\":\"14시간 50분\",\"service_period\":\"3년 2개월\",\"attendance_rate\":\"92.7%\"}}", "calculator": "annual_leave_days", "status": "calculated", "reason": "selected", "results": {"연차유급휴가 일수": 0}, "router_ms": 9195}
+{"id": "labor-heldout-021", "raw": "{\"calculator\":\"annual_leave_days\",\"inputs\":{\"hire_date\":\"2023년 6월 13일\",\"as_of_date\":\"2026년 6월 13일\",\"attendance_rate\":\"88.7%\",\"weekly_hours\":\"38시간\"}}", "calculator": "annual_leave_days", "status": "guidance", "reason": "missing_required", "results": {}, "router_ms": 10417}
+{"id": "labor-heldout-022", "raw": "{\"calculator\":\"annual_leave_days\",\"inputs\":{\"workplace_size\":\"17명\",\"weekly_hours\":\"33시간\",\"service_period\":\"5년 3개월\"}}", "calculator": "annual_leave_days", "status": "guidance", "reason": "missing_required", "results": {}, "router_ms": 7796}
+{"id": "labor-heldout-023", "raw": "{\"calculator\":\"annual_leave_days\",\"inputs\":{\"workplace_size\":\"4명\",\"weekly_hours\":\"39시간\",\"service_period\":\"3년 6개월\",\"attendance_rate\":\"90.4%\",\"ambiguity\":\"상시 직원 수를 두고 한쪽에서는 4명, 다른 쪽에서는 6명이라고 합니다.\"}}", "calculator": "annual_leave_days", "status": "guidance", "reason": "ambiguous_input", "results": {}, "router_ms": 11446}
+{"id": "labor-heldout-024", "raw": "{\"calculator\":\"annual_leave_days\",\"inputs\":{\"workplace_size\":\"28명\",\"weekly_hours\":\"36시간\",\"service_period\":\"1년\",\"attendance_rate\":\"88.1%\",\"full_attendance_months\":\"9개월\",\"employed_at_accrual\":\"인사 기록을 다시 확인 중이에요\"}}", "calculator": "annual_leave_days", "status": "guidance", "reason": "ambiguous_input", "results": {}, "router_ms": 10851}
+{"id": "labor-heldout-025", "raw": "{\"calculator\":\"weekly_holiday_pay\",\"inputs\":{\"hourly_wage\":\"14,760원\",\"paid_holiday_hours\":\"7시간 15분\",\"weekly_scheduled_hours\":\"36시간 15분\",\"attendance\":\"이번 주 소정근로일에 전부 출근했어요\",\"employment\":\"그 주 7일 내내 근로관계를 유지했습니다\"}}", "calculator": "weekly_holiday_pay", "status": "calculated", "reason": "selected", "results": {"주휴수당": 107010}, "router_ms": 12409}
+{"id": "labor-heldout-026", "raw": "{\"calculator\":\"weekly_holiday_pay\",\"inputs\":{\"hourly_wage\":\"13,684원\",\"weekly_scheduled_hours\":\"25시간 30분\",\"reference_days_per_week\":\"6일\",\"attendance\":\"개근\",\"employment\":\"한 주 동안 근로관계가 계속\"}}", "calculator": "weekly_holiday_pay", "status": "calculated", "reason": "selected", "results": {"주휴수당": 58157}, "router_ms": 10544}
+{"id": "labor-heldout-027", "raw": "{\"calculator\":\"weekly_holiday_pay\",\"inputs\":{\"hourly_wage\":\"12,943원\",\"four_week_scheduled_hours\":\"103시간\",\"four_week_reference_days\":\"19일\",\"attendance\":\"이번 주 소정근로일은 결근하지 않았고\",\"employment\":\"일주일 내내 재직했습니다\"}}", "calculator": "weekly_holiday_pay", "status": "calculated", "reason": "selected", "results": {"주휴수당": "70164.6842"}, "router_ms": 11482}
+{"id": "labor-heldout-028", "raw": "{\"calculator\":\"weekly_holiday_pay\",\"inputs\":{\"reference_days_per_week\":\"5일\",\"four_week_scheduled_hours\":\"60시간\",\"attendance\":\"개근\",\"employment\":\"7일간 고용관계가 유지\",\"hourly_wage\":\"12,190원\"}}", "calculator": "weekly_holiday_pay", "status": "calculated", "reason": "selected", "results": {"주휴수당": 36570}, "router_ms": 10110}
+{"id": "labor-heldout-029", "raw": "{\"calculator\":\"weekly_holiday_pay\",\"inputs\":{\"hourly_wage\":\"15,318원\",\"weekly_scheduled_hours\":\"14시간 54분\",\"attendance\":\"이번 주 소정근로일을 개근\",\"employment\":\"7일 내내 재직\"}}", "calculator": "weekly_holiday_pay", "status": "calculated", "reason": "selected", "results": {"주휴수당": 0}, "router_ms": 10312}
+{"id": "labor-heldout-030", "raw": "{\"calculator\":\"weekly_holiday_pay\",\"inputs\":{\"weekly_scheduled_hours\":\"4주 평균 주 29시간 30분\",\"hourly_wage\":\"13,762원\",\"employment\":\"7일 내내 재직\",\"attendance\":\"소정근로일에 하루 결근\"}}", "calculator": "weekly_holiday_pay", "status": "calculated", "reason": "selected", "results": {"주휴수당": 0}, "router_ms": 10742}
+{"id": "labor-heldout-031", "raw": "{\"calculator\":\"weekly_holiday_pay\",\"inputs\":{\"weekly_scheduled_hours\":\"28시간\",\"hourly_wage\":\"13,412원\",\"attendance\":\"정해진 근무일에는 전부 출근해서 이번 주 소정근로일은 개근입니다\",\"employment\":\"이번 주 7일이 되기 전에 근로관계가 종료됐습니다\"}}", "calculator": "weekly_holiday_pay", "status": "calculated", "reason": "selected", "results": {"주휴수당": 0}, "router_ms": 11648}
+{"id": "labor-heldout-032", "raw": "{\"calculator\":\"weekly_holiday_pay\",\"inputs\":{\"hourly_wage\":\"11,854원\",\"four_week_scheduled_hours\":\"127시간\",\"reference_days_per_week\":\"5일\",\"attendance\":\"한 번도 결근하지 않았고\",\"employment\":\"한 주 내내 근로계약이 유지됐어요\"}}", "calculator": "weekly_holiday_pay", "status": "calculated", "reason": "selected", "results": {"주휴수당": "75272.9"}, "router_ms": 11268}
+{"id": "labor-heldout-033", "raw": "{\"calculator\":\"weekly_holiday_pay\",\"inputs\":{\"weekly_scheduled_hours\":\"34시간 30분\",\"paid_holiday_hours\":\"6시간 54분\",\"attendance\":\"이번 주 소정근로일을 개근\",\"employment\":\"7일 동안 근로관계가 유지\"}}", "calculator": "weekly_holiday_pay", "status": "guidance", "reason": "missing_required", "results": {}, "router_ms": 10315}
+{"id": "labor-heldout-034", "raw": "{\"calculator\":\"weekly_holiday_pay\",\"inputs\":{\"hourly_wage\":\"14,238원\",\"weekly_scheduled_hours\":\"27시간 30분\",\"attendance\":\"이번 주 소정근로일을 개근\",\"employment\":\"이번 주 7일 동안 근로관계가 계속\"}}", "calculator": "weekly_holiday_pay", "status": "guidance", "reason": "missing_required", "results": {}, "router_ms": 10746}
+{"id": "labor-heldout-035", "raw": "{\"calculator\":\"weekly_holiday_pay\",\"inputs\":{\"hourly_wage\":\"12,786원\",\"weekly_scheduled_hours\":\"32시간\",\"paid_holiday_hours\":\"6시간 24분\",\"employment\":\"해당 주 7일 동안 근로관계가 유지됐어요\",\"attendance\":\"나머지 날은 모두 출근했는데 하루가 결근으로 찍힌 건지 출근으로 정정됐는지 아직 모릅니다\"}}", "calculator": "weekly_holiday_pay", "status": "guidance", "reason": "ambiguous_input", "results": {}, "router_ms": 13883}
+{"id": "labor-heldout-036", "raw": "{\"calculator\":\"weekly_holiday_pay\",\"inputs\":{\"hourly_wage\":\"14,327원\",\"weekly_scheduled_hours\":\"24\",\"paid_holiday_hours\":\"4시간 48분\",\"attendance\":\"개근\",\"employment\":\"7일간 근로관계는 유지됐어요\"}}", "calculator": "weekly_holiday_pay", "status": "guidance", "reason": "ambiguous_input", "results": {}, "router_ms": 10535}
+{"id": "labor-heldout-037", "raw": "{\"calculator\":\"monthly_minimum_wage\",\"inputs\":{\"year\":\"2025년\",\"daily_scheduled_hours\":\"8시간\",\"weekly_workdays\":\"5일\"}}", "calculator": "monthly_minimum_wage", "status": "calculated", "reason": "selected", "results": {"월 최저임금": 2096270}, "router_ms": 7636}
+{"id": "labor-heldout-038", "raw": "{\"calculator\":\"monthly_minimum_wage\",\"inputs\":{\"year\":\"2026년\",\"weekly_scheduled_hours\":\"40시간\",\"weekly_paid_holiday_hours\":\"8시간\"}}", "calculator": "monthly_minimum_wage", "status": "calculated", "reason": "selected", "results": {"월 최저임금": 2156880}, "router_ms": 8101}
+{"id": "labor-heldout-039", "raw": "{\"calculator\":\"monthly_minimum_wage\",\"inputs\":{\"year\":\"2027년\",\"weekly_workdays\":\"주 5일\",\"daily_scheduled_hours\":\"8시간\"}}", "calculator": "monthly_minimum_wage", "status": "calculated", "reason": "selected", "results": {"월 최저임금": 2236300}, "router_ms": 7991}
+{"id": "labor-heldout-040", "raw": "{\"calculator\":\"monthly_minimum_wage\",\"inputs\":{\"year\":\"2025년\",\"monthly_basis_hours\":\"162시간 45분\"}}", "calculator": "monthly_minimum_wage", "status": "calculated", "reason": "selected", "results": {"월 최저임금": "1632382.5"}, "router_ms": 7578}
+{"id": "labor-heldout-041", "raw": "{\"calculator\":\"monthly_minimum_wage\",\"inputs\":{\"year\":\"2026년\",\"monthly_basis_hours\":\"147.25시간\"}}", "calculator": "monthly_minimum_wage", "status": "guidance", "reason": "ambiguous_input", "results": {}, "router_ms": 7467}
+{"id": "labor-heldout-042", "raw": "{\"calculator\":\"monthly_minimum_wage\",\"inputs\":{\"year\":\"2027년\",\"monthly_basis_hours\":\"183시간 12분\",\"applicability\":\"유급주휴가 들어 있는 숫자예요\"}}", "calculator": "monthly_minimum_wage", "status": "guidance", "reason": "ambiguous_input", "results": {}, "router_ms": 9045}
+{"id": "labor-heldout-043", "raw": "{\"calculator\":\"monthly_minimum_wage\",\"inputs\":{\"year\":\"2026년\",\"monthly_basis_hours\":\"191시간\"}}", "calculator": "monthly_minimum_wage", "status": "calculated", "reason": "selected", "results": {"월 최저임금": 1971120}, "router_ms": 7174}
+{"id": "labor-heldout-044", "raw": "{\"calculator\":\"monthly_minimum_wage\",\"inputs\":{\"year\":\"2025년\",\"monthly_basis_hours\":\"134.35시간\"}}", "calculator": "monthly_minimum_wage", "status": "calculated", "reason": "selected", "results": {"월 최저임금": "1347530.5"}, "router_ms": 7473}
+{"id": "labor-heldout-045", "raw": "{\"calculator\":\"monthly_minimum_wage\",\"inputs\":{\"year\":\"2026년\",\"weekly_scheduled_hours\":\"40시간\"}}", "calculator": "monthly_minimum_wage", "status": "guidance", "reason": "missing_required", "results": {}, "router_ms": 6990}
+{"id": "labor-heldout-046", "raw": "{\"calculator\":\"monthly_minimum_wage\",\"inputs\":{\"monthly_basis_hours\":\"156시간 30분\"}}", "calculator": "monthly_minimum_wage", "status": "guidance", "reason": "missing_required", "results": {}, "router_ms": 6735}
+{"id": "labor-heldout-047", "raw": "{\"calculator\":\"monthly_minimum_wage\",\"inputs\":{\"year\":\"2026년\",\"monthly_basis_hours\":\"168시간\",\"applicability\":\"유급주휴 포함\"}}", "calculator": "monthly_minimum_wage", "status": "guidance", "reason": "ambiguous_input", "results": {}, "router_ms": 8108}
+{"id": "labor-heldout-048", "raw": "{\n  \"calculator\": \"monthly_minimum_wage\",\n  \"inputs\": {\n    \"year\": \"2027년\",\n    \"monthly_basis_hours\": \"178시간\",\n    \"applicability\": \"회사에서 수습 감액을 적용하는 대상인지 아직 답을 못 받았는데 제게 적용되는 월 최저임금이 얼마인가요?\"\n  }\n}", "calculator": "monthly_minimum_wage", "status": "guidance", "reason": "ambiguous_input", "results": {}, "router_ms": 12884}
+{"id": "labor-heldout-049", "raw": "{\"calculator\":\"premium_pay\",\"inputs\":{\"staff_count\":\"14명\",\"overtime_hours\":\"3시간 45분\",\"ordinary_hourly_wage\":\"15,364원\",\"include_base\":\"가산수당만\"}}", "calculator": "premium_pay", "status": "calculated", "reason": "selected", "results": {"법정 가산수당": "28807.5"}, "router_ms": 9451}
+{"id": "labor-heldout-050", "raw": "{\"calculator\":\"premium_pay\",\"inputs\":{\"ordinary_hourly_wage\":\"18,227원\",\"staff_count\":\"26명\",\"night_hours\":\"2시간 20분\",\"include_base\":\"기본임금 빼고\"}}", "calculator": "premium_pay", "status": "calculated", "reason": "selected", "results": {"법정 가산수당": "21264.8333"}, "router_ms": 9377}
+{"id": "labor-heldout-051", "raw": "{\"calculator\":\"premium_pay\",\"inputs\":{\"staff_count\":\"9명\",\"ordinary_hourly_wage\":\"16,578원\",\"holiday_within_hours\":\"7시간 40분\",\"include_base\":\"휴일 가산분만\"}}", "calculator": "premium_pay", "status": "guidance", "reason": "missing_required", "results": {}, "router_ms": 9465}
+{"id": "labor-heldout-052", "raw": "{\"calculator\":\"premium_pay\",\"inputs\":{\"ordinary_hourly_wage\":\"17,136원\",\"staff_count\":\"21명\",\"holiday_within_hours\":\"10시간 30분\",\"night_hours\":\"2시간 45분\",\"total_hours\":\"10.5시간\",\"include_base\":\"기본임금까지 포함한 총 지급액\"}}", "calculator": "premium_pay", "status": "guidance", "reason": "missing_required", "results": {}, "router_ms": 11899}
+{"id": "labor-heldout-053", "raw": "{\"calculator\":\"premium_pay\",\"inputs\":{\"staff_count\":\"32\",\"ordinary_hourly_wage\":\"14,265원\",\"overtime_hours\":\"4시간 40분\",\"night_hours\":\"2시간 10분\",\"include_base\":\"가산분만\"}}", "calculator": "premium_pay", "status": "calculated", "reason": "selected", "results": {"법정 가산수당": "48738.75"}, "router_ms": 10319}
+{"id": "labor-heldout-054", "raw": "{\"calculator\":\"premium_pay\",\"inputs\":{\"staff_count\":\"18명\",\"ordinary_hourly_wage\":\"14,392원\",\"holiday_within_hours\":\"14시간 45분\",\"holiday_excess_hours\":\"3시간 30분\",\"include_base\":\"휴일 가산분만\"}}", "calculator": "premium_pay", "status": "calculated", "reason": "selected", "results": {"법정 가산수당": 156513}, "router_ms": 11010}
+{"id": "labor-heldout-055", "raw": "{\"calculator\":\"premium_pay\",\"inputs\":{\"staff_count\":\"4명\",\"ordinary_hourly_wage\":\"11,936원\",\"overtime_hours\":\"3시간 30분\",\"total_hours\":\"3.5시간\",\"include_base\":\"기본임금 포함 총액\"}}", "calculator": "premium_pay", "status": "calculated", "reason": "selected", "results": {"법정 가산수당": 0, "기본임금": 41776, "기본임금 포함 합계": 41776}, "router_ms": 10312}
+{"id": "labor-heldout-056", "raw": "{\"calculator\":\"premium_pay\",\"inputs\":{\"staff_count\":\"39명\",\"ordinary_hourly_wage\":\"16,652원\",\"overtime_hours\":\"1시간 45분\",\"holiday_hours\":\"8시간\",\"night_hours\":\"1시간 15분\",\"include_base\":\"기본임금까지 합쳐 총 얼마인지\",\"total_hours\":\"10시간\"}}", "calculator": "premium_pay", "status": "guidance", "reason": "ambiguous_input", "results": {}, "router_ms": 12469}
+{"id": "labor-heldout-057", "raw": "{\"calculator\":\"premium_pay\",\"inputs\":{\"overtime_hours\":\"2시간 35분\",\"ordinary_hourly_wage\":\"17,483원\",\"include_base\":\"가산수당만\"}}", "calculator": "premium_pay", "status": "guidance", "reason": "missing_required", "results": {}, "router_ms": 8708}
+{"id": "labor-heldout-058", "raw": "{\"calculator\":\"premium_pay\",\"inputs\":{\"staff_count\":\"24명\",\"night_hours\":\"3시간 10분\",\"include_base\":\"기본임금 빼고 법정 야간 가산분만\"}}", "calculator": "premium_pay", "status": "guidance", "reason": "missing_required", "results": {}, "router_ms": 8614}
+{"id": "labor-heldout-059", "raw": "{\"calculator\":\"premium_pay\",\"inputs\":{\"staff_count\":\"5명 안팎\",\"ordinary_hourly_wage\":\"15,743원\",\"overtime_hours\":\"3시간 20분\",\"include_base\":\"법정 가산분만\"}}", "calculator": "premium_pay", "status": "none", "reason": "conversion_failed", "results": {}, "router_ms": 9793}
+{"id": "labor-heldout-060", "raw": "{\"calculator\":\"premium_pay\",\"inputs\":{\"staff_count\":\"27명\",\"ordinary_hourly_wage\":\"16,913원\",\"holiday_within_hours\":\"15시간 30분\",\"include_base\":\"휴일 가산수당만\"}}", "calculator": "premium_pay", "status": "guidance", "reason": "ambiguous_input", "results": {}, "router_ms": 9798}
+~~~
