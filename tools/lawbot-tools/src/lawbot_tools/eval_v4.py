@@ -210,6 +210,15 @@ WORKERS = 1  # --concurrency: 문항을 동시에 몇 개씩 보낼지 (main이 
 STAGE_TIMES = {}  # label → {'n': 이번 실행에서 푼 문항 수, 'sec': 걸린 시간}. 처리량(문항/분) 기록용
 
 
+def require_result_columns(path, *required):
+    """Reject older result files before doing any question inference."""
+    if path.is_file():
+        existing = pd.read_csv(path, nrows=0, **E).columns
+        missing = [name for name in required if name not in existing]
+        if missing:
+            raise SystemExit(f'{path.name}에 필요한 열이 없습니다 ({", ".join(missing)}). 다른 --tag로 실행하세요.')
+
+
 def resume(path, items, fn, label):
     """items: (id, ...) 목록. path에 이미 있는 id는 건너뛰고 한 행씩 이어 쓴다
     WORKERS가 2 이상이면 그만큼 동시에 풀고, 파일에는 문항 순서대로 쓴다 (중간에 멈춰도 이어 쓰기 가능)"""
@@ -297,23 +306,29 @@ def uses_decrees(app, model):
 # ---- 단계 ----
 def run_retrieval(app, test, path, rerank=True, decree=False):
     """decree: 하위법령 첨부 구성. 법률 리랭킹 1위로 하위법령을 거른 첨부 목록과 다른 법(정답 법률과 parent_law가 다름) 수"""
+    rr = app.reranker if rerank else None
+    trace_columns = ('emb_top10', 'rr_top10') if rr else ('emb_top10',)
+    require_result_columns(path, *trace_columns)
+
     R = app.retriever
     keys = np.array([f'{l} {a}' for l, a in zip(R.laws[: n_law(R)], R.ids[: n_law(R)])])
     rank = R.rank_all(test['question'])
     emb_pos = [int(np.where(keys[r] == g)[0][0]) + 1 for r, g in zip(rank, test['article_id'])]
     pos = dict(zip(test['id'], emb_pos))
-    rr = app.reranker if rerank else None
+    emb_top10 = dict(zip(test['id'], ('|'.join(keys[r[:10]]) for r in rank)))
     n = rr.candidates if rr else 10
 
     def one(qid, q, gold):
         cands = R.search(q, k=n)
         row = {'id': qid, 'emb_rank': pos[qid]}
+        trace = {'emb_top10': emb_top10[qid]}
         if rr:
             t0 = time.perf_counter()
             out = rr.rerank(q, cands, top_k=len(cands))
             row['rerank_sec'] = round(time.perf_counter() - t0, 3)
             row['rr_rank'] = next((i for i, h in enumerate(out, 1) if key(h) == gold), 999)
             row['rr_top3'] = '|'.join(key(h) for h in out[:3])
+            trace['rr_top10'] = '|'.join(key(h) for h in out[:10])
             if decree:
                 from lawbot.service import retrieve_decrees
 
@@ -326,7 +341,7 @@ def run_retrieval(app, test, path, rerank=True, decree=False):
                     'dec_other': sum(h['parent_law'] != gold_law for h in att),
                     'dec_rerank_sec': round(st['decree_rerank'], 3),
                 }
-        return row
+        return row | trace
 
     resume(path, list(zip(test['id'], test['question'], test['article_id'])), one, 'retrieval')
 
@@ -433,8 +448,7 @@ def run_decree_retrieval(app, model, dq, path):
     """하위법령 정답 문항: 법률 검색·리랭킹(1위 법령) → 하위법령 후보 → 리랭킹 → 필터. 웹앱과 같은 service.retrieve"""
     from lawbot.service import retrieve
 
-    if path.is_file() and 'emb_rank' not in pd.read_csv(path, nrows=0, **E).columns:
-        raise SystemExit(f'{path.name}에 emb_rank 열이 없습니다. 다른 --tag로 실행하세요.')
+    require_result_columns(path, 'emb_rank', 'decree_candidates')
 
     def one(qid, q, gold, qtype):
         st = {}
@@ -452,6 +466,13 @@ def run_decree_retrieval(app, model, dq, path):
             'n_att': len(att),
             'in_attached': gold in att,
             'decree_rerank_sec': round(st['decree_rerank'], 3),
+            'decree_candidates': json.dumps(
+                [
+                    {'article_id': key(hit), 'emb_rank': hit['emb_rank'], 'rr_rank': rank}
+                    for rank, hit in enumerate(st['decree_candidates'], 1)
+                ],
+                ensure_ascii=False,
+            ),
         }
 
     resume(path, list(zip(dq['id'], dq['question'], dq['article_id'], dq['question_type'])), one, 'decree retrieval')
