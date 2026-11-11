@@ -6,12 +6,21 @@ from collections.abc import Mapping
 from dataclasses import dataclass, replace
 from fractions import Fraction
 from pathlib import Path
-from typing import Literal, TypedDict
+from typing import Literal, NotRequired, TypedDict
 
+from lawbot import labor_annual, labor_minimum, labor_premium, labor_severance, labor_weekly
 from lawbot.calc_numbers import parse_amount
 
 MEDICAL = 'medical_expense_credit'
 MIDYEAR = 'midyear_income_tax'
+TAX_CALCULATORS = (MEDICAL, MIDYEAR)
+LABOR_CALCULATORS = {
+    'severance_pay': labor_severance,
+    'annual_leave_days': labor_annual,
+    'weekly_holiday_pay': labor_weekly,
+    'monthly_minimum_wage': labor_minimum,
+    'premium_pay': labor_premium,
+}
 _STATUTES = json.loads(Path(__file__).with_name('calc_statutes.json').read_text(encoding='utf-8'))
 ARTICLE_HASHES: dict[str, dict[str, str]] = _STATUTES['article_hashes']
 _RULES = _STATUTES['years']
@@ -43,6 +52,7 @@ _SPECIAL_PREMIUMS = ('health_premium', 'long_term_care_premium', 'employment_pre
 INPUT_FIELDS = {
     MEDICAL: (*_MEDICAL_LABELS, *_EXPENSE_FIELDS, *_REIMBURSEMENT_FIELDS),
     MIDYEAR: tuple(_MIDYEAR_LABELS),
+    **{name: tuple(module.FIELDS) for name, module in LABOR_CALCULATORS.items()},
 }
 
 
@@ -50,6 +60,7 @@ class InputRow(TypedDict):
     label: str
     value: int | str
     source: str
+    unit: NotRequired[str]
 
 
 class Step(TypedDict):
@@ -57,11 +68,13 @@ class Step(TypedDict):
     formula: str
     value: int | str
     article: str
+    unit: NotRequired[str]
 
 
 class Result(TypedDict):
     label: str
-    value: int
+    value: int | str
+    unit: NotRequired[str]
 
 
 @dataclass(frozen=True)
@@ -455,15 +468,23 @@ def calculate(
     The caller verifies every supplied span against the question. Invalid numeric
     spans raise ValueError so the router can record a conversion failure.
     """
-    year_row = _input('귀속연도', f'{year}년', year_source, f'기본값({year}년)')
+    labor = LABOR_CALCULATORS.get(calculator)
+    period = '적용연도' if labor else '귀속연도'
+    year_row = _input(period, f'{year}년', year_source, f'기본값({year}년)')
     result = Calculation(calculator, year, tuple(ARTICLE_HASHES[calculator]), inputs=(year_row,))
     if (rules := _RULES.get(str(year), {}).get(calculator)) is None:
-        supported = ', '.join(f'{value}년' for value, entries in _RULES.items() if calculator in entries)
+        supported = ', '.join(f'{value}년' for value, entries in sorted(_RULES.items()) if calculator in entries)
         return replace(
             result,
             reason='unsupported_year',
-            message=f'{year}년 귀속은 지원하지 않습니다. 지원 귀속연도는 {supported}입니다.',
+            message=(
+                f'{year}년은 지원하지 않습니다. 지원 적용연도는 {supported}입니다.'
+                if labor
+                else f'{year}년 귀속은 지원하지 않습니다. 지원 귀속연도는 {supported}입니다.'
+            ),
         )
+    if labor is not None:
+        return labor.calculate(result, inputs, rules)
     amounts = {
         key: parse_amount(inputs[key])
         for key in INPUT_FIELDS[calculator]

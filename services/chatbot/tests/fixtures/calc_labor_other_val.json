@@ -1,0 +1,212 @@
+[
+  {
+    "id": "LU01",
+    "kind": "unsupported",
+    "question": "퇴직 전 하루 평균임금 12만원이고 피보험기간 8년이면 실업급여 총액을 계산해 주세요.",
+    "calculator": "none",
+    "status": "none"
+  },
+  {
+    "id": "LU02",
+    "kind": "unsupported",
+    "question": "만 34세, 가입기간 2년, 평균임금 일 9만원일 때 구직급여를 얼마나 받을 수 있나요?",
+    "calculator": "none",
+    "status": "none"
+  },
+  {
+    "id": "LU03",
+    "kind": "unsupported",
+    "question": "월 통상임금 320만원으로 육아휴직 6개월이면 육아휴직급여 총액은 얼마인가요?",
+    "calculator": "none",
+    "status": "none"
+  },
+  {
+    "id": "LU04",
+    "kind": "unsupported",
+    "question": "부모가 각각 4개월 육아휴직하고 월 통상임금이 280만원이면 첫 달 부모육아휴직 급여를 계산해 주세요.",
+    "calculator": "none",
+    "status": "none"
+  },
+  {
+    "id": "LU05",
+    "kind": "unsupported",
+    "question": "퇴직금 4800만원을 받고 16년 근무했을 때 퇴직소득세를 계산해 주세요.",
+    "calculator": "none",
+    "status": "none"
+  },
+  {
+    "id": "LU06",
+    "kind": "unsupported",
+    "question": "10년 일하고 받은 퇴직금 6200만원을 IRP에서 일시금으로 찾으면 퇴직소득세는 얼마인가요?",
+    "calculator": "none",
+    "status": "none"
+  },
+  {
+    "id": "LU07",
+    "kind": "unsupported",
+    "question": "월 보수 270만원에 건강보험료와 장기요양보험료의 본인 부담액을 계산해 주세요.",
+    "calculator": "none",
+    "status": "none"
+  },
+  {
+    "id": "LU08",
+    "kind": "unsupported",
+    "question": "2026년 보수월액 420만원인 직장가입자의 국민연금 보험료는 얼마인가요?",
+    "calculator": "none",
+    "status": "none"
+  },
+  {
+    "id": "LU09",
+    "kind": "unsupported",
+    "question": "2026년 월급 230만원에서 근로자 고용보험료를 계산해 주세요.",
+    "calculator": "none",
+    "status": "none"
+  },
+  {
+    "id": "LU10",
+    "kind": "unsupported",
+    "question": "월 보수 500만원인 건설업 사업주의 산재보험료는 얼마인가요?",
+    "calculator": "none",
+    "status": "none"
+  },
+  {
+    "id": "LU11",
+    "kind": "unsupported",
+    "question": "총급여 4500만원이고 회사 두 곳에서 급여를 받았는데 연말정산 환급액을 계산해 주세요.",
+    "calculator": "none",
+    "status": "none"
+  },
+  {
+    "id": "LU12",
+    "kind": "unsupported",
+    "question": "자녀 2명, 부부 중 소득이 적은 쪽의 총급여 3800만원이면 자녀 세액공제액을 구해 주세요.",
+    "calculator": "none",
+    "status": "none"
+  },
+  {
+    "id": "LU13",
+    "kind": "unsupported",
+    "question": "월세 45만원을 9개월 냈고 총급여가 3200만원이면 월세 세액공제액은 얼마인가요?",
+    "calculator": "none",
+    "status": "none"
+  },
+  {
+    "id": "LU14",
+    "kind": "unsupported",
+    "question": "국민연금 가입기간 22년, 월 소득 340만원이면 노령연금 월 수령액을 계산해 주세요.",
+    "calculator": "none",
+    "status": "none"
+  },
+  {
+    "id": "LU15",
+    "kind": "unsupported",
+    "question": "통상임금 월 290만원인 직원이 출산전후휴가 90일을 쓰면 지급액은 얼마인가요?",
+    "calculator": "none",
+    "status": "none"
+  },
+  {
+    "id": "LU16",
+    "kind": "unsupported",
+    "question": "시급 14000원인 직원이 일을 못 한 6일의 휴업수당을 계산해 주세요.",
+    "calculator": "none",
+    "status": "none"
+  },
+  {
+    "id": "LU17",
+    "kind": "unsupported",
+    "question": "통상임금 하루 13만원인 근로자를 즉시 해고할 때 해고예고수당을 계산해 주세요.",
+    "calculator": "none",
+    "status": "none"
+  },
+  {
+    "id": "LU18",
+    "kind": "unsupported",
+    "question": "보증금 9000만원 중 2000만원을 월세로 바꿀 때 전월세 전환 월액은 얼마인가요?",
+    "calculator": "none",
+    "status": "none"
+  },
+  {
+    "id": "LU19",
+    "kind": "unsupported",
+    "question": "잔여 연차 7일과 일 통상임금 11만원으로 연차 미사용 수당을 계산해 주세요.",
+    "calculator": "none",
+    "status": "none"
+  },
+  {
+    "id": "LU20",
+    "kind": "unsupported",
+    "question": "월급 260만원에 소득세와 4대보험을 빼면 실수령액은 얼마인가요?",
+    "calculator": "none",
+    "status": "none"
+  },
+  {
+    "id": "LG01",
+    "kind": "general",
+    "question": "퇴직금 제도를 적용하는 법령 조문을 알려 주세요.",
+    "calculator": "none",
+    "status": "lookup"
+  },
+  {
+    "id": "LG02",
+    "kind": "general",
+    "question": "연차휴가 사용촉진을 할 때 사용자가 해야 할 절차를 설명해 주세요.",
+    "calculator": "none",
+    "status": "lookup"
+  },
+  {
+    "id": "LG03",
+    "kind": "general",
+    "question": "주휴일과 근로자의 날의 차이를 알려 주세요.",
+    "calculator": "none",
+    "status": "lookup"
+  },
+  {
+    "id": "LG04",
+    "kind": "general",
+    "question": "최저임금은 어떤 기관에서 결정하나요?",
+    "calculator": "none",
+    "status": "lookup"
+  },
+  {
+    "id": "LG05",
+    "kind": "general",
+    "question": "사용자가 가산수당을 임금명세서에 적어야 하나요?",
+    "calculator": "none",
+    "status": "lookup"
+  },
+  {
+    "id": "LG06",
+    "kind": "general",
+    "question": "육아휴직을 신청할 때 어떤 서류가 필요한가요?",
+    "calculator": "none",
+    "status": "lookup"
+  },
+  {
+    "id": "LG07",
+    "kind": "general",
+    "question": "급여명세서에서 통상임금과 평균임금은 어떻게 다른가요?",
+    "calculator": "none",
+    "status": "lookup"
+  },
+  {
+    "id": "LG08",
+    "kind": "general",
+    "question": "근로계약서를 서면으로 받지 못한 경우 어느 기관에 문의하나요?",
+    "calculator": "none",
+    "status": "lookup"
+  },
+  {
+    "id": "LG09",
+    "kind": "general",
+    "question": "취업규칙의 열람 방법과 관련 조문을 알려 주세요.",
+    "calculator": "none",
+    "status": "lookup"
+  },
+  {
+    "id": "LG10",
+    "kind": "general",
+    "question": "퇴직급여의 일시금과 연금 지급 방식의 차이를 알려 주세요.",
+    "calculator": "none",
+    "status": "lookup"
+  }
+]

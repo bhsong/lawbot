@@ -62,3 +62,22 @@ test.each(['guidance', 'none'] as const)('shows %s directly from the calculation
   expect(within(guidance).getByText('소득세법 제59조의4')).toBeVisible()
   expect(within(guidance).queryByRole('table')).not.toBeInTheDocument()
 })
+
+test('renders labor day and time units and an assumed salary source', () => {
+  const calculated: Turn = {
+    ...turn,
+    calculation: {
+      calculator: 'annual_leave_days', status: 'calculated', year: 2026,
+      results: [{ label: '연차유급휴가 일수', value: 15, unit: '일' }],
+      inputs: [{ label: '주 소정근로시간', value: 40, unit: '시간', source: '질문: 40시간' }],
+      steps: [{ label: '연차', formula: '출근율 80% 이상', value: 15, unit: '일', article: '근로기준법 제60조' }],
+    },
+    calculationCheck: 'missing',
+  }
+  render(<TurnView turn={calculated} selected reasons={null} onSelect={vi.fn()} onRetry={vi.fn()} onFeedback={vi.fn()} onShowSources={vi.fn()} />)
+  const card = screen.getByRole('region', { name: '계산 결과' })
+  expect(within(card).getByText('15일', { selector: 'strong' })).toBeVisible()
+  expect(within(card).getByRole('alert')).toHaveTextContent('일수')
+  fireEvent.click(within(card).getByText('입력과 계산 단계'))
+  expect(within(card).getByText('40시간')).toBeVisible()
+})

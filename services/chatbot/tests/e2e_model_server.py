@@ -44,6 +44,21 @@ def calculation_chunks(prompt, system, kw):
         elif '의료비 300만 원이면 의료비 세액공제액' in prompt:
             calculator = 'medical_expense_credit'
             spans = {'gross_pay': '5천만 원', 'medical_expenses': '300만 원', 'year': '2026년'}
+        elif '월급 300만원으로 3년 일했습니다' in prompt:
+            calculator = 'severance_pay'
+            spans = {'monthly_wage': '300만원', 'service_period': '3년'}
+        elif '근속 2년을 마쳤고 연차 발생일에도 재직' in prompt:
+            calculator = 'annual_leave_days'
+            spans = {
+                'workplace_size': '5명',
+                'weekly_hours': '40시간',
+                'service_period': '2년',
+                'employed_at_accrual': '연차 발생일에도 재직',
+                'attendance_rate': '96%',
+            }
+        elif '근속 2년하고 11개월' in prompt:
+            calculator = 'annual_leave_days'
+            spans = {'service_period': '2년하고 11개월'}
         else:
             return ['{"calculator":"none","kind":"calculation"}']
         inputs = {field: span for field, span in spans.items() if span in prompt}
@@ -52,8 +67,18 @@ def calculation_chunks(prompt, system, kw):
     if '계산 결과의 숫자를 그대로 쓰고 다시 계산하지 말' in prompt:
         if '장기요양보험료 5만원' in prompt:
             return ['【결론】', '결정세액은 146,750원이고 개인지방소득세는 14,675원입니다.', cite]
+        if '월급 300만원으로 3년 일했습니다' in prompt:
+            return [
+                '【결론】',
+                '평균임금 기준 퇴직금 추정은 9,000,000원입니다.',
+                '\n【근거 조문】\n근로자퇴직급여 보장법 제8조',
+            ]
         return ['【결론】', '의료비 세액공제액은 1원입니다.', cite]
+    if '표의 결과 항목과 숫자·단위를 결론에 그대로 쓰고' in prompt:
+        return ['【결론】', '연차유급휴가 일수는 15일입니다.', '\n【근거 조문】\n근로기준법 제60조']
     if '직접 계산하지 말고' in prompt:
+        if '근속 2년하고 11개월' in prompt:
+            cite = '\n【근거 조문】\n근로기준법 제60조'
         return ['【결론】', '계산에 필요한 자료와 근거 조문을 확인해 주세요.', cite]
     return answer_chunks(prompt)
 

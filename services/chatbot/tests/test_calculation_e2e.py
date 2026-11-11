@@ -1,6 +1,7 @@
 """Calculation cards on Chromium with the real web and model-server apps."""
 
 import re
+import sys
 
 import pytest
 from playwright.sync_api import expect
@@ -19,9 +20,12 @@ pytestmark = pytest.mark.e2e_stub
 
 MEDICAL = '2026년 귀속 총급여 5천만 원, 의료비 300만 원이면 의료비 세액공제액을 계산해 주세요.'
 MISSING = '2026년 귀속 의료비 300만 원이면 의료비 세액공제액을 계산해 주세요.'
-UNSUPPORTED = '월급 300만 원에 2년 일했습니다. 퇴직금을 계산해 주세요.'
+UNSUPPORTED = '월급 300만 원을 받으면 건강보험료가 얼마인지 계산해 주세요.'
 MIDYEAR = '2026년 중도퇴사 총급여 2000만원, 건강보험료 50만원, 장기요양보험료 5만원입니다. 소득세는 얼마인가요?'
 LOOKUP = '2026년 근로소득자의 표준세액공제 법정 금액은 얼마인가요?'
+SEVERANCE = '월급 300만원으로 3년 일했습니다. 퇴직금을 얼마 받나요?'
+ANNUAL = '상시 5명, 주 소정 40시간입니다. 근속 2년을 마쳤고 연차 발생일에도 재직하며 직전 1년 출근율 96%입니다. 이번에 새로 생기는 연차가 며칠인가요?'
+ANNUAL_MISSING = '근속 2년하고 11개월이면 연차가 며칠인지 산출해 주세요.'
 
 
 @pytest.fixture(scope='module')
@@ -65,6 +69,15 @@ def calculation_stack(tmp_path_factory):
     stack = e2e.Stack(
         tmp,
         3,
+        # CR041 has no date. Use the approved evaluation's 2026 reference year in the web subprocess.
+        web_command=[
+            sys.executable,
+            '-c',
+            'from functools import partial\n'
+            'from lawbot import service, web\n'
+            'service.route_calculation = partial(service.route_calculation, reference_year=2026)\n'
+            'web.main()',
+        ],
         LAWBOT_PROFILE='v5',
         LAWBOT_CORPUS='db',
         LAWBOT_DB=str(corpus),
@@ -153,3 +166,48 @@ def test_calculation_and_guidance_cards(calculation_stack, ui, width):
         assert row['call_counts']['router'] == row['call_counts']['llm'] == 1
     assert rows[-2]['calculation_check'] == 'match'
     assert rows[-1]['router_reason'] == 'lookup_question'
+
+
+@pytest.mark.parametrize('width', [390, 1280])
+def test_labor_calculation_cards(calculation_stack, ui, width):
+    ui.set_viewport_size({'width': width, 'height': 844})
+    relevant = ['calculation', 'answer', 'calculation_check', 'done']
+    events = ask_with_events(ui, calculation_stack, SEVERANCE)
+    assert [event for event in events if event in relevant] == relevant, events
+    severance = ui.get_by_role('region', name='계산 결과').last
+    expect(severance.get_by_text('9,000,000원', exact=True).first).to_be_visible()
+    expect(severance.get_by_text('평균임금 기준 퇴직금 추정', exact=True).first).to_be_visible()
+    expect(severance.get_by_text(re.compile(r'미입력\(0\) \d+건'))).to_be_visible()
+    severance.get_by_text('입력과 계산 단계', exact=True).click()
+    inputs = severance.get_by_role('table', name='계산 입력')
+    expect(inputs.get_by_text('질문: 300만원', exact=True)).to_be_visible()
+    expect(inputs.get_by_text('질문: 3년', exact=True)).to_be_visible()
+    steps = severance.get_by_role('table', name='단계별 계산')
+    expect(steps.get_by_text('근로자퇴직급여 보장법 제8조', exact=True).first).to_be_visible()
+    expect(severance.get_by_role('alert')).to_have_count(0)
+    assert ui.evaluate('document.documentElement.scrollWidth <= document.documentElement.clientWidth')
+    assert steps.evaluate('table => table.scrollWidth <= table.clientWidth + 1')
+
+    events = ask_with_events(ui, calculation_stack, ANNUAL)
+    assert [event for event in events if event in relevant] == relevant, events
+    annual = ui.get_by_role('region', name='계산 결과').last
+    expect(annual.get_by_text('연차유급휴가 일수', exact=True).first).to_be_visible()
+    expect(annual.get_by_text('15일', exact=True).first).to_be_visible()
+    expect(annual.get_by_text('15원', exact=True)).to_have_count(0)
+    expect(annual.get_by_role('alert')).to_have_count(0)
+
+    events = ask_with_events(ui, calculation_stack, ANNUAL_MISSING)
+    assert [event for event in events if event in relevant] == ['calculation', 'answer', 'done'], events
+    guidance = ui.get_by_role('region', name='계산 안내').last
+    expect(guidance.get_by_text(re.compile('상시 근로자수'))).to_be_visible()
+    expect(guidance.get_by_text('근로기준법 제60조', exact=True)).to_be_visible()
+    expect(guidance.get_by_role('table')).to_have_count(0)
+
+    rows = e2e.request_log(calculation_stack.request_log)[-3:]
+    assert [row['calculator'] for row in rows] == ['severance_pay', 'annual_leave_days', 'annual_leave_days']
+    assert [row['calculation_check'] for row in rows] == ['match', 'match', 'not_run']
+    assert rows[-1]['router_reason'] == 'missing_required'
+    for row in rows:
+        assert row['cache_reason'] == 'calculation_question' and row['response_source'] == 'rag'
+        assert row['cache_eligible'] is False and row['exact_lookup_ms'] is None
+        assert row['call_counts']['router'] == row['call_counts']['llm'] == 1

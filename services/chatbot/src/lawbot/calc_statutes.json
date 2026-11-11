@@ -18,6 +18,55 @@
       "소득세법 제61조": "faf3bb89cda701455935f4bfcb53305f77aecb1388829e574dbca34a71fe3489",
       "소득세법 제137조": "8c0907e1e523bfee2ccb7144c0d3dfcd32a91cd52cf4c6e9a3ba424032bf9bfd",
       "지방세법 제103조의15": "49d84b2bec62168e50aaf38e73a06d672b83b7a2ea1d88acc46a206c57acf4ad"
+    },
+    "severance_pay": {
+      "근로자퇴직급여 보장법 제3조": "3f419a076d2a75eaf6425696c456f09b29cb2b579a348f794416a69c4a389611",
+      "근로자퇴직급여 보장법 제4조": "b6e7b2b894ccd30435807b2b3c32336dde17cc6b28ff266dd0c33058d0679240",
+      "근로자퇴직급여 보장법 제8조": "09b70d71a6f2a9223fe781f447d44f7f35fe1df2355fbf71fbfd7ea994c0711e",
+      "근로기준법 제2조": "20cd07042a67692b3ee23d57fe065ed63d66784ca74132becc6f1d1d9647c347",
+      "근로기준법 시행령 제2조": "240ed6a3ea85c9a850076ae81540f5c3f86a8f2435257a2c9118343562384ef2",
+      "근로기준법 시행령 제4조": "48135f6442f449ca68d948e3c259fc9fb6dd9f7307fce7c5452ac716f7ab8e10",
+      "근로기준법 시행령 제6조": "085a9061c740649b99359510c880859d8a98f9149d919813051cd7a88ca7ede6"
+    },
+    "annual_leave_days": {
+      "근로기준법 제11조": "30b46b0cd8f3dadc5cb1ecc33e5a223e00d4bbda1cadf070b784065b8b63a3a7",
+      "근로기준법 제18조": "aafb9134902e961352e93351882b165c98a80123e846a4bc414b2132b1660bc4",
+      "근로기준법 제60조": "7f12b5a124909407a97aaecc5c2636aac9776f31e97049434c4fa7096c7f927e",
+      "근로기준법 시행령 제7조": "a3778a82a1f9afc5e652be130b1e11c526bcdb72d5f280ec58f694ef71e6b44c",
+      "근로기준법 시행령 제7조의2": "b121087bef165e4a0bcc807b5616a44d24f07d7ef381a3e8916080de9f1b0bd4",
+      "근로기준법 시행령 제9조": "bb3655d7ac9fc2184e4f7c7dbee29107f61a1f1d056012ac9a7060fc3dc8b629"
+    },
+    "weekly_holiday_pay": {
+      "근로기준법 제2조": "20cd07042a67692b3ee23d57fe065ed63d66784ca74132becc6f1d1d9647c347",
+      "근로기준법 제11조": "30b46b0cd8f3dadc5cb1ecc33e5a223e00d4bbda1cadf070b784065b8b63a3a7",
+      "근로기준법 제18조": "aafb9134902e961352e93351882b165c98a80123e846a4bc414b2132b1660bc4",
+      "근로기준법 제55조": "c5062d2e89371964100eef1509c1d3972baf32dec897888117c408eb3bda16be",
+      "근로기준법 시행령 제6조": "085a9061c740649b99359510c880859d8a98f9149d919813051cd7a88ca7ede6",
+      "근로기준법 시행령 제7조": "a3778a82a1f9afc5e652be130b1e11c526bcdb72d5f280ec58f694ef71e6b44c",
+      "근로기준법 시행령 제9조": "bb3655d7ac9fc2184e4f7c7dbee29107f61a1f1d056012ac9a7060fc3dc8b629",
+      "근로기준법 시행령 제30조": "f5951ea5cac8e777d54b25c8ec7417e5fcdfb3b158bdc7b46ee7d260bda90f2e"
+    },
+    "monthly_minimum_wage": {
+      "최저임금법 제3조": "fadc0502ac48f6167596aa68fe4299624cebe12fc1ca5067d73f19f65d3ff502",
+      "최저임금법 제5조": "babc3ae7748db1ef28a759e3770c372e15815acf7d9653244b1e4146d810f463",
+      "최저임금법 제6조": "c90e925e0559c3dbd44a7a2635c5cf73bb7aaa1364c0bdef2e4712f1e3ff0185",
+      "최저임금법 제7조": "7783b2b2295dd78d12dd757eb6a7701895ed1054ca8c0bf889e75837bd5f16c1",
+      "최저임금법 제10조": "b35e5092e6af114168223a114911eb65354265c8278333c0e2f3ba8decd048fb",
+      "최저임금법 시행령 제5조": "0bf4504eba4f39397955d4637f2d42e2a155214722b96cd4d40247b106938515",
+      "근로기준법 제55조": "c5062d2e89371964100eef1509c1d3972baf32dec897888117c408eb3bda16be"
+    },
+    "premium_pay": {
+      "근로기준법 제2조": "20cd07042a67692b3ee23d57fe065ed63d66784ca74132becc6f1d1d9647c347",
+      "근로기준법 제11조": "30b46b0cd8f3dadc5cb1ecc33e5a223e00d4bbda1cadf070b784065b8b63a3a7",
+      "근로기준법 제50조": "5d842035e778aac2e31867519f88fa5b605beb753ab3720ccb07ad2944a8bd76",
+      "근로기준법 제55조": "c5062d2e89371964100eef1509c1d3972baf32dec897888117c408eb3bda16be",
+      "근로기준법 제56조": "5c9e2778121ad12089054b46a220d210087622dd4d6f20fde65f54db38dfe859",
+      "근로기준법 제63조": "d6d0649dff80add64aabd9b1cd41e02c9644f7c29046a8161df1c58c1338793d",
+      "근로기준법 시행령 제6조": "085a9061c740649b99359510c880859d8a98f9149d919813051cd7a88ca7ede6",
+      "근로기준법 시행령 제7조": "a3778a82a1f9afc5e652be130b1e11c526bcdb72d5f280ec58f694ef71e6b44c",
+      "근로기준법 시행령 제7조의2": "b121087bef165e4a0bcc807b5616a44d24f07d7ef381a3e8916080de9f1b0bd4",
+      "기간제 및 단시간근로자 보호 등에 관한 법률 제3조": "3946bfa8fdad6189319a03565a12f45fa6063b1f5b3f7772b7bfddd0b0554921",
+      "기간제 및 단시간근로자 보호 등에 관한 법률 제6조": "bdbc8f6c0abed5481ac8cc27a36f3bf08f63b5cdf1d72c192088c08eaf84dbb7"
     }
   },
   "years": {
@@ -91,6 +140,237 @@
         "local_tax": {
           "article": "지방세법 제103조의15",
           "rate": "0.10"
+        }
+      },
+      "severance_pay": {
+        "minimum_service_years": {
+          "value": 1,
+          "article": "근로자퇴직급여 보장법 제4조"
+        },
+        "minimum_weekly_hours": {
+          "value": 15,
+          "article": "근로자퇴직급여 보장법 제4조"
+        },
+        "pay_days_per_year": {
+          "value": 30,
+          "article": "근로자퇴직급여 보장법 제8조"
+        },
+        "proration_days_per_year": {
+          "value": 365,
+          "article": "근로자퇴직급여 보장법 제8조",
+          "source": "https://1350.moel.go.kr/home/hp/retirementpaycal/retirementpaycal.jsp",
+          "checked_on": "2026-11-11"
+        },
+        "lookback_months": {
+          "value": 3,
+          "article": "근로기준법 제2조"
+        },
+        "bonus_months_per_year": {
+          "value": 12,
+          "article": "근로기준법 제2조",
+          "source": "https://1350.moel.go.kr/home/hp/retirementpaycal/retirementpaycal.jsp",
+          "checked_on": "2026-11-11"
+        },
+        "estimate_days_per_month": {
+          "value": 30,
+          "article": "근로기준법 제2조",
+          "assumption": "산정기간 역일수 미제공 시 월급 추정용"
+        },
+        "estimate_months_per_year": {
+          "value": 12,
+          "article": "근로자퇴직급여 보장법 제8조",
+          "assumption": "정확한 날짜가 없는 계속근로기간 환산용"
+        }
+      },
+      "annual_leave_days": {
+        "minimum_workers": {
+          "value": 5,
+          "article": "근로기준법 제11조",
+          "source": "https://www.law.go.kr/flDownload.do?bylClsCd=110201&flSeq=150840423&gubun=",
+          "checked_on": "2026-11-11"
+        },
+        "minimum_weekly_hours": {
+          "value": 15,
+          "article": "근로기준법 제18조"
+        },
+        "qualifying_attendance_percent": {
+          "value": 80,
+          "article": "근로기준법 제60조"
+        },
+        "regular_days": {
+          "value": 15,
+          "article": "근로기준법 제60조"
+        },
+        "monthly_days": {
+          "value": 1,
+          "article": "근로기준법 제60조"
+        },
+        "first_year_max_months": {
+          "value": 11,
+          "article": "근로기준법 제60조"
+        },
+        "annual_cycle_months": {
+          "value": 12,
+          "article": "근로기준법 제60조"
+        },
+        "extra_after_years": {
+          "value": 1,
+          "article": "근로기준법 제60조"
+        },
+        "extra_every_years": {
+          "value": 2,
+          "article": "근로기준법 제60조"
+        },
+        "maximum_days": {
+          "value": 25,
+          "article": "근로기준법 제60조"
+        },
+        "first_anniversary_case": {
+          "source": "https://law.go.kr/LSW/precInfoP.do?evtNo=2021%EB%8B%A4227100",
+          "checked_on": "2026-11-11"
+        },
+        "following_year_case": {
+          "source": "https://www.law.go.kr/precInfoP.do?precSeq=230957",
+          "checked_on": "2026-11-11"
+        }
+      },
+      "weekly_holiday_pay": {
+        "minimum_weekly_hours": {
+          "value": 15,
+          "article": "근로기준법 제18조"
+        },
+        "assessment_weeks": {
+          "value": 4,
+          "article": "근로기준법 제18조"
+        },
+        "qualifying_week_days": {
+          "value": 7,
+          "article": "근로기준법 제2조",
+          "source": "https://moel.go.kr/local/busan/info/policydata/view.do?bbs_seq=20210802167",
+          "checked_on": "2026-11-11"
+        },
+        "part_time_rule": {
+          "source": "https://www.law.go.kr/flDownload.do?bylClsCd=110201&flSeq=149005007&gubun=",
+          "checked_on": "2026-11-11"
+        }
+      },
+      "premium_pay": {
+        "coverage": {
+          "article": "근로기준법 제11조",
+          "minimum_staff": 5,
+          "source": "https://www.law.go.kr/flDownload.do?bylClsCd=110201&flSeq=150840423&gubun=",
+          "checked_on": "2026-11-11"
+        },
+        "base_wage": {
+          "article": "근로기준법 시행령 제6조"
+        },
+        "overtime": {
+          "article": "근로기준법 제56조",
+          "rate": "0.5"
+        },
+        "night": {
+          "article": "근로기준법 제56조",
+          "rate": "0.5"
+        },
+        "holiday": {
+          "article": "근로기준법 제56조",
+          "threshold_hours": 8,
+          "within_rate": "0.5",
+          "above_rate": "1.0"
+        }
+      },
+      "monthly_minimum_wage": {
+        "hourly_wage": {
+          "value": 10320,
+          "article": "최저임금법 시행령 제5조",
+          "source": "https://www.moel.go.kr/info/lawinfo/instruction/view.do?bbs_seq=20250800121",
+          "checked_on": "2026-11-11",
+          "notice": "2025-47"
+        },
+        "standard_monthly_basis_hours": {
+          "value": 209,
+          "article": "최저임금법 시행령 제5조",
+          "source": "https://www.moel.go.kr/info/lawinfo/instruction/view.do?bbs_seq=20250800121",
+          "checked_on": "2026-11-11",
+          "notice": "2025-47"
+        },
+        "standard_weekly_hours": {
+          "value": 40,
+          "article": "최저임금법 시행령 제5조",
+          "source": "https://www.moel.go.kr/info/lawinfo/instruction/view.do?bbs_seq=20250800121",
+          "checked_on": "2026-11-11",
+          "notice": "2025-47"
+        },
+        "standard_paid_holiday_hours": {
+          "value": 8,
+          "article": "최저임금법 시행령 제5조",
+          "source": "https://www.moel.go.kr/info/lawinfo/instruction/view.do?bbs_seq=20250800121",
+          "checked_on": "2026-11-11",
+          "notice": "2025-47"
+        }
+      }
+    },
+    "2025": {
+      "monthly_minimum_wage": {
+        "hourly_wage": {
+          "value": 10030,
+          "article": "최저임금법 시행령 제5조",
+          "source": "https://www.moel.go.kr/info/lawinfo/instruction/view.do?bbs_seq=20240800148",
+          "checked_on": "2026-11-11",
+          "notice": "2024-50"
+        },
+        "standard_monthly_basis_hours": {
+          "value": 209,
+          "article": "최저임금법 시행령 제5조",
+          "source": "https://www.moel.go.kr/info/lawinfo/instruction/view.do?bbs_seq=20240800148",
+          "checked_on": "2026-11-11",
+          "notice": "2024-50"
+        },
+        "standard_weekly_hours": {
+          "value": 40,
+          "article": "최저임금법 시행령 제5조",
+          "source": "https://www.moel.go.kr/info/lawinfo/instruction/view.do?bbs_seq=20240800148",
+          "checked_on": "2026-11-11",
+          "notice": "2024-50"
+        },
+        "standard_paid_holiday_hours": {
+          "value": 8,
+          "article": "최저임금법 시행령 제5조",
+          "source": "https://www.moel.go.kr/info/lawinfo/instruction/view.do?bbs_seq=20240800148",
+          "checked_on": "2026-11-11",
+          "notice": "2024-50"
+        }
+      }
+    },
+    "2027": {
+      "monthly_minimum_wage": {
+        "hourly_wage": {
+          "value": 10700,
+          "article": "최저임금법 시행령 제5조",
+          "source": "https://www.moel.go.kr/info/lawinfo/instruction/view.do?bbs_seq=20260800150",
+          "checked_on": "2026-11-11",
+          "notice": "2026-60"
+        },
+        "standard_monthly_basis_hours": {
+          "value": 209,
+          "article": "최저임금법 시행령 제5조",
+          "source": "https://www.moel.go.kr/info/lawinfo/instruction/view.do?bbs_seq=20260800150",
+          "checked_on": "2026-11-11",
+          "notice": "2026-60"
+        },
+        "standard_weekly_hours": {
+          "value": 40,
+          "article": "최저임금법 시행령 제5조",
+          "source": "https://www.moel.go.kr/info/lawinfo/instruction/view.do?bbs_seq=20260800150",
+          "checked_on": "2026-11-11",
+          "notice": "2026-60"
+        },
+        "standard_paid_holiday_hours": {
+          "value": 8,
+          "article": "최저임금법 시행령 제5조",
+          "source": "https://www.moel.go.kr/info/lawinfo/instruction/view.do?bbs_seq=20260800150",
+          "checked_on": "2026-11-11",
+          "notice": "2026-60"
         }
       }
     }

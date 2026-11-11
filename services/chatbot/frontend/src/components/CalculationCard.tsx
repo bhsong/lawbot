@@ -3,8 +3,8 @@ import type { Calculation, CalculationCheck } from '../types'
 const numberFormat = new Intl.NumberFormat('ko-KR')
 const NOT_ENTERED = '미입력(0)'
 
-function formatValue(value: number | string) {
-  return typeof value === 'number' ? `${numberFormat.format(value)}원` : value
+function formatValue(value: number | string, unit?: string) {
+  return typeof value === 'number' ? `${numberFormat.format(value)}${unit ?? '원'}` : value + (unit ?? '')
 }
 
 export function CalculationCard({ calculation, check }: { calculation: Calculation; check?: CalculationCheck }) {
@@ -26,18 +26,20 @@ export function CalculationCard({ calculation, check }: { calculation: Calculati
 
   const { year, inputs = [], steps = [], results = [] } = calculation
   const omitted = inputs.filter(({ source }) => source === NOT_ENTERED).length
+  const valueLabel = results.some(({ unit }) => unit === '일') ? '일수' : '금액'
+  const tax = calculation.calculator === 'medical_expense_credit' || calculation.calculator === 'midyear_income_tax'
   return (
     <section className="calculation" aria-label="계산 결과">
       <header>
         <h2>계산 결과</h2>
-        {year !== undefined && <span>{year}년 귀속</span>}
+        {year !== undefined && <span>{year}년 {tax ? '귀속' : '기준'}</span>}
       </header>
       <dl className="calculation-results">
-        {results.map(({ label, value }) => (
+        {results.map(({ label, value, unit }) => (
           <div key={label}>
             <dt>{label}</dt>
             <dd>
-              <strong>{formatValue(value)}</strong>
+              <strong>{formatValue(value, unit)}</strong>
             </dd>
           </div>
         ))}
@@ -57,10 +59,10 @@ export function CalculationCard({ calculation, check }: { calculation: Calculati
             </tr>
           </thead>
           <tbody>
-            {inputs.map(({ label, value, source }) => (
+            {inputs.map(({ label, value, source, unit }) => (
               <tr key={label} className={source === NOT_ENTERED ? 'calculation-omitted' : undefined}>
                 <th scope="row">{label}</th>
-                <td>{formatValue(value)}</td>
+                <td>{formatValue(value, unit)}</td>
                 <td>{source}</td>
               </tr>
             ))}
@@ -77,11 +79,11 @@ export function CalculationCard({ calculation, check }: { calculation: Calculati
             </tr>
           </thead>
           <tbody>
-            {steps.map(({ label, formula, value, article }) => (
+            {steps.map(({ label, formula, value, article, unit }) => (
               <tr key={label}>
                 <th scope="row">{label}</th>
                 <td>{formula}</td>
-                <td>{formatValue(value)}</td>
+                <td>{formatValue(value, unit)}</td>
                 <td>{article}</td>
               </tr>
             ))}
@@ -90,12 +92,12 @@ export function CalculationCard({ calculation, check }: { calculation: Calculati
       </details>
       {check === 'mismatch' && (
         <p className="error" role="alert">
-          답변 결론의 금액이 계산 결과와 다릅니다. 계산 표를 기준으로 확인해 주세요.
+          답변 결론의 {valueLabel}이 계산 결과와 다릅니다. 계산 표를 기준으로 확인해 주세요.
         </p>
       )}
       {check === 'missing' && (
         <p className="error" role="alert">
-          답변 결론에서 금액을 확인할 수 없습니다. 계산 표를 기준으로 확인해 주세요.
+          답변 결론에서 {valueLabel}을 확인할 수 없습니다. 계산 표를 기준으로 확인해 주세요.
         </p>
       )}
     </section>

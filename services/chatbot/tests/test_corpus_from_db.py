@@ -46,18 +46,27 @@ def corrupt_release(db):
 
 
 def test_runtime_calculator_compatibility_reads_active_db_dependencies(corpus_db):
-    medical, settlement = 'medical_expense_credit', 'midyear_income_tax'
+    medical, minimum = 'medical_expense_credit', 'monthly_minimum_wage'
     decree = '소득세법 시행령 제118조의5'
-    assert calc_corpus.database_calculator_compatibility(corpus_db, PROFILE) == {medical: (), settlement: ()}
+    minimum_decree = '최저임금법 시행령 제5조'
+    enabled = dict.fromkeys(calc_corpus.ARTICLE_HASHES, ())
+    assert len(enabled) == 7
+    assert calc_corpus.database_calculator_compatibility(corpus_db, PROFILE) == enabled
     assert all(calc_corpus.database_calculator_compatibility(corpus_db, 'v4').values())
     corrupt_release(corpus_db)
-    assert calc_corpus.database_calculator_compatibility(corpus_db, PROFILE) == {medical: (), settlement: ()}
+    assert calc_corpus.database_calculator_compatibility(corpus_db, PROFILE) == enabled
     with connect(corpus_db, write=True) as conn, transaction(conn):
         conn.execute('UPDATE article_versions SET text=text || ? WHERE article_id=?', (' synthetic edit', decree))
-    assert calc_corpus.database_calculator_compatibility(corpus_db, PROFILE) == {medical: (decree,), settlement: ()}
+    assert calc_corpus.database_calculator_compatibility(corpus_db, PROFILE) == enabled | {medical: (decree,)}
     with connect(corpus_db, write=True) as conn, transaction(conn):
         conn.execute('UPDATE article_versions SET text=? WHERE article_id=?', (b'not text', decree))
-    assert calc_corpus.database_calculator_compatibility(corpus_db, PROFILE) == {medical: (decree,), settlement: ()}
+        conn.execute(
+            'UPDATE article_versions SET text=text || ? WHERE article_id=?', (' synthetic edit', minimum_decree)
+        )
+    assert calc_corpus.database_calculator_compatibility(corpus_db, PROFILE) == enabled | {
+        medical: (decree,),
+        minimum: (minimum_decree,),
+    }
 
 
 @pytest.mark.parametrize('decrees', [False, True])

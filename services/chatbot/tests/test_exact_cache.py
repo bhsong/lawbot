@@ -18,6 +18,13 @@ QUESTION = '합성 질문인가요?'
 CALCULATION = '총급여 5000만원이고 의료비 300만원이면 세액공제액을 계산해 주세요.'
 ID = '근로기준법 제26조'
 RAW = '【결론】\n합성 결론입니다.\n【근거 조문】\n근로기준법 제26조\n【설명】\n합성 설명\n【참고】\n합성 참고'
+LABOR_QUESTIONS = {
+    'severance': '월급 300만원으로 3년 일했습니다. 퇴직금을 얼마 받나요?',
+    'annual': '근속 2년하고 11개월이면 연차가 며칠인지 산출해 주세요.',
+    'weekly': '시급 12,000원, 주 20시간이면 주휴수당을 계산해 주세요.',
+    'minimum': '하루 8시간 주 5일 일할 때 최저임금을 월급으로 환산하면 얼마인가요?',
+    'premium': '시급 15,000원, 야간 근무 5시간의 가산수당은 얼마죠?',
+}
 
 
 @pytest.mark.parametrize(
@@ -162,6 +169,89 @@ def test_legacy_calculation_entries_are_reported_and_disabled(catalog, monkeypat
     store.set_mode('shadow', 'tester', 'synthetic shadow', approval)
     assert store.lookup(namespace, QUESTION)[1] is not None
     assert store.lookup(namespace, CALCULATION)[2] == 'inactive'
+
+
+def test_labor_cache_candidates_are_bypassed_and_legacy_entries_disabled(catalog, monkeypatch, capsys):
+    store, snapshot, general = catalog
+    namespace = snapshot.namespace.id
+    approvals = [
+        replace(general, source_id=f'{topic}-approved', question=question)
+        for topic, question in LABOR_QUESTIONS.items()
+    ]
+    drafts = [
+        replace(general, source_id=f'{topic}-draft', question=f'{question} 계산 근거도 같이 알려 주세요.')
+        for topic, question in LABOR_QUESTIONS.items()
+    ]
+    assert store.stage(snapshot.namespace, [*approvals, *drafts], 'tester', 'PR2 policy') == 0
+    with monkeypatch.context() as old_policy:
+        old_policy.setattr(cache_store, 'is_calculation_question', lambda question: False)
+        assert store.stage(snapshot.namespace, [*approvals, *drafts, general], 'tester', 'legacy') == 11
+        approval = store.approve(
+            namespace,
+            1,
+            'protected',
+            {entry.query_id(namespace): entry.answer_id(namespace) for entry in [*approvals, general]},
+            actor='tester',
+            reason='legacy',
+        )
+
+    for entry in drafts:
+        with pytest.raises(ValueError, match='계산 질문'):
+            activate(store, snapshot, entry)
+
+    store.set_mode('on', 'tester', 'legacy activation', approval)
+    for entry in approvals:
+        assert store.lookup(namespace, normalize(entry.question))[2] == 'hit'
+    cache = cache_runtime.ExactCache(store, store.path, snapshot)
+    with monkeypatch.context() as deny_lookup:
+        deny_lookup.setattr(store, 'lookup', lambda *args: pytest.fail('labor question reached cache storage'))
+        for entry in [*approvals, *drafts]:
+            decision = cache.lookup(entry.question, 'pro', 'concise')
+            assert decision.reason == 'calculation_question' and not decision.eligible
+
+    args = ['exclude-calculations', '--db', str(store.path)]
+    cache_admin.main(args)
+    report = json.loads(capsys.readouterr().out)
+    assert report['counts'] == {'draft': 5, 'approved': 5}
+    assert {row['source_id'] for row in report['items']} == {entry.source_id for entry in [*approvals, *drafts]}
+    assert all(row['effective_status'] == 'off' and 'question' not in row for row in report['items'])
+    cache_admin.main([*args, '--apply', '--reason', '노동 계산 질문 제외'])
+    assert json.loads(capsys.readouterr().out)['disabled'] == 5
+    for entry in approvals:
+        assert store.lookup(namespace, normalize(entry.question))[2] == 'inactive'
+    assert cache.lookup(QUESTION, 'pro', 'concise').reason == 'hit'
+
+
+def test_seed_excludes_all_five_labor_calculation_topics(catalog):
+    _, snapshot, _ = catalog
+    questions = {'general': QUESTION, **LABOR_QUESTIONS}
+    rows = [
+        dict(
+            id=key,
+            question=question,
+            question_sha256=digest(question),
+            answer=RAW,
+            answer_sha256=digest(RAW),
+            answer_key='key',
+            display_citation_article_ids=[ID],
+            display_citation_hashes={ID: snapshot.articles[ID].text_hash},
+            batch_id='P01',
+            review_unit_id='unit',
+            source_report='report',
+            source_report_sha256='sha',
+            source_snapshot_id='snapshot',
+            split_emb='train',
+            split_sllm='train',
+            review_evidence_article_ids=[ID],
+        )
+        for key, question in questions.items()
+    ]
+    protected = Protection(frozenset(), {row['id']: row['question_sha256'] for row in rows}, 'hash')
+    seed = prepare(Bundle(rows, frozenset()), protected, snapshot)
+    assert [entry.source_id for entry in seed.drafts] == ['general']
+    assert seed.summary['excluded_calculation_rows'] == 5
+    assert {row['id'] for row in seed.exclusions} == LABOR_QUESTIONS.keys()
+    assert all(row['reasons'] == ['excluded_calculation_rows'] for row in seed.exclusions)
 
 
 @pytest.mark.parametrize('mode', ['shadow', 'on'])
