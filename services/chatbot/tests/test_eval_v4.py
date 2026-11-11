@@ -596,6 +596,43 @@ def test_decree_retrieval_stage_runs_without_answers(env, monkeypatch, tmp_path)
     assert calls == [('dqr', len(ev.load_decree_questions('val', 'v5')), 'dqretrieval_pro_concise_rr_dec_val.csv')]
 
 
+def test_decree_retrieval_records_embedding_rank_before_reranking(tmp_path, monkeypatch):
+    gold = '가법 시행령 제1조'
+    other = '나법 시행령 제2조'
+    dq = pd.DataFrame(
+        {
+            'id': ['a', 'b'],
+            'question': ['질문', '다른 질문'],
+            'article_id': [gold, other],
+            'question_type': ['keyword'] * 2,
+        }
+    )
+
+    def retrieve(app, question, k, st, model):
+        candidate = {'law': '가법 시행령', 'article_id': '제1조', 'emb_rank': 4}
+        st.update(decree_candidates=[candidate], decree_rerank=0.1)
+        return [{'law': '가법'}], [candidate]
+
+    monkeypatch.setattr(service, 'retrieve', retrieve)
+    path = tmp_path / 'dqretrieval.csv'
+    ev.run_decree_retrieval(None, 'pro', dq, path)
+    ev.run_decree_retrieval(None, 'pro', dq, path)
+    rows = pd.read_csv(path, **E)
+    assert rows['id'].tolist() == ['a', 'b']
+    assert rows['emb_rank'].tolist() == [4, 999]
+    assert rows['cand_rank'].tolist() == [1, 999]
+    assert rows['in_attached'].tolist() == [True, False]
+
+
+def test_decree_retrieval_requires_a_fresh_tag_for_legacy_csv(tmp_path):
+    path = tmp_path / 'dqretrieval.csv'
+    legacy = b'id,cand_rank\nold,1\n'
+    path.write_bytes(legacy)
+    with pytest.raises(SystemExit, match='다른 --tag'):
+        ev.run_decree_retrieval(None, 'pro', pd.DataFrame(), path)
+    assert path.read_bytes() == legacy
+
+
 def test_summary_attach_rate_by_number_of_attachments(tmp_path, monkeypatch):
     """첨부 목록은 점수순이라 앞 k개가 '첨부 수 k'일 때의 첨부와 같다: k=1..최대 첨부 수별 정답 포함률·다른 법 비율"""
     monkeypatch.setattr(ev, 'OUT', tmp_path)

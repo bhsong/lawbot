@@ -433,6 +433,9 @@ def run_decree_retrieval(app, model, dq, path):
     """하위법령 정답 문항: 법률 검색·리랭킹(1위 법령) → 하위법령 후보 → 리랭킹 → 필터. 웹앱과 같은 service.retrieve"""
     from lawbot.service import retrieve
 
+    if path.is_file() and 'emb_rank' not in pd.read_csv(path, nrows=0, **E).columns:
+        raise SystemExit(f'{path.name}에 emb_rank 열이 없습니다. 다른 --tag로 실행하세요.')
+
     def one(qid, q, gold, qtype):
         st = {}
         law, att = retrieve(app, q, 3, st, model)
@@ -443,6 +446,7 @@ def run_decree_retrieval(app, model, dq, path):
             'gold': gold,
             'top1_law': law[0]['law'],
             'in_cands': gold in order,
+            'emb_rank': next((hit['emb_rank'] for hit in st['decree_candidates'] if key(hit) == gold), 999),
             'cand_rank': order.index(gold) + 1 if gold in order else 999,
             'attached': '|'.join(att),
             'n_att': len(att),

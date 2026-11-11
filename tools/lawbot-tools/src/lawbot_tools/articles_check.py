@@ -5,7 +5,7 @@
 - 생성기(build_articles)로 기준일(기본 오늘, 한국 시간)에 시행 중인 조문을 메모리에서 만들고 법률+하위법령 CSV와 비교한다.
   파일은 쓰지 않는다 (보고서만). CSV 교체·재인덱싱·재시작은 사람이 한다 (본문이 바뀌면 임베딩·4B를 val로 다시 봐야 함)
 - 보고서: 답변 근거가 다른 조문(추가·없어짐·본문·제목·삭제 여부), 그 밖 열 변화 개수, 시행 예정 개정,
-  데이터를 만든 뒤(매니페스트 source.ref 이후) 들어온 개정, 다르면 다시 만드는 명령
+  유효기간 판정 보류 문장, 데이터를 만든 뒤(매니페스트 source.ref 이후) 들어온 개정, 다르면 다시 만드는 명령
 - 마지막 줄: `articles same=yes|no changed=N pending=N next=날짜 new=N [→ 보고서]` (차후 law-monitor가 이 줄을 요약에 붙일 예정)
 - 종료 코드: 0 같음, 1 답변 근거가 다른 조문 있음, 2 실행 실패
 """
@@ -133,6 +133,7 @@ class Result:
     new: list[dict] | None
     report: Path | None = None
     dataset: Dataset = V4
+    expiry_unhandled: list[str] = field(default_factory=list)
 
     @property
     def same(self) -> bool:
@@ -180,6 +181,7 @@ def check_with_files(
         },
         'diff': compare(old_df, new_df),
         'pending': pending(versions),
+        'expiry_unhandled': ba.expiry_notices(versions),
         'new': commits_since(ba.Repo(repo), ref, stats['paths']),
     }
     return result, files
@@ -236,6 +238,8 @@ def render(r: Result, next_steps: bool = True) -> str:
         md += [f'| {p["date"]} | {p["doc"]} | 제{p["공포번호"]}호 | {", ".join(p["articles"])} |' for p in r.pending]
     else:
         md.append('- 없음')
+    if r.expiry_unhandled:
+        md += ['', '## 유효기간 판정 보류', '', *(f'- {notice}' for notice in r.expiry_unhandled)]
     md += ['', '## 데이터를 만든 뒤 들어온 개정', '']
     if r.new is None:
         md.append('- 알 수 없음 (매니페스트 `source.ref`가 없거나 클론에 그 커밋이 없음)')
@@ -289,6 +293,8 @@ def main(argv=None):
         print(f'[다름] {c["article_id"]} {c["kind"]} (시행 {c["effective_date"]})')
     for x in r.pending[:5]:
         print(f'[시행 예정] {x["date"]} {x["doc"]} 제{x["공포번호"]}호 {", ".join(x["articles"])}')
+    for notice in r.expiry_unhandled:
+        print(f'[유효기간 판정 보류] {notice}')
     print(summary_line(r))
     return 0 if r.same else 1
 

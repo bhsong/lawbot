@@ -151,6 +151,25 @@ def test_check_same_data_exit_0_and_summary_line(data_dir, tmp_path, monkeypatch
     assert '다음 할 일' not in md
 
 
+def test_check_reports_unhandled_expiry_without_changing_the_csv_result(data_dir, tmp_path, monkeypatch, capsys):
+    sentence = '제2조 ① 제1조의 개정규정은 시행일부터 2년간 효력을 가진다.'
+    versions = [VERSIONS[0] | {'expiry_unhandled': [sentence]}]
+    build, since = fake_build(OLD, versions=versions)
+    monkeypatch.setattr(ac.ba, 'build', build)
+    monkeypatch.setattr(ac, 'commits_since', since)
+    reports = tmp_path / 'reports'
+
+    assert (
+        ac.main(
+            ['--repo', str(tmp_path), '--asof', '2026-11-02', '--data-dir', str(data_dir), '--report-dir', str(reports)]
+        )
+        == 0
+    )
+    notice = f'시험법 제200호 {sentence}'
+    assert notice in capsys.readouterr().out
+    assert notice in (reports / '2026-11-02.md').read_text(encoding='utf-8')
+
+
 def test_check_different_data_exit_1_with_diff_and_next_steps(data_dir, tmp_path, monkeypatch, capsys):
     build, since = fake_build(NEW)
     monkeypatch.setattr(ac.ba, 'build', build)

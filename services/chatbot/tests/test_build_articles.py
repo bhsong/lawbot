@@ -555,7 +555,7 @@ def test_expiry_clauses_read_article_and_paragraphs():
         '제3조 (유효기간) 제16조의 개정규정은 2007년 6월 30일까지 효력을 가진다.\n\n'
         '제4조(경과조치) 종전의 최저임금은 1994년 8월 31일까지 효력을 가진다.\n'  # 개정규정이 아니고 유효기간 조도 아님
     )
-    assert b.expiry_clauses(add) == [('제53조', [3, 6], '2022-12-31'), ('제16조', [], '2007-06-30')]
+    assert b.expiry_clauses(add) == ([('제53조', [3, 6], '2022-12-31'), ('제16조', [], '2007-06-30')], [])
 
 
 def test_expiry_clauses_do_not_expand_a_qualified_target_to_the_entire_article():
@@ -563,20 +563,61 @@ def test_expiry_clauses_do_not_expand_a_qualified_target_to_the_entire_article()
         '제2조(유효기간) 제1조(제3호 및 별지 제4호서식에 관한 부분으로 한정한다), '
         '제2조제2항 및 제3조의 개정규정은 2020년 12월 31일까지 효력을 가진다.'
     )
-    assert b.expiry_clauses(addendum) == [('제2조', [2], '2020-12-31'), ('제3조', [], '2020-12-31')]
+    clauses, unhandled = b.expiry_clauses(addendum)
+    assert clauses == [('제2조', [2], '2020-12-31'), ('제3조', [], '2020-12-31')]
+    assert len(unhandled) == 1 and '제1조(제3호' in unhandled[0]
 
 
-def test_expiry_applies_to_the_amended_text_that_remains_in_force():
+def test_expiry_reads_all_paragraphs_of_a_title_containing_expiry():
+    addendum = (
+        '제2조(지원의 유효기간) ① 제3조 및 제4조의 개정 규정은\n2020년 12월 31일까지 그 효력을 가진다.\n\n'
+        '② 제5조제2항의 개정규정은 2021년 12월 31일까지 효력을 가진다.\n\n'
+        '제3조(적용례) 제6조의 개정규정은 2020년 12월 31일까지 효력을 가진다.'
+    )
+    assert b.expiry_clauses(addendum) == (
+        [('제3조', [], '2020-12-31'), ('제4조', [], '2020-12-31'), ('제5조', [2], '2021-12-31')],
+        [],
+    )
+
+
+def test_expiry_reports_dates_in_items_relative_dates_and_partial_targets():
+    addendum = (
+        '제2조(지원의 유효기간) ① 제1조의 개정규정은 다음 각 호의 구분에 따른 날까지 효력을 가진다.\n'
+        '1. 소규모 사업장: 2020년 12월 31일\n\n'
+        '② 제2조의 개정규정은 시행일부터 2년간 효력을 가진다.\n\n'
+        '③ 제3조제1항 단서, 제4조제1항 본문, 제5조제1항 후단 및 제6조제1항제2호의 개정규정은 '
+        '2020년 12월 31일까지 효력을 가진다.'
+    )
+    clauses, unhandled = b.expiry_clauses(addendum)
+    assert clauses == []
+    assert len(unhandled) == 3
+    assert '다음 각 호' in unhandled[0]
+    assert '시행일부터 2년간' in unhandled[1]
+    assert '제3조제1항 단서' in unhandled[2]
+
+
+def test_expiry_reports_qualified_ranges_and_external_articles_without_applying_them():
+    addendum = (
+        '제2조(유효기간) ① 제1조부터 제3조까지의 개정규정은 2020년 12월 31일까지 효력을 가진다.\n'
+        '② 제2조 및 「다른 법」 제3조의 개정규정은 2020년 12월 31일까지 효력을 가진다.'
+    )
+    clauses, unhandled = b.expiry_clauses(addendum)
+    assert clauses == []
+    assert len(unhandled) == 2
+
+
+def test_expiry_compares_titles_for_articles_and_text_for_paragraphs():
     first = (
         article('제1조', '제목', '① 첫째 항.\n② 한시 규정.')
         + article('제2조', '제목', '한시 조문.')
         + article('제3조', '제목', '계속 남아 있는 한시 조문.')
         + article('제4조', '제목', '① 첫째 항.\n② 계속 남아 있는 한시 규정.\n1. 한시 규정의 세부 내용')
         + article('제5조', '제목', '① 첫째 항.\n② 교체하기 전의 한시 규정.')
+        + article('제6조', '이전 제도', '다시 쓰이는 번호의 조문.')
     )
     addendum = (
         '부칙 <제100호,2020.1.1>\n\n제1조(시행일) 이 법은 공포한 날부터 시행한다.\n\n'
-        '제2조(유효기간) 제1조제2항, 제2조, 제3조, 제4조제2항 및 제5조제2항의 개정규정은 '
+        '제2조(유효기간) 제1조제2항, 제2조, 제3조, 제4조제2항, 제5조제2항 및 제6조의 개정규정은 '
         '2020년 12월 31일까지 효력을 가진다.'
     )
     second = (
@@ -585,6 +626,7 @@ def test_expiry_applies_to_the_amended_text_that_remains_in_force():
         + article('제3조', '제목', '계속 남아 있는 한시 조문.')
         + article('제4조', '제목', '① 개정된 첫째 항.\n② 계속 남아 있는 한시 규정.\n1. 한시 규정의 세부 내용')
         + article('제5조', '제목', '① 첫째 항.\n② 다시 개정된 둘째 항.')
+        + article('제6조', '새 제도', '다시 쓰이는 번호의 조문.')
     )
     history = [('a' * 40, '2020-01-01', '제정'), ('b' * 40, '2021-01-01', '일부개정')]
     documents = [
@@ -594,7 +636,8 @@ def test_expiry_applies_to_the_amended_text_that_remains_in_force():
     articles, _ = b._compose_history(PATH, '2026-11-03', history, documents)
     got = {row['no']: row for row in articles}
     assert got['제1조']['text'] == '항 구분이 없는 개정 본문.'
-    assert not got['제2조'].get('expired')
+    assert got['제2조']['expired']
+    assert not got['제6조'].get('expired')
     assert got['제3조']['expired']
     assert got['제4조']['text'].endswith('1. 한시 규정의 세부 내용 [실효: 2020.12.31.까지 유효]')
     assert got['제5조']['text'].endswith('② 다시 개정된 둘째 항.')

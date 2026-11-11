@@ -23,8 +23,8 @@
   기준일 이후이며, 그 부칙이 시행 중이면 `부칙<제N호>제M조` 행으로 넣는다 (chapter = 부칙 머리)
 - 원문 형식 변경(공백, 조문 끝 `[시행일]` 안내 삭제)은 개정으로 보지 않는다
 - effective_date: 그 조문을 마지막으로 바꾼 개정의 시행일
-- 유효기간: 부칙 '○의 개정규정은 …까지 효력을 가진다'가 기준일 전에 끝났으면 조문 전체는 deleted=1,
-  항이면 그 항 끝에 `[실효: YYYY.M.D.까지 유효]`
+- 유효기간: 만료된 부칙 개정규정은 조문 번호와 제목이 같으면 deleted=1로 둔다. 항은 개정 본문과 같으면
+  `[실효: YYYY.M.D.까지 유효]`를 붙인다. 처리 범위 밖 문장은 보고한다.
 - 본문: 굵게 표시·`\\.` 이스케이프·들여쓰기·빈 줄 제거. 별표·서식은 링크만 있어 넣지 않음
 - 삭제: 제목이 없고 본문이 비었거나 '삭제'로 시작하면 deleted=1
 - chapter: 장(과 절) 제목, 개정 표시 제외
@@ -563,9 +563,10 @@ def _compose_history(path, asof, hist, mds):
         cur_order = list(arts)
         sched = schedule(md, fm, cur_order, asof, latest=mds[-1])
         addendum, owner = addendum_of(md, fm['공포번호'], mds[-1])
+        expiry_rules, expiry_unhandled = expiry_clauses(addendum or '')
         expiries.extend(
             (no, paras, until, arts[no])
-            for no, paras, until in expiry_clauses(addendum or '')
+            for no, paras, until in expiry_rules
             if no in arts and sched.article(no) <= asof
         )
         follows = bool(owner and FOLLOWS_PENDING.search(re.sub(r'\s+', '', addendum or '')))
@@ -624,6 +625,7 @@ def _compose_history(path, asof, hist, mds):
                 '시행 전': len(waiting),
                 'pending': waiting,
                 'mixed': mixed,
+                'expiry_unhandled': expiry_unhandled,
             }
         )
     unknown = {no: a['unknown'] for no, a in state.items() if a.get('unknown')}
@@ -698,50 +700,84 @@ def dotted(date):
     return f'{y}.{m}.{d}.'
 
 
-EXPIRY = re.compile(r'(.*?)의\s*개정규정은\s*(\d{4})년\s*(\d{1,2})월\s*(\d{1,2})일까지\s*효력을\s*가진다')
+EXPIRY_PREDICATE = r'효력을\s*(?:가진다|갖는다)'
+EXPIRY = re.compile(
+    rf'(.+?)의\s*개정\s*규정은\s*(\d{{4}})년\s*(\d{{1,2}})월\s*(\d{{1,2}})일\s*까지\s*(?:그\s*)?{EXPIRY_PREDICATE}\.?'
+)
+EXPIRY_TARGET = re.compile(r'(제\d+조(?:의\d+)?)(.*?)(?=제\d+조|$)')
+EXPIRY_SUFFIX = re.compile(r'(?:\s|[,ㆍ·]|및|또는|와|과|같은\s*조|제\d+항)*')
+EXPIRY_COMPLEX_TARGET = re.compile(r'「|부칙\s*제\d+조|(?:부터|내지)\s*제\d+조')
 PARA = '①②③④⑤⑥⑦⑧⑨⑩⑪⑫⑬⑭⑮⑯⑰⑱⑲⑳'
 
 
 def expiry_clauses(addendum):
-    """부칙 '제N조(유효기간…) ○의 개정규정은 YYYY년 M월 D일까지 효력을 가진다' → [(조문, [항], 날짜)]. 항이 없으면 조문 전체"""
-    out = []
-    for m in re.finditer(r'제\d+조\s*\(유효기간[^)]*\)\s*([^\n]*)', addendum):
-        e = EXPIRY.search(m[1])
-        if not e:
+    """Read fixed dates for article and paragraph targets, and retain unhandled statements for review."""
+    rules, unhandled = [], []
+    headings = list(ADDENDUM_ART.finditer(addendum))
+    for i, heading in enumerate(headings):
+        if '유효기간' not in heading[3]:
             continue
-        date = dt.date(int(e[2]), int(e[3]), int(e[4])).isoformat()
-        targets = re.sub(r'\([^()]*\)', '()', e[1])
-        for target in re.finditer(r'(제\d+조(?:의\d+)?)(.*?)(?=제\d+조|$)', targets):
-            no, suffix = target.groups()
-            if re.search(r'\(\)|제\d+(?:호|목)|부분', suffix):
-                continue
-            out.append((no, [int(n) for n in re.findall(r'제(\d+)항', suffix)], date))
-    return out
+        end = headings[i + 1].start() if i + 1 < len(headings) else len(addendum)
+        body = AMEND_NOTE.sub('', addendum[heading.end() : end]).strip()
+        for paragraph in re.split(rf'(?m)(?=^[ \t]*[{PARA}])', body):
+            for sentence in re.split(r'(?<=\.)\s+', ' '.join(paragraph.split())):
+                if not re.search(EXPIRY_PREDICATE, sentence):
+                    continue
+                parsed = EXPIRY.fullmatch(sentence.lstrip(PARA + ' '))
+                targets = expiry_targets(parsed[1]) if parsed else []
+                if not targets or any(paras is None for _, paras in targets):
+                    no = f'제{heading[1]}조' + (f'의{heading[2]}' if heading[2] else '')
+                    unhandled.append(f'{no} {sentence}')
+                if parsed and targets:
+                    date = dt.date(int(parsed[2]), int(parsed[3]), int(parsed[4])).isoformat()
+                    rules.extend((no, paras, date) for no, paras in targets if paras is not None)
+    return rules, unhandled
+
+
+def expiry_targets(text):
+    """Match article and paragraph targets without treating a qualified reference as a whole article."""
+    targets = re.sub(r'\([^()]*\)', '()', text.strip())
+    if not EXPIRY_TARGET.match(targets) or EXPIRY_COMPLEX_TARGET.search(targets):
+        return []
+    return [
+        (no, [int(n) for n in re.findall(r'제(\d+)항', suffix)] if EXPIRY_SUFFIX.fullmatch(suffix) else None)
+        for no, suffix in EXPIRY_TARGET.findall(targets)
+    ]
+
+
+def expiry_notices(versions):
+    """Format unhandled expiry statements with their source document and amendment number."""
+    return [
+        f'{v["doc"]} 제{int(v["공포번호"])}호 {statement}'
+        for v in versions
+        for statement in v.get('expiry_unhandled', ())
+    ]
 
 
 def paragraph_span(lines, number):
+    if not 1 <= number <= len(PARA):
+        return None
     starts = [i for i, line in enumerate(lines) if line.startswith(PARA[number - 1])]
     if len(starts) != 1:
         return None
     start = starts[0]
-    end = next((i for i in range(start + 1, len(lines)) if lines[i][:1] in PARA), len(lines))
+    end = next((i for i in range(start + 1, len(lines)) if lines[i] and lines[i][0] in PARA), len(lines))
     return start, end
 
 
 def expire(arts, expiries, asof, path):
-    """Apply elapsed expiry clauses where the covered article or paragraph still matches the amending text."""
+    """Apply elapsed expiry clauses by matching article titles or the text of individual paragraphs."""
     by_no = {a['no']: a for a in arts}
     current_text = {a['no']: a['text'] for a in arts}
     for no, paras, date, amended in expiries:
         if date >= asof or no not in by_no:
             continue
         a = by_no[no]
-        current = current_text[no]
         if not paras:
-            if (a.get('title'), squash(current)) == (amended.get('title'), squash(amended['text'])):
+            if a.get('title') == amended.get('title'):
                 a['expired'] = True
             continue
-        lines = (current or '').splitlines()
+        lines = (current_text[no] or '').splitlines()
         original = (amended['text'] or '').splitlines()
         marked = (a['text'] or '').splitlines()
         for k in paras:
@@ -1113,6 +1149,8 @@ def main(argv=None):
             print(
                 f'[시행 전 포함] {v["doc"]} {no}: 제{v["공포번호"]}호가 시행 전({", ".join(dates)}) 개정이 남은 본문을 다시 바꿈'
             )
+    for notice in expiry_notices(versions):
+        print(f'[유효기간 판정 보류] {notice}')
     for doc, v in last.items():
         print(f'[버전] {doc} 마지막 {v["commit"]} 제{v["공포번호"]}호 · {stats["paths"][doc]}')
 
