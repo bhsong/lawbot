@@ -576,8 +576,20 @@ def test_expiry_reads_all_paragraphs_of_a_title_containing_expiry():
     )
     assert b.expiry_clauses(addendum) == (
         [('제3조', [], '2020-12-31'), ('제4조', [], '2020-12-31'), ('제5조', [2], '2021-12-31')],
-        [],
+        ['제3조 제6조의 개정규정은 2020년 12월 31일까지 효력을 가진다.'],
     )
+
+
+def test_expiry_reports_amended_provisions_without_an_expiry_heading():
+    deadline = '제151조제1항제4호의 개정규정은 2026년 12월 31일까지 효력을 가진다.'
+    other = '① 제6조의 개정 규정은 다음 각 호에서 정한 날까지 그 효력을 갖는다.'
+    addendum = (
+        f'제1조의2(적용시한) {deadline} <개정 2024.12.31>\n'
+        f'제2조(지원) {other}\n'
+        '② 종전의 규정은 2026년 12월 31일까지 효력을 가진다.\n'
+        '제3조(경과조치) 종전의 감면은 2026년 12월 31일까지 그 효력을 갖는다.'
+    )
+    assert b.expiry_clauses(addendum) == ([], [f'제1조의2 {deadline}', f'제2조 {other}'])
 
 
 def test_expiry_reports_dates_in_items_relative_dates_and_partial_targets():

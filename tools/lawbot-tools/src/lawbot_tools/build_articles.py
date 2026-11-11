@@ -701,9 +701,10 @@ def dotted(date):
 
 
 EXPIRY_PREDICATE = r'효력을\s*(?:가진다|갖는다)'
-EXPIRY = re.compile(
-    rf'(.+?)의\s*개정\s*규정은\s*(\d{{4}})년\s*(\d{{1,2}})월\s*(\d{{1,2}})일\s*까지\s*(?:그\s*)?{EXPIRY_PREDICATE}\.?'
-)
+AMENDED_PROVISION = r'(.+?)의\s*개정\s*규정은\s*'
+EXPIRY_END = rf'까지\s*(?:그\s*)?{EXPIRY_PREDICATE}\.?'
+EXPIRY = re.compile(rf'{AMENDED_PROVISION}(\d{{4}})년\s*(\d{{1,2}})월\s*(\d{{1,2}})일\s*{EXPIRY_END}')
+EXPIRY_NOTICE = re.compile(rf'{AMENDED_PROVISION}.+?{EXPIRY_END}')
 EXPIRY_TARGET = re.compile(r'(제\d+조(?:의\d+)?)(.*?)(?=제\d+조|$)')
 EXPIRY_SUFFIX = re.compile(r'(?:\s|[,ㆍ·]|및|또는|와|과|같은\s*조|제\d+항)*')
 EXPIRY_COMPLEX_TARGET = re.compile(r'「|부칙\s*제\d+조|(?:부터|내지)\s*제\d+조')
@@ -715,18 +716,25 @@ def expiry_clauses(addendum):
     rules, unhandled = [], []
     headings = list(ADDENDUM_ART.finditer(addendum))
     for i, heading in enumerate(headings):
-        if '유효기간' not in heading[3]:
-            continue
+        apply_rules = '유효기간' in heading[3]
         end = headings[i + 1].start() if i + 1 < len(headings) else len(addendum)
-        body = AMEND_NOTE.sub('', addendum[heading.end() : end]).strip()
+        body = addendum[heading.end() : end]
+        if '효력을' not in body:
+            continue
+        body = AMEND_NOTE.sub('', body).strip()
+        no = f'제{heading[1]}조' + (f'의{heading[2]}' if heading[2] else '')
         for paragraph in re.split(rf'(?m)(?=^[ \t]*[{PARA}])', body):
             for sentence in re.split(r'(?<=\.)\s+', ' '.join(paragraph.split())):
                 if not re.search(EXPIRY_PREDICATE, sentence):
                     continue
-                parsed = EXPIRY.fullmatch(sentence.lstrip(PARA + ' '))
+                statement = sentence.lstrip(PARA + ' ')
+                if not apply_rules:
+                    if EXPIRY_NOTICE.fullmatch(statement):
+                        unhandled.append(f'{no} {sentence}')
+                    continue
+                parsed = EXPIRY.fullmatch(statement)
                 targets = expiry_targets(parsed[1]) if parsed else []
                 if not targets or any(paras is None for _, paras in targets):
-                    no = f'제{heading[1]}조' + (f'의{heading[2]}' if heading[2] else '')
                     unhandled.append(f'{no} {sentence}')
                 if parsed and targets:
                     date = dt.date(int(parsed[2]), int(parsed[3]), int(parsed[4])).isoformat()
