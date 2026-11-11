@@ -1,0 +1,629 @@
+[
+  {
+    "id": "labor-heldout-001",
+    "question": "직전 석 달 임금 합계는 12,934,880원, 하루 통상임금은 139,600원입니다. 마지막 재직일은 2026년 9월 17일이고 2022년 4월 23일에 입사했어요. 4주 평균 주 소정근로시간 36시간이면 법정 퇴직금이 얼마인가요?",
+    "calculator": "severance_pay",
+    "kind": "calculated",
+    "status": "calculated",
+    "expected_results": {
+      "법정 최소 퇴직금": 18593409
+    },
+    "basis": "퇴직급여법 제4조·제8조 및 근로기준법 제2조. 1,609일 재직. 12,934,880÷92가 139,600보다 커서 평균임금에 30×1,609÷365를 곱하고 원 단위 반올림."
+  },
+  {
+    "id": "labor-heldout-002",
+    "question": "통상임금 하한을 반영한 퇴직금 산정용 일급이 134,780원이라고 인사팀에서 확인해 줬습니다. 인정 계속근로기간은 총 937일, 4주 평균 주 소정근로시간은 27시간 30분이에요. 법정 최소 퇴직금 계산 부탁드립니다.",
+    "calculator": "severance_pay",
+    "kind": "calculated",
+    "status": "calculated",
+    "expected_results": {
+      "법정 최소 퇴직금": 10379906
+    },
+    "basis": "퇴직급여법 제4조·제8조. 하한 반영 일급 134,780×30×937÷365를 원 단위 반올림."
+  },
+  {
+    "id": "labor-heldout-003",
+    "question": "2026년 8월 13일이 첫 비재직일이고 입사일은 2021년 7월 19일입니다. 4주 평균 주 소정근로시간은 38시간이에요. 퇴직 직전 3개월 임금 총액 11,268,500원에는 회사 사정으로 휴업한 산정 제외 9일의 임금 742,000원이 들어 있습니다. 이 총액 밖에서 평균임금에 별도 산입할 적격 연간 상여는 1,736,000원입니다. 1일 통상임금이 127,300원일 때 법정 퇴직금은요?",
+    "calculator": "severance_pay",
+    "kind": "calculated",
+    "status": "calculated",
+    "expected_results": {
+      "법정 최소 퇴직금": 20090331
+    },
+    "basis": "근로기준법 제2조 및 시행령 제2조. (11,268,500−742,000+1,736,000×3÷12)÷(92−9)가 통상임금보다 높다. 퇴직급여법 제8조에 따라 그 일급×30×1,851÷365를 원 단위 반올림."
+  },
+  {
+    "id": "labor-heldout-004",
+    "question": "2025년 12월 2일에 들어갔고 마지막 재직일은 2026년 10월 16일입니다. 계약상 근로시간은 4주 평균 주 39시간이에요. 법으로 정한 퇴직금이 발생하나요? 금액이 궁금합니다.",
+    "calculator": "severance_pay",
+    "kind": "calculated",
+    "status": "calculated",
+    "expected_results": {
+      "법정 최소 퇴직금": 0
+    },
+    "basis": "퇴직급여법 제4조. 첫 비재직일은 2026년 10월 17일이며 인정 기간 319일로 달력상 1년 미만."
+  },
+  {
+    "id": "labor-heldout-005",
+    "question": "인정 계속근로기간은 1,063일인데, 계약상 4주 평균으로 주에 14시간 45분 일했습니다. 통상임금 하한을 반영한 산정용 일급은 89,740원으로 나와 있어요. 이 경우 법정 퇴직금은 얼마로 보나요?",
+    "calculator": "severance_pay",
+    "kind": "calculated",
+    "status": "calculated",
+    "expected_results": {
+      "법정 최소 퇴직금": 0
+    },
+    "basis": "퇴직급여법 제4조. 4주 평균 주 소정근로시간 14.75시간은 15시간 미만."
+  },
+  {
+    "id": "labor-heldout-006",
+    "question": "퇴직금 대략 얼마나 나오는지 보고 싶습니다. 월급은 지난 석 달 내내 342만 7,500원이었고, 인정 근속은 2년 7개월 9일입니다. 4주 평균 주 소정근로시간은 40시간이에요.",
+    "calculator": "severance_pay",
+    "kind": "calculated",
+    "status": "calculated",
+    "expected_results": {
+      "평균임금 기준 퇴직금 추정": 8938889,
+      "통상임금 하한 적용 퇴직금 추정": 10264753
+    },
+    "basis": "근로기준법 제2조와 퇴직급여법 제8조의 월급 추정. 기간은 365×31÷12+9일. 평균임금 가정은 3,427,500÷30, 통상임금 하한 가정은 3,427,500×8÷209. 각각 30×추정 재직일수÷365를 곱해 원 단위 반올림."
+  },
+  {
+    "id": "labor-heldout-007",
+    "question": "입사일 2025년 4월 26일, 첫 비재직일 2026년 4월 26일입니다. 퇴직 전 3개월 임금 합계가 8,532,750원이고 하루 통상임금은 101,370원이래요. 소정근로는 4주 평균 주 35시간이었습니다. 딱 1년 채운 제 법정 퇴직금을 알려 주세요.",
+    "calculator": "severance_pay",
+    "kind": "calculated",
+    "status": "calculated",
+    "expected_results": {
+      "법정 최소 퇴직금": 3041100
+    },
+    "basis": "퇴직급여법 제4조·제8조 및 근로기준법 제2조. 달력상 1년이며 365일. 8,532,750÷90보다 큰 통상임금 101,370×30."
+  },
+  {
+    "id": "labor-heldout-008",
+    "question": "법정 퇴직금을 확인 중입니다. 인정 계속근로기간이 786일이고 4주 평균 주 소정근로는 32시간이었습니다. 마지막 3개월은 역일수 91일, 임금 합계 9,776,192원이에요. 그 합계에 들어 있지 않은 별도 산입 대상 연간 미사용 연차수당은 524,640원, 하루 통상임금은 105,610원입니다.",
+    "calculator": "severance_pay",
+    "kind": "calculated",
+    "status": "calculated",
+    "expected_results": {
+      "법정 최소 퇴직금": 7033429
+    },
+    "basis": "근로기준법 제2조와 퇴직급여법 제8조. (9,776,192+524,640×3÷12)÷91=108,872가 통상임금보다 높다. 108,872×30×786÷365를 원 단위 반올림."
+  },
+  {
+    "id": "labor-heldout-009",
+    "question": "법정 퇴직금 계산해 주세요. 계속근로는 1,124일이고, 4주 평균 주 소정근로시간은 33시간, 퇴직 직전 3개월 임금 총액은 10,758,200원입니다. 그 3개월의 역일수는 92일이에요.",
+    "calculator": "severance_pay",
+    "kind": "missing",
+    "status": "guidance",
+    "expected_results": null,
+    "basis": "근로기준법 제2조. 평균임금과 대조할 1일 통상임금이나 하한 반영 산정용 일급이 없다."
+  },
+  {
+    "id": "labor-heldout-010",
+    "question": "하루 통상임금 하한까지 반영한 퇴직금 산정용 일급이 118,260원이라고 합니다. 4주 평균 주 소정근로시간은 29시간이었어요. 법정 최소 퇴직금이 얼마인지 계산할 수 있나요?",
+    "calculator": "severance_pay",
+    "kind": "missing",
+    "status": "guidance",
+    "expected_results": null,
+    "basis": "퇴직급여법 제4조·제8조. 계속근로기간이나 재직 경계 날짜가 없어 1년 요건과 비례 계수를 확정할 수 없다."
+  },
+  {
+    "id": "labor-heldout-011",
+    "question": "2023년 2월 17일에 입사했고 회사 서류에는 퇴사일이 2026년 7월 23일이라고만 적혀 있습니다. 그날까지 직원이었던 건지 그날부터 퇴직 처리된 건지는 모르겠어요. 4주 평균 주 소정근로시간은 37시간, 통상임금 하한 반영 산정용 일급은 119,840원인데 법정 퇴직금은 얼마죠?",
+    "calculator": "severance_pay",
+    "kind": "ambiguous",
+    "status": "guidance",
+    "expected_results": null,
+    "basis": "퇴직급여법 제8조. 기재된 퇴사일이 마지막 재직일인지 첫 비재직일인지에 따라 인정 재직일수가 달라진다."
+  },
+  {
+    "id": "labor-heldout-012",
+    "question": "퇴직금 명세를 보니 입사일은 2024년 5월 14일, 첫 비재직일은 2026년 9월 21일로 돼 있어요. 같은 명세에 인정 계속근로일수는 812일로 찍혀 있습니다. 중간에 근속에서 뺀 기간은 없고 4주 평균 주 소정근로시간은 31시간, 통상임금 하한 반영 산정용 일급은 124,970원인데 어느 쪽으로 계산해야 하나요?",
+    "calculator": "severance_pay",
+    "kind": "ambiguous",
+    "status": "guidance",
+    "expected_results": null,
+    "basis": "퇴직급여법 제8조. 제시한 두 날짜 간 860일과 명세상 812일은 제외 기간 없이 동시에 맞을 수 없다."
+  },
+  {
+    "id": "labor-heldout-013",
+    "question": "입사한 지 8개월이고 상시 근로자 16명인 곳에서 일합니다. 4주 평균 주 소정근로시간은 36시간이에요. 8개월 중 정해진 근무일에 빠짐없이 출근하고 그 달이 끝난 다음 날까지도 재직한 건 6개월입니다. 입사일 기준 법정 연차가 지금까지 며칠 생겼나요?",
+    "calculator": "annual_leave_days",
+    "kind": "calculated",
+    "status": "calculated",
+    "expected_results": {
+      "연차유급휴가 일수": 6
+    },
+    "basis": "근로기준법 제60조 제2항. 1년 미만의 적격 개근 6개월에 각 1일."
+  },
+  {
+    "id": "labor-heldout-014",
+    "question": "이번 입사기념일로 근속 7년을 채웠습니다. 연차가 생기는 날에도 계속 회사에 다니고 있어요. 직전 1년 출근율은 86.5%, 상시 직원은 정확히 23명이고 4주 평균 주 소정근로시간은 37시간입니다. 이번에 발생하는 법정 연차는 며칠이죠?",
+    "calculator": "annual_leave_days",
+    "kind": "calculated",
+    "status": "calculated",
+    "expected_results": {
+      "연차유급휴가 일수": 18
+    },
+    "basis": "근로기준법 제60조 제1항·제4항. 출근율 80% 이상, 발생일 재직, 완료 7년이므로 15+⌊(7−1)÷2⌋."
+  },
+  {
+    "id": "labor-heldout-015",
+    "question": "입사일은 2025년 8월 22일이고 계약이 끝난 2026년 8월 21일이 마지막 재직일이에요. 1년 출근율은 91.4%였고 개근한 달을 마친 다음 날에도 재직한 건 10개월입니다. 상시 근로자 12명, 4주 평균 주 소정근로시간 37시간인 경우 입사일 기준 이 계약에서 법정 연차가 며칠 발생했나요?",
+    "calculator": "annual_leave_days",
+    "kind": "calculated",
+    "status": "calculated",
+    "expected_results": {
+      "연차유급휴가 일수": 10
+    },
+    "basis": "근로기준법 제60조와 대법원 2021다227100. 첫 1년이 끝난 다음 날에는 재직하지 않아 15일 발생 요건을 충족하지 않는다. 월 단위로 성립한 10일."
+  },
+  {
+    "id": "labor-heldout-016",
+    "question": "상시 47명이 일하는 직장입니다. 2003년 8월 19일 입사했고 2026년 8월 19일 현재 재직 중입니다. 4주 평균 주 소정근로시간은 39시간, 이번 연차 산정에 해당하는 1년 출근율은 96.2%예요. 올해 입사일 기준으로 새로 생기는 연차 일수는 얼마인가요?",
+    "calculator": "annual_leave_days",
+    "kind": "calculated",
+    "status": "calculated",
+    "expected_results": {
+      "연차유급휴가 일수": 25
+    },
+    "basis": "근로기준법 제60조 제1항·제4항. 완료 23년의 기본·가산 합 26일에 25일 상한 적용."
+  },
+  {
+    "id": "labor-heldout-017",
+    "question": "지금 계속근로기간 4년 8개월입니다. 해당 1년 출근율이 77.4%였고, 그 1년 안에 개근하고 해당 월을 끝낸 다음 날에도 재직한 달은 7개월이에요. 상시 근로자 수는 19명, 4주 평균 주 소정근로시간은 34시간입니다. 그 1년 근로로 발생하는 입사일 기준 법정 연차가 며칠인가요?",
+    "calculator": "annual_leave_days",
+    "kind": "calculated",
+    "status": "calculated",
+    "expected_results": {
+      "연차유급휴가 일수": 7
+    },
+    "basis": "근로기준법 제60조 제2항. 해당 연도 출근율 80% 미만으로 적격 개근월 7개에 각 1일."
+  },
+  {
+    "id": "labor-heldout-018",
+    "question": "2025년 10월 11일에 입사했고 2026년 10월 11일 현재 재직하고 있습니다. 상시 근로자 31명, 4주 평균 주 소정근로시간 38시간, 첫 1년 출근율 87.8%입니다. 첫해에 개근하고 그 달이 끝난 다음 날까지 재직한 달은 9개월인데요. 첫해 월 단위 연차도 합산하면 1주년까지 총 며칠 발생한 건가요?",
+    "calculator": "annual_leave_days",
+    "kind": "calculated",
+    "status": "calculated",
+    "expected_results": {
+      "연차유급휴가 일수": 24
+    },
+    "basis": "근로기준법 제60조 제1항·제2항. 첫해 월 단위 9일과 출근율·재직 요건을 충족한 1주년의 15일을 더한다."
+  },
+  {
+    "id": "labor-heldout-019",
+    "question": "상시 일하는 직원이 딱 4명인 작업장입니다. 근속 2년 4개월이고 최근 연차 산정 대상 1년 출근율은 94.3%, 4주 평균 주 소정근로시간은 40시간이에요. 법에 따라 입사일 기준 연차가 며칠 생기나요?",
+    "calculator": "annual_leave_days",
+    "kind": "calculated",
+    "status": "calculated",
+    "expected_results": {
+      "연차유급휴가 일수": 0
+    },
+    "basis": "근로기준법 제11조 및 시행령 별표 1. 상시 4명 사업장은 제60조의 법정 연차 적용 범위에 들지 않는다."
+  },
+  {
+    "id": "labor-heldout-020",
+    "question": "재직 3년 2개월이고, 상시 근로자 수는 26명입니다. 해당 1년 출근율은 92.7%였고 계약에 따른 4주 평균 주 소정근로시간은 14시간 50분입니다. 입사일 기준 법정 연차 발생 일수를 알고 싶어요.",
+    "calculator": "annual_leave_days",
+    "kind": "calculated",
+    "status": "calculated",
+    "expected_results": {
+      "연차유급휴가 일수": 0
+    },
+    "basis": "근로기준법 제18조 제3항. 4주 평균 주 소정근로시간이 15시간 미만이라 제60조 적용 제외."
+  },
+  {
+    "id": "labor-heldout-021",
+    "question": "2023년 6월 13일 입사해서 2026년 6월 13일 현재도 재직합니다. 산정 대상 1년 출근율이 88.7%이고 4주 평균 주 소정근로시간은 38시간입니다. 입사일 기준으로 이번 법정 연차는 며칠 생기나요?",
+    "calculator": "annual_leave_days",
+    "kind": "missing",
+    "status": "guidance",
+    "expected_results": null,
+    "basis": "근로기준법 제11조. 상시 근로자 수가 없어 제60조의 적용 여부를 판단할 수 없다."
+  },
+  {
+    "id": "labor-heldout-022",
+    "question": "상시 근로자 17명, 4주 평균 주 소정근로시간 33시간으로 5년 3개월째 계속 다니고 있어요. 입사일 기준으로 가장 최근에 발생한 법정 연차 일수를 계산해 주실 수 있나요?",
+    "calculator": "annual_leave_days",
+    "kind": "missing",
+    "status": "guidance",
+    "expected_results": null,
+    "basis": "근로기준법 제60조 제1항·제2항. 최근 산정 대상 1년 출근율이 제시되지 않았다."
+  },
+  {
+    "id": "labor-heldout-023",
+    "question": "상시 직원 수를 두고 한쪽에서는 4명, 다른 쪽에서는 6명이라고 합니다. 4주 평균 주 소정근로시간은 39시간이고 3년 6개월째 재직 중입니다. 해당 1년 출근율이 90.4%면 입사일 기준 법정 연차가 며칠 발생하나요?",
+    "calculator": "annual_leave_days",
+    "kind": "ambiguous",
+    "status": "guidance",
+    "expected_results": null,
+    "basis": "근로기준법 제11조. 상시 인원 후보가 5명 기준의 양쪽에 있다."
+  },
+  {
+    "id": "labor-heldout-024",
+    "question": "계약상 근속은 정확히 1년이고 1년 출근율은 88.1%였어요. 개근한 달이 끝난 다음 날까지 재직한 것은 9개월입니다. 연차 발생일에도 근로관계가 이어졌는지 아니면 그 전날 종료됐는지는 인사 기록을 다시 확인 중이에요. 상시 근로자 28명, 4주 평균 주 소정근로시간 36시간일 때 입사일 기준 연차가 며칠 생기나요?",
+    "calculator": "annual_leave_days",
+    "kind": "ambiguous",
+    "status": "guidance",
+    "expected_results": null,
+    "basis": "근로기준법 제60조와 대법원 2021다227100. 1년을 마친 다음 날 재직 여부에 따라 1주년 발생분의 성립이 달라진다."
+  },
+  {
+    "id": "labor-heldout-025",
+    "question": "통상시급이 14,760원이고 유급주휴시간은 7시간 15분입니다. 계약상 4주 평균 주 소정근로시간이 36시간 15분이고 이번 주 소정근로일에 전부 출근했어요. 그 주 7일 내내 근로관계를 유지했습니다. 주휴수당 한 주치 얼마인가요?",
+    "calculator": "weekly_holiday_pay",
+    "kind": "calculated",
+    "status": "calculated",
+    "expected_results": {
+      "주휴수당": 107010
+    },
+    "basis": "근로기준법 제55조 및 시행령 제30조. 주 15시간 이상, 소정근로일 개근, 7일 재직으로 유급주휴 7.25×14,760."
+  },
+  {
+    "id": "labor-heldout-026",
+    "question": "이번 주에 해당하는 주휴수당 계산 좀 해주세요. 비교 통상근로자는 주 소정근로일이 6일이고, 저는 4주 평균으로 주 소정근로시간 25시간 30분입니다. 이번 주 소정근로일은 개근했고 한 주 동안 근로관계가 계속됐습니다. 제 통상시급은 13,684원이에요.",
+    "calculator": "weekly_holiday_pay",
+    "kind": "calculated",
+    "status": "calculated",
+    "expected_results": {
+      "주휴수당": 58157
+    },
+    "basis": "근로기준법 제55조 및 시행령 제9조 별표 2. 4주 환산 분자와 분모를 각각 4로 나누면 유급주휴 25.5÷6=4.25시간. 4.25×13,684."
+  },
+  {
+    "id": "labor-heldout-027",
+    "question": "4주 동안 제 소정근로시간 합계가 103시간이고, 같은 4주간 비교 통상근로자의 소정근로일수는 모두 19일입니다. 이번 주 소정근로일은 결근하지 않았고 일주일 내내 재직했습니다. 통상시급 12,943원으로 주휴수당 1회분이 얼마나 되나요?",
+    "calculator": "weekly_holiday_pay",
+    "kind": "calculated",
+    "status": "calculated",
+    "expected_results": {
+      "주휴수당": "70164.6842"
+    },
+    "basis": "근로기준법 제55조 및 시행령 제9조 별표 2. 103÷4로 15시간 기준을 충족하고 유급주휴 103÷19×12,943을 소수 넷째 자리까지 표시."
+  },
+  {
+    "id": "labor-heldout-028",
+    "question": "비교할 통상근로자의 주 소정근로일수는 고정 5일입니다. 제 4주간 소정근로시간 합계는 딱 60시간이에요. 이번 주는 소정근로일을 개근했고 그 주 7일간 고용관계가 유지됐습니다. 통상시급이 12,190원이면 이 주의 주휴수당이 얼마인가요?",
+    "calculator": "weekly_holiday_pay",
+    "kind": "calculated",
+    "status": "calculated",
+    "expected_results": {
+      "주휴수당": 36570
+    },
+    "basis": "근로기준법 제18조 제3항·제55조 및 시행령 제9조 별표 2. 60÷4=15시간으로 기준을 충족한다. 유급주휴 60÷20=3시간에 12,190을 곱한다."
+  },
+  {
+    "id": "labor-heldout-029",
+    "question": "통상시급 15,318원 받고 있습니다. 이번 주 소정근로일을 개근했고 7일 내내 재직했지만 4주 평균 주 소정근로시간은 14시간 54분입니다. 법에 따라 주휴수당이 얼마 생기나요?",
+    "calculator": "weekly_holiday_pay",
+    "kind": "calculated",
+    "status": "calculated",
+    "expected_results": {
+      "주휴수당": 0
+    },
+    "basis": "근로기준법 제18조 제3항. 평균 14.9시간은 15시간 미만이라 제55조 적용 제외."
+  },
+  {
+    "id": "labor-heldout-030",
+    "question": "소정근로시간은 4주 평균 주 29시간 30분이고 통상시급은 13,762원입니다. 그 주에 7일 내내 재직했는데 소정근로일에 하루 결근했어요. 이번 주 법정 주휴수당이 얼마인지 봐 주세요.",
+    "calculator": "weekly_holiday_pay",
+    "kind": "calculated",
+    "status": "calculated",
+    "expected_results": {
+      "주휴수당": 0
+    },
+    "basis": "근로기준법 제55조 및 시행령 제30조. 소정근로일 결근으로 해당 주 개근 요건 미충족."
+  },
+  {
+    "id": "labor-heldout-031",
+    "question": "정해진 근무일에는 전부 출근해서 이번 주 소정근로일은 개근입니다. 다만 이번 주 7일이 되기 전에 근로관계가 종료됐습니다. 4주 평균 주 소정근로시간은 28시간이고 통상시급 13,412원인데 이 주 주휴수당이 나오나요?",
+    "calculator": "weekly_holiday_pay",
+    "kind": "calculated",
+    "status": "calculated",
+    "expected_results": {
+      "주휴수당": 0
+    },
+    "basis": "근로기준법 제2조·제55조와 고용노동부 주휴일 행정해석. 연속 7일의 해당 주 근로관계 존속 요건 미충족."
+  },
+  {
+    "id": "labor-heldout-032",
+    "question": "이번 주 소정근로일에 한 번도 결근하지 않았고 한 주 내내 근로계약이 유지됐어요. 통상시급은 11,854원입니다. 저의 4주간 소정근로시간은 합해서 127시간이고 비교 통상근로자는 주마다 소정근로일이 5일이에요. 법정 주휴수당 한 주분을 알려 주세요.",
+    "calculator": "weekly_holiday_pay",
+    "kind": "calculated",
+    "status": "calculated",
+    "expected_results": {
+      "주휴수당": "75272.9"
+    },
+    "basis": "근로기준법 제55조 및 시행령 제9조 별표 2. 유급주휴 127÷(5×4)=6.35시간, 주휴수당은 6.35×11,854."
+  },
+  {
+    "id": "labor-heldout-033",
+    "question": "이번 주 소정근로일을 개근했고 7일 동안 근로관계가 유지됐습니다. 4주 평균 주 소정근로시간은 34시간 30분이고 유급주휴시간은 6시간 54분입니다. 제 주휴수당은 얼마인가요?",
+    "calculator": "weekly_holiday_pay",
+    "kind": "missing",
+    "status": "guidance",
+    "expected_results": null,
+    "basis": "근로기준법 제55조 및 시행령 제6조. 주휴시간에 곱할 통상시급이 없다."
+  },
+  {
+    "id": "labor-heldout-034",
+    "question": "통상시급 14,238원이고 4주 평균 주 소정근로시간은 27시간 30분입니다. 이번 주 소정근로일을 개근했고 이번 주 7일 동안 근로관계가 계속됐어요. 이번 주 주휴수당이 얼마인가요?",
+    "calculator": "weekly_holiday_pay",
+    "kind": "missing",
+    "status": "guidance",
+    "expected_results": null,
+    "basis": "근로기준법 시행령 제9조 별표 2. 유급주휴시간 또는 같은 기간 비교 통상근로자의 소정근로일수가 필요하다."
+  },
+  {
+    "id": "labor-heldout-035",
+    "question": "통상시급 12,786원이고 4주 평균 주 소정근로시간은 32시간입니다. 유급주휴시간은 6시간 24분이고 해당 주 7일 동안 근로관계가 유지됐어요. 나머지 날은 모두 출근했는데 하루가 결근으로 찍힌 건지 출근으로 정정됐는지 아직 모릅니다. 이 주 주휴수당을 계산해 주실 수 있나요?",
+    "calculator": "weekly_holiday_pay",
+    "kind": "ambiguous",
+    "status": "guidance",
+    "expected_results": null,
+    "basis": "근로기준법 제55조 및 시행령 제30조. 해당 주 개근 여부가 확정되지 않아 지급 요건과 금액이 달라진다."
+  },
+  {
+    "id": "labor-heldout-036",
+    "question": "계약서 사본에서 4주 평균 주 소정근로시간 칸에 24라고만 보여서 시간인지 분인지 확인이 안 됩니다. 이번 주 소정근로일은 개근했고 7일간 근로관계는 유지됐어요. 통상시급이 14,327원이고 유급주휴시간은 4시간 48분으로 적혀 있는데 주휴수당이 얼마인가요?",
+    "calculator": "weekly_holiday_pay",
+    "kind": "ambiguous",
+    "status": "guidance",
+    "expected_results": null,
+    "basis": "근로기준법 제18조 제3항·제55조. 단위가 명시되지 않고 질의에도 시간·분 두 가능성이 있어 주 15시간 요건을 확정할 수 없다."
+  },
+  {
+    "id": "labor-heldout-037",
+    "question": "2025년 당시 근로계약이 하루 소정근로 8시간씩 주 5일이었습니다. 고시 기준으로 그해 월 최저임금을 얼마로 보면 되나요?",
+    "calculator": "monthly_minimum_wage",
+    "kind": "calculated",
+    "status": "calculated",
+    "expected_results": {
+      "월 최저임금": 2096270
+    },
+    "basis": "2025년 고용노동부 고시 제2024-50호. 표준 주 40시간과 유급주휴를 적용하는 209시간×10,030."
+  },
+  {
+    "id": "labor-heldout-038",
+    "question": "급여표를 확인하려고요. 한 주에 소정근로 40시간, 주 유급주휴 8시간이면 2026년 최저시급을 월급으로 바꾼 법정 기준이 얼마예요?",
+    "calculator": "monthly_minimum_wage",
+    "kind": "calculated",
+    "status": "calculated",
+    "expected_results": {
+      "월 최저임금": 2156880
+    },
+    "basis": "2026년 고용노동부 고시 제2025-47호. 표준 월 209시간×10,320."
+  },
+  {
+    "id": "labor-heldout-039",
+    "question": "2027년 월 최저임금을 계산해 주세요. 근로계약상 주 5일이고 1일 소정근로시간은 8시간입니다. 고시에 따른 월 환산액이 궁금합니다.",
+    "calculator": "monthly_minimum_wage",
+    "kind": "calculated",
+    "status": "calculated",
+    "expected_results": {
+      "월 최저임금": 2236300
+    },
+    "basis": "2027년 고용노동부 고시 제2026-60호. 표준 월 209시간×10,700."
+  },
+  {
+    "id": "labor-heldout-040",
+    "question": "2025년 급여를 월 최저임금으로 환산해 보고 싶어요. 유급주휴가 반영된 계약서의 월 최저임금 적용기준시간은 162시간 45분입니다. 얼마가 기준이었나요?",
+    "calculator": "monthly_minimum_wage",
+    "kind": "calculated",
+    "status": "calculated",
+    "expected_results": {
+      "월 최저임금": "1632382.5"
+    },
+    "basis": "최저임금법 시행령 제5조 및 2025년 고시. 162시간 45분=162.75시간, 162.75×10,030."
+  },
+  {
+    "id": "labor-heldout-041",
+    "question": "147.25시간이 유급주휴까지 반영한 월 최저임금 적용기준시간입니다. 이 근로조건에 2026년 최저임금을 전액 적용했을 때 월 최저임금은 얼마인가요?",
+    "calculator": "monthly_minimum_wage",
+    "kind": "calculated",
+    "status": "calculated",
+    "expected_results": {
+      "월 최저임금": 1519620
+    },
+    "basis": "최저임금법 시행령 제5조 및 2026년 고시. 147.25×10,320."
+  },
+  {
+    "id": "labor-heldout-042",
+    "question": "2027년분 계약서 검토 중입니다. 월 최저임금 적용기준시간: 183시간 12분. 유급주휴가 들어 있는 숫자예요. 최저임금 월 환산액을 알려 주세요.",
+    "calculator": "monthly_minimum_wage",
+    "kind": "calculated",
+    "status": "calculated",
+    "expected_results": {
+      "월 최저임금": 1960240
+    },
+    "basis": "최저임금법 시행령 제5조 및 2027년 고시. 183시간 12분=183.2시간, 183.2×10,700."
+  },
+  {
+    "id": "labor-heldout-043",
+    "question": "근태표에는 이번 달 실근로가 173시간이라고 나옵니다. 별도로 월 최저임금 적용기준시간은 191시간이라고 회사에서 확인해 줬어요. 2026년 월 최저임금이 얼마인지 그 기준으로 계산해 주세요.",
+    "calculator": "monthly_minimum_wage",
+    "kind": "calculated",
+    "status": "calculated",
+    "expected_results": {
+      "월 최저임금": 1971120
+    },
+    "basis": "최저임금법 시행령 제5조 및 2026년 고시. 유급 환산 기준 191×10,320."
+  },
+  {
+    "id": "labor-heldout-044",
+    "question": "예전에 받은 자료에 적용연도가 2025년으로 적혀 있습니다. 월 최저임금 적용기준시간이 134.35시간으로 확정돼 있어요. 이 경우 월 환산한 최저임금액이 어떻게 되나요?",
+    "calculator": "monthly_minimum_wage",
+    "kind": "calculated",
+    "status": "calculated",
+    "expected_results": {
+      "월 최저임금": "1347530.5"
+    },
+    "basis": "최저임금법 시행령 제5조 및 2025년 고시. 134.35×10,030."
+  },
+  {
+    "id": "labor-heldout-045",
+    "question": "주 소정근로시간이 40시간인 계약입니다. 2026년 최저임금을 월급으로 환산하면 얼마인가요?",
+    "calculator": "monthly_minimum_wage",
+    "kind": "missing",
+    "status": "guidance",
+    "expected_results": null,
+    "basis": "최저임금법 시행령 제5조. 표준 월 환산을 판단할 주 소정근로일수나 유급주휴시간이 없고 별도 월 적용기준시간도 주어지지 않았다."
+  },
+  {
+    "id": "labor-heldout-046",
+    "question": "유급주휴 포함 월 최저임금 적용기준시간은 156시간 30분이라고 합니다. 이 계약 조건에서 최저시급을 월 최저임금으로 환산해 주세요.",
+    "calculator": "monthly_minimum_wage",
+    "kind": "missing",
+    "status": "guidance",
+    "expected_results": null,
+    "basis": "최저임금법 제10조 및 시행령 제5조. 표준 이외의 월 기준시간은 주어졌지만 적용연도가 없어 시급을 확정할 수 없다."
+  },
+  {
+    "id": "labor-heldout-047",
+    "question": "2026년 급여를 보는데 유급주휴 포함 월 최저임금 적용기준시간이 168시간인지 176시간인지 자료 두 곳이 다릅니다. 월 최저임금 하나로 계산 가능할까요?",
+    "calculator": "monthly_minimum_wage",
+    "kind": "ambiguous",
+    "status": "guidance",
+    "expected_results": null,
+    "basis": "최저임금법 시행령 제5조. 두 월 적용기준시간은 동일 월의 서로 다른 환산액을 낸다."
+  },
+  {
+    "id": "labor-heldout-048",
+    "question": "2027년 월 최저임금 적용기준시간은 178시간입니다. 회사에서 수습 감액을 적용하는 대상인지 아직 답을 못 받았는데 제게 적용되는 월 최저임금이 얼마인가요?",
+    "calculator": "monthly_minimum_wage",
+    "kind": "ambiguous",
+    "status": "guidance",
+    "expected_results": null,
+    "basis": "최저임금법 제5조 및 시행령 제3조·제5조. 질문이 본인에게 적용되는 금액을 묻고 있으나 수습 감액 적용 사실이 불확실하다."
+  },
+  {
+    "id": "labor-heldout-049",
+    "question": "상시 14명이 일하는 회사에서 평일 연장근로를 했습니다. 휴게 빼고 3시간 45분, 통상시급 15,364원이에요. 가산수당만 얼마인지 계산해 주세요.",
+    "calculator": "premium_pay",
+    "kind": "calculated",
+    "status": "calculated",
+    "expected_results": {
+      "법정 가산수당": "28807.5"
+    },
+    "basis": "근로기준법 제11조·제56조 제1항. 15,364×3.75×0.5."
+  },
+  {
+    "id": "labor-heldout-050",
+    "question": "통상시급은 18,227원이고 사업장 상시 근로자는 26명입니다. 평일 통상 근무 중 오후 10시 이후 야간 실근로가 2시간 20분이었어요. 휴게시간은 뺀 상태고, 기본임금 빼고 야간에 붙는 돈만 알려 주세요.",
+    "calculator": "premium_pay",
+    "kind": "calculated",
+    "status": "calculated",
+    "expected_results": {
+      "법정 가산수당": "21264.8333"
+    },
+    "basis": "근로기준법 제11조·제56조 제3항. 18,227×(2+20÷60)×0.5를 소수 넷째 자리까지 표시."
+  },
+  {
+    "id": "labor-heldout-051",
+    "question": "휴일 하루 출근해서 쉬는 시간 빼고 7시간 40분 일했습니다. 상시 근로자 9명이고 제 통상시급은 16,578원입니다. 휴일 가산분만 계산하면 얼마예요?",
+    "calculator": "premium_pay",
+    "kind": "calculated",
+    "status": "calculated",
+    "expected_results": {
+      "법정 가산수당": 63549
+    },
+    "basis": "근로기준법 제11조·제56조 제2항. 하루 휴일근로 전부 8시간 이내로 16,578×(7+40÷60)×0.5."
+  },
+  {
+    "id": "labor-heldout-052",
+    "question": "통상시급 17,136원, 상시 근로자 21명입니다. 휴일 하루에 휴게시간을 뺀 실근로가 10시간 30분이고 그중 야간근로가 2시간 45분이에요. 중복 없이 센 총 실근로도 10.5시간입니다. 기본임금까지 포함한 총 지급액을 구해 주세요.",
+    "calculator": "premium_pay",
+    "kind": "calculated",
+    "status": "calculated",
+    "expected_results": {
+      "법정 가산수당": 134946,
+      "기본임금": 179928,
+      "기본임금 포함 합계": 314874
+    },
+    "basis": "근로기준법 제56조 제2항·제3항. 휴일 8×0.5+2.5×1 및 야간 2.75×0.5를 17,136에 곱한다. 기본임금 17,136×10.5를 한 번 더한다."
+  },
+  {
+    "id": "labor-heldout-053",
+    "question": "직원은 상시 32명이고 통상시급 14,265원 받습니다. 휴게 제외하고 평일 연장을 4시간 40분 했고 그 안에서 야간 근로는 2시간 10분입니다. 연장과 야간을 합친 가산분만 얼마인지 보고 싶어요.",
+    "calculator": "premium_pay",
+    "kind": "calculated",
+    "status": "calculated",
+    "expected_results": {
+      "법정 가산수당": "48738.75"
+    },
+    "basis": "근로기준법 제56조 제1항·제3항. 14,265×((4+40÷60)+(2+10÷60))×0.5."
+  },
+  {
+    "id": "labor-heldout-054",
+    "question": "휴일 이틀의 실근로를 휴일별로 나눠 보니 하루 8시간 이내에 해당하는 부분의 합계가 14시간 45분이고, 하루 8시간을 넘는 부분 합계는 3시간 30분입니다. 모두 휴게 제외고 야간에 일한 시간은 없어요. 상시 근로자 18명, 통상시급 14,392원이면 휴일 가산분만 얼마인가요?",
+    "calculator": "premium_pay",
+    "kind": "calculated",
+    "status": "calculated",
+    "expected_results": {
+      "법정 가산수당": 156513
+    },
+    "basis": "근로기준법 제56조 제2항. 14,392×(14.75×0.5+3.5×1). 휴일별 8시간 경계로 이미 분리된 합계다."
+  },
+  {
+    "id": "labor-heldout-055",
+    "question": "상시 직원은 4명인 사업장이에요. 통상시급 11,936원이고 평일 연장근로가 휴게 제외 3시간 30분, 중복 없는 총 실근로는 3.5시간입니다. 이 시간에 법에서 정한 기본임금 포함 총액과 가산수당을 알려 주세요.",
+    "calculator": "premium_pay",
+    "kind": "calculated",
+    "status": "calculated",
+    "expected_results": {
+      "법정 가산수당": 0,
+      "기본임금": 41776,
+      "기본임금 포함 합계": 41776
+    },
+    "basis": "근로기준법 제11조 및 시행령 별표 1. 4명 사업장에 제56조 법정 가산 미적용. 기본임금 11,936×3.5."
+  },
+  {
+    "id": "labor-heldout-056",
+    "question": "기본임금까지 합쳐 총 얼마인지 계산 부탁드려요. 상시 인원 39명, 통상시급 16,652원입니다. 휴게를 빼고 평일 연장근로 1시간 45분, 휴일 하루 근로 8시간입니다. 그 휴일 근로 중 야간근로 1시간 15분이 포함돼 있습니다. 별도로 평일 소정근로 15분까지 합해 중복 없는 실근로는 총 10시간입니다.",
+    "calculator": "premium_pay",
+    "kind": "calculated",
+    "status": "calculated",
+    "expected_results": {
+      "법정 가산수당": 91586,
+      "기본임금": 166520,
+      "기본임금 포함 합계": 258106
+    },
+    "basis": "근로기준법 제56조 제1항~제3항. 16,652×(1.75+8+1.25)×0.5를 가산하고 중복 없는 10시간에 대한 기본임금 166,520을 더한다."
+  },
+  {
+    "id": "labor-heldout-057",
+    "question": "평일 연장근로가 휴게 빼고 2시간 35분입니다. 통상시급은 17,483원이고 가산수당만 계산하려는데 얼마인가요?",
+    "calculator": "premium_pay",
+    "kind": "missing",
+    "status": "guidance",
+    "expected_results": null,
+    "basis": "근로기준법 제11조. 상시 근로자 수를 제시하지 않아 제56조 적용을 결정할 수 없다."
+  },
+  {
+    "id": "labor-heldout-058",
+    "question": "상시 근로자 24명인 곳에서 야간 실근로를 3시간 10분 했습니다. 휴게시간은 이미 제외했어요. 기본임금 빼고 법정 야간 가산분만 계산해 주세요.",
+    "calculator": "premium_pay",
+    "kind": "missing",
+    "status": "guidance",
+    "expected_results": null,
+    "basis": "근로기준법 제56조 제3항. 야간 가산율을 적용할 통상시급이 없다."
+  },
+  {
+    "id": "labor-heldout-059",
+    "question": "상시 인원은 5명 안팎인데 상시 근로자 산정에 포함되는 사람이 누군지 회사도 확인 중입니다. 통상시급 15,743원에 휴게 제외 평일 연장근로 3시간 20분이면 법정 가산분만 얼마예요?",
+    "calculator": "premium_pay",
+    "kind": "ambiguous",
+    "status": "guidance",
+    "expected_results": null,
+    "basis": "근로기준법 제11조·제56조. 상시 근로자 수가 5명 이상인지 확정되지 않아 가산 적용 자체가 달라진다."
+  },
+  {
+    "id": "labor-heldout-060",
+    "question": "상시 근로자 27명이고 통상시급은 16,913원입니다. 휴일 이틀에 나가서 쉬는 시간 빼고 합쳐 15시간 30분 일했어요. 날짜별로 몇 시간씩인지 기록을 아직 못 봤습니다. 휴일 가산수당만 얼마인지 계산해 주실 수 있나요?",
+    "calculator": "premium_pay",
+    "kind": "ambiguous",
+    "status": "guidance",
+    "expected_results": null,
+    "basis": "근로기준법 제56조 제2항. 각 휴일의 8시간 이내와 초과 시간을 나눌 수 없어 같은 총 실근로에도 가산액이 달라진다."
+  }
+]
