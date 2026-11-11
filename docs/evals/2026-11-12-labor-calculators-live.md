@@ -1458,3 +1458,49 @@ held-out 60문항은 구현 전에 별도 커밋 `19b20ef`에 고정했다. fixt
 {"id": "labor-heldout-059", "raw": "{\"calculator\":\"premium_pay\",\"inputs\":{\"staff_count\":\"5명 안팎\",\"ordinary_hourly_wage\":\"15,743원\",\"overtime_hours\":\"3시간 20분\",\"include_base\":\"법정 가산분만\"}}", "calculator": "premium_pay", "status": "none", "reason": "conversion_failed", "results": {}, "router_ms": 9793}
 {"id": "labor-heldout-060", "raw": "{\"calculator\":\"premium_pay\",\"inputs\":{\"staff_count\":\"27명\",\"ordinary_hourly_wage\":\"16,913원\",\"holiday_within_hours\":\"15시간 30분\",\"include_base\":\"휴일 가산수당만\"}}", "calculator": "premium_pay", "status": "guidance", "reason": "ambiguous_input", "results": {}, "router_ms": 9798}
 ~~~
+
+
+## 보완 리뷰 반영과 재평가
+
+사용자의 후속 요청으로 [리뷰 P1·P2](https://github.com/bhsong/lawbot/pull/120#issuecomment-6808359883)를 반영했다. 수량의 앞뒤 명사를 허용 목록에 더하지 않고, 필드 단위의 유일한 완전 구간과 원래 위치를 검증한다. 복합 기간·시간과 입력 출처를 보존하고, 복수 수량·부정·비교·근삿값·단위 역할 충돌은 안내한다. 선택된 계산기의 변환 실패는 `guidance/unresolved_input`으로 필요한 재입력을 요청한다. 공통 지급 범위에서 기본급 포함·제외를 기본임금과 함께 인식한다.
+
+리뷰의 “변환 실패가 제약 없는 일반 RAG로 넘어간다”는 설명은 정정한다. 이전 `none/conversion_failed`도 `service.py`에서 계산 안내 이벤트와 `GUIDANCE_INSTRUCTION`을 보냈다. 최초 실측 AL01은 금지 지시를 받고도 모델이 일수를 계산한 사례이며, 지시가 빠진 사례는 아니다. 390px·1280px 대역 E2E에서 실패 안내와 직접 계산 금지 지시 전달을 함께 확인한다. P3 퇴사 표현의 확장은 이번 수정에 포함하지 않았다.
+
+동결 fixture·ROUTER_SYSTEM·생성 지시·법정 데이터는 유지했다. 테스트 수량 문장은 리뷰 유형과 일반 어법에서 별도로 작성했고 held-out 실패 문장으로 규칙을 맞추지 않았다. TDD에서 수량 회귀 22건, 지급 범위 8건, 위치·역할 보존 6건, 부정·비교 보호 14건, 대역 E2E 2건의 의미 실패를 먼저 확인했다.
+
+### 리뷰 후 오프라인 재채점
+
+모델 호출 없이 보존된 val 원출력 46건과 held-out 원출력 60건을 수정 전 `cc51457` 코드와 수정 후 코드에 각각 재생했다. 동일한 원출력으로 계산기·상태·사유·계산값을 비교했다. held-out 원기록 60건은 수정 전 재생과 모두 일치했다. val의 미보존 192건을 복원하거나 재호출하지 않았다. 아래 숫자는 참고용이며 새 독립 평가의 통과 근거로 사용하지 않는다.
+
+| 문항군 | 보존 문항 | 수정 전 일치 | 수정 후 일치 | 개선 | 악화 | 유지 |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| PR1 목록 | 13 | 9 | 9 | 0 | 0 | 13 |
+| PR2 대조 | 11 | 10 | 10 | 0 | 0 | 11 |
+| 노동 val | 22 | 20 | 20 | 0 | 0 | 22 |
+| held-out 재생 | 60 | 52 | 53 | 1 | 0 | 59 |
+| 합계 | 106 | 91 | 92 | 1 | 0 | 105 |
+
+유일한 판정 변경은 `labor-heldout-059`다. `staff_count="5명 안팎"`의 불확실한 수량이 `none/conversion_failed`에서 `guidance/ambiguous_input`으로 바뀌었다. 양쪽 모두 계산 결과는 없다. 그 밖의 105건은 계산기·상태·사유·계산값이 모두 동일했다.
+
+- PR1 유지 13건은 CR023·CR030·CR033·CR041·CR043·CR048·CR050·CR052·CR057·CR077·CR088·CR092·CR100이다.
+- PR2 대조 유지 11건은 CR023·CR030·CR041·CR043·CR048·CR050·CR052·CR057·CR077·CR088·CR092다.
+- 노동 val 유지 22건은 MW002·LU06·WH004·WH005·WH008·WH010·AL01·AL02·AL03·AL12·AL13·AL14·AL16·AL17·AL18·LP002·LP003·LP004·LP005·LP006·LP008·LP012다.
+- held-out 유지 59건은 `labor-heldout-001`부터 `labor-heldout-058`까지와 `labor-heldout-060`이다.
+
+val 계산 출력은 21/21, held-out 계산형 출력은 34/34가 고정 fixture의 독립 검산값과 일치했다. 계산값 변경은 0건이다. 다만 모호 문항 `labor-heldout-012`에서 퇴직금 8,833,496원을 출력하는 기존 실패가 유지돼, 비계산형 계산 결과 1건과 평가상 틀린 계산 1건이다. 따라서 전체 오산 0건으로 보고하지 않는다.
+
+| held-out 재생 계산기 | 계산형 | 필수 입력 누락 | 모호 |
+| --- | ---: | ---: | ---: |
+| 퇴직금 | 8/8 | 2/2 | 1/2 |
+| 연차유급휴가 | 7/8 | 2/2 | 2/2 |
+| 주휴수당 | 8/8 | 2/2 | 2/2 |
+| 최저임금 월 환산 | 6/8 | 2/2 | 2/2 |
+| 가산수당 | 5/8 | 2/2 | 2/2 |
+
+퇴직금 모호, 최저임금 계산형, 가산수당 계산형 및 비계산형 계산 결과 0건 기준은 이 재생에서도 미달이다. 이 결과를 보고 코드를 추가 조정하지 않았으며, 앞서 기록한 최초 held-out 실측 52/60은 그대로 보존한다.
+
+### 리뷰 수정 기본 검증
+
+기본 pytest 전체 **1,781 passed, 13 deselected**(138.89초), Ruff 검사·포맷(412파일), Pyright, 캘린더 스키마, Python 문법 검사가 통과했다. 챗봇 화면 44건·캘린더 화면 19건의 단위 테스트와 두 화면 타입 검사·빌드가 통과했다. 단위·계약·통합·대역 E2E에 실제 모델 호출은 없으며, 신규 변환 오류 안내는 390px·1280px에서 검증했다. `e2e_live`·`models`는 실행 안 함이다.
+
+실행 명령은 `.venv/bin/pytest -q --tb=short`, `ruff check`, `ruff format --check`, `pyright`, `pyright services/law-calendar/src`, `python -m law_calendar.schema --check`, `python -m compileall -q services packages tools`이며, 각 화면에서 `npm run typecheck && npm test && npm run build`를 실행했다. CI 통과 뒤 후속 실제 라우터 평가를 수행한다.

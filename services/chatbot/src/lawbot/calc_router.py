@@ -14,12 +14,13 @@ from zoneinfo import ZoneInfo
 from lawbot.answer_format import sections
 from lawbot.api_client import ModelLoadError, ModelServerError, ModelServerTimeout, RouterTimeout
 from lawbot.calc_numbers import (
+    AmbiguousQuantity,
     amount_spans,
     can_assign_spans,
     complete_amount_spans,
     complete_labor_spans,
-    labor_amount_spans,
     labor_hour_context_matches,
+    labor_quantity_excerpt,
     parse_count,
     parse_year,
     restore_labor_unit,
@@ -335,13 +336,26 @@ def route_calculation(
     if calculator == MEDICAL and (combined := _combined_medical_span(question, inputs)):
         inputs['medical_category'] = combined
     reference = reference_year if reference_year is not None else datetime.now(_KST).year
+    quantity_positions: dict[str, tuple[tuple[int, int], ...]] = {}
+    quantity_sources: dict[str, str] = {}
     if labor is not None:
         for field, source in inputs.items():
             if (kind := labor.FIELDS.get(field)) is not None:
                 restored = restore_labor_unit(question, source, field, kind)
                 if restored is None or (kind == 'hours' and not labor_hour_context_matches(field, restored)):
                     return guidance(_LABOR_AMBIGUOUS_MESSAGE)
-                inputs[field] = restored
+                try:
+                    inputs[field], quantity_positions[field] = labor_quantity_excerpt(question, restored, field, kind)
+                    if quantity_positions[field]:
+                        quantity_sources[field] = restored
+                except AmbiguousQuantity:
+                    return guidance(_LABOR_AMBIGUOUS_MESSAGE)
+                except ValueError:
+                    return guidance('입력한 수량과 단위를 확인해 다시 알려 주세요.', 'unresolved_input')
+        if calculator == 'premium_pay' and not can_assign_spans(
+            [positions for field, positions in quantity_positions.items() if labor.FIELDS[field] == 'hours']
+        ):
+            return guidance(_LABOR_AMBIGUOUS_MESSAGE)
         check_question = getattr(labor, 'question_issue', None)
         if check_question is not None and (issue := check_question(question, inputs)):
             return guidance(issue)
@@ -356,7 +370,7 @@ def route_calculation(
     try:
         years = _calculation_years(question, inputs, reference, calculator)
     except ValueError, OverflowError:
-        return none('conversion_failed')
+        return guidance('입력한 수량과 단위를 확인해 다시 알려 주세요.', 'unresolved_input')
     if len(set(years.values())) > 1:
         return guidance('어느 귀속연도를 기준으로 계산할지 알려 주세요.')
     year = next(iter(years.values()), reference)
@@ -367,7 +381,7 @@ def route_calculation(
             inputs['year'] = year_source
 
     candidates = [
-        tuple(labor_amount_spans(question, source, field) if labor else complete_amount_spans(question, source))
+        quantity_positions[field] if labor else tuple(complete_amount_spans(question, source))
         for field, source in inputs.items()
         if (labor.FIELDS.get(field) == 'money' if labor else field != 'medical_category')
     ]
@@ -376,9 +390,11 @@ def route_calculation(
     if not can_assign_spans(candidates):
         return guidance(_AMBIGUOUS_INPUT_MESSAGE)
     try:
-        calculation = calculate(calculator, inputs, year=year, year_source=year_source)
+        calculation = calculate(calculator, inputs | quantity_sources, year=year, year_source=year_source)
+    except AmbiguousQuantity:
+        return guidance(_LABOR_AMBIGUOUS_MESSAGE)
     except ValueError:
-        return none('conversion_failed')
+        return guidance('입력한 수량과 단위를 확인해 다시 알려 주세요.', 'unresolved_input')
     payload = calculation.as_dict()
     if labor is None and payload['status'] == 'calculated':
         if label := _unaccounted_optional(question, calculator, inputs):

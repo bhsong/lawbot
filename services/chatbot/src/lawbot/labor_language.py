@@ -35,6 +35,30 @@ def is_uncertain(text: str) -> bool:
     return _UNCERTAIN.search(normalize_fact(text)) is not None
 
 
+_QUANTITY_UNIT = r'(?:명|인|년|개월|일|시간|분|%|원)'
+_QUANTITY_QUALIFIER = re.compile(
+    r'[~～∼]|\d[-–—]\d|(?:대략|약|대충)(?=[\d영공일이삼사오육칠팔구십백천만억조])|'
+    rf'{_QUANTITY_UNIT}(?:이상|이하|미만|초과|가량|정도|안팎|내외|전후)|최소|최대'
+)
+_QUANTITY_NEGATION = re.compile(
+    rf'{_QUANTITY_UNIT}(?:간)?(?:[이가은는도]?(?:아니|아닙|아님)'
+    r'|[^\d.!?;\n]{0,28}(?:(?:것|게)[은는이가도]?(?:아니|아닙|아님)|지(?:않|못)|안(?:했|합|하)))'
+)
+_QUANTITY_COMPARISON = re.compile(
+    rf'{_QUANTITY_UNIT}(?:보다|에|을|를|이|가|은|는)?(?:더|훨씬|조금|채)?'
+    r'(?:적|많|작|크|짧|길|넘|못미치|미치지|안되|되지않)'
+)
+
+
+def is_uncertain_quantity(text: str) -> bool:
+    """Do not remove uncertainty, approximation or bounds along with quantity context."""
+    value = normalize_fact(text)
+    return any(
+        pattern.search(value) is not None
+        for pattern in (_UNCERTAIN, _QUANTITY_QUALIFIER, _QUANTITY_NEGATION, _QUANTITY_COMPARISON)
+    )
+
+
 def classify_employment(source: str, *, weekly: bool = False) -> bool | None:
     """Read a verified employment fact for an accrual date or an entire week."""
     text = normalize_fact(source)
@@ -57,10 +81,11 @@ def classify_employment(source: str, *, weekly: bool = False) -> bool | None:
 
 
 _PAY_SCOPE_UNCERTAIN = re.compile(r'\s*(?:인|는)지|\s*여부|\s*일지')
-_BASE_WAGE = r'기본\s*임금\s*(?:(?:을|은|도|과|에|까지)\s*)?'
+_BASE_WAGE_NAME = r'기본\s*(?:임금|급)'
+_BASE_WAGE = rf'{_BASE_WAGE_NAME}\s*(?:(?:을|은|도|과|에|까지)\s*)?'
 _BASE_INCLUDED = re.compile(
     rf'{_BASE_WAGE}(?:포함(?!\s*하지\s*(?:않|말|못))|합산|더(?:한|해|하|할|함))'
-    r'|기본\s*임금\s*까지(?!\s*(?:포함|제외|빼))'
+    rf'|{_BASE_WAGE_NAME}\s*까지(?!\s*(?:포함|제외|빼))'
 )
 _TOTAL_PAY = re.compile(r'총\s*(?:지급액|임금)|임금\s*총액')
 _PREMIUM_ONLY = re.compile(

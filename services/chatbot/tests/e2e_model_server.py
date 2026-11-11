@@ -59,6 +59,16 @@ def calculation_chunks(prompt, system, kw):
         elif '근속 2년하고 11개월' in prompt:
             calculator = 'annual_leave_days'
             spans = {'service_period': '2년하고 11개월'}
+        elif '입사일은 2024년 2월 30일' in prompt:
+            calculator = 'annual_leave_days'
+            spans = {
+                'workplace_size': '8명',
+                'weekly_hours': '40시간',
+                'attendance_rate': '92%',
+                'hire_date': '2024년 2월 30일',
+                'as_of_date': '2026년 3월 1일',
+                'employed_at_accrual': '재직 중',
+            }
         else:
             return ['{"calculator":"none","kind":"calculation"}']
         inputs = {field: span for field, span in spans.items() if span in prompt}
@@ -79,7 +89,7 @@ def calculation_chunks(prompt, system, kw):
     if '표의 결과 항목과 숫자·단위를 결론에 그대로 쓰고' in prompt:
         return ['【결론】', '연차유급휴가 일수는 15일입니다.', '\n【근거 조문】\n근로기준법 제60조']
     if '직접 계산하지 말고' in prompt:
-        if '근속 2년하고 11개월' in prompt:
+        if '근속 2년하고 11개월' in prompt or '입사일은 2024년 2월 30일' in prompt:
             cite = '\n【근거 조문】\n근로기준법 제60조'
         return ['【결론】', '계산에 필요한 자료와 근거 조문을 확인해 주세요.', cite]
     return answer_chunks(prompt)

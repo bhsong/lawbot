@@ -7,7 +7,7 @@ from datetime import date
 from fractions import Fraction
 from typing import TYPE_CHECKING, Any
 
-from lawbot.calc_numbers import _MAX_SAFE_INTEGER, parse_amount, parse_count, parse_hours
+from lawbot.calc_numbers import _MAX_SAFE_INTEGER, parse_count, parse_hours, parse_labor_amount
 from lawbot.labor_dates import advance_days, calendar_month_boundary, parse_labor_date, parse_service_period
 
 if TYPE_CHECKING:
@@ -208,7 +208,9 @@ def _monthly_estimates(
 
 def calculate(base: Calculation, inputs: Mapping[str, str], rules: Mapping[str, Any]) -> Calculation:
     money = {
-        field: parse_amount(inputs[field]) for field, kind in FIELDS.items() if kind == 'money' and field in inputs
+        field: parse_labor_amount(inputs[field])
+        for field, kind in FIELDS.items()
+        if kind == 'money' and field in inputs
     }
     days = {field: parse_count(inputs[field], '일') for field in ('wage_days', 'excluded_days') if field in inputs}
     base = replace(base, inputs=(*base.inputs, *_inputs(inputs, money, days)))

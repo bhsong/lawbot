@@ -5,6 +5,7 @@ import pytest
 
 from lawbot.calc_router import route_calculation
 from lawbot.calculators import Calculation
+from lawbot.labor_language import premium_pay_scope
 from lawbot.labor_premium import FIELDS, SCHEMA, calculate, question_issue
 
 RULES = {
@@ -184,6 +185,45 @@ def test_premium_request_with_conflicting_pay_scope_guides(pay_question):
     )
     assert outcome.payload['status'] == 'guidance'
     assert outcome.reason == 'ambiguous_input'
+
+
+@pytest.mark.parametrize(
+    ('source', 'scope', 'evidence'),
+    [
+        ('기본급을 포함한 지급액을 알려 주세요.', 'base', '기본급을 포함'),
+        ('기본급까지 계산해 주세요.', 'base', '기본급까지'),
+        ('기본급은 제외하고 산출해 주세요.', 'premium', '기본급은 제외'),
+        ('기본급을 포함하지 말고 계산해 주세요.', 'premium', '기본급을 포함하지 말'),
+        ('기본급 포함 지급액과 가산분만을 함께 요구했습니다.', 'ambiguous', None),
+        ('기본급 포함인지 먼저 확인해야 합니다.', 'ambiguous', None),
+    ],
+)
+def test_basic_salary_uses_the_shared_base_wage_scope(source, scope, evidence):
+    assert premium_pay_scope(source) == (scope, evidence)
+
+
+@pytest.mark.parametrize(
+    ('pay_request', 'expected'),
+    [
+        ('기본급을 포함해서 받을 금액을 계산해 주세요.', 107_250),
+        ('기본급은 제외하고 추가로 받을 금액을 계산해 주세요.', 16_250),
+        ('가산분만 계산하되 기본급을 포함해 주세요.', None),
+    ],
+)
+def test_basic_salary_scope_controls_the_calculation(pay_request, expected):
+    outcome = _route_premium(
+        f'야간 근무 2시간 30분, 중복 없는 총 실근로시간 7시간입니다. {pay_request}',
+        night_hours='2시간 30분',
+        total_hours='7시간',
+    )
+    if expected is None:
+        assert outcome.payload['status'] == 'guidance'
+        assert outcome.reason == 'ambiguous_input'
+        assert not outcome.payload.get('results')
+    else:
+        # 13,000 × 2.5 × 50%; including base adds 13,000 × 7 (Article 56).
+        assert outcome.payload['status'] == 'calculated'
+        assert outcome.payload['results'][-1]['value'] == expected
 
 
 def test_single_holiday_uses_the_actual_original_duration_instead_of_invented_splits():

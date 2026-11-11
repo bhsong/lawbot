@@ -134,7 +134,7 @@ def test_routing_uses_original_spans_and_explicit_year():
         ('{"calculator":"medical_expense_credit","inputs":{"gross_pay":50000000}}', 'invalid_schema'),
         (classify(INPUTS | {'gross_pay': '50000000'})(None), 'span_not_in_question'),
         (classify(INPUTS | {'gross_pay': '5'})(None), 'incomplete_amount_span'),
-        (classify(INPUTS | {'gross_pay': '5천만 원입니다'})(None), 'conversion_failed'),
+        (classify(INPUTS | {'gross_pay': '5천만 원입니다'})(None), 'unresolved_input'),
     ],
 )
 def test_router_fails_closed_once(response, reason):
@@ -145,7 +145,7 @@ def test_router_fails_closed_once(response, reason):
         return response
 
     route = route_calculation(QUESTION, complete, {MEDICAL: ()})
-    assert route.payload['status'] == 'none'
+    assert route.payload['status'] == ('guidance' if reason == 'unresolved_input' else 'none')
     assert route.reason == reason
     assert calls == [QUESTION]
 

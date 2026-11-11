@@ -8,6 +8,8 @@ from fractions import Fraction
 from functools import cache
 from typing import Literal
 
+from lawbot.labor_language import is_uncertain_quantity
+
 _DIGITS = '영공일이삼사오육칠팔구'
 _VALUES = str.maketrans(_DIGITS, '00123456789')
 _ARABIC = r'(?:[0-9]{1,3}(?:,[0-9]{3})+|[0-9]+)(?:\.[0-9]+)?'
@@ -30,7 +32,7 @@ _WEEK_SCOPE = r'(?:매\s*주|1\s*주|주(?:당|간)?)'
 _WEEK_AVERAGE = r'[0-9]+\s*주\s*(?:(?:동안|간)\s*(?:의\s*)?)?평균'
 _SCHEDULED = r'소정(?:\s*근로)?(?:\s*시간(?:\s*수)?)?'
 _HOURS_CONTEXT = re.compile(
-    rf'^(?:(?P<holiday>(?:주\s*)?(?:유급\s*)?주휴(?:\s*시간)?)'
+    rf'(?:(?P<holiday>(?:주\s*)?(?:유급\s*)?주휴(?:\s*시간)?)'
     rf'|(?P<week>{_WEEK_AVERAGE}(?:\s*{_WEEK_SCOPE})?(?:\s*{_SCHEDULED})?'
     rf'|{_WEEK_SCOPE}(?:\s*평균)?(?:\s*{_SCHEDULED})?)|{_SCHEDULED}){_PARTICLE}'
 )
@@ -38,19 +40,23 @@ _HOURS_FIELDS = {
     'holiday': {'paid_holiday_hours', 'weekly_paid_holiday_hours'},
     'week': {'weekly_hours', 'weekly_scheduled_hours'},
 }
-_HOURLY_WAGE_LABEL = re.compile(rf'^(?:(?:통상\s*)?시급|시간급(?:\s*통상\s*임금)?){_PARTICLE}')
-_COUNT_CONTEXT = {
-    '명': re.compile(rf'^상시(?:\s*(?:근로자(?:\s*수)?|인원(?:\s*수)?))?{_PARTICLE}'),
-    '일': re.compile(rf'^{_WEEK_SCOPE}(?:\s*{_SCHEDULED})?{_PARTICLE}'),
-    '개월': re.compile(rf'^(?:첫해\s*)?개근(?:\s*월\s*수)?{_PARTICLE}'),
-}
+_HOURLY_WAGE_LABEL = re.compile(rf'(?:(?:통상\s*)?시급|시간급(?:\s*통상\s*임금)?){_PARTICLE}')
 _COUNT_UNITS = {
     'workplace_size': ('명', '인'),
     'staff_count': ('명', '인'),
     'full_attendance_months': ('개월',),
 }
-_DURATION_CONTEXT = re.compile(rf'^(?:계속\s*근로\s*기간|근속(?:\s*기간)?){_PARTICLE}|\s*근속$')
-_PERCENT_CONTEXT = re.compile(rf'^출근율{_PARTICLE}')
+_SOURCE_NUMBER = rf'(?:[0-9０-９]+(?:[,，][0-9０-９]+)*(?:[.．][0-9０-９]+)?|(?<![가-힣])[{_DIGITS}]+)'
+_DURATION_JOIN = r'\s*(?:하고|과|및)?\s*'
+_QUANTITY_PATTERNS = {
+    'hours': re.compile(rf'{_SOURCE_NUMBER}\s*(?:시간(?:\s*{_SOURCE_NUMBER}\s*분)?|분)'),
+    'percent': re.compile(rf'{_SOURCE_NUMBER}\s*[%％]'),
+    'duration': re.compile(
+        rf'{_SOURCE_NUMBER}\s*(?:년(?:{_DURATION_JOIN}{_SOURCE_NUMBER}\s*개월)?'
+        rf'(?:{_DURATION_JOIN}{_SOURCE_NUMBER}\s*일)?|개월(?:{_DURATION_JOIN}{_SOURCE_NUMBER}\s*일)?|일)'
+    ),
+    'money': _MONEY_TOKEN,
+}
 _UNIT_EXTENSIONS = {
     'hours': re.compile(rf'\s*(?:시간(?:\s*{_ARABIC}\s*분)?|분)'),
     'percent': re.compile(r'\s*[%％]'),
@@ -121,9 +127,8 @@ def parse_amount(text: str) -> int:
 
 def parse_quantity(text: str, unit: Literal['%', '개월']) -> Decimal:
     """Read a percentage in percentage points or a duration in whole months."""
-    value = unicodedata.normalize('NFKC', text).strip()
-    if unit == '%':
-        value = _PERCENT_CONTEXT.sub('', value)
+    kind = 'percent' if unit == '%' else 'count'
+    value = unicodedata.normalize('NFKC', quantity_excerpt(text, kind, unit=unit))
     if not value.endswith(unit):
         raise ValueError('unit is missing')
     number = _plain_number(value.removesuffix(unit).strip())
@@ -160,12 +165,9 @@ def amount_spans(text: str) -> Iterator[tuple[str, int | Decimal]]:
 
 
 def parse_count(text: str, unit: str) -> int:
-    value = unicodedata.normalize('NFKC', text).strip()
+    value = unicodedata.normalize('NFKC', quantity_excerpt(text, 'count', unit=unit))
     if unit in ('명', '인'):
-        value = _COUNT_CONTEXT['명'].sub('', value)
         unit = value[-1] if value.endswith(('명', '인')) else unit
-    elif context := _COUNT_CONTEXT.get(unit):
-        value = context.sub('', value)
     if not value.endswith(unit):
         raise ValueError('missing count unit')
     number = _plain_number(value.removesuffix(unit).strip())
@@ -175,7 +177,7 @@ def parse_count(text: str, unit: str) -> int:
 
 
 def parse_hours(text: str) -> Fraction:
-    value = _HOURS_CONTEXT.sub('', unicodedata.normalize('NFKC', text).strip())
+    value = unicodedata.normalize('NFKC', quantity_excerpt(text, 'hours'))
     match = re.fullmatch(rf'(?:(?P<hours>{_ARABIC})\s*시간)?\s*(?:(?P<minutes>{_ARABIC})\s*분)?', value)
     if not match or not any(match.groups()):
         raise ValueError('missing hour or minute unit')
@@ -185,16 +187,67 @@ def parse_hours(text: str) -> Fraction:
 
 
 def labor_hour_context_matches(field: str, source: str) -> bool:
-    match = _HOURS_CONTEXT.match(unicodedata.normalize('NFKC', source).strip())
-    return match is None or match.lastgroup is None or field in _HOURS_FIELDS[match.lastgroup]
+    return all(
+        match.lastgroup is None or field in _HOURS_FIELDS[match.lastgroup]
+        for match in _HOURS_CONTEXT.finditer(unicodedata.normalize('NFKC', source))
+    )
 
 
-def strip_service_period_context(text: str) -> str:
-    return _DURATION_CONTEXT.sub('', unicodedata.normalize('NFKC', text).strip()).strip()
+class AmbiguousQuantity(ValueError):
+    """A source contains multiple quantities or does not assert an exact value."""
+
+
+def quantity_excerpt(text: str, kind: str, *, unit: str = '') -> str:
+    """Read one complete quantity while retaining its original spelling and units."""
+    if is_uncertain_quantity(text):
+        raise AmbiguousQuantity('quantity is not exact')
+    if kind == 'count':
+        units = r'(?:명|인)' if unit in ('명', '인') else re.escape(unit)
+        pattern = re.compile(rf'{_SOURCE_NUMBER}\s*{units}')
+    else:
+        pattern = _QUANTITY_PATTERNS[kind]
+    matches = list(pattern.finditer(text))
+    if len(matches) > 1:
+        raise AmbiguousQuantity('multiple quantities')
+    if not matches:
+        raise ValueError('quantity with the expected unit is missing')
+    match = matches[0]
+    positions = complete_amount_spans(text, match[0]) if kind == 'money' else complete_labor_spans(text, match[0], kind)
+    if match.span() not in positions:
+        raise ValueError('incomplete quantity')
+    return match[0]
+
+
+def labor_quantity_excerpt(
+    question: str, source: str, field: str, kind: str
+) -> tuple[str, tuple[tuple[int, int], ...]]:
+    """Discard context only around a unique quantity at its original complete position."""
+    if kind not in _QUANTITY_PATTERNS and kind != 'count':
+        return source, ()
+    if kind == 'money' and _HOURLY_WAGE_LABEL.search(source) and field not in ('hourly_wage', 'ordinary_hourly_wage'):
+        raise AmbiguousQuantity('hourly wage assigned to another monetary field')
+    if kind == 'money' and '원' not in source:
+        return source, tuple(labor_amount_spans(question, source, field))
+    unit = _COUNT_UNITS.get(field, ('일',))[0]
+    excerpt = quantity_excerpt(source, kind, unit=unit)
+    positions = set(
+        complete_amount_spans(question, excerpt) if kind == 'money' else complete_labor_spans(question, excerpt, kind)
+    )
+    offset = source.index(excerpt)
+    anchored = tuple(
+        position
+        for match in re.finditer(re.escape(source), question)
+        if (position := (match.start() + offset, match.start() + offset + len(excerpt))) in positions
+    )
+    if not anchored:
+        raise AmbiguousQuantity('incomplete original quantity')
+    return excerpt, anchored
 
 
 def parse_labor_amount(text: str) -> int:
-    """Read an ordinary hourly wage, optionally including its label."""
+    """Read one exact wage amount, optionally including its original context."""
+    if '원' in text:
+        return parse_amount(quantity_excerpt(text, 'money'))
     return parse_amount(_HOURLY_WAGE_LABEL.sub('', unicodedata.normalize('NFKC', text).strip()))
 
 
