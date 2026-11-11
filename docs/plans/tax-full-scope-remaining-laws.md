@@ -63,24 +63,29 @@
 | 토큰 상한 | 법률 임베딩 4,352, 하위법령 임베딩 5,120, 리랭커 2,560 |
 | 동시 처리 | 서버 동시 생성 1, 평가 동시 요청 1, 읽기 상한 300초, 자동 재시도 0 |
 
-실제 호출 전에 평가 스크립트가 이미 계산한 후보 순서를 CSV에 남기도록 준비한다. 법률 단계는 `rank_all`의 임베딩 상위 10개 ID와 실제 리랭킹 상위 10개 ID 및 첨부 ID를 기록한다. 하위법령 단계는 후보 ID와 각 임베딩·리랭킹 순위 및 첨부 ID를 기록한다. 가짜 검색 결과로 로그를 검증하고 실행 코드의 커밋을 고정한다. 후보 기록에 추가 추론은 없다.
+3단계 실행 코드는 `798ccea1427e80ac1ce85d96d4fdf8f16c2f0d9f`으로 고정한다. 해당 커밋을 체크아웃한 개발 환경에서 실행한다. `retrieval`은 `rank_all`의 상위 10개 ID를 `emb_top10`에, 실제 리랭킹 상위 10개 ID를 `rr_top10`에 기록한다. 첨부는 기존 `dec_attached` 열에 남는다. `decree-retrieval`은 `decree_candidates` 열에 `article_id`·`emb_rank`·`rr_rank`를 담은 JSON 배열을 리랭킹 순서로 기록하고 기존 `attached` 열에 첨부 ID를 남긴다. 새 형식으로 처음 실행할 때는 새 tag를 사용한다. 가짜 검색 결과로 기록을 검증했고, 후보 기록에 추가 추론은 없다.
 
 문항별 기준 순위가 없으므로 신규 B의 비삭제 ID 중 `0eac5af`에 없던 ID를 사용해 ‘신규 B 조문이 정답보다 앞선 문항’을 뽑는다. 임베딩과 리랭킹 단계에는 정답 앞에 선 신규 B ID와 순위를 적는다. 리랭킹 후보에 정답이 없으면 정답의 리랭킹 순위를 추정하지 않는다. 하위법령 첨부 단계에서는 정답보다 먼저 첨부된 신규 B ID와 정답 미첨부 상태에서 첨부된 신규 B ID를 기록한다. 문항 ID, 정답 조문 ID, 신규 B 조문 ID와 단계별 순위를 v6 재학습용 하드 네거티브 후보로 남긴다.
 
 아래 명령은 별도 사용자 승인 후 실행한다. 평가 구간은 두 검색 단계의 경계에서 나눈다. 06:20 KST 전에 진행 중인 구간을 종료하고 06:50 이후 이어간다. 중단했다면 같은 tag의 완료 문항 기록을 사용하고 구간별 실제 요청 수를 기록한다.
 
 ```zsh
-export LAWBOT_PROFILE=v5 LAWBOT_EMB_MODEL=lawbot-emb-v5b
-export LAWBOT_MAX_SEQ=4352 LAWBOT_DECREE_MAX_SEQ=5120
-export LAWBOT_RERANKER_ENABLED=1 LAWBOT_RERANK_MODEL=qwen3-reranker-4b LAWBOT_RERANKER_CANDIDATES=10
-export LAWBOT_DECREE_ENABLED=1 LAWBOT_DECREE_MODELS=pro LAWBOT_DECREE_TAU=0.9 LAWBOT_DECREE_K=2
-export LAWBOT_CORPUS=csv LAWBOT_DB='' LAWBOT_EMBED_CACHE=0 LAWBOT_REQUEST_LOG='' LAWBOT_FEEDBACK=0
-export LAWBOT_MODEL_READ_TIMEOUT=300
-export LAWBOT_V5_ARTICLES="$PWD/data/v5/articles_v5.csv"
-export LAWBOT_V5_DECREE_ARTICLES="$PWD/data/v5/law_articles_v5_decree.csv"
+(
+  set -e
+  test "$(git rev-parse HEAD)" = "798ccea1427e80ac1ce85d96d4fdf8f16c2f0d9f"
 
-uv run --no-sync lawbot-eval-v4 retrieval --split val --dataset v5 --model pro --concurrency 1 --tag new_b_only
-uv run --no-sync lawbot-eval-v4 decree-retrieval --split val --dataset v5 --model pro --concurrency 1 --tag new_b_only
+  export LAWBOT_PROFILE=v5 LAWBOT_EMB_MODEL=lawbot-emb-v5b
+  export LAWBOT_MAX_SEQ=4352 LAWBOT_DECREE_MAX_SEQ=5120
+  export LAWBOT_RERANKER_ENABLED=1 LAWBOT_RERANK_MODEL=qwen3-reranker-4b LAWBOT_RERANKER_CANDIDATES=10
+  export LAWBOT_DECREE_ENABLED=1 LAWBOT_DECREE_MODELS=pro LAWBOT_DECREE_TAU=0.9 LAWBOT_DECREE_K=2
+  export LAWBOT_CORPUS=csv LAWBOT_DB='' LAWBOT_EMBED_CACHE=0 LAWBOT_REQUEST_LOG='' LAWBOT_FEEDBACK=0
+  export LAWBOT_MODEL_READ_TIMEOUT=300
+  export LAWBOT_V5_ARTICLES="$PWD/data/v5/articles_v5.csv"
+  export LAWBOT_V5_DECREE_ARTICLES="$PWD/data/v5/law_articles_v5_decree.csv"
+
+  uv run --no-sync lawbot-eval-v4 retrieval --split val --dataset v5 --model pro --concurrency 1 --tag new_b_only
+  uv run --no-sync lawbot-eval-v4 decree-retrieval --split val --dataset v5 --model pro --concurrency 1 --tag new_b_only
+)
 ```
 
 | 항목 | 예상 |
