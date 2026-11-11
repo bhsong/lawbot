@@ -123,8 +123,8 @@ def amount_spans(text: str) -> Iterator[tuple[str, int | Decimal]]:
         yield source, value
 
 
-def complete_amount_span(question: str, source: str) -> bool:
-    """Reject excerpts taken from inside a longer number or its units."""
+def complete_amount_span(question: str, source: str, *, occurrences: int = 1) -> bool:
+    """Check for enough exact, complete occurrences of a monetary excerpt."""
     normalized_source = unicodedata.normalize('NFKC', source).strip()
     for match in re.finditer(re.escape(source), question):
         before = unicodedata.normalize('NFKC', question[: match.start()])
@@ -137,13 +137,14 @@ def complete_amount_span(question: str, source: str) -> bool:
             continue
         if re.search(rf'[0-9{_CHARACTERS}]\s*[{_SMALL_UNITS}{_LARGE_UNITS}][ \t]+$', before):
             continue
-        if normalized_source.endswith('원'):
+        if not normalized_source.endswith('원'):
+            if re.match(rf'\s*(?:[{_SMALL_UNITS}{_LARGE_UNITS}%]|년|개월|시간|일|세|명)', after):
+                continue
+            if re.match(rf'\s*[{_DIGITS}]+(?:[{_SMALL_UNITS}{_LARGE_UNITS}]|\s*원|$)', after):
+                continue
+            if re.search(rf'[{_SMALL_UNITS}{_LARGE_UNITS}]$', normalized_source) and re.match(r'\s*[0-9]', after):
+                continue
+        occurrences -= 1
+        if occurrences == 0:
             return True
-        if re.match(rf'\s*(?:[{_SMALL_UNITS}{_LARGE_UNITS}%]|년|개월|시간|일|세|명)', after):
-            continue
-        if re.match(rf'\s*[{_DIGITS}]+(?:[{_SMALL_UNITS}{_LARGE_UNITS}]|\s*원|$)', after):
-            continue
-        if re.search(rf'[{_SMALL_UNITS}{_LARGE_UNITS}]$', normalized_source) and re.match(r'\s*[0-9]', after):
-            continue
-        return True
     return False

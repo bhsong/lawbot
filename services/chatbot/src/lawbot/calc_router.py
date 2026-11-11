@@ -3,6 +3,7 @@
 import json
 import re
 import time
+from collections import Counter
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from datetime import datetime
@@ -37,6 +38,7 @@ CALCULATED_INSTRUCTION = '계산 결과의 숫자를 그대로 쓰고 다시 계
 GUIDANCE_INSTRUCTION = '직접 계산하지 말고 계산에 필요한 정보와 근거 조문만 안내할 것.'
 NO_CALCULATOR_MESSAGE = '이 질문은 계산 결과를 제공할 수 없습니다. 계산에 필요한 정보와 근거 조문을 확인해 주세요.'
 TEMPORARY_ROUTER_MESSAGE = '계산 판정을 일시적으로 하지 못했습니다. 계산에 필요한 정보와 근거 조문을 확인해 주세요.'
+_AMBIGUOUS_INPUT_MESSAGE = '계산에 사용할 금액과 그 금액이 어떤 항목에 해당하는지 확인해 주세요.'
 _KST = ZoneInfo('Asia/Seoul')
 _RELATIVE_YEARS = {'재작년': -2, '작년': -1, '지난해': -1, '올해': 0, '내년': 1}
 _YEARS = re.compile(
@@ -235,7 +237,7 @@ def route_calculation(
         return none('corpus_mismatch')
 
     if ambiguous:
-        return guidance('계산에 사용할 금액과 그 금액이 어떤 항목에 해당하는지 확인해 주세요.')
+        return guidance(_AMBIGUOUS_INPUT_MESSAGE)
     if _UNSUPPORTED_DETAILS[calculator].search(question):
         return guidance(
             '계산기의 적용 범위를 벗어난 항목이 있습니다. 해당 항목의 공제 요건과 공제 대상 금액을 확인해 주세요.',
@@ -258,11 +260,13 @@ def route_calculation(
             return none('incomplete_year_span')
     year_source = next(iter(years), None)
 
-    for field, source in inputs.items():
-        if field == 'medical_category':
+    amount_sources = Counter(source for field, source in inputs.items() if field != 'medical_category')
+    for source, occurrences in amount_sources.items():
+        if complete_amount_span(question, source, occurrences=occurrences):
             continue
-        if not complete_amount_span(question, source):
-            return none('incomplete_amount_span')
+        if occurrences > 1:
+            return guidance(_AMBIGUOUS_INPUT_MESSAGE)
+        return none('incomplete_amount_span')
     try:
         calculation = calculate(calculator, inputs, year=year, year_source=year_source)
     except ValueError:

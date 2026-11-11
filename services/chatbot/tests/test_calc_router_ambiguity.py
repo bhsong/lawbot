@@ -57,6 +57,20 @@ def test_replay_ambiguous_live_responses(case_id, response):
     assert route.reason == 'ambiguous_input'
 
 
+def test_replay_cr092_from_second_evaluation_rejects_reusing_the_combined_amount():
+    case = _VAL_CASES['CR092']
+    response = (
+        '{"calculator":"medical_expense_credit","inputs":{"gross_pay":"5000만원",'
+        '"general_expenses":"700만원","infertility_expenses":"700만원"}}'
+    )
+    route = route_calculation(case['question'], lambda _: response, {MEDICAL: ()}, reference_year=2026)
+    assert route.payload['calculator'] == MEDICAL
+    assert route.payload['status'] == 'guidance'
+    assert route.reason == 'ambiguous_input'
+    assert route.payload['message'] == '계산에 사용할 금액과 그 금액이 어떤 항목에 해당하는지 확인해 주세요.'
+    assert 'results' not in route.payload
+
+
 # The first evaluation retained only the failed responses. These four responses use the frozen
 # questions' original spans to check that the previously successful paths still give guidance.
 @pytest.mark.parametrize(

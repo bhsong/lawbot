@@ -203,6 +203,22 @@ def test_combined_medical_cost_with_different_rates(total, status):
         assert result.payload['results'][0]['value'] == 0
 
 
+def test_equal_medical_amounts_can_be_used_when_each_is_stated():
+    question = '2026년 총급여 5000만원, 일반 의료비 300만원, 난임시술비 300만원의 세액공제액은 얼마인가요?'
+    inputs = {'gross_pay': '5000만원', 'general_expenses': '300만원', 'infertility_expenses': '300만원'}
+    route = route_calculation(question, classify(inputs), {MEDICAL: ()})
+    assert route.payload['status'] == 'calculated'
+    assert route.payload['results'] == [{'label': '의료비 세액공제', 'value': 1_125_000}]
+
+
+def test_amount_substring_in_longer_number_does_not_count_as_another_occurrence():
+    question = '2026년 총급여 1300만원, 일반 의료비와 난임시술비 합계 300만원의 세액공제액은 얼마인가요?'
+    inputs = {'gross_pay': '1300만원', 'general_expenses': '300만원', 'infertility_expenses': '300만원'}
+    route = route_calculation(question, classify(inputs), {MEDICAL: ()})
+    assert route.payload['status'] == 'guidance'
+    assert route.reason == 'ambiguous_input'
+
+
 def test_optional_reimbursement_stated_in_question_cannot_default_to_zero():
     unaccounted = route_calculation(
         QUESTION, classify({'gross_pay': '5천만 원', 'medical_expenses': '300만 원'}), {MEDICAL: ()}
@@ -263,6 +279,17 @@ def test_combined_health_and_long_term_care_premium_must_be_extracted_once(label
     assert complete.payload['status'] == 'calculated'
     # At ₩40M gross, A deducts the single ₩2M premium under §52 and determines ₩1,843,500.
     assert complete.payload['results'][0] == {'label': '결정세액', 'value': 1_843_500}
+
+
+def test_combined_health_premium_amount_cannot_be_used_for_both_premiums():
+    calculator = 'midyear_income_tax'
+    question = (
+        '2026년 중도퇴사까지 총급여 4000만원, 건강보험료·장기요양보험료 합계 200만원이면 근로소득세는 얼마인가요?'
+    )
+    inputs = {'gross_pay': '4000만원', 'health_premium': '200만원', 'long_term_care_premium': '200만원'}
+    route = route_calculation(question, classify(inputs, calculator), {calculator: ()})
+    assert route.payload['status'] == 'guidance'
+    assert route.reason == 'ambiguous_input'
 
 
 @pytest.mark.parametrize(
