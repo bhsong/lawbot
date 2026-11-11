@@ -138,6 +138,17 @@ def _guidance(base: Calculation, message: str, reason: str = 'missing_required')
     return replace(base, message=message, reason=reason)
 
 
+def _append_severance_total(steps: list[Step], label: str, formula: str, amount: Fraction) -> int:
+    if amount > _MAX_SAFE_INTEGER:
+        raise ValueError('amount exceeds the supported precision')
+    shown = int(amount + Fraction(1, 2))
+    if amount.denominator != 1:
+        unrounded = f'{amount:,.4f}'.rstrip('0').rstrip('.')
+        formula += f' (원 단위 반올림 전 약 {unrounded}원)'
+    steps.append(_step(label, formula, shown, _SEVERANCE))
+    return shown
+
+
 def _monthly_estimates(
     base: Calculation,
     steps: list[Step],
@@ -152,57 +163,41 @@ def _monthly_estimates(
     daily_rule = rules['estimate_daily_hours']
     daily_hours = int(daily_rule['value'])
     conditional_ordinary = Fraction(monthly * daily_hours, monthly_hours)
-    average_amount = average * factor
-    conditional_amount = max(average, conditional_ordinary) * factor
-    if conditional_amount > _MAX_SAFE_INTEGER:
-        raise ValueError('amount exceeds the supported precision')
-    average_shown = _format_value(average_amount)
-    # Round only the presented conditional total, with halves rounded up.
-    conditional_shown = int(conditional_amount + Fraction(1, 2))
-
     average_label = '평균임금 기준 퇴직금 추정'
     conditional_label = '통상임금 하한 적용 퇴직금 추정'
-    average_formula = f'추정 1일 평균임금 {factor_formula}'
-    if isinstance(average_shown, str):
-        average_formula += ' (소수 넷째 자리까지 표시)'
-    steps.extend(
-        (
-            _step(average_label, average_formula, average_amount, _SEVERANCE),
-            _step(
-                '1일 통상임금 추정 (가정)',
-                f'{monthly:,}원 ÷ {monthly_hours}시간 × {daily_hours}시간 (소수 넷째 자리까지 표시)',
-                conditional_ordinary,
-                daily_rule['article'],
-            ),
-            _step(
-                conditional_label,
-                f'평균임금과 가정한 통상임금 중 큰 일급 {factor_formula} (최종 표시 금액만 원 단위 반올림)',
-                conditional_shown,
-                _SEVERANCE,
-            ),
+    average_shown = _append_severance_total(
+        steps, average_label, f'추정 1일 평균임금 {factor_formula}', average * factor
+    )
+    steps.append(
+        _step(
+            '1일 통상임금 추정 (가정)',
+            f'{monthly:,}원 ÷ {monthly_hours}시간 × {daily_hours}시간 (소수 넷째 자리까지 표시)',
+            conditional_ordinary,
+            daily_rule['article'],
         )
+    )
+    conditional_shown = _append_severance_total(
+        steps,
+        conditional_label,
+        f'평균임금과 가정한 통상임금 중 큰 일급 {factor_formula}',
+        max(average, conditional_ordinary) * factor,
     )
     average_result: Result = {
         'label': average_label,
         'value': average_shown,
         'condition': '최근 3개월 월급이 일정하고 평균임금을 적용한 경우',
     }
-    if isinstance(average_shown, str):
-        average_result['unit'] = '원'
     schedule = f'월 {monthly_hours}시간·1일 {daily_hours}시간'
     conditional_result: Result = {
         'label': conditional_label,
         'value': conditional_shown,
         'condition': f'월급 전액이 통상임금이고 {schedule}인 경우',
     }
-    average_text = (
-        f'{average_shown:,}' if isinstance(average_shown, int) else f'{average_amount:,.4f}'.rstrip('0').rstrip('.')
-    )
     minimum_years = rules['minimum_service_years']['value']
     minimum_hours = rules['minimum_weekly_hours']['value']
     message = (
         f'{schedule}을 기준으로 하고 월급이 기본급만으로 구성돼 모두 통상임금이라면 {conditional_shown:,}원, '
-        f'그 외에는 평균임금 기준 {average_text}원 이상으로 추정합니다. 최근 3개월 월급이 일정하다고 가정했습니다. '
+        f'그 외에는 평균임금 기준 {average_shown:,}원 이상으로 추정합니다. 최근 3개월 월급이 일정하다고 가정했습니다. '
         f'실제 역일수와 계속근로 {minimum_years}년 이상·4주 평균 주 소정근로시간 {minimum_hours}시간 이상 등 '
         '법정 지급 요건을 확인해 주세요.'
     )
@@ -264,10 +259,10 @@ def calculate(base: Calculation, inputs: Mapping[str, str], rules: Mapping[str, 
             service_days = Fraction(year_days * service_months, months_per_year) + extra_days
             service_formula = f'{year_days}일 × ({years}년 + {months}개월 ÷ {months_per_year}) + {extra_days}일 (추정)'
             remaining_months = minimum_years * months_per_year - service_months
-            if remaining_months <= 0:
+            # Consecutive calendar month boundaries are 28 to 31 days apart.
+            if remaining_months <= 0 or extra_days >= 31 * remaining_months:
                 service_eligible = True
             elif extra_days < 28 * remaining_months:
-                # Even the shortest calendar months cannot be covered by these extra days.
                 service_eligible = False
             else:
                 service_eligible = None
@@ -293,6 +288,10 @@ def calculate(base: Calculation, inputs: Mapping[str, str], rules: Mapping[str, 
             steps=tuple(steps),
             results=({'label': '법정 최소 퇴직금', 'value': 0},),
             message='제시된 근로기간 또는 주 소정근로시간은 법정 퇴직급여 요건을 충족하지 않습니다.',
+        )
+    if estimate and service_eligible is None:
+        return _guidance(
+            base, '달력상 1년 충족 여부를 확인할 수 있도록 입사일과 종료일을 알려 주세요.', 'ambiguous_input'
         )
     if not estimate and (service_eligible is None or hours is None):
         return _guidance(base, '달력상 1년 이상 계속근로 여부와 4주 평균 주 소정근로시간을 알려 주세요.')
@@ -388,17 +387,9 @@ def calculate(base: Calculation, inputs: Mapping[str, str], rules: Mapping[str, 
         daily_formula = '1일 평균임금과 1일 통상임금 중 큰 금액'
 
     steps.append(_step('퇴직금 산정용 일급', daily_formula, daily, _AVERAGE))
-    amount = daily * factor
-    if amount > _MAX_SAFE_INTEGER:
-        raise ValueError('amount exceeds the supported precision')
     label = '퇴직금 추정' if estimate else '법정 최소 퇴직금'
-    formula = f'산정용 일급 {factor_formula}'
-    shown = _format_value(amount)
+    shown = _append_severance_total(steps, label, f'산정용 일급 {factor_formula}', daily * factor)
     result: Result = {'label': label, 'value': shown}
-    if isinstance(shown, str):
-        formula += ' (소수 넷째 자리까지 표시)'
-        result['unit'] = '원'
-    steps.append(_step(label, formula, amount, _SEVERANCE))
     message = (
         '최근 3개월 월급이 일정하다고 보고 계산한 추정입니다. 실제 역일수, 계속근로·주 소정근로시간 요건과 '
         '통상임금 하한이 결과를 바꿀 수 있습니다.'
