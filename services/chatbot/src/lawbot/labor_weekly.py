@@ -46,8 +46,9 @@ _LABELS = {
     'employment': '해당 주 근로관계 존속 여부',
 }
 _UNCERTAIN = re.compile(r'인지|는지|여부|모르|불명확|미정|또는|혹은')
-_NO_ABSENCE = re.compile(r'결근(?:하지않|이?없)')
-_ABSENCE = re.compile(r'개근(?:하지않|못|이?아니)|미개근|결근')
+_TENTATIVE_ATTENDANCE = re.compile(r'것같|보기어렵')
+_NO_ABSENCE = re.compile(r'결근(?:하지않|이?없)|개근을?(?:하지)?못한적(?:이|은|도)?없')
+_ABSENCE = re.compile(r'개근(?:을?(?:하지(?:않|못)|못)|이?아니)|미개근|결근')
 _ATTENDED = re.compile(r'개근|소정근로일(?:을|에)?(?:모두|전부)출근')
 _FULL_WEEK = re.compile(r'(?<!\d)7일|일주일|한주(?:간|동안)')
 _EARLY_END = re.compile(r'되기전|되기이전|미만|채우지못|유지(?:하지않|되지않|못)|유지안|미유지')
@@ -68,13 +69,16 @@ def _normalized(text: str) -> str:
 
 def _attendance(source: str) -> bool | None:
     text = _normalized(source)
-    if _UNCERTAIN.search(text):
+    if _UNCERTAIN.search(text) or _TENTATIVE_ATTENDANCE.search(text):
         return None
-    if _NO_ABSENCE.search(text):
-        return True
-    if _ABSENCE.search(text):
+    text, no_absence = _NO_ABSENCE.subn(' ', text)
+    text, absence = _ABSENCE.subn(' ', text)
+    attended = no_absence > 0 or _ATTENDED.search(text) is not None
+    if absence and attended:
+        return None
+    if absence:
         return False
-    return True if _ATTENDED.search(text) else None
+    return True if attended else None
 
 
 def _employment(source: str) -> bool | None:

@@ -260,9 +260,17 @@ def calculate(base: Calculation, inputs: Mapping[str, str], rules: Mapping[str, 
         if years or months:
             if not estimate:
                 return _guidance(base, '입사·종료일 또는 인정 계속근로일수를 알려 주세요.')
-            service_days = Fraction(year_days * (years * months_per_year + months), months_per_year) + extra_days
+            service_months = years * months_per_year + months
+            service_days = Fraction(year_days * service_months, months_per_year) + extra_days
             service_formula = f'{year_days}일 × ({years}년 + {months}개월 ÷ {months_per_year}) + {extra_days}일 (추정)'
-            service_eligible = years * months_per_year + months >= minimum_years * months_per_year or qualifies
+            remaining_months = minimum_years * months_per_year - service_months
+            if remaining_months <= 0:
+                service_eligible = True
+            elif extra_days < 28 * remaining_months:
+                # Even the shortest calendar months cannot be covered by these extra days.
+                service_eligible = False
+            else:
+                service_eligible = None
         else:
             service_days = Fraction(extra_days)
             service_eligible = True if service_days > year_days * minimum_years else None

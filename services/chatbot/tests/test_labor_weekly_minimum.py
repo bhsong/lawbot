@@ -57,6 +57,54 @@ def test_weekly_holiday_question_checks_negation_and_missing_evidence():
     assert labor_weekly.question_issue(question, {'attendance': '개근', 'employment': '7일간 근로관계 유지'})
 
 
+@pytest.mark.parametrize(
+    ('attendance', 'extracted', 'expected_pay'),
+    [
+        ('개근하지 못했습니다', '개근하지 못했습니다', 0),
+        ('개근 못 했습니다', '개근 못 했습니다', 0),
+        ('개근을 못 했습니다', '개근을 못 했습니다', 0),
+        ('개근하지 못했습니다', '개근', None),
+        ('개근하지 못한 것 같습니다', '개근하지 못한 것 같습니다', None),
+        ('개근한 것 같습니다', '개근', None),
+        ('개근했다고 보기 어렵습니다', '개근', None),
+        ('개근했지만 소정근로일에 결근했습니다', '개근했지만 소정근로일에 결근했습니다', None),
+        ('개근했습니다', '개근', 80_000),
+        ('결근하지 않았습니다', '결근하지 않았습니다', 80_000),
+        ('개근하지 못한 적이 없습니다', '개근하지 못한 적이 없습니다', 80_000),
+    ],
+)
+def test_weekly_holiday_routes_negated_or_uncertain_attendance(attendance, extracted, expected_pay):
+    name = 'weekly_holiday_pay'
+    question = (
+        f'통상시급 1만원, 주 소정 40시간, 유급주휴 8시간입니다. {attendance}. '
+        '7일간 근로관계 유지했습니다. 주휴수당을 계산해 주세요.'
+    )
+    raw = json.dumps(
+        {
+            'calculator': name,
+            'inputs': {
+                'hourly_wage': '1만원',
+                'weekly_scheduled_hours': '40시간',
+                'paid_holiday_hours': '8시간',
+                'attendance': extracted,
+                'employment': '7일간 근로관계 유지',
+            },
+        },
+        ensure_ascii=False,
+    )
+
+    routed = route_calculation(question, lambda _: raw, {name: ()}, reference_year=2026)
+
+    if expected_pay is None:
+        assert routed.payload['status'] == 'guidance'
+        assert routed.reason == 'ambiguous_input'
+        assert '개근 여부' in routed.payload['message']
+        assert not routed.payload.get('results')
+    else:
+        assert routed.payload['status'] == 'calculated'
+        assert routed.payload['results'] == [{'label': '주휴수당', 'value': expected_pay, 'unit': '원'}]
+
+
 def test_minimum_wage_question_checks_basis_and_exemption():
     question = '수습 감액 대상인지 모릅니다. 하루 8시간 주 5일입니다.'
     inputs = {'daily_scheduled_hours': '8시간', 'weekly_workdays': '5일'}

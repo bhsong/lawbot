@@ -3,6 +3,7 @@ from pathlib import Path
 
 import pytest
 
+from lawbot.calc_router import route_calculation
 from lawbot.calculators import Calculation
 from lawbot.labor_premium import FIELDS, SCHEMA, calculate, question_issue
 
@@ -71,6 +72,8 @@ def test_premium_source_and_result_carry_explicit_units():
         ('휴일 이틀에 총 10시간 일했습니다.', {'holiday_hours': '10시간'}, '휴일별'),
         ('기본임금 포함 총액이 얼마인가요?', {}, '총 실근로시간'),
         ('초과근무가 2시간이고 야간은 3시간입니다.', {'overtime_hours': '2시간'}, '야간'),
+        ('초과근무 시간은 2시간이고 야간은 3시간입니다.', {'night_hours': '3시간'}, '평일 연장'),
+        ('초과근무는 2시간이고 야간 실근로 시간은 3시간입니다.', {'overtime_hours': '2시간'}, '야간'),
         ('휴게 1시간을 포함해 야간 근무가 3시간입니다.', {'night_hours': '3시간'}, '휴게'),
         ('상시 4명인지 5명인지 모르겠어요.', {'staff_count': '5명'}, '상시'),
         ('단시간근로자의 소정근로시간을 초과한 2시간입니다.', {'overtime_hours': '2시간'}, '적용'),
@@ -78,6 +81,35 @@ def test_premium_source_and_result_carry_explicit_units():
 )
 def test_question_issue_blocks_information_lost_during_extraction(question, extra, guidance):
     assert guidance in (question_issue(question, extra) or '')
+
+
+@pytest.mark.parametrize(
+    ('omitted', 'guidance'),
+    [('overtime_hours', '평일 연장 실근로시간'), ('night_hours', '야간 실근로시간'), (None, None)],
+)
+def test_premium_route_requires_each_explicit_work_duration(omitted, guidance):
+    question = (
+        '상시 6명, 통상시급 12,000원, 평일 연장근로시간은 2시간이고 야간근로시간은 2시간입니다. 가산수당은 얼마인가요?'
+    )
+    inputs = {
+        'staff_count': '6명',
+        'ordinary_hourly_wage': '12,000원',
+        'overtime_hours': '2시간',
+        'night_hours': '2시간',
+    }
+    if omitted is not None:
+        del inputs[omitted]
+    raw = json.dumps({'calculator': 'premium_pay', 'inputs': inputs})
+    outcome = route_calculation(question, lambda _: raw, {'premium_pay': ()}, reference_year=2026)
+
+    if guidance is None:
+        assert outcome.payload['status'] == 'calculated'
+        assert outcome.payload['results'] == [{'label': '법정 가산수당', 'value': 24_000, 'unit': '원'}]
+    else:
+        assert outcome.payload['status'] == 'guidance'
+        assert outcome.reason == 'ambiguous_input'
+        assert guidance in outcome.payload['message']
+        assert not outcome.payload.get('results')
 
 
 @pytest.mark.parametrize(

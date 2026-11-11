@@ -71,9 +71,10 @@ _BREAK_INCLUDED = re.compile(r'휴게(?:시간)?[^.!?\n]{0,15}(?:포함|안\s*�
 _BREAK_EXCLUDED = re.compile(r'휴게(?:시간)?[^.!?\n]{0,8}(?:제외|빼고|(?<!안 )뺀)')
 _UNCERTAIN_TIME = re.compile(r'(야간|연장|휴일)[^.!?\n]{0,24}(?:인지|는지)\s*(?:모르|몰라|불명확)')
 _HOURS_TOKEN = r'(?:[0-9０-９]+(?:[.．][0-9０-９]+)?|[영공일이삼사오육칠팔구십백천]+)\s*(?:시간|분)'
+_LABELED_HOURS = rf'\s*(?:실?근로|근무)?\s*(?:시간\s*)?(?:은|는|이|가|를|을|에|:)?\s*{_HOURS_TOKEN}'
 _HOUR_EVIDENCE = {
-    'overtime_hours': re.compile(rf'(?:연장|초과)\s*(?:실?근로|근무)?\s*(?:은|는|이|가|를|을|에|:)?\s*{_HOURS_TOKEN}'),
-    'night_hours': re.compile(rf'야간\s*(?:실?근로|근무)?\s*(?:은|는|이|가|를|을|에|:)?\s*{_HOURS_TOKEN}'),
+    'overtime_hours': re.compile(rf'(?:연장|초과){_LABELED_HOURS}'),
+    'night_hours': re.compile(rf'야간{_LABELED_HOURS}'),
     'holiday_hours': re.compile(rf'휴일(?:(?!야간|연장)[^.!?\n,]){{0,22}}?{_HOURS_TOKEN}'),
 }
 

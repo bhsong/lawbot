@@ -47,6 +47,33 @@ def test_cr041_estimates_from_monthly_wages_and_flags_historical_answer():
     assert check_conclusion(message, result.as_dict()) == 'match'
 
 
+@pytest.mark.parametrize('period', ['6개월', '11개월', '364일', '11개월 27일'])
+def test_monthly_wage_before_one_year_returns_no_statutory_severance(period):
+    result = calculate(
+        'severance_pay',
+        {'monthly_wage': '300만원', 'service_period': period, 'weekly_hours': '40시간'},
+        year=2026,
+    )
+
+    assert result.status == 'calculated'
+    assert list(result.results) == [{'label': '법정 최소 퇴직금', 'value': 0}]
+    assert '요건을 충족하지 않습니다' in (result.message or '')
+    assert result.steps[-1]['article'] == '근로자퇴직급여 보장법 제4조'
+
+
+@pytest.mark.parametrize('period', ['1년', '12개월', '11개월 31일'])
+def test_monthly_wage_at_one_year_remains_eligible(period):
+    result = calculate(
+        'severance_pay',
+        {'monthly_wage': '300만원', 'service_period': period, 'weekly_hours': '40시간'},
+        year=2026,
+    )
+
+    assert result.status == 'calculated'
+    assert [row['label'] for row in result.results] == ['평균임금 기준 퇴직금 추정', '통상임금 하한 적용 퇴직금 추정']
+    assert all(row['value'] != 0 for row in result.results)
+
+
 def test_monthly_estimate_uses_supplied_ordinary_wage_without_hypothetical_result():
     result = calculate(
         'severance_pay',
