@@ -602,7 +602,7 @@ def ask(
             st[name] = getattr(last, attr, None)
         st |= cast(Timing, answer_check(app, raw, hits))
         if (payload := st.get('_calculation')) and payload['status'] == 'calculated':
-            st.setdefault('calculation_metrics', {})['calculation_check'] = check_conclusion(raw, payload['results'])
+            st.setdefault('calculation_metrics', {})['calculation_check'] = check_conclusion(raw, payload)
         log_timing(st)
         record('ok')
         logged = True

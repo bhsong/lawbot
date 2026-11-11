@@ -14,9 +14,11 @@ _LARGE_UNITS = '조억만'
 _SMALL_VALUES = dict(zip(_SMALL_UNITS, (1000, 100, 10)))
 _LARGE_VALUES = dict(zip(_LARGE_UNITS, (10**12, 10**8, 10**4)))
 _CHARACTERS = f'{_DIGITS}{_SMALL_UNITS}{_LARGE_UNITS}'
-_MONEY_CHARS = f'0-9０-９.,，．{_CHARACTERS}'
+_MONEY_START = f'0-9０-９{_CHARACTERS}'
+_MONEY_CHARS = f'{_MONEY_START}.,，．'
 _MONEY_TOKEN = re.compile(
-    rf'(?<![0-9０-９.,，．])(?P<sign>[-−]?[ \t]*)(?P<amount>[{_MONEY_CHARS}]+'
+    rf'(?:(?<![0-9０-９.,，．])|(?<=원[,，]))'
+    rf'(?P<sign>[-−]?[ \t]*)(?P<amount>[{_MONEY_START}][{_MONEY_CHARS}]*'
     rf'(?:[ \t]+[{_MONEY_CHARS}]+)*[ \t]*원)'
 )
 _MAX_SAFE_INTEGER = 2**53 - 1
@@ -48,8 +50,7 @@ def _small_number(text: str) -> Decimal:
     return total
 
 
-def parse_amount(text: str) -> int:
-    """Read a nonnegative, exact amount in won, with optional Korean unit groups."""
+def _amount_in_won(text: str) -> Decimal:
     value = unicodedata.normalize('NFKC', text).strip()
     with_won = value.endswith('원')
     value = value.removesuffix('원').strip()
@@ -73,9 +74,15 @@ def parse_amount(text: str) -> int:
             raise ValueError('ambiguous remainder')
         total += number * place
         previous = place
-    if total != total.to_integral_value() or total > _MAX_SAFE_INTEGER:
+    return total
+
+
+def parse_amount(text: str) -> int:
+    """Read a nonnegative, exact amount in won, with optional Korean unit groups."""
+    amount = _amount_in_won(text)
+    if amount != amount.to_integral_value() or amount > _MAX_SAFE_INTEGER:
         raise ValueError('amount is not an exact supported integer')
-    return int(total)
+    return int(amount)
 
 
 def parse_quantity(text: str, unit: Literal['%', '개월']) -> Decimal:
@@ -96,13 +103,14 @@ def parse_year(text: str) -> int:
     return int(match[1])
 
 
-def amount_spans(text: str) -> Iterator[tuple[str, int]]:
-    """Yield explicit won amounts from a model's conclusion."""
+def amount_spans(text: str) -> Iterator[tuple[str, int | Decimal]]:
+    """Yield explicit won amounts, including fractional values displayed in calculation steps."""
     for match in _MONEY_TOKEN.finditer(text):
         try:
-            value = parse_amount(match['amount'])
+            amount = _amount_in_won(match['amount'])
         except ValueError:
             continue
+        value = int(amount) if amount == amount.to_integral_value() else amount
         sign = match['sign'].strip()
         yield match[0].strip(), -value if sign else value
 

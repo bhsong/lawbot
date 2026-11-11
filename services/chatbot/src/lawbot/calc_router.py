@@ -16,8 +16,8 @@ from lawbot.calculators import ARTICLE_HASHES, INPUT_FIELDS, MEDICAL, MEDICAL_GR
 from lawbot_common.api import SERVER_BUSY
 
 ROUTER_SYSTEM = """계산 질문 분류기. JSON 한 개만 출력한다.
-법령이 정한 기한·일수·비율·금액·요건·절차를 조회하는 질문은 {"calculator":"none","kind":"lookup"}.
-질문의 금액·날짜 등으로 결과를 산출해야 하지만 미지원인 경우(일반 연말정산, 퇴직소득세 등)는 {"calculator":"none","kind":"calculation"}.
+사용자가 준 금액·기간·인원수로 금액·일수·세액을 구해야 답할 수 있는 질문은 계산이다. 지원하는 계산기가 없으면 {"calculator":"none","kind":"calculation"}.
+법령에 적힌 값·기한·요건을 묻는 질문은 조회다. 질문에 숫자가 있어도 그 숫자로 계산하지 않으면 {"calculator":"none","kind":"lookup"}.
 지원 계산의 형식은 {"calculator":"계산기 이름","inputs":{}}.
 지원: medical_expense_credit(의료비 세액공제), midyear_income_tax(중도퇴사 근로소득세 기본 공제).
 지원 계산이면 필수 값이 없어도 계산기 이름을 선택한다. inputs 값은 질문에 있는 정확한 연속 문자열이다.
@@ -204,22 +204,37 @@ def route_calculation(
             return Routing({'calculator': None, 'status': 'lookup'}, 'lookup_question', elapsed_ms)
         if obj['kind'] == 'calculation':
             return none('unsupported_question')
-    if obj.keys() != {'calculator', 'inputs'}:
+    required = {'calculator', 'inputs'}
+    if (
+        not required <= obj.keys() <= required | {'ambiguity', 'kind'}
+        or obj.get('kind', 'calculation') != 'calculation'
+    ):
         return none('invalid_schema')
     name, inputs = obj['calculator'], obj['inputs']
     if not isinstance(name, str) or name not in INPUT_FIELDS or not isinstance(inputs, dict):
         return none('invalid_schema')
     calculator = name
     allowed = set(INPUT_FIELDS[calculator]) | {'year', 'ambiguity'}
-    if not inputs.keys() <= allowed or any(not isinstance(span, str) or not span.strip() for span in inputs.values()):
+    top_ambiguity = obj.get('ambiguity')
+    spans = [*inputs.values()]
+    if 'ambiguity' in obj:
+        spans.append(top_ambiguity)
+    if not inputs.keys() <= allowed or any(not isinstance(span, str) or not span.strip() for span in spans):
         return none('invalid_schema')
-    if any(span not in question for span in inputs.values()):
+
+    ambiguous = (
+        _AMOUNT_RANGE.search(question) is not None
+        or _AMBIGUOUS_AMOUNT.search(question) is not None
+        or any(span is not None and span in question for span in (top_ambiguity, inputs.get('ambiguity')))
+    )
+    # Guidance for an ambiguous question does not use the extracted inputs.
+    if not ambiguous and any(span not in question for span in spans):
         return none('span_not_in_question')
     active = compatibility() if callable(compatibility) else compatibility
     if calculator not in active or active[calculator]:
         return none('corpus_mismatch')
 
-    if 'ambiguity' in inputs or _AMOUNT_RANGE.search(question) or _AMBIGUOUS_AMOUNT.search(question):
+    if ambiguous:
         return guidance('계산에 사용할 금액과 그 금액이 어떤 항목에 해당하는지 확인해 주세요.')
     if _UNSUPPORTED_DETAILS[calculator].search(question):
         return guidance(
@@ -266,10 +281,19 @@ def prompt_suffix(payload: dict[str, Any]) -> str:
     return f'\n\n[계산 결과]\n{json.dumps(payload, ensure_ascii=False)}\n{instruction}'
 
 
-def check_conclusion(raw: str, results: list[dict[str, Any]]) -> Literal['match', 'mismatch', 'missing']:
-    conclusion = sections(raw).get('결론', raw)
+def check_conclusion(raw: str, payload: dict[str, Any]) -> Literal['match', 'mismatch', 'missing']:
+    marked = sections(raw)
+    conclusion = marked.get('결론', '' if marked else raw)
     conclusion = re.sub(r'(?m)^[ \t]*-[ \t]+', '', conclusion)
-    observed = [value for _, value in amount_spans(conclusion)]
+    observed = {value for _, value in amount_spans(conclusion)}
     if not observed:
         return 'missing'
-    return 'match' if observed == [result['value'] for result in results] else 'mismatch'
+    required = {result['value'] for result in payload['results']}
+    allowed = required.copy()
+    for row in (*payload['inputs'], *payload['steps']):
+        value = row['value']
+        if isinstance(value, str):
+            allowed.update(amount for _, amount in amount_spans(value))
+        else:
+            allowed.add(value)
+    return 'match' if required <= observed <= allowed else 'mismatch'

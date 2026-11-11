@@ -433,7 +433,14 @@ def test_end_to_end_through_real_server_app(env, real_server, tmp_path):
     assert text.startswith('예고해야 합니다.') and '25.0 tok/s' in stats
 
 
-def test_calculation_router_through_real_server_app(env, real_server, tmp_path, capsys):
+@pytest.mark.parametrize(
+    ('answer', 'check'),
+    [
+        ('【결론】 세액공제액은 225,000원입니다.', 'mismatch'),
+        ('【결론】 실손보험금 100만 원 차감 후 의료비 200만 원 기준 세액공제액은 75,000원입니다.', 'match'),
+    ],
+)
+def test_calculation_router_through_real_server_app(env, real_server, tmp_path, capsys, answer, check):
     from lawbot import web
     from lawbot.calculators import MEDICAL
 
@@ -455,7 +462,7 @@ def test_calculation_router_through_real_server_app(env, real_server, tmp_path, 
             }
             text = json.dumps(output, ensure_ascii=False)
         else:
-            text = '【결론】 세액공제액은 225,000원입니다.'
+            text = answer
         yield types.SimpleNamespace(text=text, finish_reason='stop')
 
     env.setattr(Chat, 'stream', stream)
@@ -473,13 +480,13 @@ def test_calculation_router_through_real_server_app(env, real_server, tmp_path, 
     event_names = [event for event, _ in events]
     assert event_names.index('calculation') < event_names.index('answer') < event_names.index('calculation_check')
     assert dict(events)['calculation']['results'][0]['value'] == 75_000
-    assert dict(events)['calculation_check'] == {'status': 'mismatch'}
+    assert dict(events)['calculation_check'] == {'status': check}
     record = json.loads(path.read_text(encoding='utf-8'))
     assert record['cache_reason'] == 'calculation_question'
     assert record['calculator'] == MEDICAL
     assert record['calculation_status'] == 'calculated'
     assert record['router_reason'] == 'selected' and record['router_ms'] >= 0
-    assert record['calculation_check'] == 'mismatch'
+    assert record['calculation_check'] == check
     assert record['call_counts'] == {'router': 1, 'embedding': 1, 'search': 1, 'rerank': 1, 'llm': 1}
     assert not any(value in path.read_text(encoding='utf-8') for value in ('5천만', '75,000', '75000', question))
     chat = real_server.chat[app.models.specs['pro'].model]

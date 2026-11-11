@@ -8,7 +8,7 @@ import pytest
 from lawbot.api_client import ModelServerError, ModelServerTimeout, RouterTimeout
 from lawbot.calc_gate import is_calculation_question
 from lawbot.calc_numbers import amount_spans, parse_amount, parse_quantity, parse_year
-from lawbot.calc_router import check_conclusion, route_calculation
+from lawbot.calc_router import ROUTER_SYSTEM, check_conclusion, route_calculation
 from lawbot_common.api import SERVER_BUSY
 
 MEDICAL = 'medical_expense_credit'
@@ -81,6 +81,17 @@ def test_gate_on_synthetic_val():
     }
     misses = [case['id'] for case in cases if is_calculation_question(case['question']) != (case['kind'] != 'general')]
     assert misses == []
+
+
+def test_router_prompt_distinguishes_computation_from_looking_up_a_value():
+    assert (
+        '사용자가 준 금액·기간·인원수로 금액·일수·세액을 구해야 답할 수 있는 질문은 계산이다. '
+        '지원하는 계산기가 없으면 {"calculator":"none","kind":"calculation"}.'
+    ) in ROUTER_SYSTEM
+    assert (
+        '법령에 적힌 값·기한·요건을 묻는 질문은 조회다. '
+        '질문에 숫자가 있어도 그 숫자로 계산하지 않으면 {"calculator":"none","kind":"lookup"}.'
+    ) in ROUTER_SYSTEM
 
 
 def test_gate_positive_lookup_cases_route_to_rag():
@@ -266,4 +277,5 @@ def test_combined_health_and_long_term_care_premium_must_be_extracted_once(label
     ],
 )
 def test_conclusion_check_ignores_other_sections(text, status):
-    assert check_conclusion(text, [{'label': '의료비 세액공제', 'value': 75_000}]) == status
+    payload = {'results': [{'label': '의료비 세액공제', 'value': 75_000}], 'inputs': [], 'steps': []}
+    assert check_conclusion(text, payload) == status
