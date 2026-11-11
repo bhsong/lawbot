@@ -105,14 +105,22 @@ def parse_year(text: str) -> int:
 
 def amount_spans(text: str) -> Iterator[tuple[str, int | Decimal]]:
     """Yield explicit won amounts, including fractional values displayed in calculation steps."""
+    previous_end: int | None = None
     for match in _MONEY_TOKEN.finditer(text):
         try:
             amount = _amount_in_won(match['amount'])
         except ValueError:
             continue
         value = int(amount) if amount == amount.to_integral_value() else amount
-        sign = match['sign'].strip()
-        yield match[0].strip(), -value if sign else value
+        source = match[0].strip()
+        if match['sign'].strip():
+            # A minus between adjacent won amounts is a subtraction operator.
+            if previous_end is not None and not text[previous_end : match.start('sign')].strip(' \t'):
+                source = match['amount']
+            else:
+                value = -value
+        previous_end = match.end()
+        yield source, value
 
 
 def complete_amount_span(question: str, source: str) -> bool:

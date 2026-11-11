@@ -86,7 +86,7 @@ def test_gate_on_synthetic_val():
 def test_router_prompt_distinguishes_computation_from_looking_up_a_value():
     assert (
         '사용자가 준 금액·기간·인원수로 금액·일수·세액을 구해야 답할 수 있는 질문은 계산이다. '
-        '지원하는 계산기가 없으면 {"calculator":"none","kind":"calculation"}.'
+        '지원하는 계산기가 없으면(일반 연말정산, 퇴직소득세 등) {"calculator":"none","kind":"calculation"}.'
     ) in ROUTER_SYSTEM
     assert (
         '법령에 적힌 값·기한·요건을 묻는 질문은 조회다. '

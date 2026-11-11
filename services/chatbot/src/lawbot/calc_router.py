@@ -16,7 +16,7 @@ from lawbot.calculators import ARTICLE_HASHES, INPUT_FIELDS, MEDICAL, MEDICAL_GR
 from lawbot_common.api import SERVER_BUSY
 
 ROUTER_SYSTEM = """계산 질문 분류기. JSON 한 개만 출력한다.
-사용자가 준 금액·기간·인원수로 금액·일수·세액을 구해야 답할 수 있는 질문은 계산이다. 지원하는 계산기가 없으면 {"calculator":"none","kind":"calculation"}.
+사용자가 준 금액·기간·인원수로 금액·일수·세액을 구해야 답할 수 있는 질문은 계산이다. 지원하는 계산기가 없으면(일반 연말정산, 퇴직소득세 등) {"calculator":"none","kind":"calculation"}.
 법령에 적힌 값·기한·요건을 묻는 질문은 조회다. 질문에 숫자가 있어도 그 숫자로 계산하지 않으면 {"calculator":"none","kind":"lookup"}.
 지원 계산의 형식은 {"calculator":"계산기 이름","inputs":{}}.
 지원: medical_expense_credit(의료비 세액공제), midyear_income_tax(중도퇴사 근로소득세 기본 공제).

@@ -16,3 +16,17 @@ from lawbot.calc_numbers import amount_spans
 )
 def test_amount_spans_distinguishes_list_separators_and_digit_grouping(text, expected):
     assert list(amount_spans(text)) == expected
+
+
+@pytest.mark.parametrize(
+    ('text', 'expected'),
+    [
+        ('200만 원(300만 원 - 100만 원)', [('200만 원', 2_000_000), ('300만 원', 3_000_000), ('100만 원', 1_000_000)]),
+        ('300만원−100만원', [('300만원', 3_000_000), ('100만원', 1_000_000)]),
+        ('-300만원 - -100만원', [('-300만원', -3_000_000), ('-100만원', -1_000_000)]),
+        ('300만원, -100만원', [('300만원', 3_000_000), ('-100만원', -1_000_000)]),
+        ('300만원\n-100만원', [('300만원', 3_000_000), ('-100만원', -1_000_000)]),
+    ],
+)
+def test_amount_spans_distinguishes_subtraction_and_negative_amounts(text, expected):
+    assert list(amount_spans(text)) == expected

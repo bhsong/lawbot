@@ -20,6 +20,14 @@ def test_conclusion_check_replays_evaluation_answers(case_id):
     assert check_conclusion(case['answer'], calculation.as_dict()) == 'match'
 
 
+def test_conclusion_check_reads_subtraction_operands_as_positive_amounts():
+    case = REPLAY['CR001']
+    calculation = calculate(VAL['CR001']['calculator'], case['inputs'], year=2026)
+    answer = '【결론】 의료비 세액공제는 75,000원입니다. 직접 부담 의료비는 200만 원(300만 원 - 100만 원)입니다.'
+
+    assert check_conclusion(answer, calculation.as_dict()) == 'match'
+
+
 @pytest.mark.parametrize(
     ('text', 'status'),
     [
