@@ -1,5 +1,5 @@
-# tests/test_v5_data.py  →  data/v5 (노동·소득세법 전체 + 세금·보험 범위 목록)
-# 생성: lawbot-build-articles --scope data/v5/scope_tax.csv --version v5. 여기서는 만든 파일이 범위 목록·v4와 맞는지만 본다
+"""Check the generated v5 corpus and its frozen evaluation data."""
+
 import csv
 import hashlib
 import json
@@ -9,11 +9,22 @@ import pytest
 
 from lawbot import manifest
 from lawbot.paths import DATA, V4_DECREE_ARTICLES
+from lawbot_common.law_scope import load_law_scope
+from lawbot_tools import build_articles
 
 V5 = DATA / 'v5'
 LAW_CSV, DECREE_CSV, SCOPE = V5 / 'articles_v5.csv', V5 / 'law_articles_v5_decree.csv', V5 / 'scope_tax.csv'
 E = dict(encoding='utf-8-sig', dtype=str, keep_default_na=False)
 ADDENDUM = '부칙<'
+EXPANDED_LAWS = {
+    '고용보험법',
+    '국민연금법',
+    '국민건강보험법',
+    '고용보험 및 산업재해보상보험의 보험료징수 등에 관한 법률',
+    '노인장기요양보험법',
+    '국세기본법',
+    '농어촌특별세법',
+}
 
 
 @pytest.fixture(scope='module')
@@ -26,19 +37,62 @@ def scope():
     return pd.read_csv(SCOPE, **E)
 
 
+def test_v5_scope_expands_registered_documents_and_keeps_two_partial_laws():
+    scope = build_articles.load_scope(SCOPE)
+    assert {law for law, _ in scope} == {'조세특례제한법', '지방세법'}
+
+    documents = build_articles.docs(scope)
+    expected = {
+        (entry.name, kind)
+        for entry in load_law_scope()
+        if entry.name in EXPANDED_LAWS
+        for kind in ('법률', *entry.decrees)
+    }
+    expanded = [(law, kind, selection) for law, kind, selection in documents if law in EXPANDED_LAWS]
+    assert {(law, kind) for law, kind, _ in expanded} == expected
+    assert len(expanded) == len(expected)
+    assert all(selection is None for _, _, selection in expanded)
+
+
+def test_expanded_documents_are_present_in_the_generated_corpus(v5):
+    expanded = v5[v5['parent_law'].isin(EXPANDED_LAWS)]
+    expected = {
+        (entry.name, kind)
+        for entry in load_law_scope()
+        if entry.name in EXPANDED_LAWS
+        for kind in ('법률', *entry.decrees)
+    }
+    assert set(zip(expanded['parent_law'], expanded['kind'])) == expected
+    assert expanded['article_id'].is_unique
+    assert (expanded['deleted'] == '1').any()
+
+
 @pytest.mark.parametrize(
     ('path', 'law_column', 'baseline_sha256'),
     [
-        (SCOPE, 'law', '4d977ea0d5261e917987af0d09ea08f420b9cce6b4ddf55cc2d30c04dd09938a'),
-        (LAW_CSV, 'law', '8d6c3061596208e2d0f0868647615ac39d8ac596c70da60beca25ec65d2d4e29'),
-        (DECREE_CSV, 'parent_law', '2898d2ce91d3c85d22a24219d69803587f6293414cff97d736ed5b613d3aa2de'),
+        (SCOPE, 'law', 'fb1f40f4659b907dd5919af57ad4b341b84ecb7fb49df0cf662a1c525eaff3ad'),
+        (LAW_CSV, 'law', 'e397deca1c62a88b2b5ac7e1d7ec10b7fa18707d353cd6f04179b97d7322cd47'),
+        (DECREE_CSV, 'parent_law', '8678c4080c2310b7aac0cc2545a78de50031491cbab7bb2aa469b8dc099b897b'),
     ],
 )
-def test_income_tax_expansion_preserves_all_other_rows(path, law_column, baseline_sha256):
-    """Hash the rows and their relative order from main 0f214d0, excluding income tax."""
+def test_new_b_expansion_preserves_all_other_rows(path, law_column, baseline_sha256):
+    """Hash the rows and relative order from main 0eac5af outside the seven expanded laws."""
     with path.open(encoding='utf-8-sig', newline='') as source:
-        rows = [row for row in csv.DictReader(source) if row[law_column] != '소득세법']
+        rows = [row for row in csv.DictReader(source) if row[law_column] not in EXPANDED_LAWS]
     assert hashlib.sha256(json.dumps(rows, ensure_ascii=False).encode()).hexdigest() == baseline_sha256
+
+
+def test_doc_tokens_cover_every_live_article_in_corpus_order(v5):
+    tokens = pd.read_csv(V5 / 'doc_tokens_v5.csv', **E)
+    live = v5[v5['deleted'] == '0']
+    assert tokens['article'].tolist() == live['article_id'].tolist()
+    assert tokens['tokens'].astype(int).gt(0).all()
+    expanded_ids = set(live.loc[live['parent_law'].isin(EXPANDED_LAWS), 'article_id'])
+    rows = tokens[~tokens['article'].isin(expanded_ids)].to_dict('records')
+    assert (
+        hashlib.sha256(json.dumps(rows, ensure_ascii=False).encode()).hexdigest()
+        == 'fb441dc773eee3a40ee2097a26748e446ec2b9ecb80a4d3ff334a7b4924bfe5a'
+    )
 
 
 def test_manifests_match_the_csvs():
@@ -67,28 +121,33 @@ def test_deleted_article_recreated_by_a_pending_amendment_stays_deleted(v5):
     assert row['effective_date'] == '2022-02-15'
 
 
-def test_scoped_documents_have_exactly_the_scope_and_its_addendum_overrides(v5, scope):
-    """세금·보험 문서: 범위 목록 조문과, 범위 안 본칙을 대신하는 부칙 특례만. 삭제 조문 없음.
-    범위는 번호로만 정한다 (사용자 목록의 제목은 시행 전 개정의 제목인 것이 있음: 보험료징수법 제16조의10)"""
+def test_scoped_documents_have_exactly_the_scope(v5, scope):
     tax = v5[v5['parent_law'].isin(set(scope['law']))]
     main = tax[~tax['article_no'].str.startswith(ADDENDUM)]
     got = set(zip(main['parent_law'], main['kind'], main['article_no']))
     assert got == set(zip(scope['law'], scope['kind'], scope['article_no']))
     assert len(main) == len(scope)
     assert (tax['deleted'] == '0').all()
-    extra = tax[tax['article_no'].str.startswith(ADDENDUM)]
-    assert list(extra['article_id']) == [
+    for targets in tax.loc[tax['article_no'].str.startswith(ADDENDUM), 'related_ids']:
+        assert set(targets.split('|')) <= set(main['article_id'])
+
+
+def test_expansion_preserves_active_addendum_overrides(v5):
+    existing = {
         '국민연금법 부칙<제8541호>제7조',
         '국민연금법 부칙<제11143호>제7조',
         '국민연금법 부칙<제20903호>제4조',
-    ]
-    assert set(extra['related_ids']) <= set(main['article_id'])  # 대신하는 본칙은 범위 안
+    }
+    live = v5[v5['deleted'] == '0']
+    assert existing <= set(live['article_id'])
+    for targets in live.loc[live['article_id'].isin(existing), 'related_ids']:
+        assert set(targets.split('|')) <= set(live['article_id'])
 
 
-def test_labor_documents_equal_v4_except_the_known_rule_changes(v5, scope):
-    """노동 문서는 v4와 칸 단위로 같고, 2026-11-03 규칙 변경 두 가지만 다르다 (docs/evals/2026-11-03-v5-generator.md)"""
+def test_labor_documents_equal_v4_except_the_known_rule_changes(v5):
+    """The v4 documents differ in two generator rules recorded in the 2026-11-03 report."""
     v4 = pd.read_csv(V4_DECREE_ARTICLES, **E)
-    labor = v5[~v5['parent_law'].isin(set(scope['law']) | {'소득세법'})]
+    labor = v5[v5['parent_law'].isin(v4['parent_law'])]
     added = labor[labor['article_no'].str.startswith(ADDENDUM)]
     assert list(added['article_id']) == ['근로자퇴직급여 보장법 부칙<제21475호>제2조']
     labor = labor.drop(added.index).reset_index(drop=True)
@@ -98,9 +157,10 @@ def test_labor_documents_equal_v4_except_the_known_rule_changes(v5, scope):
     assert cells == [('근로자퇴직급여 보장법 제1조', 'effective_date')]
 
 
-def test_mixed_articles_are_marked(v5):
-    """Check the 2027-01-01 notices, including three newly in-scope subordinate articles."""
-    marked = v5[v5['text'].str.contains('[주의:', regex=False)]
+def test_existing_mixed_articles_are_marked(v5):
+    """Keep the existing 2027-01-01 notices outside the expanded families."""
+    unchanged = v5[~v5['parent_law'].isin(EXPANDED_LAWS)]
+    marked = unchanged[unchanged['text'].str.contains('[주의:', regex=False)]
     assert list(marked['article_id']) == [
         '소득세법 제14조',
         '소득세법 제21조',

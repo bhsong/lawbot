@@ -554,7 +554,7 @@ def _compose_history(path, asof, hist, mds):
     state: dict[str, dict] = {}
     prev: dict[str, dict] = {}
     pending: dict[str, list[str]] = {}  # 시행 전 개정이 남은 조문 → 그 시행일들
-    expiries: list[tuple[str, list[int], str]] = []
+    expiries: list[tuple[str, list[int], str, dict]] = []
     used = []
     order: list[str] = []
     for (sha, _, _), md in zip(hist, mds):
@@ -563,7 +563,11 @@ def _compose_history(path, asof, hist, mds):
         cur_order = list(arts)
         sched = schedule(md, fm, cur_order, asof, latest=mds[-1])
         addendum, owner = addendum_of(md, fm['공포번호'], mds[-1])
-        expiries += expiry_clauses(addendum or '')
+        expiries.extend(
+            (no, paras, until, arts[no])
+            for no, paras, until in expiry_clauses(addendum or '')
+            if no in arts and sched.article(no) <= asof
+        )
         follows = bool(owner and FOLLOWS_PENDING.search(re.sub(r'\s+', '', addendum or '')))
         applied = 0
         waiting: list[tuple[str, str]] = []  # 시행 전이라 반영하지 않은 (조문, 시행일)
@@ -706,36 +710,50 @@ def expiry_clauses(addendum):
         if not e:
             continue
         date = dt.date(int(e[2]), int(e[3]), int(e[4])).isoformat()
-        cur = None
-        for t in re.finditer(r'제(\d+)(조(?:의(\d+))?|항)', e[1]):
-            if t[2].startswith('조'):
-                cur = (f'제{t[1]}조' + (f'의{t[3]}' if t[3] else ''), [])
-                out.append((*cur, date))
-            elif cur is not None:
-                cur[1].append(int(t[1]))
+        targets = re.sub(r'\([^()]*\)', '()', e[1])
+        for target in re.finditer(r'(제\d+조(?:의\d+)?)(.*?)(?=제\d+조|$)', targets):
+            no, suffix = target.groups()
+            if re.search(r'\(\)|제\d+(?:호|목)|부분', suffix):
+                continue
+            out.append((no, [int(n) for n in re.findall(r'제(\d+)항', suffix)], date))
     return out
 
 
+def paragraph_span(lines, number):
+    starts = [i for i, line in enumerate(lines) if line.startswith(PARA[number - 1])]
+    if len(starts) != 1:
+        return None
+    start = starts[0]
+    end = next((i for i in range(start + 1, len(lines)) if lines[i][:1] in PARA), len(lines))
+    return start, end
+
+
 def expire(arts, expiries, asof, path):
-    """유효기간이 기준일 전에 끝난 개정규정: 조문 전체면 삭제 조문으로(deleted), 항이면 그 항 끝에 '[실효: …까지 유효]'"""
+    """Apply elapsed expiry clauses where the covered article or paragraph still matches the amending text."""
     by_no = {a['no']: a for a in arts}
-    for no, paras, date in expiries:
+    current_text = {a['no']: a['text'] for a in arts}
+    for no, paras, date, amended in expiries:
         if date >= asof or no not in by_no:
             continue
         a = by_no[no]
+        current = current_text[no]
         if not paras:
-            a['expired'] = True
+            if (a.get('title'), squash(current)) == (amended.get('title'), squash(amended['text'])):
+                a['expired'] = True
             continue
-        mark = f' [실효: {dotted(date)}까지 유효]'
-        lines = a['text'].split('\n')
+        lines = (current or '').splitlines()
+        original = (amended['text'] or '').splitlines()
+        marked = (a['text'] or '').splitlines()
         for k in paras:
-            starts = [i for i, line in enumerate(lines) if line.startswith(PARA[k - 1])]
-            if len(starts) != 1:
-                raise ValueError(f'{path} {no}: 유효기간이 끝난 제{k}항을 본문에서 찾지 못했습니다')
-            nxt = [i for i, line in enumerate(lines) if i > starts[0] and line[:1] in PARA]
-            last = (nxt[0] if nxt else len(lines)) - 1
-            lines[last] += mark
-        a['text'] = '\n'.join(lines)
+            declared = paragraph_span(original, k)
+            if declared is None:
+                raise ValueError(f'{path} {no}: 유효기간이 끝난 제{k}항을 개정 본문에서 찾지 못했습니다')
+            if (span := paragraph_span(lines, k)) is None:
+                continue
+            start, end = span
+            if squash('\n'.join(lines[start:end])) == squash('\n'.join(original[slice(*declared)])):
+                marked[end - 1] += f' [실효: {dotted(date)}까지 유효]'
+        a['text'] = '\n'.join(marked) or None
 
 
 def commits_since(repo: Repo, ref, paths):
