@@ -24,6 +24,9 @@ UNSUPPORTED = '월급 300만 원을 받으면 건강보험료가 얼마인지 �
 MIDYEAR = '2026년 중도퇴사 총급여 2000만원, 건강보험료 50만원, 장기요양보험료 5만원입니다. 소득세는 얼마인가요?'
 LOOKUP = '2026년 근로소득자의 표준세액공제 법정 금액은 얼마인가요?'
 SEVERANCE = '월급 300만원으로 3년 일했습니다. 퇴직금을 얼마 받나요?'
+SEVERANCE_OMITTED = (
+    '월급 275만원으로 4년 근무했습니다. 퇴직 안내 서류의 근속 일수는 1,430일입니다. 퇴직금을 계산해 주세요.'
+)
 ANNUAL = '상시 5명, 주 소정 40시간입니다. 근속 2년을 마쳤고 연차 발생일에도 재직하며 직전 1년 출근율 96%입니다. 이번에 새로 생기는 연차가 며칠인가요?'
 ANNUAL_MISSING = '근속 2년하고 11개월이면 연차가 며칠인지 산출해 주세요.'
 ANNUAL_INVALID = (
@@ -245,6 +248,31 @@ def test_invalid_labor_input_keeps_guidance_and_no_calculation(calculation_stack
     assert row['calculator'] == 'annual_leave_days'
     assert row['calculation_status'] == 'guidance'
     assert row['router_reason'] == 'unresolved_input'
+    assert row['calculation_check'] == 'not_run'
+    assert row['cache_reason'] == 'calculation_question' and row['response_source'] == 'rag'
+    assert row['cache_eligible'] is False and row['exact_lookup_ms'] is None
+    assert row['call_counts']['router'] == row['call_counts']['llm'] == 1
+
+
+@pytest.mark.parametrize('width', [390, 1280])
+def test_omitted_labor_quantity_requests_clarification(calculation_stack, ui, width):
+    ui.set_viewport_size({'width': width, 'height': 844})
+    events = ask_with_events(ui, calculation_stack, SEVERANCE_OMITTED)
+    relevant = ['calculation', 'answer', 'calculation_check', 'done']
+    assert [event for event in events if event in relevant] == ['calculation', 'answer', 'done']
+    guidance = ui.get_by_role('region', name='계산 안내')
+    expect(
+        guidance.get_by_text('질문에 적힌 계속근로 기간·일수 중 어느 값을 사용할지 확인해 주세요.', exact=True)
+    ).to_be_visible()
+    expect(guidance.get_by_text('근로자퇴직급여 보장법 제8조', exact=True)).to_be_visible()
+    expect(guidance.get_by_role('table')).to_have_count(0)
+    expect(ui.get_by_role('region', name='계산 결과')).to_have_count(0)
+    expect(e2e.answer(ui)).to_contain_text('계산에 필요한 자료와 근거 조문을 확인해 주세요.')
+    assert ui.evaluate('document.documentElement.scrollWidth <= document.documentElement.clientWidth')
+    row = e2e.request_log(calculation_stack.request_log)[-1]
+    assert row['calculator'] == 'severance_pay'
+    assert row['calculation_status'] == 'guidance'
+    assert row['router_reason'] == 'ambiguous_input'
     assert row['calculation_check'] == 'not_run'
     assert row['cache_reason'] == 'calculation_question' and row['response_source'] == 'rag'
     assert row['cache_eligible'] is False and row['exact_lookup_ms'] is None

@@ -1871,3 +1871,601 @@ val 계산 출력은 21/21, held-out 계산형 출력은 34/34가 고정 fixture
 {"group": "labor-pr2-heldout", "kind": "ambiguous", "id": "labor-heldout-059", "question": "상시 인원은 5명 안팎인데 상시 근로자 산정에 포함되는 사람이 누군지 회사도 확인 중입니다. 통상시급 15,743원에 휴게 제외 평일 연장근로 3시간 20분이면 법정 가산분만 얼마예요?", "raw": "{\"calculator\":\"premium_pay\",\"inputs\":{\"staff_count\":\"5명 안팎\",\"ordinary_hourly_wage\":\"15,743원\",\"overtime_hours\":\"3시간 20분\",\"include_base\":\"법정 가산분만\"}}", "gate": true, "calculator": "premium_pay", "status": "guidance", "expected_calculator": "premium_pay", "expected_status": "guidance", "reason": "ambiguous_input", "router_ms": 9819, "router_validation_ms": 0.472, "results": {}, "expected_results": null, "results_match": null, "classification_match": true, "router_system_chars": 2795, "router_prompt_tokens": 1240, "router_completion_tokens": 53, "expected_reason": "ambiguous_input"}
 {"group": "labor-pr2-heldout", "kind": "ambiguous", "id": "labor-heldout-060", "question": "상시 근로자 27명이고 통상시급은 16,913원입니다. 휴일 이틀에 나가서 쉬는 시간 빼고 합쳐 15시간 30분 일했어요. 날짜별로 몇 시간씩인지 기록을 아직 못 봤습니다. 휴일 가산수당만 얼마인지 계산해 주실 수 있나요?", "raw": "{\"calculator\":\"premium_pay\",\"inputs\":{\"staff_count\":\"27명\",\"ordinary_hourly_wage\":\"16,913원\",\"holiday_within_hours\":\"15시간 30분\",\"include_base\":\"휴일 가산수당만\"}}", "gate": true, "calculator": "premium_pay", "status": "guidance", "expected_calculator": "premium_pay", "expected_status": "guidance", "reason": "ambiguous_input", "router_ms": 9811, "router_validation_ms": 0.662, "results": {}, "expected_results": null, "results_match": null, "classification_match": true, "router_system_chars": 2795, "router_prompt_tokens": 1254, "router_completion_tokens": 53, "expected_reason": "ambiguous_input"}
 ~~~
+
+
+## 최종 보완
+
+### 범위와 판정
+
+기준 커밋 `66a0610`과 이번 최종 보완의 결정적 코드를 같은 보존 원출력 166건으로 비교했다. 실제 모델 호출은 **0회**다. `none` 상태에도 `GUIDANCE_INSTRUCTION`이 `prompt_suffix`로 붙으므로, 변환 실패가 제약 없는 일반 RAG로 넘어간다는 앞선 리뷰 설명은 착오였다는 정정을 유지한다.
+
+이번 변경은 노동 계산기가 결과를 내기 직전에 원문 수량과 입력 근거 위치를 공통으로 대조한다. 기간·일수, 시간, 금액, 인원, 비율 중 계산 역할에 속하지만 근거 span에 반영되지 않은 수량이 있으면 `guidance/ambiguous_input`으로 어느 값을 사용할지 안내한다. 연도·날짜·조문 번호·시각, 계산과 역할이 다른 측정 기준이나 단위 분모는 공통 규칙으로 구별하도록 설계했다. 계산식, 법정 데이터, `ROUTER_SYSTEM`, 생성 지시와 held-out fixture는 바꾸지 않았다.
+
+**완료 기준은 미충족이다.** 위험했던 012는 안내로 바뀌었지만, 정상 계산형 13개가 새로 안내로 바뀌었다. 최초·재평가 보존 기록에 같은 문항이 각각 있어 레코드 수로는 악화 26건이다. 이 새 악화는 사용자가 수용한 기존 6건에 포함되지 않으며 **사용자 수용되지 않음**으로 남긴다. 재생 결과를 본 뒤 해당 문항에 맞춰 규칙을 조정하지 않았고, 기대값이나 판정 기준도 바꾸지 않았다.
+
+이 재생은 참고용 회귀 확인이다. held-out은 이미 결과를 본 문항이므로 새 통과 근거로 사용하지 않는다. 아래 166건은 원래 직접 평가 전체가 아니라, 기록에 원출력이 보존된 val 46건과 최초 held-out 60건, held-out 재평가 60건이다.
+
+### 실행 방법과 고정 입력
+
+- 수정 전: `git archive 66a0610`으로 결정적 코드·평가 도구·fixture를 레포 밖 임시 위치에 복사했다.
+- 수정 후: 구현과 독립 Red/Green 검증을 마친 코드를 고정한 뒤 한 번 재생했다.
+- 동일한 원문·원출력을 fake router가 반환하게 해 `_route_case`와 `_heldout_score`의 변환·검사·계산 경로를 실행했다. 소켓 연결 함수를 실패하도록 막아 네트워크 호출을 차단했다. 조문 호환성은 양쪽 모두 동일한 활성 상태의 대역으로 고정했다.
+- 보존된 raw를 재사용했으며 생성·임베딩·리랭크·모델 스모크·실제 라우터 요청을 보내지 않았다. 서버·운영 트리·운영 데이터는 읽거나 바꾸지 않았다.
+- held-out fixture SHA-256: `1bb1e9624beb7dd818d7ad08fe046602776cac344fa778a94f583f88f2f445ac`.
+- 계산값은 기존 fixture/평가 기록의 독립 검산 기대값과 대조했다. 이 검증을 위해 기대값을 고치지 않았다.
+- 비교 상태는 `(calculator, status, reason, results)`다. 기대가 안내인 012의 계산 차단은 개선으로 분리하고, 기대가 계산인 문항의 `calculated → guidance/none`은 악화로 센다.
+
+### 전수 비교 요약
+
+| 보존 원출력 묶음 | 건수 | 기대 판정·값 일치: 수정 전 → 후 | 개선 | 악화 | 유지 | 수정 후 계산 / 독립 검산 일치 |
+| --- | ---: | --- | ---: | ---: | ---: | --- |
+| val | 46 | 39/46 → 39/46 | 0 | 0 | 46 | 21/21 |
+| held-out 최초 | 60 | 53/60 → 41/60 | 1 | 13 | 46 | 21/21 |
+| held-out 재평가 | 60 | 53/60 → 41/60 | 1 | 13 | 46 | 21/21 |
+| **합계** | **166** | **145/166 → 121/166** | **2** | **26** | **138** | **63/63** |
+
+최초·재평가 묶음은 모두 `66a0610`으로 다시 계산한 상태를 수정 전 기준으로 삼았다. 따라서 과거 실제 실행 당시 수치를 덮어쓴 비교가 아니다. 상태가 달라진 문항의 raw는 두 묶음에서 동일했다. 서로 다른 문항 기준으로는 개선 1개(012), 악화 13개다.
+
+| 완료 기준 | 결과 |
+| --- | --- |
+| 012의 잘못된 계산을 안내로 전환 | 충족: 두 기록 모두 `calculated/selected`(8,833,496원) → `guidance/ambiguous_input`, 결과 없음 |
+| 012의 의도한 차단 외 정상 계산의 악화 0건 | **미충족: 13개 문항 × 2개 기록 = 26건** |
+| 양쪽에서 계속 계산되는 건의 계산값 변경 0건 | 충족: 63건 모두 값 동일, 독립 기대값 일치 |
+| 수정 후 출력 계산의 오산 0건 | 충족: 63건 모두 독립 기대값 일치 |
+
+`계산값 변경 0건`은 양쪽 모두 calculated인 63건에 대한 비교다. 계산 결과가 제거된 28건은 별도로 집계했다. 의도한 012 차단 2건과 정상 계산 차단 26건이며, 결과 제거를 값 유지로 세지 않았다.
+
+#### 계산기별 비교
+
+아래 표는 최초·재평가 묶음 각각에 똑같이 적용된다. 계산형 기준을 낮추지 않았으며, 새 평가 통과 판정으로 사용하지 않는다.
+
+| 계산기 | 계산형 전 → 후 | 필수 입력 누락 전 → 후 | 모호 전 → 후 | 개선 | 새 악화 | 유지 |
+| --- | --- | --- | --- | ---: | ---: | ---: |
+| 퇴직금 | 8/8 → 4/8 | 2/2 → 2/2 | 1/2 → 2/2 | 1 | 4 | 7 |
+| 연차 | 7/8 → 5/8 | 2/2 → 2/2 | 2/2 → 2/2 | 0 | 2 | 10 |
+| 주휴 | 8/8 → 4/8 | 2/2 → 2/2 | 2/2 → 2/2 | 0 | 4 | 8 |
+| 최저임금 월 환산 | 6/8 → 4/8 | 2/2 → 2/2 | 2/2 → 2/2 | 0 | 2 | 10 |
+| 가산수당 | 5/8 → 4/8 | 2/2 → 2/2 | 2/2 → 2/2 | 0 | 1 | 11 |
+
+### 새 악화 원인
+
+주원인 기준으로 중복 없이 세면 세 종류다. 조사·지시어를 수량으로 잡는 경우 4개(002·003·025·055), 측정 기준·근로관계 유지기간·단위 분모·실근로와 계산 입력의 역할을 구별하지 못하는 경우 7개(008·017·028·030·031·039·043), 동치 기간이나 같은 기간의 반복 설명을 별도 수량으로 보는 경우 2개(007·013)다. 025·028에는 앞의 두 원인이 겹친다.
+
+| 문항 | 구분 | 관찰된 원인 |
+| --- | --- | --- |
+| 002 | 새 악화 | 수량 추출이 조사 `이`까지 포함한 `이 134,780원`을 금액 구간으로 잡는다. 실제 근거 span `134,780원`보다 넓어 매칭되지 않는다. |
+| 003 | 새 악화 | 수량 추출이 조사 `이`까지 포함한 `이 127,300원`을 잡아 실제 금액 span `127,300원`과 매칭되지 않는다. |
+| 007 | 새 악화 | 날짜 입력과 동치인 `1년`이라는 근속기간 재설명을 별도 미사용 수량으로 잡는다. 날짜로 이미 반영된 기간과의 동치 관계를 확인하지 않는다. |
+| 008 | 새 악화 | 평균임금 측정 구간 `3개월`과 그 구간의 역일수 `91일`을 모두 wage_days 역할로 잡는다. 입력한 91일 외에 측정 기준 3개월도 별도 입력을 요구한다. |
+| 012 | 개선 | 날짜로 산출한 기간과 별도로 명시된 `812일`이 어느 입력에도 쓰이지 않았음을 발견해 안내한다. 의도한 안전 개선이다. 같은 질문의 `4주`도 인접 근속 문맥 때문에 service 역할로 잡혔지만, 첫 미사용 수량은 812일이다. |
+| 013 | 새 악화 | 같은 `8개월`이 근속 설명과 개근 월수의 기준 설명에 반복된다. 두 원문 위치 모두 service_period의 근거 후보인데, 수량마다 별도 입력 필드를 요구해 하나가 남는다. |
+| 017 | 새 악화 | 출근율과 개근 월수를 설명하는 기준 기간 `그 1년`을 계속근로기간과 구분하지 못해 별도 미사용 기간으로 잡는다. |
+| 025 | 새 악화 | 조사 `이`를 붙인 `이 14,760원`이 실제 시급 span보다 넓어 매칭되지 않는다. 부가적으로 근로관계 유지기간 `7일`도 weekly_days 역할로 잡혀 불필요한 입력 요구가 남는다. |
+| 028 | 새 악화 | 그 주 전체의 고용관계 유지기간 `7일`을 주 소정근로일수 weekly_days로 잡아 미사용 입력으로 본다. 부가적으로 `이 12,190원`도 조사까지 포함돼 실제 시급 span과 맞지 않는다. |
+| 030 | 새 악화 | 주휴 자격을 설명하는 근로관계 유지기간 `7일`을 주 소정근로일수 weekly_days로 잡는다. 이미 결근으로 결과가 0원인 경우에도 계산을 막는다. |
+| 031 | 새 악화 | 그 주의 근로관계 종료 시점을 설명하는 `7일`을 주 소정근로일수 weekly_days로 잡는다. 근로관계 종료 사실로 결과가 0원인 경우에도 계산을 막는다. |
+| 039 | 새 악화 | 일 소정근로시간의 단위 분모인 `1일`을 별도 기간 입력으로 잡는다. daily_scheduled_hours의 `8시간`과 주 5일 입력으로 계산할 수 있는데도 기간을 추가로 요구한다. |
+| 043 | 새 악화 | 월 실제 근로시간 `173시간`과 월 최저임금 적용기준시간 `191시간`의 역할을 구분하지 못한다. 계산에 사용할 기준 191시간이 명시돼 있어도 실근로 173시간을 미사용 입력으로 본다. |
+| 055 | 새 악화 | 지시어 `이 시간`을 한글 숫자 수량처럼 잡는다. 실제 연장근로 3시간 30분과 총 실근로 3.5시간은 모두 입력에 반영됐지만 지시어 때문에 계산을 막는다. |
+
+### 바뀐 문항의 질문·라우터 원출력·전후 판정
+
+아래 각 문항은 최초와 재평가 기록 모두에서 같은 원문·raw·전후 판정을 보였다. 중복 원문을 한 번씩 보존하되 각 문항은 두 레코드에 해당한다. 새 악화 13건 모두 결과를 출력하지 않고 안내하며, 계산을 유지해야 한다는 기존 기대값은 그대로 남긴다.
+
+#### 최종 재생 labor-heldout-002 — 새 악화
+
+질문 원문:
+
+~~~text
+통상임금 하한을 반영한 퇴직금 산정용 일급이 134,780원이라고 인사팀에서 확인해 줬습니다. 인정 계속근로기간은 총 937일, 4주 평균 주 소정근로시간은 27시간 30분이에요. 법정 최소 퇴직금 계산 부탁드립니다.
+~~~
+
+라우터 원출력:
+
+~~~text
+{"calculator":"severance_pay","inputs":{"adjusted_daily_wage":"134,780원","service_period":"937일","weekly_hours":"27시간 30분"}}
+~~~
+
+기대: `severance_pay/calculated` · 독립 기대값: `{"법정 최소 퇴직금": 10379906}`
+
+수정 전: `severance_pay/calculated/selected` · 결과 `{"법정 최소 퇴직금": 10379906}`
+
+수정 후: `severance_pay/guidance/ambiguous_input` · 결과 `{}`
+
+수량 추출이 조사 `이`까지 포함한 `이 134,780원`을 금액 구간으로 잡는다. 실제 근거 span `134,780원`보다 넓어 매칭되지 않는다.
+
+#### 최종 재생 labor-heldout-003 — 새 악화
+
+질문 원문:
+
+~~~text
+2026년 8월 13일이 첫 비재직일이고 입사일은 2021년 7월 19일입니다. 4주 평균 주 소정근로시간은 38시간이에요. 퇴직 직전 3개월 임금 총액 11,268,500원에는 회사 사정으로 휴업한 산정 제외 9일의 임금 742,000원이 들어 있습니다. 이 총액 밖에서 평균임금에 별도 산입할 적격 연간 상여는 1,736,000원입니다. 1일 통상임금이 127,300원일 때 법정 퇴직금은요?
+~~~
+
+라우터 원출력:
+
+~~~text
+{"calculator":"severance_pay","inputs":{"retirement_date":"2026년 8월 13일","hire_date":"2021년 7월 19일","weekly_hours":"38시간","wage_total":"11,268,500원","excluded_days":"9일","excluded_wages":"742,000원","annual_bonus":"1,736,000원","ordinary_daily_wage":"127,300원"}}
+~~~
+
+기대: `severance_pay/calculated` · 독립 기대값: `{"법정 최소 퇴직금": 20090331}`
+
+수정 전: `severance_pay/calculated/selected` · 결과 `{"법정 최소 퇴직금": 20090331}`
+
+수정 후: `severance_pay/guidance/ambiguous_input` · 결과 `{}`
+
+수량 추출이 조사 `이`까지 포함한 `이 127,300원`을 잡아 실제 금액 span `127,300원`과 매칭되지 않는다.
+
+#### 최종 재생 labor-heldout-007 — 새 악화
+
+질문 원문:
+
+~~~text
+입사일 2025년 4월 26일, 첫 비재직일 2026년 4월 26일입니다. 퇴직 전 3개월 임금 합계가 8,532,750원이고 하루 통상임금은 101,370원이래요. 소정근로는 4주 평균 주 35시간이었습니다. 딱 1년 채운 제 법정 퇴직금을 알려 주세요.
+~~~
+
+라우터 원출력:
+
+~~~text
+{"calculator":"severance_pay","inputs":{"hire_date":"2025년 4월 26일","retirement_date":"2026년 4월 26일","wage_total":"8,532,750원","ordinary_daily_wage":"101,370원","weekly_hours":"4주 평균 주 35시간"}}
+~~~
+
+기대: `severance_pay/calculated` · 독립 기대값: `{"법정 최소 퇴직금": 3041100}`
+
+수정 전: `severance_pay/calculated/selected` · 결과 `{"법정 최소 퇴직금": 3041100}`
+
+수정 후: `severance_pay/guidance/ambiguous_input` · 결과 `{}`
+
+날짜 입력과 동치인 `1년`이라는 근속기간 재설명을 별도 미사용 수량으로 잡는다. 날짜로 이미 반영된 기간과의 동치 관계를 확인하지 않는다.
+
+#### 최종 재생 labor-heldout-008 — 새 악화
+
+질문 원문:
+
+~~~text
+법정 퇴직금을 확인 중입니다. 인정 계속근로기간이 786일이고 4주 평균 주 소정근로는 32시간이었습니다. 마지막 3개월은 역일수 91일, 임금 합계 9,776,192원이에요. 그 합계에 들어 있지 않은 별도 산입 대상 연간 미사용 연차수당은 524,640원, 하루 통상임금은 105,610원입니다.
+~~~
+
+라우터 원출력:
+
+~~~text
+{"calculator":"severance_pay","inputs":{"service_period":"786일","weekly_hours":"32시간","wage_days":"91일","wage_total":"9,776,192원","annual_unused_leave_pay":"524,640원","ordinary_daily_wage":"105,610원"}}
+~~~
+
+기대: `severance_pay/calculated` · 독립 기대값: `{"법정 최소 퇴직금": 7033429}`
+
+수정 전: `severance_pay/calculated/selected` · 결과 `{"법정 최소 퇴직금": 7033429}`
+
+수정 후: `severance_pay/guidance/ambiguous_input` · 결과 `{}`
+
+평균임금 측정 구간 `3개월`과 그 구간의 역일수 `91일`을 모두 wage_days 역할로 잡는다. 입력한 91일 외에 측정 기준 3개월도 별도 입력을 요구한다.
+
+#### 최종 재생 labor-heldout-012 — 개선
+
+질문 원문:
+
+~~~text
+퇴직금 명세를 보니 입사일은 2024년 5월 14일, 첫 비재직일은 2026년 9월 21일로 돼 있어요. 같은 명세에 인정 계속근로일수는 812일로 찍혀 있습니다. 중간에 근속에서 뺀 기간은 없고 4주 평균 주 소정근로시간은 31시간, 통상임금 하한 반영 산정용 일급은 124,970원인데 어느 쪽으로 계산해야 하나요?
+~~~
+
+라우터 원출력:
+
+~~~text
+{
+  "calculator": "severance_pay",
+  "inputs": {
+    "hire_date": "2024년 5월 14일",
+    "retirement_date": "2026년 9월 21일",
+    "weekly_hours": "31시간",
+    "adjusted_daily_wage": "124,970원"
+  }
+}
+~~~
+
+기대: `severance_pay/guidance` · 독립 기대값: `null`
+
+수정 전: `severance_pay/calculated/selected` · 결과 `{"법정 최소 퇴직금": 8833496}`
+
+수정 후: `severance_pay/guidance/ambiguous_input` · 결과 `{}`
+
+날짜로 산출한 기간과 별도로 명시된 `812일`이 어느 입력에도 쓰이지 않았음을 발견해 안내한다. 의도한 안전 개선이다. 같은 질문의 `4주`도 인접 근속 문맥 때문에 service 역할로 잡혔지만, 첫 미사용 수량은 812일이다.
+
+#### 최종 재생 labor-heldout-013 — 새 악화
+
+질문 원문:
+
+~~~text
+입사한 지 8개월이고 상시 근로자 16명인 곳에서 일합니다. 4주 평균 주 소정근로시간은 36시간이에요. 8개월 중 정해진 근무일에 빠짐없이 출근하고 그 달이 끝난 다음 날까지도 재직한 건 6개월입니다. 입사일 기준 법정 연차가 지금까지 며칠 생겼나요?
+~~~
+
+라우터 원출력:
+
+~~~text
+{"calculator":"annual_leave_days","inputs":{"workplace_size":"16명","weekly_hours":"36시간","service_period":"8개월","full_attendance_months":"6개월","include_first_year":"true"}}
+~~~
+
+기대: `annual_leave_days/calculated` · 독립 기대값: `{"연차유급휴가 일수": 6}`
+
+수정 전: `annual_leave_days/calculated/selected` · 결과 `{"연차유급휴가 일수": 6}`
+
+수정 후: `annual_leave_days/guidance/ambiguous_input` · 결과 `{}`
+
+같은 `8개월`이 근속 설명과 개근 월수의 기준 설명에 반복된다. 두 원문 위치 모두 service_period의 근거 후보인데, 수량마다 별도 입력 필드를 요구해 하나가 남는다.
+
+#### 최종 재생 labor-heldout-017 — 새 악화
+
+질문 원문:
+
+~~~text
+지금 계속근로기간 4년 8개월입니다. 해당 1년 출근율이 77.4%였고, 그 1년 안에 개근하고 해당 월을 끝낸 다음 날에도 재직한 달은 7개월이에요. 상시 근로자 수는 19명, 4주 평균 주 소정근로시간은 34시간입니다. 그 1년 근로로 발생하는 입사일 기준 법정 연차가 며칠인가요?
+~~~
+
+라우터 원출력:
+
+~~~text
+{"calculator":"annual_leave_days","inputs":{"workplace_size":"19명","weekly_hours":"34시간","service_period":"4년 8개월","attendance_rate":"77.4%","full_attendance_months":"7개월","include_first_year":"true"}}
+~~~
+
+기대: `annual_leave_days/calculated` · 독립 기대값: `{"연차유급휴가 일수": 7}`
+
+수정 전: `annual_leave_days/calculated/selected` · 결과 `{"연차유급휴가 일수": 7}`
+
+수정 후: `annual_leave_days/guidance/ambiguous_input` · 결과 `{}`
+
+출근율과 개근 월수를 설명하는 기준 기간 `그 1년`을 계속근로기간과 구분하지 못해 별도 미사용 기간으로 잡는다.
+
+#### 최종 재생 labor-heldout-025 — 새 악화
+
+질문 원문:
+
+~~~text
+통상시급이 14,760원이고 유급주휴시간은 7시간 15분입니다. 계약상 4주 평균 주 소정근로시간이 36시간 15분이고 이번 주 소정근로일에 전부 출근했어요. 그 주 7일 내내 근로관계를 유지했습니다. 주휴수당 한 주치 얼마인가요?
+~~~
+
+라우터 원출력:
+
+~~~text
+{"calculator":"weekly_holiday_pay","inputs":{"hourly_wage":"14,760원","paid_holiday_hours":"7시간 15분","weekly_scheduled_hours":"36시간 15분","attendance":"이번 주 소정근로일에 전부 출근했어요","employment":"그 주 7일 내내 근로관계를 유지했습니다"}}
+~~~
+
+기대: `weekly_holiday_pay/calculated` · 독립 기대값: `{"주휴수당": 107010}`
+
+수정 전: `weekly_holiday_pay/calculated/selected` · 결과 `{"주휴수당": 107010}`
+
+수정 후: `weekly_holiday_pay/guidance/ambiguous_input` · 결과 `{}`
+
+조사 `이`를 붙인 `이 14,760원`이 실제 시급 span보다 넓어 매칭되지 않는다. 부가적으로 근로관계 유지기간 `7일`도 weekly_days 역할로 잡혀 불필요한 입력 요구가 남는다.
+
+#### 최종 재생 labor-heldout-028 — 새 악화
+
+질문 원문:
+
+~~~text
+비교할 통상근로자의 주 소정근로일수는 고정 5일입니다. 제 4주간 소정근로시간 합계는 딱 60시간이에요. 이번 주는 소정근로일을 개근했고 그 주 7일간 고용관계가 유지됐습니다. 통상시급이 12,190원이면 이 주의 주휴수당이 얼마인가요?
+~~~
+
+라우터 원출력:
+
+~~~text
+{"calculator":"weekly_holiday_pay","inputs":{"reference_days_per_week":"5일","four_week_scheduled_hours":"60시간","attendance":"개근","employment":"7일간 고용관계가 유지","hourly_wage":"12,190원"}}
+~~~
+
+기대: `weekly_holiday_pay/calculated` · 독립 기대값: `{"주휴수당": 36570}`
+
+수정 전: `weekly_holiday_pay/calculated/selected` · 결과 `{"주휴수당": 36570}`
+
+수정 후: `weekly_holiday_pay/guidance/ambiguous_input` · 결과 `{}`
+
+그 주 전체의 고용관계 유지기간 `7일`을 주 소정근로일수 weekly_days로 잡아 미사용 입력으로 본다. 부가적으로 `이 12,190원`도 조사까지 포함돼 실제 시급 span과 맞지 않는다.
+
+#### 최종 재생 labor-heldout-030 — 새 악화
+
+질문 원문:
+
+~~~text
+소정근로시간은 4주 평균 주 29시간 30분이고 통상시급은 13,762원입니다. 그 주에 7일 내내 재직했는데 소정근로일에 하루 결근했어요. 이번 주 법정 주휴수당이 얼마인지 봐 주세요.
+~~~
+
+라우터 원출력:
+
+~~~text
+{"calculator":"weekly_holiday_pay","inputs":{"weekly_scheduled_hours":"4주 평균 주 29시간 30분","hourly_wage":"13,762원","employment":"7일 내내 재직","attendance":"소정근로일에 하루 결근"}}
+~~~
+
+기대: `weekly_holiday_pay/calculated` · 독립 기대값: `{"주휴수당": 0}`
+
+수정 전: `weekly_holiday_pay/calculated/selected` · 결과 `{"주휴수당": 0}`
+
+수정 후: `weekly_holiday_pay/guidance/ambiguous_input` · 결과 `{}`
+
+주휴 자격을 설명하는 근로관계 유지기간 `7일`을 주 소정근로일수 weekly_days로 잡는다. 이미 결근으로 결과가 0원인 경우에도 계산을 막는다.
+
+#### 최종 재생 labor-heldout-031 — 새 악화
+
+질문 원문:
+
+~~~text
+정해진 근무일에는 전부 출근해서 이번 주 소정근로일은 개근입니다. 다만 이번 주 7일이 되기 전에 근로관계가 종료됐습니다. 4주 평균 주 소정근로시간은 28시간이고 통상시급 13,412원인데 이 주 주휴수당이 나오나요?
+~~~
+
+라우터 원출력:
+
+~~~text
+{"calculator":"weekly_holiday_pay","inputs":{"weekly_scheduled_hours":"28시간","hourly_wage":"13,412원","attendance":"정해진 근무일에는 전부 출근해서 이번 주 소정근로일은 개근입니다","employment":"이번 주 7일이 되기 전에 근로관계가 종료됐습니다"}}
+~~~
+
+기대: `weekly_holiday_pay/calculated` · 독립 기대값: `{"주휴수당": 0}`
+
+수정 전: `weekly_holiday_pay/calculated/selected` · 결과 `{"주휴수당": 0}`
+
+수정 후: `weekly_holiday_pay/guidance/ambiguous_input` · 결과 `{}`
+
+그 주의 근로관계 종료 시점을 설명하는 `7일`을 주 소정근로일수 weekly_days로 잡는다. 근로관계 종료 사실로 결과가 0원인 경우에도 계산을 막는다.
+
+#### 최종 재생 labor-heldout-039 — 새 악화
+
+질문 원문:
+
+~~~text
+2027년 월 최저임금을 계산해 주세요. 근로계약상 주 5일이고 1일 소정근로시간은 8시간입니다. 고시에 따른 월 환산액이 궁금합니다.
+~~~
+
+라우터 원출력:
+
+~~~text
+{"calculator":"monthly_minimum_wage","inputs":{"year":"2027년","weekly_workdays":"주 5일","daily_scheduled_hours":"8시간"}}
+~~~
+
+기대: `monthly_minimum_wage/calculated` · 독립 기대값: `{"월 최저임금": 2236300}`
+
+수정 전: `monthly_minimum_wage/calculated/selected` · 결과 `{"월 최저임금": 2236300}`
+
+수정 후: `monthly_minimum_wage/guidance/ambiguous_input` · 결과 `{}`
+
+일 소정근로시간의 단위 분모인 `1일`을 별도 기간 입력으로 잡는다. daily_scheduled_hours의 `8시간`과 주 5일 입력으로 계산할 수 있는데도 기간을 추가로 요구한다.
+
+#### 최종 재생 labor-heldout-043 — 새 악화
+
+질문 원문:
+
+~~~text
+근태표에는 이번 달 실근로가 173시간이라고 나옵니다. 별도로 월 최저임금 적용기준시간은 191시간이라고 회사에서 확인해 줬어요. 2026년 월 최저임금이 얼마인지 그 기준으로 계산해 주세요.
+~~~
+
+라우터 원출력:
+
+~~~text
+{"calculator":"monthly_minimum_wage","inputs":{"year":"2026년","monthly_basis_hours":"191시간"}}
+~~~
+
+기대: `monthly_minimum_wage/calculated` · 독립 기대값: `{"월 최저임금": 1971120}`
+
+수정 전: `monthly_minimum_wage/calculated/selected` · 결과 `{"월 최저임금": 1971120}`
+
+수정 후: `monthly_minimum_wage/guidance/ambiguous_input` · 결과 `{}`
+
+월 실제 근로시간 `173시간`과 월 최저임금 적용기준시간 `191시간`의 역할을 구분하지 못한다. 계산에 사용할 기준 191시간이 명시돼 있어도 실근로 173시간을 미사용 입력으로 본다.
+
+#### 최종 재생 labor-heldout-055 — 새 악화
+
+질문 원문:
+
+~~~text
+상시 직원은 4명인 사업장이에요. 통상시급 11,936원이고 평일 연장근로가 휴게 제외 3시간 30분, 중복 없는 총 실근로는 3.5시간입니다. 이 시간에 법에서 정한 기본임금 포함 총액과 가산수당을 알려 주세요.
+~~~
+
+라우터 원출력:
+
+~~~text
+{"calculator":"premium_pay","inputs":{"staff_count":"4명","ordinary_hourly_wage":"11,936원","overtime_hours":"3시간 30분","total_hours":"3.5시간","include_base":"기본임금 포함 총액"}}
+~~~
+
+기대: `premium_pay/calculated` · 독립 기대값: `{"법정 가산수당": 0, "기본임금": 41776, "기본임금 포함 합계": 41776}`
+
+수정 전: `premium_pay/calculated/selected` · 결과 `{"법정 가산수당": 0, "기본임금": 41776, "기본임금 포함 합계": 41776}`
+
+수정 후: `premium_pay/guidance/ambiguous_input` · 결과 `{}`
+
+지시어 `이 시간`을 한글 숫자 수량처럼 잡는다. 실제 연장근로 3시간 30분과 총 실근로 3.5시간은 모두 입력에 반영됐지만 지시어 때문에 계산을 막는다.
+
+### 유지 문항과 전수 판정 보존
+
+val 46건은 모두 상태와 결과가 유지됐다. 최초·재평가 held-out에서 유지된 46개 ID는 각 묶음에서 다음과 같다.
+
+`001 · 004 · 005 · 006 · 009 · 010 · 011 · 014 · 015 · 016 · 018 · 019 · 020 · 021 · 022 · 023 · 024 · 026 · 027 · 029 · 032 · 033 · 034 · 035 · 036 · 037 · 038 · 040 · 041 · 042 · 044 · 045 · 046 · 047 · 048 · 049 · 050 · 051 · 052 · 053 · 054 · 056 · 057 · 058 · 059 · 060`
+
+각 레코드의 비교 결과를 아래에 보존한다. 원문·raw는 이 문서 앞부분의 해당 원출력 보존 절에 있고, 바뀐 문항은 위에도 그대로 옮겼다. `source`의 `val`, `heldout_first`, `heldout_repeat`는 각각 보존 val·최초·재평가 묶음이다.
+
+~~~jsonl
+{"source":"val","group":"pr1","id":"CR023","before":{"calculator":"midyear_income_tax","status":"calculated","reason":"selected","results":{"결정세액":0,"개인지방소득세":0}},"after":{"calculator":"midyear_income_tax","status":"calculated","reason":"selected","results":{"결정세액":0,"개인지방소득세":0}},"change":"unchanged"}
+{"source":"val","group":"pr1","id":"CR030","before":{"calculator":"midyear_income_tax","status":"calculated","reason":"selected","results":{"결정세액":0,"개인지방소득세":0}},"after":{"calculator":"midyear_income_tax","status":"calculated","reason":"selected","results":{"결정세액":0,"개인지방소득세":0}},"change":"unchanged"}
+{"source":"val","group":"pr1","id":"CR033","before":{"calculator":"none","status":"none","reason":"unsupported_question","results":{}},"after":{"calculator":"none","status":"none","reason":"unsupported_question","results":{}},"change":"unchanged"}
+{"source":"val","group":"pr1","id":"CR041","before":{"calculator":"none","status":"none","reason":"unsupported_question","results":{}},"after":{"calculator":"none","status":"none","reason":"unsupported_question","results":{}},"change":"unchanged"}
+{"source":"val","group":"pr1","id":"CR043","before":{"calculator":"none","status":"none","reason":"unsupported_question","results":{}},"after":{"calculator":"none","status":"none","reason":"unsupported_question","results":{}},"change":"unchanged"}
+{"source":"val","group":"pr1","id":"CR048","before":{"calculator":"none","status":"none","reason":"unsupported_question","results":{}},"after":{"calculator":"none","status":"none","reason":"unsupported_question","results":{}},"change":"unchanged"}
+{"source":"val","group":"pr1","id":"CR050","before":{"calculator":"none","status":"none","reason":"invalid_schema","results":{}},"after":{"calculator":"none","status":"none","reason":"invalid_schema","results":{}},"change":"unchanged"}
+{"source":"val","group":"pr1","id":"CR052","before":{"calculator":"none","status":"none","reason":"unsupported_question","results":{}},"after":{"calculator":"none","status":"none","reason":"unsupported_question","results":{}},"change":"unchanged"}
+{"source":"val","group":"pr1","id":"CR057","before":{"calculator":"none","status":"lookup","reason":"lookup_question","results":{}},"after":{"calculator":"none","status":"lookup","reason":"lookup_question","results":{}},"change":"unchanged"}
+{"source":"val","group":"pr1","id":"CR077","before":{"calculator":"none","status":"lookup","reason":"lookup_question","results":{}},"after":{"calculator":"none","status":"lookup","reason":"lookup_question","results":{}},"change":"unchanged"}
+{"source":"val","group":"pr1","id":"CR088","before":{"calculator":"midyear_income_tax","status":"guidance","reason":"missing_required","results":{}},"after":{"calculator":"midyear_income_tax","status":"guidance","reason":"missing_required","results":{}},"change":"unchanged"}
+{"source":"val","group":"pr1","id":"CR092","before":{"calculator":"medical_expense_credit","status":"guidance","reason":"ambiguous_input","results":{}},"after":{"calculator":"medical_expense_credit","status":"guidance","reason":"ambiguous_input","results":{}},"change":"unchanged"}
+{"source":"val","group":"pr1","id":"CR100","before":{"calculator":"none","status":"none","reason":"unsupported_question","results":{}},"after":{"calculator":"none","status":"none","reason":"unsupported_question","results":{}},"change":"unchanged"}
+{"source":"val","group":"pr2_regression","id":"CR023","before":{"calculator":"midyear_income_tax","status":"calculated","reason":"selected","results":{"결정세액":0,"개인지방소득세":0}},"after":{"calculator":"midyear_income_tax","status":"calculated","reason":"selected","results":{"결정세액":0,"개인지방소득세":0}},"change":"unchanged"}
+{"source":"val","group":"pr2_regression","id":"CR030","before":{"calculator":"midyear_income_tax","status":"calculated","reason":"selected","results":{"결정세액":0,"개인지방소득세":0}},"after":{"calculator":"midyear_income_tax","status":"calculated","reason":"selected","results":{"결정세액":0,"개인지방소득세":0}},"change":"unchanged"}
+{"source":"val","group":"pr2_regression","id":"CR041","before":{"calculator":"severance_pay","status":"calculated","reason":"selected","results":{"평균임금 기준 퇴직금 추정":9000000,"통상임금 하한 적용 퇴직금 추정":10334928}},"after":{"calculator":"severance_pay","status":"calculated","reason":"selected","results":{"평균임금 기준 퇴직금 추정":9000000,"통상임금 하한 적용 퇴직금 추정":10334928}},"change":"unchanged"}
+{"source":"val","group":"pr2_regression","id":"CR043","before":{"calculator":"monthly_minimum_wage","status":"calculated","reason":"selected","results":{"월 최저임금":2156880}},"after":{"calculator":"monthly_minimum_wage","status":"calculated","reason":"selected","results":{"월 최저임금":2156880}},"change":"unchanged"}
+{"source":"val","group":"pr2_regression","id":"CR048","before":{"calculator":"none","status":"none","reason":"unsupported_question","results":{}},"after":{"calculator":"none","status":"none","reason":"unsupported_question","results":{}},"change":"unchanged"}
+{"source":"val","group":"pr2_regression","id":"CR050","before":{"calculator":"annual_leave_days","status":"guidance","reason":"missing_required","results":{}},"after":{"calculator":"annual_leave_days","status":"guidance","reason":"missing_required","results":{}},"change":"unchanged"}
+{"source":"val","group":"pr2_regression","id":"CR052","before":{"calculator":"none","status":"none","reason":"unsupported_question","results":{}},"after":{"calculator":"none","status":"none","reason":"unsupported_question","results":{}},"change":"unchanged"}
+{"source":"val","group":"pr2_regression","id":"CR057","before":{"calculator":"none","status":"lookup","reason":"lookup_question","results":{}},"after":{"calculator":"none","status":"lookup","reason":"lookup_question","results":{}},"change":"unchanged"}
+{"source":"val","group":"pr2_regression","id":"CR077","before":{"calculator":"none","status":"lookup","reason":"lookup_question","results":{}},"after":{"calculator":"none","status":"lookup","reason":"lookup_question","results":{}},"change":"unchanged"}
+{"source":"val","group":"pr2_regression","id":"CR088","before":{"calculator":"midyear_income_tax","status":"guidance","reason":"missing_required","results":{}},"after":{"calculator":"midyear_income_tax","status":"guidance","reason":"missing_required","results":{}},"change":"unchanged"}
+{"source":"val","group":"pr2_regression","id":"CR092","before":{"calculator":"medical_expense_credit","status":"guidance","reason":"ambiguous_input","results":{}},"after":{"calculator":"medical_expense_credit","status":"guidance","reason":"ambiguous_input","results":{}},"change":"unchanged"}
+{"source":"val","group":"labor","id":"MW002","before":{"calculator":"monthly_minimum_wage","status":"calculated","reason":"selected","results":{"월 최저임금":2096270}},"after":{"calculator":"monthly_minimum_wage","status":"calculated","reason":"selected","results":{"월 최저임금":2096270}},"change":"unchanged"}
+{"source":"val","group":"labor","id":"LU06","before":{"calculator":"severance_pay","status":"guidance","reason":"ambiguous_input","results":{}},"after":{"calculator":"severance_pay","status":"guidance","reason":"ambiguous_input","results":{}},"change":"unchanged"}
+{"source":"val","group":"labor","id":"WH004","before":{"calculator":"none","status":"lookup","reason":"lookup_question","results":{}},"after":{"calculator":"none","status":"lookup","reason":"lookup_question","results":{}},"change":"unchanged"}
+{"source":"val","group":"labor","id":"WH005","before":{"calculator":"weekly_holiday_pay","status":"calculated","reason":"selected","results":{"주휴수당":36000}},"after":{"calculator":"weekly_holiday_pay","status":"calculated","reason":"selected","results":{"주휴수당":36000}},"change":"unchanged"}
+{"source":"val","group":"labor","id":"WH008","before":{"calculator":"weekly_holiday_pay","status":"calculated","reason":"selected","results":{"주휴수당":94500}},"after":{"calculator":"weekly_holiday_pay","status":"calculated","reason":"selected","results":{"주휴수당":94500}},"change":"unchanged"}
+{"source":"val","group":"labor","id":"WH010","before":{"calculator":"weekly_holiday_pay","status":"calculated","reason":"selected","results":{"주휴수당":0}},"after":{"calculator":"weekly_holiday_pay","status":"calculated","reason":"selected","results":{"주휴수당":0}},"change":"unchanged"}
+{"source":"val","group":"labor","id":"AL01","before":{"calculator":"annual_leave_days","status":"calculated","reason":"selected","results":{"연차유급휴가 일수":6}},"after":{"calculator":"annual_leave_days","status":"calculated","reason":"selected","results":{"연차유급휴가 일수":6}},"change":"unchanged"}
+{"source":"val","group":"labor","id":"AL02","before":{"calculator":"annual_leave_days","status":"calculated","reason":"selected","results":{"연차유급휴가 일수":11}},"after":{"calculator":"annual_leave_days","status":"calculated","reason":"selected","results":{"연차유급휴가 일수":11}},"change":"unchanged"}
+{"source":"val","group":"labor","id":"AL03","before":{"calculator":"annual_leave_days","status":"calculated","reason":"selected","results":{"연차유급휴가 일수":15}},"after":{"calculator":"annual_leave_days","status":"calculated","reason":"selected","results":{"연차유급휴가 일수":15}},"change":"unchanged"}
+{"source":"val","group":"labor","id":"AL12","before":{"calculator":"annual_leave_days","status":"calculated","reason":"selected","results":{"연차유급휴가 일수":0}},"after":{"calculator":"annual_leave_days","status":"calculated","reason":"selected","results":{"연차유급휴가 일수":0}},"change":"unchanged"}
+{"source":"val","group":"labor","id":"AL13","before":{"calculator":"annual_leave_days","status":"guidance","reason":"missing_required","results":{}},"after":{"calculator":"annual_leave_days","status":"guidance","reason":"missing_required","results":{}},"change":"unchanged"}
+{"source":"val","group":"labor","id":"AL14","before":{"calculator":"annual_leave_days","status":"guidance","reason":"missing_required","results":{}},"after":{"calculator":"annual_leave_days","status":"guidance","reason":"missing_required","results":{}},"change":"unchanged"}
+{"source":"val","group":"labor","id":"AL16","before":{"calculator":"annual_leave_days","status":"guidance","reason":"ambiguous_input","results":{}},"after":{"calculator":"annual_leave_days","status":"guidance","reason":"ambiguous_input","results":{}},"change":"unchanged"}
+{"source":"val","group":"labor","id":"AL17","before":{"calculator":"annual_leave_days","status":"guidance","reason":"ambiguous_input","results":{}},"after":{"calculator":"annual_leave_days","status":"guidance","reason":"ambiguous_input","results":{}},"change":"unchanged"}
+{"source":"val","group":"labor","id":"AL18","before":{"calculator":"annual_leave_days","status":"guidance","reason":"ambiguous_input","results":{}},"after":{"calculator":"annual_leave_days","status":"guidance","reason":"ambiguous_input","results":{}},"change":"unchanged"}
+{"source":"val","group":"labor","id":"LP002","before":{"calculator":"premium_pay","status":"calculated","reason":"selected","results":{"법정 가산수당":30000}},"after":{"calculator":"premium_pay","status":"calculated","reason":"selected","results":{"법정 가산수당":30000}},"change":"unchanged"}
+{"source":"val","group":"labor","id":"LP003","before":{"calculator":"premium_pay","status":"calculated","reason":"selected","results":{"법정 가산수당":40000}},"after":{"calculator":"premium_pay","status":"calculated","reason":"selected","results":{"법정 가산수당":40000}},"change":"unchanged"}
+{"source":"val","group":"labor","id":"LP004","before":{"calculator":"premium_pay","status":"calculated","reason":"selected","results":{"법정 가산수당":72000}},"after":{"calculator":"premium_pay","status":"calculated","reason":"selected","results":{"법정 가산수당":72000}},"change":"unchanged"}
+{"source":"val","group":"labor","id":"LP005","before":{"calculator":"premium_pay","status":"calculated","reason":"selected","results":{"법정 가산수당":96000}},"after":{"calculator":"premium_pay","status":"calculated","reason":"selected","results":{"법정 가산수당":96000}},"change":"unchanged"}
+{"source":"val","group":"labor","id":"LP006","before":{"calculator":"premium_pay","status":"calculated","reason":"selected","results":{"법정 가산수당":37500,"기본임금":60000,"기본임금 포함 합계":97500}},"after":{"calculator":"premium_pay","status":"calculated","reason":"selected","results":{"법정 가산수당":37500,"기본임금":60000,"기본임금 포함 합계":97500}},"change":"unchanged"}
+{"source":"val","group":"labor","id":"LP008","before":{"calculator":"premium_pay","status":"calculated","reason":"selected","results":{"법정 가산수당":104000}},"after":{"calculator":"premium_pay","status":"calculated","reason":"selected","results":{"법정 가산수당":104000}},"change":"unchanged"}
+{"source":"val","group":"labor","id":"LP012","before":{"calculator":"premium_pay","status":"calculated","reason":"selected","results":{"법정 가산수당":60000,"기본임금":96000,"기본임금 포함 합계":156000}},"after":{"calculator":"premium_pay","status":"calculated","reason":"selected","results":{"법정 가산수당":60000,"기본임금":96000,"기본임금 포함 합계":156000}},"change":"unchanged"}
+{"source":"heldout_first","group":"labor-pr2-heldout","id":"labor-heldout-001","before":{"calculator":"severance_pay","status":"calculated","reason":"selected","results":{"법정 최소 퇴직금":18593409}},"after":{"calculator":"severance_pay","status":"calculated","reason":"selected","results":{"법정 최소 퇴직금":18593409}},"change":"unchanged"}
+{"source":"heldout_first","group":"labor-pr2-heldout","id":"labor-heldout-002","before":{"calculator":"severance_pay","status":"calculated","reason":"selected","results":{"법정 최소 퇴직금":10379906}},"after":{"calculator":"severance_pay","status":"guidance","reason":"ambiguous_input","results":{}},"change":"regressed"}
+{"source":"heldout_first","group":"labor-pr2-heldout","id":"labor-heldout-003","before":{"calculator":"severance_pay","status":"calculated","reason":"selected","results":{"법정 최소 퇴직금":20090331}},"after":{"calculator":"severance_pay","status":"guidance","reason":"ambiguous_input","results":{}},"change":"regressed"}
+{"source":"heldout_first","group":"labor-pr2-heldout","id":"labor-heldout-004","before":{"calculator":"severance_pay","status":"calculated","reason":"selected","results":{"법정 최소 퇴직금":0}},"after":{"calculator":"severance_pay","status":"calculated","reason":"selected","results":{"법정 최소 퇴직금":0}},"change":"unchanged"}
+{"source":"heldout_first","group":"labor-pr2-heldout","id":"labor-heldout-005","before":{"calculator":"severance_pay","status":"calculated","reason":"selected","results":{"법정 최소 퇴직금":0}},"after":{"calculator":"severance_pay","status":"calculated","reason":"selected","results":{"법정 최소 퇴직금":0}},"change":"unchanged"}
+{"source":"heldout_first","group":"labor-pr2-heldout","id":"labor-heldout-006","before":{"calculator":"severance_pay","status":"calculated","reason":"selected","results":{"평균임금 기준 퇴직금 추정":8938889,"통상임금 하한 적용 퇴직금 추정":10264753}},"after":{"calculator":"severance_pay","status":"calculated","reason":"selected","results":{"평균임금 기준 퇴직금 추정":8938889,"통상임금 하한 적용 퇴직금 추정":10264753}},"change":"unchanged"}
+{"source":"heldout_first","group":"labor-pr2-heldout","id":"labor-heldout-007","before":{"calculator":"severance_pay","status":"calculated","reason":"selected","results":{"법정 최소 퇴직금":3041100}},"after":{"calculator":"severance_pay","status":"guidance","reason":"ambiguous_input","results":{}},"change":"regressed"}
+{"source":"heldout_first","group":"labor-pr2-heldout","id":"labor-heldout-008","before":{"calculator":"severance_pay","status":"calculated","reason":"selected","results":{"법정 최소 퇴직금":7033429}},"after":{"calculator":"severance_pay","status":"guidance","reason":"ambiguous_input","results":{}},"change":"regressed"}
+{"source":"heldout_first","group":"labor-pr2-heldout","id":"labor-heldout-009","before":{"calculator":"severance_pay","status":"guidance","reason":"missing_required","results":{}},"after":{"calculator":"severance_pay","status":"guidance","reason":"missing_required","results":{}},"change":"unchanged"}
+{"source":"heldout_first","group":"labor-pr2-heldout","id":"labor-heldout-010","before":{"calculator":"severance_pay","status":"guidance","reason":"missing_required","results":{}},"after":{"calculator":"severance_pay","status":"guidance","reason":"missing_required","results":{}},"change":"unchanged"}
+{"source":"heldout_first","group":"labor-pr2-heldout","id":"labor-heldout-011","before":{"calculator":"severance_pay","status":"guidance","reason":"ambiguous_input","results":{}},"after":{"calculator":"severance_pay","status":"guidance","reason":"ambiguous_input","results":{}},"change":"unchanged"}
+{"source":"heldout_first","group":"labor-pr2-heldout","id":"labor-heldout-012","before":{"calculator":"severance_pay","status":"calculated","reason":"selected","results":{"법정 최소 퇴직금":8833496}},"after":{"calculator":"severance_pay","status":"guidance","reason":"ambiguous_input","results":{}},"change":"improved"}
+{"source":"heldout_first","group":"labor-pr2-heldout","id":"labor-heldout-013","before":{"calculator":"annual_leave_days","status":"calculated","reason":"selected","results":{"연차유급휴가 일수":6}},"after":{"calculator":"annual_leave_days","status":"guidance","reason":"ambiguous_input","results":{}},"change":"regressed"}
+{"source":"heldout_first","group":"labor-pr2-heldout","id":"labor-heldout-014","before":{"calculator":"annual_leave_days","status":"guidance","reason":"ambiguous_input","results":{}},"after":{"calculator":"annual_leave_days","status":"guidance","reason":"ambiguous_input","results":{}},"change":"unchanged"}
+{"source":"heldout_first","group":"labor-pr2-heldout","id":"labor-heldout-015","before":{"calculator":"annual_leave_days","status":"calculated","reason":"selected","results":{"연차유급휴가 일수":10}},"after":{"calculator":"annual_leave_days","status":"calculated","reason":"selected","results":{"연차유급휴가 일수":10}},"change":"unchanged"}
+{"source":"heldout_first","group":"labor-pr2-heldout","id":"labor-heldout-016","before":{"calculator":"annual_leave_days","status":"calculated","reason":"selected","results":{"연차유급휴가 일수":25}},"after":{"calculator":"annual_leave_days","status":"calculated","reason":"selected","results":{"연차유급휴가 일수":25}},"change":"unchanged"}
+{"source":"heldout_first","group":"labor-pr2-heldout","id":"labor-heldout-017","before":{"calculator":"annual_leave_days","status":"calculated","reason":"selected","results":{"연차유급휴가 일수":7}},"after":{"calculator":"annual_leave_days","status":"guidance","reason":"ambiguous_input","results":{}},"change":"regressed"}
+{"source":"heldout_first","group":"labor-pr2-heldout","id":"labor-heldout-018","before":{"calculator":"annual_leave_days","status":"calculated","reason":"selected","results":{"연차유급휴가 일수":24}},"after":{"calculator":"annual_leave_days","status":"calculated","reason":"selected","results":{"연차유급휴가 일수":24}},"change":"unchanged"}
+{"source":"heldout_first","group":"labor-pr2-heldout","id":"labor-heldout-019","before":{"calculator":"annual_leave_days","status":"calculated","reason":"selected","results":{"연차유급휴가 일수":0}},"after":{"calculator":"annual_leave_days","status":"calculated","reason":"selected","results":{"연차유급휴가 일수":0}},"change":"unchanged"}
+{"source":"heldout_first","group":"labor-pr2-heldout","id":"labor-heldout-020","before":{"calculator":"annual_leave_days","status":"calculated","reason":"selected","results":{"연차유급휴가 일수":0}},"after":{"calculator":"annual_leave_days","status":"calculated","reason":"selected","results":{"연차유급휴가 일수":0}},"change":"unchanged"}
+{"source":"heldout_first","group":"labor-pr2-heldout","id":"labor-heldout-021","before":{"calculator":"annual_leave_days","status":"guidance","reason":"missing_required","results":{}},"after":{"calculator":"annual_leave_days","status":"guidance","reason":"missing_required","results":{}},"change":"unchanged"}
+{"source":"heldout_first","group":"labor-pr2-heldout","id":"labor-heldout-022","before":{"calculator":"annual_leave_days","status":"guidance","reason":"missing_required","results":{}},"after":{"calculator":"annual_leave_days","status":"guidance","reason":"missing_required","results":{}},"change":"unchanged"}
+{"source":"heldout_first","group":"labor-pr2-heldout","id":"labor-heldout-023","before":{"calculator":"annual_leave_days","status":"guidance","reason":"ambiguous_input","results":{}},"after":{"calculator":"annual_leave_days","status":"guidance","reason":"ambiguous_input","results":{}},"change":"unchanged"}
+{"source":"heldout_first","group":"labor-pr2-heldout","id":"labor-heldout-024","before":{"calculator":"annual_leave_days","status":"guidance","reason":"ambiguous_input","results":{}},"after":{"calculator":"annual_leave_days","status":"guidance","reason":"ambiguous_input","results":{}},"change":"unchanged"}
+{"source":"heldout_first","group":"labor-pr2-heldout","id":"labor-heldout-025","before":{"calculator":"weekly_holiday_pay","status":"calculated","reason":"selected","results":{"주휴수당":107010}},"after":{"calculator":"weekly_holiday_pay","status":"guidance","reason":"ambiguous_input","results":{}},"change":"regressed"}
+{"source":"heldout_first","group":"labor-pr2-heldout","id":"labor-heldout-026","before":{"calculator":"weekly_holiday_pay","status":"calculated","reason":"selected","results":{"주휴수당":58157}},"after":{"calculator":"weekly_holiday_pay","status":"calculated","reason":"selected","results":{"주휴수당":58157}},"change":"unchanged"}
+{"source":"heldout_first","group":"labor-pr2-heldout","id":"labor-heldout-027","before":{"calculator":"weekly_holiday_pay","status":"calculated","reason":"selected","results":{"주휴수당":"70164.6842"}},"after":{"calculator":"weekly_holiday_pay","status":"calculated","reason":"selected","results":{"주휴수당":"70164.6842"}},"change":"unchanged"}
+{"source":"heldout_first","group":"labor-pr2-heldout","id":"labor-heldout-028","before":{"calculator":"weekly_holiday_pay","status":"calculated","reason":"selected","results":{"주휴수당":36570}},"after":{"calculator":"weekly_holiday_pay","status":"guidance","reason":"ambiguous_input","results":{}},"change":"regressed"}
+{"source":"heldout_first","group":"labor-pr2-heldout","id":"labor-heldout-029","before":{"calculator":"weekly_holiday_pay","status":"calculated","reason":"selected","results":{"주휴수당":0}},"after":{"calculator":"weekly_holiday_pay","status":"calculated","reason":"selected","results":{"주휴수당":0}},"change":"unchanged"}
+{"source":"heldout_first","group":"labor-pr2-heldout","id":"labor-heldout-030","before":{"calculator":"weekly_holiday_pay","status":"calculated","reason":"selected","results":{"주휴수당":0}},"after":{"calculator":"weekly_holiday_pay","status":"guidance","reason":"ambiguous_input","results":{}},"change":"regressed"}
+{"source":"heldout_first","group":"labor-pr2-heldout","id":"labor-heldout-031","before":{"calculator":"weekly_holiday_pay","status":"calculated","reason":"selected","results":{"주휴수당":0}},"after":{"calculator":"weekly_holiday_pay","status":"guidance","reason":"ambiguous_input","results":{}},"change":"regressed"}
+{"source":"heldout_first","group":"labor-pr2-heldout","id":"labor-heldout-032","before":{"calculator":"weekly_holiday_pay","status":"calculated","reason":"selected","results":{"주휴수당":"75272.9"}},"after":{"calculator":"weekly_holiday_pay","status":"calculated","reason":"selected","results":{"주휴수당":"75272.9"}},"change":"unchanged"}
+{"source":"heldout_first","group":"labor-pr2-heldout","id":"labor-heldout-033","before":{"calculator":"weekly_holiday_pay","status":"guidance","reason":"missing_required","results":{}},"after":{"calculator":"weekly_holiday_pay","status":"guidance","reason":"missing_required","results":{}},"change":"unchanged"}
+{"source":"heldout_first","group":"labor-pr2-heldout","id":"labor-heldout-034","before":{"calculator":"weekly_holiday_pay","status":"guidance","reason":"missing_required","results":{}},"after":{"calculator":"weekly_holiday_pay","status":"guidance","reason":"missing_required","results":{}},"change":"unchanged"}
+{"source":"heldout_first","group":"labor-pr2-heldout","id":"labor-heldout-035","before":{"calculator":"weekly_holiday_pay","status":"guidance","reason":"ambiguous_input","results":{}},"after":{"calculator":"weekly_holiday_pay","status":"guidance","reason":"ambiguous_input","results":{}},"change":"unchanged"}
+{"source":"heldout_first","group":"labor-pr2-heldout","id":"labor-heldout-036","before":{"calculator":"weekly_holiday_pay","status":"guidance","reason":"ambiguous_input","results":{}},"after":{"calculator":"weekly_holiday_pay","status":"guidance","reason":"ambiguous_input","results":{}},"change":"unchanged"}
+{"source":"heldout_first","group":"labor-pr2-heldout","id":"labor-heldout-037","before":{"calculator":"monthly_minimum_wage","status":"calculated","reason":"selected","results":{"월 최저임금":2096270}},"after":{"calculator":"monthly_minimum_wage","status":"calculated","reason":"selected","results":{"월 최저임금":2096270}},"change":"unchanged"}
+{"source":"heldout_first","group":"labor-pr2-heldout","id":"labor-heldout-038","before":{"calculator":"monthly_minimum_wage","status":"calculated","reason":"selected","results":{"월 최저임금":2156880}},"after":{"calculator":"monthly_minimum_wage","status":"calculated","reason":"selected","results":{"월 최저임금":2156880}},"change":"unchanged"}
+{"source":"heldout_first","group":"labor-pr2-heldout","id":"labor-heldout-039","before":{"calculator":"monthly_minimum_wage","status":"calculated","reason":"selected","results":{"월 최저임금":2236300}},"after":{"calculator":"monthly_minimum_wage","status":"guidance","reason":"ambiguous_input","results":{}},"change":"regressed"}
+{"source":"heldout_first","group":"labor-pr2-heldout","id":"labor-heldout-040","before":{"calculator":"monthly_minimum_wage","status":"calculated","reason":"selected","results":{"월 최저임금":"1632382.5"}},"after":{"calculator":"monthly_minimum_wage","status":"calculated","reason":"selected","results":{"월 최저임금":"1632382.5"}},"change":"unchanged"}
+{"source":"heldout_first","group":"labor-pr2-heldout","id":"labor-heldout-041","before":{"calculator":"monthly_minimum_wage","status":"guidance","reason":"ambiguous_input","results":{}},"after":{"calculator":"monthly_minimum_wage","status":"guidance","reason":"ambiguous_input","results":{}},"change":"unchanged"}
+{"source":"heldout_first","group":"labor-pr2-heldout","id":"labor-heldout-042","before":{"calculator":"monthly_minimum_wage","status":"guidance","reason":"ambiguous_input","results":{}},"after":{"calculator":"monthly_minimum_wage","status":"guidance","reason":"ambiguous_input","results":{}},"change":"unchanged"}
+{"source":"heldout_first","group":"labor-pr2-heldout","id":"labor-heldout-043","before":{"calculator":"monthly_minimum_wage","status":"calculated","reason":"selected","results":{"월 최저임금":1971120}},"after":{"calculator":"monthly_minimum_wage","status":"guidance","reason":"ambiguous_input","results":{}},"change":"regressed"}
+{"source":"heldout_first","group":"labor-pr2-heldout","id":"labor-heldout-044","before":{"calculator":"monthly_minimum_wage","status":"calculated","reason":"selected","results":{"월 최저임금":"1347530.5"}},"after":{"calculator":"monthly_minimum_wage","status":"calculated","reason":"selected","results":{"월 최저임금":"1347530.5"}},"change":"unchanged"}
+{"source":"heldout_first","group":"labor-pr2-heldout","id":"labor-heldout-045","before":{"calculator":"monthly_minimum_wage","status":"guidance","reason":"missing_required","results":{}},"after":{"calculator":"monthly_minimum_wage","status":"guidance","reason":"missing_required","results":{}},"change":"unchanged"}
+{"source":"heldout_first","group":"labor-pr2-heldout","id":"labor-heldout-046","before":{"calculator":"monthly_minimum_wage","status":"guidance","reason":"missing_required","results":{}},"after":{"calculator":"monthly_minimum_wage","status":"guidance","reason":"missing_required","results":{}},"change":"unchanged"}
+{"source":"heldout_first","group":"labor-pr2-heldout","id":"labor-heldout-047","before":{"calculator":"monthly_minimum_wage","status":"guidance","reason":"ambiguous_input","results":{}},"after":{"calculator":"monthly_minimum_wage","status":"guidance","reason":"ambiguous_input","results":{}},"change":"unchanged"}
+{"source":"heldout_first","group":"labor-pr2-heldout","id":"labor-heldout-048","before":{"calculator":"monthly_minimum_wage","status":"guidance","reason":"ambiguous_input","results":{}},"after":{"calculator":"monthly_minimum_wage","status":"guidance","reason":"ambiguous_input","results":{}},"change":"unchanged"}
+{"source":"heldout_first","group":"labor-pr2-heldout","id":"labor-heldout-049","before":{"calculator":"premium_pay","status":"calculated","reason":"selected","results":{"법정 가산수당":"28807.5"}},"after":{"calculator":"premium_pay","status":"calculated","reason":"selected","results":{"법정 가산수당":"28807.5"}},"change":"unchanged"}
+{"source":"heldout_first","group":"labor-pr2-heldout","id":"labor-heldout-050","before":{"calculator":"premium_pay","status":"calculated","reason":"selected","results":{"법정 가산수당":"21264.8333"}},"after":{"calculator":"premium_pay","status":"calculated","reason":"selected","results":{"법정 가산수당":"21264.8333"}},"change":"unchanged"}
+{"source":"heldout_first","group":"labor-pr2-heldout","id":"labor-heldout-051","before":{"calculator":"premium_pay","status":"guidance","reason":"missing_required","results":{}},"after":{"calculator":"premium_pay","status":"guidance","reason":"missing_required","results":{}},"change":"unchanged"}
+{"source":"heldout_first","group":"labor-pr2-heldout","id":"labor-heldout-052","before":{"calculator":"premium_pay","status":"guidance","reason":"missing_required","results":{}},"after":{"calculator":"premium_pay","status":"guidance","reason":"missing_required","results":{}},"change":"unchanged"}
+{"source":"heldout_first","group":"labor-pr2-heldout","id":"labor-heldout-053","before":{"calculator":"premium_pay","status":"calculated","reason":"selected","results":{"법정 가산수당":"48738.75"}},"after":{"calculator":"premium_pay","status":"calculated","reason":"selected","results":{"법정 가산수당":"48738.75"}},"change":"unchanged"}
+{"source":"heldout_first","group":"labor-pr2-heldout","id":"labor-heldout-054","before":{"calculator":"premium_pay","status":"calculated","reason":"selected","results":{"법정 가산수당":156513}},"after":{"calculator":"premium_pay","status":"calculated","reason":"selected","results":{"법정 가산수당":156513}},"change":"unchanged"}
+{"source":"heldout_first","group":"labor-pr2-heldout","id":"labor-heldout-055","before":{"calculator":"premium_pay","status":"calculated","reason":"selected","results":{"법정 가산수당":0,"기본임금":41776,"기본임금 포함 합계":41776}},"after":{"calculator":"premium_pay","status":"guidance","reason":"ambiguous_input","results":{}},"change":"regressed"}
+{"source":"heldout_first","group":"labor-pr2-heldout","id":"labor-heldout-056","before":{"calculator":"premium_pay","status":"guidance","reason":"ambiguous_input","results":{}},"after":{"calculator":"premium_pay","status":"guidance","reason":"ambiguous_input","results":{}},"change":"unchanged"}
+{"source":"heldout_first","group":"labor-pr2-heldout","id":"labor-heldout-057","before":{"calculator":"premium_pay","status":"guidance","reason":"missing_required","results":{}},"after":{"calculator":"premium_pay","status":"guidance","reason":"missing_required","results":{}},"change":"unchanged"}
+{"source":"heldout_first","group":"labor-pr2-heldout","id":"labor-heldout-058","before":{"calculator":"premium_pay","status":"guidance","reason":"missing_required","results":{}},"after":{"calculator":"premium_pay","status":"guidance","reason":"missing_required","results":{}},"change":"unchanged"}
+{"source":"heldout_first","group":"labor-pr2-heldout","id":"labor-heldout-059","before":{"calculator":"premium_pay","status":"guidance","reason":"ambiguous_input","results":{}},"after":{"calculator":"premium_pay","status":"guidance","reason":"ambiguous_input","results":{}},"change":"unchanged"}
+{"source":"heldout_first","group":"labor-pr2-heldout","id":"labor-heldout-060","before":{"calculator":"premium_pay","status":"guidance","reason":"ambiguous_input","results":{}},"after":{"calculator":"premium_pay","status":"guidance","reason":"ambiguous_input","results":{}},"change":"unchanged"}
+{"source":"heldout_repeat","group":"labor-pr2-heldout","id":"labor-heldout-001","before":{"calculator":"severance_pay","status":"calculated","reason":"selected","results":{"법정 최소 퇴직금":18593409}},"after":{"calculator":"severance_pay","status":"calculated","reason":"selected","results":{"법정 최소 퇴직금":18593409}},"change":"unchanged"}
+{"source":"heldout_repeat","group":"labor-pr2-heldout","id":"labor-heldout-002","before":{"calculator":"severance_pay","status":"calculated","reason":"selected","results":{"법정 최소 퇴직금":10379906}},"after":{"calculator":"severance_pay","status":"guidance","reason":"ambiguous_input","results":{}},"change":"regressed"}
+{"source":"heldout_repeat","group":"labor-pr2-heldout","id":"labor-heldout-003","before":{"calculator":"severance_pay","status":"calculated","reason":"selected","results":{"법정 최소 퇴직금":20090331}},"after":{"calculator":"severance_pay","status":"guidance","reason":"ambiguous_input","results":{}},"change":"regressed"}
+{"source":"heldout_repeat","group":"labor-pr2-heldout","id":"labor-heldout-004","before":{"calculator":"severance_pay","status":"calculated","reason":"selected","results":{"법정 최소 퇴직금":0}},"after":{"calculator":"severance_pay","status":"calculated","reason":"selected","results":{"법정 최소 퇴직금":0}},"change":"unchanged"}
+{"source":"heldout_repeat","group":"labor-pr2-heldout","id":"labor-heldout-005","before":{"calculator":"severance_pay","status":"calculated","reason":"selected","results":{"법정 최소 퇴직금":0}},"after":{"calculator":"severance_pay","status":"calculated","reason":"selected","results":{"법정 최소 퇴직금":0}},"change":"unchanged"}
+{"source":"heldout_repeat","group":"labor-pr2-heldout","id":"labor-heldout-006","before":{"calculator":"severance_pay","status":"calculated","reason":"selected","results":{"평균임금 기준 퇴직금 추정":8938889,"통상임금 하한 적용 퇴직금 추정":10264753}},"after":{"calculator":"severance_pay","status":"calculated","reason":"selected","results":{"평균임금 기준 퇴직금 추정":8938889,"통상임금 하한 적용 퇴직금 추정":10264753}},"change":"unchanged"}
+{"source":"heldout_repeat","group":"labor-pr2-heldout","id":"labor-heldout-007","before":{"calculator":"severance_pay","status":"calculated","reason":"selected","results":{"법정 최소 퇴직금":3041100}},"after":{"calculator":"severance_pay","status":"guidance","reason":"ambiguous_input","results":{}},"change":"regressed"}
+{"source":"heldout_repeat","group":"labor-pr2-heldout","id":"labor-heldout-008","before":{"calculator":"severance_pay","status":"calculated","reason":"selected","results":{"법정 최소 퇴직금":7033429}},"after":{"calculator":"severance_pay","status":"guidance","reason":"ambiguous_input","results":{}},"change":"regressed"}
+{"source":"heldout_repeat","group":"labor-pr2-heldout","id":"labor-heldout-009","before":{"calculator":"severance_pay","status":"guidance","reason":"missing_required","results":{}},"after":{"calculator":"severance_pay","status":"guidance","reason":"missing_required","results":{}},"change":"unchanged"}
+{"source":"heldout_repeat","group":"labor-pr2-heldout","id":"labor-heldout-010","before":{"calculator":"severance_pay","status":"guidance","reason":"missing_required","results":{}},"after":{"calculator":"severance_pay","status":"guidance","reason":"missing_required","results":{}},"change":"unchanged"}
+{"source":"heldout_repeat","group":"labor-pr2-heldout","id":"labor-heldout-011","before":{"calculator":"severance_pay","status":"guidance","reason":"ambiguous_input","results":{}},"after":{"calculator":"severance_pay","status":"guidance","reason":"ambiguous_input","results":{}},"change":"unchanged"}
+{"source":"heldout_repeat","group":"labor-pr2-heldout","id":"labor-heldout-012","before":{"calculator":"severance_pay","status":"calculated","reason":"selected","results":{"법정 최소 퇴직금":8833496}},"after":{"calculator":"severance_pay","status":"guidance","reason":"ambiguous_input","results":{}},"change":"improved"}
+{"source":"heldout_repeat","group":"labor-pr2-heldout","id":"labor-heldout-013","before":{"calculator":"annual_leave_days","status":"calculated","reason":"selected","results":{"연차유급휴가 일수":6}},"after":{"calculator":"annual_leave_days","status":"guidance","reason":"ambiguous_input","results":{}},"change":"regressed"}
+{"source":"heldout_repeat","group":"labor-pr2-heldout","id":"labor-heldout-014","before":{"calculator":"annual_leave_days","status":"guidance","reason":"ambiguous_input","results":{}},"after":{"calculator":"annual_leave_days","status":"guidance","reason":"ambiguous_input","results":{}},"change":"unchanged"}
+{"source":"heldout_repeat","group":"labor-pr2-heldout","id":"labor-heldout-015","before":{"calculator":"annual_leave_days","status":"calculated","reason":"selected","results":{"연차유급휴가 일수":10}},"after":{"calculator":"annual_leave_days","status":"calculated","reason":"selected","results":{"연차유급휴가 일수":10}},"change":"unchanged"}
+{"source":"heldout_repeat","group":"labor-pr2-heldout","id":"labor-heldout-016","before":{"calculator":"annual_leave_days","status":"calculated","reason":"selected","results":{"연차유급휴가 일수":25}},"after":{"calculator":"annual_leave_days","status":"calculated","reason":"selected","results":{"연차유급휴가 일수":25}},"change":"unchanged"}
+{"source":"heldout_repeat","group":"labor-pr2-heldout","id":"labor-heldout-017","before":{"calculator":"annual_leave_days","status":"calculated","reason":"selected","results":{"연차유급휴가 일수":7}},"after":{"calculator":"annual_leave_days","status":"guidance","reason":"ambiguous_input","results":{}},"change":"regressed"}
+{"source":"heldout_repeat","group":"labor-pr2-heldout","id":"labor-heldout-018","before":{"calculator":"annual_leave_days","status":"calculated","reason":"selected","results":{"연차유급휴가 일수":24}},"after":{"calculator":"annual_leave_days","status":"calculated","reason":"selected","results":{"연차유급휴가 일수":24}},"change":"unchanged"}
+{"source":"heldout_repeat","group":"labor-pr2-heldout","id":"labor-heldout-019","before":{"calculator":"annual_leave_days","status":"calculated","reason":"selected","results":{"연차유급휴가 일수":0}},"after":{"calculator":"annual_leave_days","status":"calculated","reason":"selected","results":{"연차유급휴가 일수":0}},"change":"unchanged"}
+{"source":"heldout_repeat","group":"labor-pr2-heldout","id":"labor-heldout-020","before":{"calculator":"annual_leave_days","status":"calculated","reason":"selected","results":{"연차유급휴가 일수":0}},"after":{"calculator":"annual_leave_days","status":"calculated","reason":"selected","results":{"연차유급휴가 일수":0}},"change":"unchanged"}
+{"source":"heldout_repeat","group":"labor-pr2-heldout","id":"labor-heldout-021","before":{"calculator":"annual_leave_days","status":"guidance","reason":"missing_required","results":{}},"after":{"calculator":"annual_leave_days","status":"guidance","reason":"missing_required","results":{}},"change":"unchanged"}
+{"source":"heldout_repeat","group":"labor-pr2-heldout","id":"labor-heldout-022","before":{"calculator":"annual_leave_days","status":"guidance","reason":"missing_required","results":{}},"after":{"calculator":"annual_leave_days","status":"guidance","reason":"missing_required","results":{}},"change":"unchanged"}
+{"source":"heldout_repeat","group":"labor-pr2-heldout","id":"labor-heldout-023","before":{"calculator":"annual_leave_days","status":"guidance","reason":"ambiguous_input","results":{}},"after":{"calculator":"annual_leave_days","status":"guidance","reason":"ambiguous_input","results":{}},"change":"unchanged"}
+{"source":"heldout_repeat","group":"labor-pr2-heldout","id":"labor-heldout-024","before":{"calculator":"annual_leave_days","status":"guidance","reason":"ambiguous_input","results":{}},"after":{"calculator":"annual_leave_days","status":"guidance","reason":"ambiguous_input","results":{}},"change":"unchanged"}
+{"source":"heldout_repeat","group":"labor-pr2-heldout","id":"labor-heldout-025","before":{"calculator":"weekly_holiday_pay","status":"calculated","reason":"selected","results":{"주휴수당":107010}},"after":{"calculator":"weekly_holiday_pay","status":"guidance","reason":"ambiguous_input","results":{}},"change":"regressed"}
+{"source":"heldout_repeat","group":"labor-pr2-heldout","id":"labor-heldout-026","before":{"calculator":"weekly_holiday_pay","status":"calculated","reason":"selected","results":{"주휴수당":58157}},"after":{"calculator":"weekly_holiday_pay","status":"calculated","reason":"selected","results":{"주휴수당":58157}},"change":"unchanged"}
+{"source":"heldout_repeat","group":"labor-pr2-heldout","id":"labor-heldout-027","before":{"calculator":"weekly_holiday_pay","status":"calculated","reason":"selected","results":{"주휴수당":"70164.6842"}},"after":{"calculator":"weekly_holiday_pay","status":"calculated","reason":"selected","results":{"주휴수당":"70164.6842"}},"change":"unchanged"}
+{"source":"heldout_repeat","group":"labor-pr2-heldout","id":"labor-heldout-028","before":{"calculator":"weekly_holiday_pay","status":"calculated","reason":"selected","results":{"주휴수당":36570}},"after":{"calculator":"weekly_holiday_pay","status":"guidance","reason":"ambiguous_input","results":{}},"change":"regressed"}
+{"source":"heldout_repeat","group":"labor-pr2-heldout","id":"labor-heldout-029","before":{"calculator":"weekly_holiday_pay","status":"calculated","reason":"selected","results":{"주휴수당":0}},"after":{"calculator":"weekly_holiday_pay","status":"calculated","reason":"selected","results":{"주휴수당":0}},"change":"unchanged"}
+{"source":"heldout_repeat","group":"labor-pr2-heldout","id":"labor-heldout-030","before":{"calculator":"weekly_holiday_pay","status":"calculated","reason":"selected","results":{"주휴수당":0}},"after":{"calculator":"weekly_holiday_pay","status":"guidance","reason":"ambiguous_input","results":{}},"change":"regressed"}
+{"source":"heldout_repeat","group":"labor-pr2-heldout","id":"labor-heldout-031","before":{"calculator":"weekly_holiday_pay","status":"calculated","reason":"selected","results":{"주휴수당":0}},"after":{"calculator":"weekly_holiday_pay","status":"guidance","reason":"ambiguous_input","results":{}},"change":"regressed"}
+{"source":"heldout_repeat","group":"labor-pr2-heldout","id":"labor-heldout-032","before":{"calculator":"weekly_holiday_pay","status":"calculated","reason":"selected","results":{"주휴수당":"75272.9"}},"after":{"calculator":"weekly_holiday_pay","status":"calculated","reason":"selected","results":{"주휴수당":"75272.9"}},"change":"unchanged"}
+{"source":"heldout_repeat","group":"labor-pr2-heldout","id":"labor-heldout-033","before":{"calculator":"weekly_holiday_pay","status":"guidance","reason":"missing_required","results":{}},"after":{"calculator":"weekly_holiday_pay","status":"guidance","reason":"missing_required","results":{}},"change":"unchanged"}
+{"source":"heldout_repeat","group":"labor-pr2-heldout","id":"labor-heldout-034","before":{"calculator":"weekly_holiday_pay","status":"guidance","reason":"missing_required","results":{}},"after":{"calculator":"weekly_holiday_pay","status":"guidance","reason":"missing_required","results":{}},"change":"unchanged"}
+{"source":"heldout_repeat","group":"labor-pr2-heldout","id":"labor-heldout-035","before":{"calculator":"weekly_holiday_pay","status":"guidance","reason":"ambiguous_input","results":{}},"after":{"calculator":"weekly_holiday_pay","status":"guidance","reason":"ambiguous_input","results":{}},"change":"unchanged"}
+{"source":"heldout_repeat","group":"labor-pr2-heldout","id":"labor-heldout-036","before":{"calculator":"weekly_holiday_pay","status":"guidance","reason":"ambiguous_input","results":{}},"after":{"calculator":"weekly_holiday_pay","status":"guidance","reason":"ambiguous_input","results":{}},"change":"unchanged"}
+{"source":"heldout_repeat","group":"labor-pr2-heldout","id":"labor-heldout-037","before":{"calculator":"monthly_minimum_wage","status":"calculated","reason":"selected","results":{"월 최저임금":2096270}},"after":{"calculator":"monthly_minimum_wage","status":"calculated","reason":"selected","results":{"월 최저임금":2096270}},"change":"unchanged"}
+{"source":"heldout_repeat","group":"labor-pr2-heldout","id":"labor-heldout-038","before":{"calculator":"monthly_minimum_wage","status":"calculated","reason":"selected","results":{"월 최저임금":2156880}},"after":{"calculator":"monthly_minimum_wage","status":"calculated","reason":"selected","results":{"월 최저임금":2156880}},"change":"unchanged"}
+{"source":"heldout_repeat","group":"labor-pr2-heldout","id":"labor-heldout-039","before":{"calculator":"monthly_minimum_wage","status":"calculated","reason":"selected","results":{"월 최저임금":2236300}},"after":{"calculator":"monthly_minimum_wage","status":"guidance","reason":"ambiguous_input","results":{}},"change":"regressed"}
+{"source":"heldout_repeat","group":"labor-pr2-heldout","id":"labor-heldout-040","before":{"calculator":"monthly_minimum_wage","status":"calculated","reason":"selected","results":{"월 최저임금":"1632382.5"}},"after":{"calculator":"monthly_minimum_wage","status":"calculated","reason":"selected","results":{"월 최저임금":"1632382.5"}},"change":"unchanged"}
+{"source":"heldout_repeat","group":"labor-pr2-heldout","id":"labor-heldout-041","before":{"calculator":"monthly_minimum_wage","status":"guidance","reason":"ambiguous_input","results":{}},"after":{"calculator":"monthly_minimum_wage","status":"guidance","reason":"ambiguous_input","results":{}},"change":"unchanged"}
+{"source":"heldout_repeat","group":"labor-pr2-heldout","id":"labor-heldout-042","before":{"calculator":"monthly_minimum_wage","status":"guidance","reason":"ambiguous_input","results":{}},"after":{"calculator":"monthly_minimum_wage","status":"guidance","reason":"ambiguous_input","results":{}},"change":"unchanged"}
+{"source":"heldout_repeat","group":"labor-pr2-heldout","id":"labor-heldout-043","before":{"calculator":"monthly_minimum_wage","status":"calculated","reason":"selected","results":{"월 최저임금":1971120}},"after":{"calculator":"monthly_minimum_wage","status":"guidance","reason":"ambiguous_input","results":{}},"change":"regressed"}
+{"source":"heldout_repeat","group":"labor-pr2-heldout","id":"labor-heldout-044","before":{"calculator":"monthly_minimum_wage","status":"calculated","reason":"selected","results":{"월 최저임금":"1347530.5"}},"after":{"calculator":"monthly_minimum_wage","status":"calculated","reason":"selected","results":{"월 최저임금":"1347530.5"}},"change":"unchanged"}
+{"source":"heldout_repeat","group":"labor-pr2-heldout","id":"labor-heldout-045","before":{"calculator":"monthly_minimum_wage","status":"guidance","reason":"missing_required","results":{}},"after":{"calculator":"monthly_minimum_wage","status":"guidance","reason":"missing_required","results":{}},"change":"unchanged"}
+{"source":"heldout_repeat","group":"labor-pr2-heldout","id":"labor-heldout-046","before":{"calculator":"monthly_minimum_wage","status":"guidance","reason":"missing_required","results":{}},"after":{"calculator":"monthly_minimum_wage","status":"guidance","reason":"missing_required","results":{}},"change":"unchanged"}
+{"source":"heldout_repeat","group":"labor-pr2-heldout","id":"labor-heldout-047","before":{"calculator":"monthly_minimum_wage","status":"guidance","reason":"ambiguous_input","results":{}},"after":{"calculator":"monthly_minimum_wage","status":"guidance","reason":"ambiguous_input","results":{}},"change":"unchanged"}
+{"source":"heldout_repeat","group":"labor-pr2-heldout","id":"labor-heldout-048","before":{"calculator":"monthly_minimum_wage","status":"guidance","reason":"ambiguous_input","results":{}},"after":{"calculator":"monthly_minimum_wage","status":"guidance","reason":"ambiguous_input","results":{}},"change":"unchanged"}
+{"source":"heldout_repeat","group":"labor-pr2-heldout","id":"labor-heldout-049","before":{"calculator":"premium_pay","status":"calculated","reason":"selected","results":{"법정 가산수당":"28807.5"}},"after":{"calculator":"premium_pay","status":"calculated","reason":"selected","results":{"법정 가산수당":"28807.5"}},"change":"unchanged"}
+{"source":"heldout_repeat","group":"labor-pr2-heldout","id":"labor-heldout-050","before":{"calculator":"premium_pay","status":"calculated","reason":"selected","results":{"법정 가산수당":"21264.8333"}},"after":{"calculator":"premium_pay","status":"calculated","reason":"selected","results":{"법정 가산수당":"21264.8333"}},"change":"unchanged"}
+{"source":"heldout_repeat","group":"labor-pr2-heldout","id":"labor-heldout-051","before":{"calculator":"premium_pay","status":"guidance","reason":"missing_required","results":{}},"after":{"calculator":"premium_pay","status":"guidance","reason":"missing_required","results":{}},"change":"unchanged"}
+{"source":"heldout_repeat","group":"labor-pr2-heldout","id":"labor-heldout-052","before":{"calculator":"premium_pay","status":"guidance","reason":"missing_required","results":{}},"after":{"calculator":"premium_pay","status":"guidance","reason":"missing_required","results":{}},"change":"unchanged"}
+{"source":"heldout_repeat","group":"labor-pr2-heldout","id":"labor-heldout-053","before":{"calculator":"premium_pay","status":"calculated","reason":"selected","results":{"법정 가산수당":"48738.75"}},"after":{"calculator":"premium_pay","status":"calculated","reason":"selected","results":{"법정 가산수당":"48738.75"}},"change":"unchanged"}
+{"source":"heldout_repeat","group":"labor-pr2-heldout","id":"labor-heldout-054","before":{"calculator":"premium_pay","status":"calculated","reason":"selected","results":{"법정 가산수당":156513}},"after":{"calculator":"premium_pay","status":"calculated","reason":"selected","results":{"법정 가산수당":156513}},"change":"unchanged"}
+{"source":"heldout_repeat","group":"labor-pr2-heldout","id":"labor-heldout-055","before":{"calculator":"premium_pay","status":"calculated","reason":"selected","results":{"법정 가산수당":0,"기본임금":41776,"기본임금 포함 합계":41776}},"after":{"calculator":"premium_pay","status":"guidance","reason":"ambiguous_input","results":{}},"change":"regressed"}
+{"source":"heldout_repeat","group":"labor-pr2-heldout","id":"labor-heldout-056","before":{"calculator":"premium_pay","status":"guidance","reason":"ambiguous_input","results":{}},"after":{"calculator":"premium_pay","status":"guidance","reason":"ambiguous_input","results":{}},"change":"unchanged"}
+{"source":"heldout_repeat","group":"labor-pr2-heldout","id":"labor-heldout-057","before":{"calculator":"premium_pay","status":"guidance","reason":"missing_required","results":{}},"after":{"calculator":"premium_pay","status":"guidance","reason":"missing_required","results":{}},"change":"unchanged"}
+{"source":"heldout_repeat","group":"labor-pr2-heldout","id":"labor-heldout-058","before":{"calculator":"premium_pay","status":"guidance","reason":"missing_required","results":{}},"after":{"calculator":"premium_pay","status":"guidance","reason":"missing_required","results":{}},"change":"unchanged"}
+{"source":"heldout_repeat","group":"labor-pr2-heldout","id":"labor-heldout-059","before":{"calculator":"premium_pay","status":"guidance","reason":"ambiguous_input","results":{}},"after":{"calculator":"premium_pay","status":"guidance","reason":"ambiguous_input","results":{}},"change":"unchanged"}
+{"source":"heldout_repeat","group":"labor-pr2-heldout","id":"labor-heldout-060","before":{"calculator":"premium_pay","status":"guidance","reason":"ambiguous_input","results":{}},"after":{"calculator":"premium_pay","status":"guidance","reason":"ambiguous_input","results":{}},"change":"unchanged"}
+~~~
+
+### 검증과 남은 한계
+
+| 검증 층 | 결과 |
+| --- | --- |
+| 기본 테스트 전체(단위·계약·통합·대역 E2E 포함) | 1,810 passed, 13 deselected, 140.24초 |
+| Ruff check·format, Pyright(전체·calendar), compileall·schema | Green |
+| chatbot 화면 typecheck·test·build | Green, 테스트 44개 |
+| calendar 화면 typecheck·test·build | Green, 테스트 19개 |
+| CI | 최종 head 결과는 PR 검증표 참조 |
+| 실제 모델 E2E(`e2e_live`) | 실행 안 함 |
+| 모델 스모크(`models`) | 실행 안 함 |
+| 실제 라우터 평가 | 실행 안 함; 이번 보완 모델 호출 0회 |
+| 보존 원출력 오프라인 재생 | 166건 실행, **정상 계산 악화 0건 기준 미충족** |
+
+최초 로컬 기본 테스트 수집은 sandbox 안에서 MLX 초기화가 abort되어 재실행했다. 위 표는 허용된 실행 환경에서 정상 완료한 최종 결과이며, 실제 모델 요청·모델 로드·서버 변경은 없었다. 일반 테스트 Green과 이번 회귀 완료 기준 충족 여부를 구분한다.
+
+다음은 이번 최종 보완 전에 **사용자 수용**된 한계다.
+
+- 안전한 미달 6건: 014·041·042·051·052·056. 모두 계산 결과 없이 안내하며, 이번 재생에서도 상태가 유지됐다.
+- 계산형 기준 미달: 최저임금 6/8, 가산 5/8을 **사용자 수용**. 이는 `66a0610` 재평가 당시의 수치다. 이번 코드에서 추가로 내려간 최저임금 4/8·가산 4/8을 수용한 의미가 아니다.
+- CR057의 조회 오분류는 **사용자 수용**. 기대값은 `none/unsupported_question`으로 유지하고 미달로 남긴다.
+- 첫 글자 추가 지연 +1.172초는 **사용자 수용**. 이번에는 모델을 호출하지 않아 지연을 새로 측정하지 않았다.
+
+새 악화 13개(002·003·007·008·013·017·025·028·030·031·039·043·055)는 위 수용 범위와 별개이며 **사용자 수용되지 않았다**. 이 때문에 PR의 이번 완료 기준을 충족했다고 보고하지 않는다. 표현 범위 확장은 다음 PR에서 새 held-out과 함께 진행하며, 다음 PR은 이번 범위 밖이다. 라우터 지시문 길이 조정도 후속 후보로만 남긴다. 병합·운영 반영은 하지 않는다.

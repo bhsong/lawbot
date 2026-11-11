@@ -37,6 +37,7 @@ from lawbot.calculators import (
 )
 from lawbot.labor_dates import parse_labor_date
 from lawbot.labor_language import is_uncertain
+from lawbot.labor_quantity_coverage import unaccounted_labor_quantity
 from lawbot_common.api import SERVER_BUSY
 
 PR1_ROUTER_SYSTEM = """계산 질문 분류기. JSON 한 개만 출력한다.
@@ -396,6 +397,9 @@ def route_calculation(
     except ValueError:
         return guidance('입력한 수량과 단위를 확인해 다시 알려 주세요.', 'unresolved_input')
     payload = calculation.as_dict()
+    if labor is not None and payload['status'] == 'calculated':
+        if label := unaccounted_labor_quantity(question, labor.FIELDS, quantity_positions):
+            return guidance(f'질문에 적힌 {label} 중 어느 값을 사용할지 확인해 주세요.')
     if labor is None and payload['status'] == 'calculated':
         if label := _unaccounted_optional(question, calculator, inputs):
             return guidance(f'계산에 사용할 {label} 항목을 확인해 주세요.', 'unresolved_input')
