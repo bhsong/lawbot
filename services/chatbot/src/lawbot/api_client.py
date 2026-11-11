@@ -45,6 +45,22 @@ class ModelServerTimeout(TimeoutError):
     """질문 처리 중 모델 서버(또는 외부 생성 API)가 시간 상한 안에 응답하지 않음. 웹앱은 '응답이 없습니다'로 안내"""
 
 
+_TIMEOUT_REASONS = {
+    httpx.ConnectTimeout: 'connect_timeout',
+    httpx.ReadTimeout: 'read_timeout',
+    httpx.WriteTimeout: 'write_timeout',
+    httpx.PoolTimeout: 'pool_timeout',
+}
+
+
+class RouterTimeout(ModelServerTimeout):
+    """A timeout with the transport phase when the client can identify it."""
+
+    def __init__(self, cause: BaseException | None):
+        super().__init__('계산 라우터가 제한 시간 내에 응답하지 않았습니다.')
+        self.reason = _TIMEOUT_REASONS.get(type(cause), 'timeout')
+
+
 class ModelLoadError(OSError):
     """모델 서버가 답변 모델을 불러오지 못함 (폴더 없음·형식 오류). 웹앱은 '모델 불러오기 실패'로 안내"""
 

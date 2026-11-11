@@ -1,6 +1,7 @@
 # tests/test_api_client.py  →  모델 서버 클라이언트(api_client)·생성 API 주소 설정(security.llm_endpoint)과
 # 두 서비스 계약: 챗봇의 실제 클라이언트·openai SDK가 실제 모델 서버 앱(lawbot_model_server.api, 가짜 모델)과 통한다
 import base64
+import json
 import types
 
 import httpx
@@ -430,6 +431,189 @@ def test_end_to_end_through_real_server_app(env, real_server, tmp_path):
     r = run(a, '해고 예고?', 'fast', 'concise')
     text, stats = r.text, r.stats
     assert text.startswith('예고해야 합니다.') and '25.0 tok/s' in stats
+
+
+@pytest.mark.parametrize(
+    ('answer', 'check'),
+    [
+        ('【결론】 세액공제액은 225,000원입니다.', 'mismatch'),
+        ('【결론】 실손보험금 100만 원 차감 후 의료비 200만 원 기준 세액공제액은 75,000원입니다.', 'match'),
+    ],
+)
+def test_calculation_router_through_real_server_app(env, real_server, tmp_path, capsys, answer, check):
+    from lawbot import web
+    from lawbot.calculators import MEDICAL
+
+    question = '2026년 총급여 5천만 원, 의료비 300만 원, 실손보험금 100만 원입니다. 의료비 세액공제액은 얼마인가요?'
+    path = tmp_path / 'requests.jsonl'
+    env.setenv('LAWBOT_REQUEST_LOG', str(path))
+    env.setenv('LAWBOT_RERANKER_ENABLED', '1')
+
+    def stream(self, messages, **kwargs):
+        self.calls.append((messages, kwargs))
+        if kwargs['max_tokens'] == 128:
+            output = {
+                'calculator': MEDICAL,
+                'inputs': {
+                    'gross_pay': '5천만 원',
+                    'medical_expenses': '300만 원',
+                    'insurance_reimbursement': '100만 원',
+                },
+            }
+            text = json.dumps(output, ensure_ascii=False)
+        else:
+            text = answer
+        yield types.SimpleNamespace(text=text, finish_reason='stop')
+
+    env.setattr(Chat, 'stream', stream)
+    app = service.load_app()
+    app.settings = None
+    app.calculator_dependencies = {MEDICAL: ()}
+
+    class ForbiddenCache:
+        def lookup(self, *args):
+            raise AssertionError('calculation question must skip cache lookup')
+
+    app.exact_cache = ForbiddenCache()
+    capsys.readouterr()
+    events = list(web.chat_events(app, question, 'pro', 'concise'))
+    event_names = [event for event, _ in events]
+    assert event_names.index('calculation') < event_names.index('answer') < event_names.index('calculation_check')
+    assert dict(events)['calculation']['results'][0]['value'] == 75_000
+    assert dict(events)['calculation_check'] == {'status': check}
+    record = json.loads(path.read_text(encoding='utf-8'))
+    assert record['cache_reason'] == 'calculation_question'
+    assert record['calculator'] == MEDICAL
+    assert record['calculation_status'] == 'calculated'
+    assert record['router_reason'] == 'selected' and record['router_ms'] >= 0
+    assert record['calculation_check'] == check
+    assert record['call_counts'] == {'router': 1, 'embedding': 1, 'search': 1, 'rerank': 1, 'llm': 1}
+    assert not any(value in path.read_text(encoding='utf-8') for value in ('5천만', '75,000', '75000', question))
+    chat = real_server.chat[app.models.specs['pro'].model]
+    (router_messages, router_kwargs), (answer_messages, answer_kwargs) = chat.calls
+    assert router_messages[1]['content'] == question
+    assert router_kwargs == {'max_tokens': 128, 'temperature': 0.0, 'top_p': None, 'enable_thinking': False}
+    assert answer_kwargs['max_tokens'] == 1024
+    assert answer_messages[1]['content'].startswith('[참고 조문]\n')
+    assert f'[질문]\n{question}\n\n[계산 결과]\n' in answer_messages[1]['content']
+    assert '계산 결과의 숫자를 그대로 쓰고 다시 계산하지 말 것.' in answer_messages[1]['content']
+    posts = [line for line in capsys.readouterr().out.splitlines() if ' POST ' in line]
+    assert len(posts) == 4
+
+
+def test_web_noncalculation_prompt_and_calls_unchanged(env, real_server, capsys):
+    from fakes import HITS
+    from lawbot import web
+
+    search = service.Retriever.search
+
+    def search_with_fixed_hits(self, query, k=3):
+        search(self, query, k)
+        return HITS[:k]
+
+    env.setattr(service.Retriever, 'search', search_with_fixed_hits)
+    env.setenv('LAWBOT_RERANKER_ENABLED', '1')
+    app = service.load_app()
+    capsys.readouterr()
+    events = list(web.chat_events(app, '해고 예고?', 'pro', 'full'))
+    assert all(event not in {'calculation', 'calculation_check'} for event, _ in events)
+    calls = real_server.chat[app.models.specs['pro'].model].calls
+    assert len(calls) == 1
+    messages, kwargs = calls[0]
+    assert messages[0]['content'].encode() == app.profile.system_file.read_text().strip().encode()
+    assert (
+        messages[1]['content'].encode()
+        == (
+            '[참고 조문]\n[1] 근로기준법 제26조(해고의 예고)\n'
+            '사용자는 근로자를 해고하려면 적어도 30일 전에 예고를 하여야 한다.\n\n'
+            '[2] 근로기준법 제36조(금품 청산)\n'
+            '사용자는 근로자가 사망 또는 퇴직한 경우에는 14일 이내에 지급하여야 한다.\n\n[질문]\n해고 예고?'
+        ).encode()
+    )
+    assert kwargs == {'max_tokens': 1024, 'temperature': 0.0, 'top_p': None, 'enable_thinking': False}
+    posts = [line.split()[2] for line in capsys.readouterr().out.splitlines() if ' POST ' in line]
+    assert posts == ['/v1/embeddings', '/v1/rerank', '/v1/chat/completions']
+
+
+def test_gated_lookup_uses_identical_rag_messages_and_no_calculation_event(env, real_server, tmp_path, capsys):
+    from lawbot import web
+    from lawbot.calc_gate import is_calculation_question
+
+    question = '2026년 근로소득자의 표준세액공제 법정 금액은 얼마인가요?'
+    assert is_calculation_question(question)
+    original_stream = Chat.stream
+
+    def stream(self, messages, **kwargs):
+        if kwargs['max_tokens'] == 128:
+            self.calls.append((messages, kwargs))
+            yield types.SimpleNamespace(text='{"calculator":"none","kind":"lookup"}', finish_reason='stop')
+        else:
+            yield from original_stream(self, messages, **kwargs)
+
+    env.setattr(Chat, 'stream', stream)
+    path = tmp_path / 'requests.jsonl'
+    env.setenv('LAWBOT_REQUEST_LOG', str(path))
+    env.setenv('LAWBOT_RERANKER_ENABLED', '1')
+    app = service.load_app()
+    list(service.ask(app, question, 'pro', fmt='concise'))
+    chat = real_server.chat[app.models.specs['pro'].model]
+    [(baseline, baseline_kwargs)] = chat.calls
+
+    def unexpected_lookup(*args):
+        pytest.fail('cache gate must also apply to router lookups')
+
+    app.exact_cache = types.SimpleNamespace(lookup=unexpected_lookup)
+    capsys.readouterr()
+    events = list(web.chat_events(app, question, 'pro', 'concise'))
+    assert 'done' in dict(events)
+    assert all(event not in {'calculation', 'calculation_check'} for event, _ in events)
+    _, (router, router_kwargs), (answer, answer_kwargs) = chat.calls
+    assert router[1]['content'] == question and router_kwargs['max_tokens'] == 128
+    assert [message['content'].encode() for message in answer] == [message['content'].encode() for message in baseline]
+    assert answer_kwargs == baseline_kwargs
+    posts = [line.split()[2] for line in capsys.readouterr().out.splitlines() if ' POST ' in line]
+    assert posts == ['/v1/chat/completions', '/v1/embeddings', '/v1/rerank', '/v1/chat/completions']
+    row = json.loads(path.read_text(encoding='utf-8').splitlines()[-1])
+    assert row['cache_reason'] == 'calculation_question' and row['exact_lookup_ms'] is None
+    assert row['router_reason'] == 'lookup_question' and row['calculation_status'] == 'none'
+
+
+def test_router_queue_full_shows_temporary_guidance_and_continues_rag(env, real_server, tmp_path):
+    from lawbot import web
+    from lawbot_model_server.scheduler import QueueFull, Scheduler
+
+    question = '2026년 총급여 5천만 원, 의료비 300만 원이면 세액공제액은 얼마인가요?'
+    diagnostic = 'fixture 내부 대기열 진단'
+    original_chat = Scheduler.chat
+    chat_tokens = []
+
+    def chat(self, model_id, messages, options):
+        chat_tokens.append(options['max_tokens'])
+        if options['max_tokens'] == 128:
+            raise QueueFull(diagnostic)
+        return original_chat(self, model_id, messages, options)
+
+    env.setattr(Scheduler, 'chat', chat)
+    path = tmp_path / 'requests.jsonl'
+    env.setenv('LAWBOT_REQUEST_LOG', str(path))
+    app = service.load_app()
+    events = dict(web.chat_events(app, question, 'pro', 'concise'))
+
+    assert events['calculation']['status'] == 'none'
+    assert events['calculation']['message'].startswith('계산 판정을 일시적으로 하지 못했습니다.')
+    assert diagnostic not in events['calculation']['message']
+    assert events['done']['response_source'] == 'rag'
+    assert events['done']['text'].startswith('예고해야 합니다.')
+    assert 'error' not in events
+    assert chat_tokens == [128, 1024]
+    [(messages, _)] = real_server.chat[app.models.specs['pro'].model].calls
+    assert messages[1]['content'].startswith('[참고 조문]\n')
+    assert '직접 계산하지 말고 계산에 필요한 정보와 근거 조문만 안내할 것.' in messages[1]['content']
+    logged = path.read_text(encoding='utf-8')
+    record = json.loads(logged)
+    assert record['router_reason'] == 'queue_full'
+    assert record['calculation_status'] == 'none'
+    assert diagnostic not in logged and question not in logged
 
 
 def test_request_id_reaches_model_server_log(env, real_server, capsys):

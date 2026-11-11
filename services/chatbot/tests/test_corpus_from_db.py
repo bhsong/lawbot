@@ -3,7 +3,7 @@ import json
 import numpy as np
 import pytest
 
-from lawbot import check_deploy, deploy, embed_cache, feedback, manifest, service, settings, view
+from lawbot import calc_corpus, check_deploy, deploy, embed_cache, feedback, manifest, service, settings, view
 from lawbot.admin import Corpus
 from lawbot.cache_store import init as init_cache
 from lawbot.db import cli
@@ -43,6 +43,21 @@ def corrupt_release(db):
             'SELECT version_id FROM corpus_release_articles WHERE release_id=? AND position=0)',
             (' synthetic corruption', RELEASE),
         )
+
+
+def test_runtime_calculator_compatibility_reads_active_db_dependencies(corpus_db):
+    medical, settlement = 'medical_expense_credit', 'midyear_income_tax'
+    decree = '소득세법 시행령 제118조의5'
+    assert calc_corpus.database_calculator_compatibility(corpus_db, PROFILE) == {medical: (), settlement: ()}
+    assert all(calc_corpus.database_calculator_compatibility(corpus_db, 'v4').values())
+    corrupt_release(corpus_db)
+    assert calc_corpus.database_calculator_compatibility(corpus_db, PROFILE) == {medical: (), settlement: ()}
+    with connect(corpus_db, write=True) as conn, transaction(conn):
+        conn.execute('UPDATE article_versions SET text=text || ? WHERE article_id=?', (' synthetic edit', decree))
+    assert calc_corpus.database_calculator_compatibility(corpus_db, PROFILE) == {medical: (decree,), settlement: ()}
+    with connect(corpus_db, write=True) as conn, transaction(conn):
+        conn.execute('UPDATE article_versions SET text=? WHERE article_id=?', (b'not text', decree))
+    assert calc_corpus.database_calculator_compatibility(corpus_db, PROFILE) == {medical: (decree,), settlement: ()}
 
 
 @pytest.mark.parametrize('decrees', [False, True])
@@ -209,6 +224,8 @@ def test_check_deploy_reports_configured_exact_cache(corpus_db, env, tmp_path):
         level == 'OK' and '정확 일치 캐시:' in text and '스키마 2 · 모드 off · namespace ' in text
         for level, text in checks
     )
+    assert ('OK', '계산기 medical_expense_credit 켜짐 (근거 조문 본문 일치)') in checks
+    assert ('INFO', '계산 질문 캐시 제외 0개 · 초안 0 · 승인 0') in checks
 
 
 @pytest.mark.parametrize('bundle_state', ['unset', 'missing', 'present'])

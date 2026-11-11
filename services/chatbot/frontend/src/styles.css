@@ -11,6 +11,8 @@
   --accent-fg: #ffffff;
   --danger: #b42318;
   --danger-bg: #fef3f2;
+  --omitted: #754300;
+  --omitted-bg: #fff3d5;
   --shadow: 0 1px 2px rgba(0, 0, 0, 0.06), 0 1px 3px rgba(0, 0, 0, 0.08);
   --menu-shadow: 0 8px 24px rgba(0, 0, 0, 0.12);
   font-family: 'Pretendard Variable', Pretendard, -apple-system, BlinkMacSystemFont, 'Apple SD Gothic Neo', system-ui, sans-serif;
@@ -31,6 +33,8 @@
     --accent-fg: #0d0d0d;
     --danger: #ff8f84;
     --danger-bg: #3a2220;
+    --omitted: #ffd384;
+    --omitted-bg: #49350e;
     --shadow: 0 1px 2px rgba(0, 0, 0, 0.4);
     --menu-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
   }
@@ -262,6 +266,108 @@ button {
   width: 3px;
   border-radius: 2px;
   background: var(--soft-2);
+}
+
+.calculation {
+  margin-bottom: 12px;
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--panel);
+  font-size: 14px;
+  overflow-wrap: anywhere;
+}
+
+.calculation header,
+.calculation-results > div {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 4px 12px;
+}
+
+.calculation h2 {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 650;
+}
+
+.calculation header span,
+.calculation-articles {
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.calculation > p,
+.calculation-results,
+.calculation-articles {
+  margin: 6px 0 0;
+}
+
+.calculation-results dd {
+  margin: 0;
+  font-size: 18px;
+  font-variant-numeric: tabular-nums;
+}
+
+.calculation details {
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--line);
+}
+
+.calculation summary {
+  cursor: pointer;
+}
+
+.calculation summary .calculation-omitted {
+  display: inline-block;
+  margin-inline-start: 8px;
+  padding: 0 7px;
+  border-radius: 4px;
+  font-size: 12px;
+}
+
+.calculation-omitted {
+  background: var(--omitted-bg);
+  color: var(--omitted);
+  font-weight: 650;
+}
+
+.calculation table {
+  width: 100%;
+  margin-top: 10px;
+  table-layout: fixed;
+  border-collapse: collapse;
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.calculation caption {
+  padding-bottom: 3px;
+  font-weight: 650;
+  text-align: left;
+}
+
+.calculation th,
+.calculation td {
+  padding: 5px 6px;
+  border: 1px solid var(--line);
+  text-align: left;
+  vertical-align: top;
+}
+
+.calculation th[scope='row'] {
+  font-weight: 550;
+}
+
+.calculation thead {
+  background: var(--soft);
+}
+
+.calculation-articles {
+  padding-inline-start: 18px;
 }
 
 .answer {

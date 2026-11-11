@@ -26,6 +26,7 @@ import httpx
 import pandas as pd
 
 from lawbot import corpus_store, deploy, envfile, manifest, paths
+from lawbot.calc_corpus import calculator_report
 from lawbot.db.corpus_import import prepare_corpus
 from lawbot.db.migrate import startup_path
 from lawbot_common.logs import logger
@@ -229,9 +230,8 @@ def update(repo: str, asof: str, live: Path, report_dir: Path | None, restart: b
     report = report_dir / f'{asof}.md' if report_dir else None
     if r.same:
         if report:
-            report.parent.mkdir(parents=True, exist_ok=True)
-            report.write_text(ac.render(r, next_steps=False), encoding='utf-8')
             r.report = report
+        _report_assessment(report, ac.render(r, next_steps=False) if report else '', _calculator_notes(web))
         print('articles updated=no ' + ac.summary_line(r).removeprefix('articles '))
         return 0
 
@@ -252,10 +252,11 @@ def update(repo: str, asof: str, live: Path, report_dir: Path | None, restart: b
             raise UpdateError(f'바뀐 조문이 자기 본문으로 상위 {GATE_K}개 안에 검색되지 않음: {", ".join(missing)}')
         tag, moved = switch(live, stage, dataset)
 
-    restarted = do_restart(moved) if restart else 'no'
-    if report:
-        report.parent.mkdir(parents=True, exist_ok=True)
-        md = ac.render(r, next_steps=False) + '\n'.join(
+    restarted = 'failed'
+    try:
+        restarted = do_restart(moved) if restart else 'no'
+    finally:
+        md = (ac.render(r, next_steps=False) if report else '') + '\n'.join(
             [
                 '',
                 '## 갱신',
@@ -268,7 +269,7 @@ def update(repo: str, asof: str, live: Path, report_dir: Path | None, restart: b
                 '',
             ]
         )
-        report.write_text(md, encoding='utf-8')
+        _report_assessment(report, md, _calculator_notes(web))
     print(
         f'articles updated=yes asof={asof} changed={len(r.diff.answer)} archive={tag} restart={restarted}'
         + (f' → {report}' if report else '')
@@ -294,7 +295,7 @@ def init(live: Path, dataset: ac.Dataset) -> int:
     return 0
 
 
-def rollback(live: Path, restart: bool, dataset: ac.Dataset) -> int:
+def rollback(live: Path, restart: bool, dataset: ac.Dataset, report_dir: Path | None = None) -> int:
     archive = live / 'archive'
     _, combined = ba.csv_names(dataset.version)
     stem = Path(combined).stem
@@ -315,7 +316,14 @@ def rollback(live: Path, restart: bool, dataset: ac.Dataset) -> int:
                 if manifest.check(stage / name) is None:
                     raise UpdateError(f'보관본 {tag}의 매니페스트가 없습니다 ({name})')
         current, moved = switch(live, stage, dataset)
-    restarted = do_restart(moved) if restart else 'no'
+    restarted = 'failed'
+    try:
+        restarted = do_restart(moved) if restart else 'no'
+    finally:
+        report = report_dir / f'{ac.today()}-rollback.md' if report_dir else None
+        _report_assessment(
+            report, f'## 코퍼스 롤백\n\n- 대상 `{tag}`\n- 재시작 {restarted}\n', _calculator_notes(web_csv())
+        )
     print(f'articles rollback restored={tag} archived={current} restart={restarted}')
     return 0
 
@@ -353,6 +361,18 @@ def _cache_assessment(db, profile, notes):
     except Exception as exc:  # Optional cache assessment must not undo a valid corpus activation.
         log.warning('캐시 판정 실패 (%s)', type(exc).__name__)
         notes.append('캐시 판정 실패')
+
+
+def _calculator_notes(source):
+    return [message for _, message in calculator_report(source)]
+
+
+def _active_calculator_notes(db, profile):
+    try:
+        release = corpus_store.active_release(db, profile)
+    except OSError, RuntimeError, ValueError:
+        return _calculator_notes(None)
+    return _calculator_notes(release.combined.data)
 
 
 def _restart_db(db, profile, current, previous, notes):
@@ -419,9 +439,10 @@ def _update_db(args, dataset, db, current):
     report = args.report_dir / f'{asof}.md' if args.report_dir else None
     if result.same:
         if report:
-            report.parent.mkdir(parents=True, exist_ok=True)
-            report.write_text(ac.render(result, next_steps=False), encoding='utf-8')
             result.report = report
+        _report_assessment(
+            report, ac.render(result, next_steps=False) if report else '', _calculator_notes(current.combined.data)
+        )
         print('articles updated=no ' + ac.summary_line(result).removeprefix('articles '))
         return 0
 
@@ -445,7 +466,7 @@ def _update_db(args, dataset, db, current):
                 '',
             ]
         )
-        _report_assessment(report, md, notes)
+        _report_assessment(report, md, _active_calculator_notes(db, profile) + notes)
     print(
         f'articles updated=yes asof={asof} changed={len(result.diff.answer)} archive={previous} restart={restarted}'
         + (f' → {report}' if report else '')
@@ -475,8 +496,12 @@ def _run_db(args, dataset):
             try:
                 restarted = _restart_db(db, profile, previous, current.release_id, notes) if args.restart else 'no'
             finally:
-                report = args.report_dir / f'{ac.today()}-rollback.md' if args.report_dir and notes else None
-                _report_assessment(report, f'## 코퍼스 롤백\n\n- 대상 `{previous}`\n- 재시작 {restarted}\n', notes)
+                report = args.report_dir / f'{ac.today()}-rollback.md' if args.report_dir else None
+                _report_assessment(
+                    report,
+                    f'## 코퍼스 롤백\n\n- 대상 `{previous}`\n- 재시작 {restarted}\n',
+                    _active_calculator_notes(db, profile) + notes,
+                )
             print(f'articles rollback restored={previous} archived={current.release_id} restart={restarted}')
             return 0
         return _update_db(args, dataset, db, current)
@@ -512,7 +537,7 @@ def main(argv=None):
             if a.init:
                 return init(live, dataset)
             if a.rollback:
-                return rollback(live, a.restart, dataset)
+                return rollback(live, a.restart, dataset, a.report_dir)
             if not a.repo:
                 raise UpdateError('--repo가 필요합니다')
             return update(a.repo, a.asof or ac.today(), live, a.report_dir, a.restart, dataset)

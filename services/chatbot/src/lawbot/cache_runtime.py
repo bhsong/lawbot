@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from lawbot.cache_store import READ_TIMEOUT, CacheDatabaseError, Store, translate_sqlite_errors
+from lawbot.calc_gate import is_calculation_question
 from lawbot.corpus_store import active_token
 from lawbot.exact_cache import FORMAT, MODEL, PROFILE, Article, Snapshot, normalize
 
@@ -61,6 +62,8 @@ class ExactCache:
 
     def lookup(self, question: str, model: str, fmt: str) -> Decision:
         started = time.perf_counter()
+        if is_calculation_question(question):
+            return Decision('bypass', 'calculation_question', time.perf_counter() - started, False)
         eligible = (model, fmt) == (MODEL, FORMAT)
         mode = 'unknown'
 

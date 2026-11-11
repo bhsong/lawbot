@@ -510,6 +510,17 @@ uv run python -m lawbot.cache_admin set-mode on --db "$cache_db" --bundle "$cach
 
 한 번도 승인되지 않은 초안은 이전 namespace에 보존됩니다. 새 릴리스의 캐시 탭에서 검토하려면 현재 릴리스로 `cache_admin seed`를 다시 실행합니다. 관리자 화면에서는 모든 모드에서 신규 초안을 승인할 수 있습니다. `on`에서 승인하면 보호 분할을 통과한 초안의 연결 질문에 즉시 반환됩니다. `on`에서 검토 대기 답변을 재승인하면 이전에 승인된 연결 질문에 즉시 반환됩니다. 이미 승인된 답변에 새 질문을 추가할 때는 `off`에서 CLI 승인 묶음에 포함합니다.
 
+계산 질문 게이트를 통과한 질문은 캐시 조회·seed·승인에서 제외됩니다. 관리 화면의 **캐시** 탭에서 현재 namespace의 제외 개수와 연결 질문의 `끔` 표시를 확인할 수 있습니다. seed 보고서에는 `excluded_calculation_rows` 개수와 제외된 입력 ID가 남습니다.
+
+배포 때 전용 캐시 DB의 기존 초안과 승인 항목을 점검합니다. 첫 명령은 모든 namespace의 질문 행을 읽기 전용으로 집계합니다. JSON의 `counts`는 초안·승인별 개수이며 `items`에는 질문·답변·namespace·출처 ID가 있습니다. 둘째 명령은 기존의 활성 플래그를 끄고 실제 변경 개수를 `disabled`에 기록합니다. 두 명령 모두 질문 원문을 출력하지 않으며 승인·감사 이력은 보존됩니다.
+
+```fish
+uv run python -m lawbot.cache_admin exclude-calculations --db "$cache_db"
+uv run python -m lawbot.cache_admin exclude-calculations --db "$cache_db" --apply --reason "$reason"
+```
+
+`uv run python -m lawbot.check_deploy`와 `lawbot-articles-update` 갱신 보고서에서 계산기별 근거 조문 본문 일치 여부를 확인합니다. 적용 데이터와 본문 해시가 다르거나 조문이 누락된 계산기는 자동으로 꺼집니다.
+
 기존 캐시에서 처음 전환할 때는 전용 DB를 백업하고 `uv run python -m lawbot.cache_admin migrate --db "$cache_db"`로 스키마를 적용합니다. 캐시를 `off`로 둔 상태에서 `uv run python -m lawbot.cache_carry`로 현재 릴리스를 판정합니다. 이전 파일 지문과 새 `DISPLAY_VERSION` 기반 지문이 달라 첫 판정은 검토 대기로 시작합니다. 관리자 화면이나 CLI에서 검토한 뒤 바로 `on`으로 전환하거나 `shadow`에서 먼저 관찰할 수 있습니다. `answer_format.py`·`citation.py`의 표시 동작을 바꿀 때는 `DISPLAY_VERSION`과 렌더 스냅샷을 갱신합니다.
 
 문제가 발생하면 `set-mode off --db "$cache_db" --reason "$reason"`로 먼저 우회하고, 개별 답변은 `revoke answer "$answer_id" --db "$cache_db" --reason "$reason"`로 철회합니다. 두 명령은 `uv run python -m lawbot.cache_admin`으로 실행합니다. 동일 namespace의 정정은 `off`에서 승인된 질문 하나씩 `replace`로 처리하고 새 승인 ID를 사용합니다. DB 복구가 필요하면 `cache_admin backup`의 온라인 백업을 별도 경로에 준비해 무결성과 마지막 철회·감사 이력을 대조합니다. 복구 DB도 `off`에서 시작합니다. [정정 검토 파일과 세부 절차](archives/exact-cache-p07.md#10-구현-명령과-개발-기록)

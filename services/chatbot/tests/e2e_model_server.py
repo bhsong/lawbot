@@ -9,6 +9,8 @@
 #   slow       토큰마다 SLOW_S초 (웹앱 read timeout보다 길게)
 #   chat_error 첫 토큰 뒤 생성 중 예외
 #   busy       동시 생성 1·대기 1, 토큰마다 BUSY_S초 (테스트가 요청 2개로 자리를 채움)
+#   calculation  Router JSON and fixed answers for the calculation-card browser tests.
+import json
 import os
 import re
 import sys
@@ -31,13 +33,39 @@ def answer_chunks(prompt):
     return ['【결론】', '가짜 모델 ', '답변입니다.', '\n【근거 조문】\n', cite]
 
 
+def calculation_chunks(prompt, system, kw):
+    if system.startswith('계산 질문 분류기'):
+        assert kw['max_tokens'] == 128 and kw['temperature'] == 0 and not kw['enable_thinking']
+        if '표준세액공제 법정 금액' in prompt:
+            return ['{"calculator":"none","kind":"lookup"}']
+        if '장기요양보험료 5만원' in prompt:
+            calculator = 'midyear_income_tax'
+            spans = {'gross_pay': '2000만원', 'health_premium': '50만원', 'long_term_care_premium': '5만원'}
+        elif '의료비 300만 원이면 의료비 세액공제액' in prompt:
+            calculator = 'medical_expense_credit'
+            spans = {'gross_pay': '5천만 원', 'medical_expenses': '300만 원', 'year': '2026년'}
+        else:
+            return ['{"calculator":"none","kind":"calculation"}']
+        inputs = {field: span for field, span in spans.items() if span in prompt}
+        return [json.dumps({'calculator': calculator, 'inputs': inputs}, ensure_ascii=False)]
+    cite = '\n【근거 조문】\n소득세법 제59조의4'
+    if '계산 결과의 숫자를 그대로 쓰고 다시 계산하지 말' in prompt:
+        if '장기요양보험료 5만원' in prompt:
+            return ['【결론】', '결정세액은 146,750원이고 개인지방소득세는 14,675원입니다.', cite]
+        return ['【결론】', '의료비 세액공제액은 1원입니다.', cite]
+    if '직접 계산하지 말고' in prompt:
+        return ['【결론】', '계산에 필요한 자료와 근거 조문을 확인해 주세요.', cite]
+    return answer_chunks(prompt)
+
+
 class E2EChat(ms_fakes.FakeChat):
     mode = 'normal'
 
     def stream(self, messages, **kw):
-        chunks = answer_chunks(messages[-1]['content'])
+        prompt = messages[-1]['content']
         system = messages[0]['content']
-        if '근로소득 세금, 4대보험' in system:
+        chunks = calculation_chunks(prompt, system, kw) if self.mode == 'calculation' else answer_chunks(prompt)
+        if self.mode != 'calculation' and '근로소득 세금, 4대보험' in system:
             chunks[3:3] = [' 근로소득 세금, 4대보험']
             if '【설명】' in system:
                 chunks += ['\n【설명】\n가짜 모델의 전체 설명', '\n【참고】\n가짜 모델의 참고 사항']

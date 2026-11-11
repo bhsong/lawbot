@@ -6,7 +6,7 @@ import hashlib
 import json
 import os
 import pwd
-from dataclasses import replace
+from dataclasses import asdict, replace
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -151,7 +151,18 @@ def correction(path, identity, seed, snapshot):
 def parser():
     cli = argparse.ArgumentParser(description=__doc__)
     sub = cli.add_subparsers(dest='command', required=True)
-    for name in ('init', 'migrate', 'inspect', 'seed', 'approve', 'replace', 'set-mode', 'revoke', 'backup'):
+    for name in (
+        'init',
+        'migrate',
+        'inspect',
+        'seed',
+        'approve',
+        'replace',
+        'set-mode',
+        'revoke',
+        'backup',
+        'exclude-calculations',
+    ):
         cmd = sub.add_parser(name)
         cmd.add_argument('--db', required=name != 'inspect')
         if name in ('inspect', 'seed', 'approve', 'replace', 'set-mode'):
@@ -185,6 +196,9 @@ def parser():
             cmd.add_argument('target')
         if name == 'backup':
             cmd.add_argument('--out', required=True)
+        if name == 'exclude-calculations':
+            cmd.add_argument('--apply', action='store_true', help='제외 항목의 활성 플래그를 끕니다.')
+            cmd.add_argument('--reason', help='--apply에 필요한 변경 사유')
     return cli
 
 
@@ -219,9 +233,23 @@ def run(args):
     if command == 'backup':
         backup(path, db_path(args.out))
         return {'backup': 'ok'}
+    store = Store(path)
+    if command == 'exclude-calculations':
+        if args.apply and not reason.strip():
+            raise ValueError('--apply에는 변경 사유가 필요합니다.')
+        rows, disabled = (
+            store.disable_calculations(actor, reason) if args.apply else (store.calculation_exclusions(), 0)
+        )
+        return {
+            'counts': {status: sum(row.status == status for row in rows) for status in ('draft', 'approved')},
+            'disabled': disabled,
+            'items': [
+                asdict(row) | {'effective_status': 'off', 'exact_enabled': row.exact_enabled and not args.apply}
+                for row in rows
+            ],
+        }
     if not reason.strip():
         raise ValueError('변경 사유가 필요합니다.')
-    store = Store(path)
     if command == 'revoke':
         store.revoke(args.kind, args.target, actor, reason)
         return {'revoked': args.target}
