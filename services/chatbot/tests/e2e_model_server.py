@@ -47,9 +47,6 @@ def calculation_chunks(prompt, system, kw):
         elif '월급 300만원으로 3년 일했습니다' in prompt:
             calculator = 'severance_pay'
             spans = {'monthly_wage': '300만원', 'service_period': '3년'}
-        elif '월급 275만원으로 4년 근무했습니다' in prompt:
-            calculator = 'severance_pay'
-            spans = {'monthly_wage': '275만원', 'service_period': '4년'}
         elif '근속 2년을 마쳤고 연차 발생일에도 재직' in prompt:
             calculator = 'annual_leave_days'
             spans = {
@@ -88,18 +85,10 @@ def calculation_chunks(prompt, system, kw):
                 '월급 전액을 통상임금으로 보고 월 209시간과 1일 8시간을 가정하면 10,334,928원으로 추정됩니다.',
                 '\n【근거 조문】\n근로자퇴직급여 보장법 제8조',
             ]
-        if '월급 275만원으로 4년 근무했습니다' in prompt:
-            return [
-                '【결론】',
-                '평균임금 기준 퇴직금 추정은 11,000,000원이고 통상임금 하한 적용 추정은 12,631,579원입니다.',
-                '\n【근거 조문】\n근로자퇴직급여 보장법 제8조',
-            ]
         return ['【결론】', '의료비 세액공제액은 1원입니다.', cite]
     if '표의 결과 항목과 숫자·단위를 결론에 그대로 쓰고' in prompt:
         return ['【결론】', '연차유급휴가 일수는 15일입니다.', '\n【근거 조문】\n근로기준법 제60조']
     if '직접 계산하지 말고' in prompt:
-        if '월급 275만원으로 4년 근무했습니다' in prompt:
-            cite = '\n【근거 조문】\n근로자퇴직급여 보장법 제8조'
         if '근속 2년하고 11개월' in prompt or '입사일은 2024년 2월 30일' in prompt:
             cite = '\n【근거 조문】\n근로기준법 제60조'
         return ['【결론】', '계산에 필요한 자료와 근거 조문을 확인해 주세요.', cite]

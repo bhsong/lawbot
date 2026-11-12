@@ -135,3 +135,6 @@ LAWBOT_ENV_FILE="$dev_env" uv run --locked python -m lawbot_tools.eval_calc_rout
 - [ ] 반영 직전에 2027년 최저임금 고시의 적용기간과 시간급 **10,700원**, 표준 209시간 월 환산액 **2,236,300원**을 `calc_statutes.json`과 다시 대조한다. [고용노동부 제2026-60호](https://www.moel.go.kr/info/lawinfo/instruction/view.do?bbs_seq=20260800150) · [최저임금위원회 결정 현황](https://www.minimumwage.go.kr/minWage/policy/decisionMain.do)
 
 향후 승인된 운영 반영 시 챗봇 화면에서 `npm ci && npm run build`를 실행한다. 운영 담당자가 `uv run python -m lawbot.cache_admin exclude-calculations --db "$cache_db"`로 집계하고, 캐시 DB 백업 후 `--apply --reason "$reason"`으로 제외를 적용한다. 웹앱을 재시작한 뒤 `uv run python -m lawbot.check_deploy`에서 계산기 일곱 개의 상태와 캐시 집계를 확인한다. 이번 작업은 개발 클론과 합성 데이터로 한정한다. 운영 트리·데이터에는 접근하지 않는다. 모델 서버 코드·설정·프로세스·launchd 및 임베딩·리랭커·검색 설정은 변경 범위에 포함하지 않는다. [정확 일치 캐시 운영 절차](../operations.md#p07-정확-일치-캐시)
+
+**되돌림 (2026-11-12):** 사용자 결정으로 위 최종 보완 코드는 되돌렸다. 이 PR은 `41d7032` 코드(held-out 재평가 53/60)로 마무리한다. 012의 원문 수량 대조와 표현 범위 확장은 다음 PR에서 새 held-out과 함께 진행한다. [기록](../evals/2026-11-12-labor-calculators-live.md#되돌림과-최종-상태)
+
