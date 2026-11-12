@@ -307,7 +307,7 @@ def main():
     parser.add_argument('--database', type=Path, default=os.environ.get('LAW_CALENDAR_DB'))
     parser.add_argument('--port', type=int, required=True)
     parser.add_argument('--frontend', type=Path)
-    parser.add_argument('--erp-feed', type=Path, default=os.environ.get('LAW_CALENDAR_ERP_FEED'))
+    parser.add_argument('--erp-feed', type=Path, default=os.environ.get('LAWBOT_CALENDAR_ERP_FEED'))
     args = parser.parse_args()
     if args.database is None or not 1 <= args.port <= 65535:
         parser.error('An explicit database and valid port are required')

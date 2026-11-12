@@ -43,11 +43,7 @@ def serve(tmp, *, development, database=None, erp_feed=None):
             str(port),
             *(['--erp-feed', str(erp_feed)] if erp_feed is not None else []),
         ]
-    env = {
-        key: value
-        for key, value in os.environ.items()
-        if not key.startswith(('LAWBOT_', 'LAW_MONITOR_', 'LAW_CALENDAR_'))
-    }
+    env = {key: value for key, value in os.environ.items() if not key.startswith(('LAWBOT_', 'LAW_MONITOR_'))}
     log = tmp / 'calendar-server.log'
     with log.open('w') as out:
         proc = subprocess.Popen(args, cwd=FRONTEND, env=env, stdout=out, stderr=subprocess.STDOUT)

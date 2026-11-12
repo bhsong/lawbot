@@ -87,3 +87,26 @@ def test_unconfigured_feed_is_missing_and_law_endpoints_are_unchanged(dataset, f
         assert plain.get('/api/erp-updates').json()['state'] == 'missing'
         for path in ('/api/law-calendar?month=2026-11', '/api/law-events?month=2026-11', '/api/law-calendar/status'):
             assert plain.get(path).json() == with_erp.get(path).json()
+
+
+def test_main_reads_the_feed_path_from_the_service_env_file(dataset, feed, tmp_path, monkeypatch):
+    from law_calendar import server
+
+    service = tmp_path / 'calendar-service'
+    module = service / 'src' / 'law_calendar' / 'server.py'
+    module.parent.mkdir(parents=True)
+    (service / '.env').write_text(f'LAWBOT_CALENDAR_ERP_FEED={feed}\n', encoding='utf-8')
+    monkeypatch.delenv('LAWBOT_ENV_FILE', raising=False)
+    monkeypatch.setenv('LAWBOT_CALENDAR_ERP_FEED', 'placeholder')
+    monkeypatch.delenv('LAWBOT_CALENDAR_ERP_FEED')
+    monkeypatch.setattr(server, '__file__', str(module))
+    monkeypatch.setattr('sys.argv', ['law-calendar', '--database', str(dataset), '--port', '8000'])
+    states = []
+
+    def run(app, **_):
+        with TestClient(app) as client:
+            states.append(client.get('/api/erp-updates').json()['state'])
+
+    monkeypatch.setattr(server.uvicorn, 'run', run)
+    server.main()
+    assert states == ['ok']

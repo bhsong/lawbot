@@ -62,7 +62,7 @@ uv run --project services/law-calendar law-calendar --database services/law-cale
 
 화면 위의 탭에서 `법령 캘린더`와 `ERP 자료`를 고른다. `/#erp`로 접속하면 ERP 자료 탭이 바로 열린다. ERP 코드는 `frontend/src/erp/`에만 있고, 법령 달력 그리드와 챗봇 관리 화면에는 ERP가 나오지 않는다.
 
-- 데이터: [`services/erp-updates`](../erp-updates/README.md)가 승인한 항목만 담아 만든 공개 피드 파일이다. 서버는 `--erp-feed <파일>` 또는 `LAW_CALENDAR_ERP_FEED`로 그 파일을 읽기만 한다. 캘린더 DB에는 쓰지 않는다.
+- 데이터: [`services/erp-updates`](../erp-updates/README.md)가 승인한 항목만 담아 만든 공개 피드 파일이다. 서버는 `--erp-feed <파일>` 또는 서비스 `.env`(`services/law-calendar/.env`)의 `LAWBOT_CALENDAR_ERP_FEED=<절대 경로>`로 그 파일을 읽기만 한다. 캘린더 DB에는 쓰지 않는다.
 - `GET /api/erp-updates`: `state`가 `ok`이면 `items`·`relatedLaws`·`history`를 돌려준다. 파일이 없거나 설정하지 않았으면 `missing`, 형식이 맞지 않으면 `invalid`이고 둘 다 항목은 0건이다. 기존 조회 API의 응답은 바뀌지 않는다.
 - 화면 구성:
   - **현재 적용 중**: 시행일이 오늘(KST) 이전인 항목과 현행 법령본 기준 항목
