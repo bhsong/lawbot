@@ -1,6 +1,6 @@
 # 계산기 PR3: 2단계 라우터 실제 모델 평가 (2026-11-12)
 
-계획: [calc-two-stage-router](../plans/calc-two-stage-router.md). 공유 모델 서버를 쓰는 평가는 사용자가 이 PR에 한해 오늘 하루 승인했다. 모든 실행은 동시 1개, 자동 재시도 0회, temperature 0, 06:20–06:50 밖에서 했고, 시작 전·후 구성이 같아 모두 유효하다.
+계획: [calc-two-stage-router](../archives/calc-two-stage-router.md). 공유 모델 서버를 쓰는 평가는 사용자가 이 PR에 한해 오늘 하루 승인했다. 모든 실행은 동시 1개, 자동 재시도 0회, temperature 0, 06:20–06:50 밖에서 했고, 시작 전·후 구성이 같아 모두 유효하다.
 
 ## 요약
 
