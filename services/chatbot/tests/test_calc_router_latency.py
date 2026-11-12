@@ -32,7 +32,8 @@ def test_router_inherits_configured_read_limit():
         timeout=request_timeout(90),  # pyright: ignore[reportArgumentType]
         http_client=httpx.Client(transport=httpx.MockTransport(reply)),  # pyright: ignore[reportArgumentType]
     ) as client:
-        assert LLM('pro', client, 'system').route_calculation('질문') == '{}'
+        # An unusable stage-1 selection ends routing without a second request.
+        assert LLM('pro', client, 'system').route_calculation('질문') is None
 
     assert len(requests) == 1
     assert requests[0].extensions['timeout']['connect'] == 5

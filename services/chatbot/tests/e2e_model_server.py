@@ -10,7 +10,6 @@
 #   chat_error 첫 토큰 뒤 생성 중 예외
 #   busy       동시 생성 1·대기 1, 토큰마다 BUSY_S초 (테스트가 요청 2개로 자리를 채움)
 #   calculation  Router JSON and fixed answers for the calculation-card browser tests.
-import json
 import os
 import re
 import sys
@@ -33,46 +32,69 @@ def answer_chunks(prompt):
     return ['【결론】', '가짜 모델 ', '답변입니다.', '\n【근거 조문】\n', cite]
 
 
-def calculation_chunks(prompt, system, kw):
+ROUTES = (
+    (
+        '장기요양보험료 5만원',
+        'midyear_income_tax',
+        {'gross_pay': '2000만원', 'health_premium': '50만원', 'long_term_care_premium': '5만원'},
+        {},
+    ),
+    (
+        '의료비 300만 원이면 의료비 세액공제액',
+        'medical_expense_credit',
+        {'gross_pay': '5천만 원', 'medical_expenses': '300만 원'},
+        {},
+    ),
+    ('월급 300만원으로 3년 일했습니다', 'severance_pay', {'monthly_wage': '300만원', 'service_period': '3년'}, {}),
+    (
+        '근속 2년을 마쳤고 연차 발생일에도 재직',
+        'annual_leave_days',
+        {'workplace_size': '5명', 'weekly_hours': '40시간', 'service_period': '2년', 'attendance_rate': '96%'},
+        {'employed_at_accrual': '연차 발생일에도 재직'},
+    ),
+    ('근속 2년하고 11개월', 'annual_leave_days', {'service_period': '2년하고 11개월'}, {}),
+    (
+        '입사일은 2024년 2월 30일',
+        'annual_leave_days',
+        {
+            'workplace_size': '8명',
+            'weekly_hours': '40시간',
+            'attendance_rate': '92%',
+            'hire_date': '2024년 2월 30일',
+            'as_of_date': '2026년 3월 1일',
+        },
+        {'employed_at_accrual': '재직 중'},
+    ),
+)
+FIELD_TITLES = {
+    'midyear_income_tax': '중도퇴사자',
+    'medical_expense_credit': '의료비',
+    'severance_pay': '법정 퇴직금',
+    'annual_leave_days': '연차유급휴가',
+}
+MARK = re.compile(r'\[([0-9]+):([^\]]*)\]')
+
+
+def route_chunks(prompt, system, kw):
+    """Answer both router stages: a calculator name, then one label per numbered quantity."""
+    assert kw['temperature'] == 0 and not kw['enable_thinking']
     if system.startswith('계산 질문 분류기'):
-        assert kw['max_tokens'] == 128 and kw['temperature'] == 0 and not kw['enable_thinking']
+        assert kw['max_tokens'] == 12
         if '표준세액공제 법정 금액' in prompt:
-            return ['{"calculator":"none","kind":"lookup"}']
-        if '장기요양보험료 5만원' in prompt:
-            calculator = 'midyear_income_tax'
-            spans = {'gross_pay': '2000만원', 'health_premium': '50만원', 'long_term_care_premium': '5만원'}
-        elif '의료비 300만 원이면 의료비 세액공제액' in prompt:
-            calculator = 'medical_expense_credit'
-            spans = {'gross_pay': '5천만 원', 'medical_expenses': '300만 원', 'year': '2026년'}
-        elif '월급 300만원으로 3년 일했습니다' in prompt:
-            calculator = 'severance_pay'
-            spans = {'monthly_wage': '300만원', 'service_period': '3년'}
-        elif '근속 2년을 마쳤고 연차 발생일에도 재직' in prompt:
-            calculator = 'annual_leave_days'
-            spans = {
-                'workplace_size': '5명',
-                'weekly_hours': '40시간',
-                'service_period': '2년',
-                'employed_at_accrual': '연차 발생일에도 재직',
-                'attendance_rate': '96%',
-            }
-        elif '근속 2년하고 11개월' in prompt:
-            calculator = 'annual_leave_days'
-            spans = {'service_period': '2년하고 11개월'}
-        elif '입사일은 2024년 2월 30일' in prompt:
-            calculator = 'annual_leave_days'
-            spans = {
-                'workplace_size': '8명',
-                'weekly_hours': '40시간',
-                'attendance_rate': '92%',
-                'hire_date': '2024년 2월 30일',
-                'as_of_date': '2026년 3월 1일',
-                'employed_at_accrual': '재직 중',
-            }
-        else:
-            return ['{"calculator":"none","kind":"calculation"}']
-        inputs = {field: span for field, span in spans.items() if span in prompt}
-        return [json.dumps({'calculator': calculator, 'inputs': inputs}, ensure_ascii=False)]
+            return ['lookup']
+        return [next((name for marker, name, _, _ in ROUTES if marker in prompt), 'unsupported')]
+    plain = MARK.sub(r'\2', prompt)
+    _, name, spans, facts = next(route for route in ROUTES if route[0] in plain)
+    fields = {span: field for field, span in spans.items()}
+    lines = [f'{index}={fields.get(text, "x")}' for index, text in MARK.findall(prompt)]
+    lines += [f'{field}=예|{evidence}' for field, evidence in facts.items()]
+    assert system.startswith(FIELD_TITLES[name])
+    return ['\n'.join(lines)]
+
+
+def calculation_chunks(prompt, system, kw):
+    if system.startswith('계산 질문 분류기') or '계산 입력 분류기' in system.split('\n', 1)[0]:
+        return route_chunks(prompt, system, kw)
     cite = '\n【근거 조문】\n소득세법 제59조의4'
     if '계산 결과의 숫자를 그대로 쓰고 다시 계산하지 말' in prompt:
         if '장기요양보험료 5만원' in prompt:

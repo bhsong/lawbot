@@ -31,14 +31,6 @@ FIELDS = {
     'excluded_days': 'count',
     'year': 'year',
 }
-SCHEMA = (
-    '퇴직금. service_period(인정 계속근로기간 전체) 또는 hire_date와 '
-    'retirement_date(첫 비재직일)/last_employed_date(마지막 재직일), weekly_hours(4주 평균 주 소정시간), '
-    'service_qualifies(달력상 1년 이상임이 명시된 구간), wage_total(직전 3개월 임금 총액), '
-    'wage_days(그 역일수), ordinary_daily_wage(1일 통상임금) 또는 adjusted_daily_wage(하한 반영 산정용 일급). '
-    'annual_bonus/annual_unused_leave_pay(임금 총액에 별도 산입할 적격 연간 상여/미사용연차수당), '
-    'excluded_wages/excluded_days(제외 임금/일수). 월급만 제시되면 monthly_wage.'
-)
 
 _QUALIFICATION = '근로자퇴직급여 보장법 제4조'
 _SEVERANCE = '근로자퇴직급여 보장법 제8조'
@@ -69,9 +61,21 @@ _VARIABLE_HOURS = re.compile(r'(?:소정\s*(?:근로\s*)?시간|근무\s*시간)
 _HOURS_RANGE = re.compile(r'\d+(?:\.\d+)?\s*(?:시간)?\s*(?:[~～∼–-]|또는)\s*\d+(?:\.\d+)?\s*시간')
 _UNQUALIFIED_END = re.compile(r'(?:퇴직|퇴사)\s*일(?:자)?\s*(?:은|는|이|가|:)?\s*[0-9]')
 _QUALIFIED_END = re.compile(r'첫\s*비재직일|마지막\s*(?:재직|근무)일|근로관계\s*종료\s*다음\s*날')
+FACT_LABELS = {'service_qualifies': '달력상 1년 이상 계속근로 여부'}
 
 
-def question_issue(question: str, inputs: Mapping[str, str]) -> str | None:
+def fact_polarity(field: str, evidence: str) -> bool | None:
+    """Return the polarity the wording itself makes certain, or None."""
+    if field != 'service_qualifies':
+        return None
+    if re.search(r'(?<!\d)1\s*년\s*미만', evidence):
+        return False
+    if re.search(r'(?<!\d)1\s*년\s*이상', evidence) and not re.search(r'아니|미만|불명|모르|않', evidence):
+        return True
+    return None
+
+
+def question_issue(question: str, inputs: Mapping[str, str], facts: Mapping[str, bool] | None = None) -> str | None:
     if _OUTSIDE.search(question):
         return '법정 세전 퇴직금제도의 산정 범위에 해당하는지 확인해 주세요.'
     if _VARIABLE_HOURS.search(question) or _HOURS_RANGE.search(question):
@@ -206,7 +210,12 @@ def _monthly_estimates(
     )
 
 
-def calculate(base: Calculation, inputs: Mapping[str, str], rules: Mapping[str, Any]) -> Calculation:
+def calculate(
+    base: Calculation,
+    inputs: Mapping[str, str],
+    rules: Mapping[str, Any],
+    facts: Mapping[str, bool] | None = None,
+) -> Calculation:
     money = {
         field: parse_labor_amount(inputs[field])
         for field, kind in FIELDS.items()
@@ -235,7 +244,9 @@ def calculate(base: Calculation, inputs: Mapping[str, str], rules: Mapping[str, 
         raise ValueError('invalid weekly hours')
 
     qualifies = None
-    if 'service_qualifies' in inputs:
+    if facts is not None and 'service_qualifies' in facts:
+        qualifies = facts['service_qualifies']
+    elif 'service_qualifies' in inputs:
         if not re.search(rf'(?<!\d){minimum_years}\s*년\s*이상', inputs['service_qualifies']) or re.search(
             r'아니|미만|불명|모르|않', inputs['service_qualifies']
         ):
@@ -277,7 +288,9 @@ def calculate(base: Calculation, inputs: Mapping[str, str], rules: Mapping[str, 
     else:
         return _guidance(base, '계속근로기간 또는 입사일과 종료일을 알려 주세요.')
 
-    if qualifies and service_eligible is False:
+    # Dates or a period decide eligibility; a judged fact overrides them only when its wording is explicit.
+    inferred = facts is not None and fact_polarity('service_qualifies', inputs.get('service_qualifies', '')) is None
+    if qualifies is not None and service_eligible is not None and qualifies != service_eligible and not inferred:
         return _guidance(base, '계속근로기간과 달력상 1년 충족 여부를 확인해 주세요.', 'ambiguous_input')
     service_eligible = qualifies if service_eligible is None else service_eligible
     steps.append(_step('인정 계속근로일수', service_formula, service_days, _SEVERANCE, '일'))

@@ -36,7 +36,6 @@ GEN_FIELDS = (
     'finish_reason',
 )
 TEMPERATURE = 0  # 탐욕적 생성 (평가·웹앱 공통, 모델 서버 기본값과 같음)
-ROUTER_MAX_TOKENS = 128
 
 
 def response(text='', **kw):
@@ -97,20 +96,37 @@ class LLM:
             {'role': 'user', 'content': build_prompt(hits, question)},
         ]
 
-    def route_calculation(
-        self, question: str, *, tax_only: bool = False, metrics: dict[str, int] | None = None
-    ) -> str | None:
-        """Classify once with the Pro client's endpoint and configured read timeout."""
-        from lawbot.calc_router import PR1_ROUTER_SYSTEM, ROUTER_SYSTEM
+    def route_calculation(self, question: str, *, metrics: dict[str, int] | None = None) -> str | None:
+        """Select a calculator, then label the question's numbers for it.
 
-        system = PR1_ROUTER_SYSTEM if tax_only else ROUTER_SYSTEM
-        if metrics is not None:
-            metrics['router_system_chars'] = len(system)
+        Returns the router JSON composed from both stages, or None when stage 1 is
+        unusable or a stage hits its token limit. Each stage is one non-streaming
+        request with the configured read timeout and no retry.
+        """
+        from lawbot.calc_extract import (
+            SELECT_MAX_TOKENS,
+            SELECT_SYSTEM,
+            compose_route,
+            label_max_tokens,
+            label_system,
+            marked_question,
+            parse_selection,
+        )
+
+        selection = parse_selection(self._router_completion(SELECT_SYSTEM, question, SELECT_MAX_TOKENS, metrics))
+        if selection is None or selection in ('lookup', 'unsupported'):
+            return compose_route(question, selection)
+        labels = self._router_completion(
+            label_system(selection), marked_question(question), label_max_tokens(question), metrics
+        )
+        return None if labels is None else compose_route(question, selection, labels)
+
+    def _router_completion(self, system: str, user: str, max_tokens: int, metrics: dict[str, int] | None) -> str | None:
         try:
             result = self.client.chat.completions.create(
                 model=self.model,
-                messages=[{'role': 'system', 'content': system}, {'role': 'user', 'content': question}],
-                max_tokens=ROUTER_MAX_TOKENS,
+                messages=[{'role': 'system', 'content': system}, {'role': 'user', 'content': user}],
+                max_tokens=max_tokens,
                 temperature=TEMPERATURE,
                 stream=False,
                 extra_body={'chat_template_kwargs': {'enable_thinking': False}},
@@ -123,9 +139,14 @@ class LLM:
             if type(converted) is RuntimeError:
                 converted = ModelServerError('계산 라우터 응답 오류')
             raise converted from exc
-        if metrics is not None and (usage := getattr(result, 'usage', None)) is not None:
-            metrics['router_prompt_tokens'] = usage.prompt_tokens
-            metrics['router_completion_tokens'] = usage.completion_tokens
+        if metrics is not None:
+            metrics['router_calls'] = metrics.get('router_calls', 0) + 1
+            if (usage := getattr(result, 'usage', None)) is not None:
+                for key, value in (
+                    ('router_prompt_tokens', usage.prompt_tokens),
+                    ('router_completion_tokens', usage.completion_tokens),
+                ):
+                    metrics[key] = metrics.get(key, 0) + value
         if not result.choices or result.choices[0].finish_reason == 'length':
             return None
         return result.choices[0].message.content

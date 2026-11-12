@@ -3,10 +3,11 @@ from pathlib import Path
 
 import pytest
 
+from lawbot.calc_extract import FIELD_DESCRIPTIONS
 from lawbot.calc_router import route_calculation
 from lawbot.calculators import Calculation
 from lawbot.labor_language import premium_pay_scope
-from lawbot.labor_premium import FIELDS, SCHEMA, calculate, question_issue
+from lawbot.labor_premium import FIELDS, calculate, question_issue
 
 RULES = {
     'coverage': {'article': '근로기준법 제11조', 'minimum_staff': 5},
@@ -277,4 +278,4 @@ def test_premium_rejects_inconsistent_inputs(extra):
 
 
 def test_prompt_documents_all_premium_inputs():
-    assert all(field in SCHEMA for field in FIELDS)
+    assert FIELD_DESCRIPTIONS['premium_pay'][1].keys() == FIELDS.keys()

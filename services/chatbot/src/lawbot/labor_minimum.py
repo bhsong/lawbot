@@ -21,12 +21,6 @@ FIELDS = {
     'monthly_basis_hours': 'hours',
     'applicability': 'fact',
 }
-SCHEMA = (
-    '최저임금 월 환산: year(적용연도), weekly_scheduled_hours(주 소정시간), daily_scheduled_hours(1일 소정시간), '
-    'weekly_workdays(주 소정근로일수), weekly_paid_holiday_hours(주 유급주휴시간), '
-    'monthly_basis_hours(명시된 월 최저임금 적용기준시간, 실제 월 근로시간 제외), '
-    'applicability(수습 감액·적용 제외 등 적용 사실 전체).'
-)
 
 _CONVERSION_ARTICLE = '최저임금법 시행령 제5조'
 _LABELS = {
@@ -51,6 +45,7 @@ _SPECIAL_CONDITIONS = re.compile(
 _ORDINARY_APPLICABILITY = re.compile(
     r'(?:최저임금(?:법)?전액적용|일반근로자|감액(?:이)?없(?:음|습니다)|수습(?:이)?아님)'
 )
+_ACTUAL_HOURS = re.compile(r'실제|실근로|근태|일한\s*시간|근무했|일했')
 _CONDITION_MESSAGE = '수습 감액이나 법 적용 제외 여부, 또는 비교할 임금 항목을 확인해 주세요.'
 
 
@@ -59,14 +54,41 @@ def _ordinary(source: str) -> bool:
     return _ORDINARY_APPLICABILITY.fullmatch(compact) is not None
 
 
-def question_issue(question: str, inputs: Mapping[str, str]) -> str | None:
+FACT_LABELS = {'applicability': '수습 감액이나 최저임금 적용 제외 해당 여부'}
+
+
+def fact_polarity(field: str, evidence: str) -> bool | None:
+    """Return the polarity the wording itself makes certain, or None."""
+    if field != 'applicability':
+        return None
+    if _ordinary(evidence):
+        return False
+    if _SPECIAL_CONDITIONS.search(evidence) and not re.search(r'아니|않|없', evidence):
+        return True
+    return None
+
+
+def question_issue(question: str, inputs: Mapping[str, str], facts: Mapping[str, bool] | None = None) -> str | None:
     """Check that monthly basis hours and material exceptions were reported."""
     normalized_question = unicodedata.normalize('NFKC', question)
     basis = re.sub(r'\s+', '', unicodedata.normalize('NFKC', inputs.get('monthly_basis_hours', '')))
     stated = {re.sub(r'\s+', '', match[1] or match[2]) for match in _MONTH_BASIS.finditer(normalized_question)}
-    if _MONTH_BASIS_RANGE.search(normalized_question) or ((basis or stated) and stated != {basis}):
+    source = inputs.get('monthly_basis_hours', '')
+    described_as_worked = bool(source) and any(
+        source in clause and _ACTUAL_HOURS.search(clause)
+        for clause in re.split(r'[!?\n,;]|(?<!\d)\.|\.(?!\d)', question)
+    )
+    if (
+        _MONTH_BASIS_RANGE.search(normalized_question)
+        or (stated and stated != {basis})
+        or (not stated and described_as_worked)
+    ):
         return '질문에 적힌 월 최저임금 적용기준시간을 확인해 주세요.'
-    if _SPECIAL_CONDITIONS.search(question):
+    if facts is not None and 'applicability' in facts:
+        clauses = re.split(r'[!?\n;]|(?<!\d)\.|\.(?!\d)', question)
+        if facts['applicability'] or any(fact_polarity('applicability', clause) for clause in clauses):
+            return _CONDITION_MESSAGE
+    elif _SPECIAL_CONDITIONS.search(question):
         condition = inputs.get('applicability', '')
         if not _ordinary(condition):
             return _CONDITION_MESSAGE
@@ -80,7 +102,9 @@ def _shown(value: Fraction | int) -> int | str:
     return int(value) if value == int(value) else f'{value:.4f}'.rstrip('0').rstrip('.')
 
 
-def calculate(base: Calculation, inputs: Mapping[str, str], rules: dict) -> Calculation:
+def calculate(
+    base: Calculation, inputs: Mapping[str, str], rules: dict, facts: Mapping[str, bool] | None = None
+) -> Calculation:
     rows: list[InputRow] = []
     hours: dict[str, Fraction] = {}
     workdays = None
@@ -105,7 +129,11 @@ def calculate(base: Calculation, inputs: Mapping[str, str], rules: dict) -> Calc
     def guidance(message: str, reason: str = 'missing_required') -> Calculation:
         return replace(base, reason=reason, message=message)
 
-    if 'applicability' in inputs and not _ordinary(inputs['applicability']):
+    if facts is not None and 'applicability' in facts:
+        special = facts['applicability']
+    else:
+        special = 'applicability' in inputs and not _ordinary(inputs['applicability'])
+    if special:
         return guidance(_CONDITION_MESSAGE, 'ambiguous_input')
     wage_rule = rules['hourly_wage']
     month_rule = rules['standard_monthly_basis_hours']
