@@ -29,6 +29,52 @@ export interface ChangePage {
   page_size: number
 }
 
+export interface ErpAttachment {
+  title: string
+  pdfUrl: string
+  sha256: string | null
+  bytes: number | null
+}
+
+export interface ErpHistory {
+  itemId: string
+  sourceKey: string
+  title: string
+  at: string
+  action: "collected" | "unchanged" | "attached" | "approved" | "rejected"
+  origin: string | null
+}
+
+export interface ErpItem {
+  id: string
+  sourceKey: string
+  sourceTitle: string
+  category: string
+  kind: "admrule" | "form" | "article"
+  title: string
+  agency: string | null
+  lawName: string | null
+  article: string | null
+  issuedNo: string | null
+  issuedOn: string | null
+  effectiveFrom: string | null
+  asOf: string | null
+  excerpt: string | null
+  sourceUrl: string | null
+  attachments: (ErpAttachment)[]
+  contentSha256: string
+  collectedAt: string
+  reviewedAt: string
+}
+
+export interface ErpUpdates {
+  state: "ok" | "missing" | "invalid"
+  generatedAt?: string | null
+  items?: (ErpItem)[]
+  relatedLaws?: (string)[]
+  history?: (ErpHistory)[]
+}
+
 export interface HeldChange {
   id: string
   lawName: string

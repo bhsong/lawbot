@@ -4,7 +4,7 @@ import argparse
 import json
 from pathlib import Path
 
-from law_calendar.models import CalendarMonth, CalendarStatus, ChangePage, HoldPage, PublicDetail
+from law_calendar.models import CalendarMonth, CalendarStatus, ChangePage, ErpUpdates, HoldPage, PublicDetail
 
 TARGET = Path(__file__).resolve().parents[2] / 'frontend/src/law-calendar/api-types.ts'
 
@@ -27,7 +27,7 @@ def ts_type(schema):
 
 def generate():
     schemas = {}
-    for model in (CalendarMonth, CalendarStatus, ChangePage, HoldPage, PublicDetail):
+    for model in (CalendarMonth, CalendarStatus, ChangePage, ErpUpdates, HoldPage, PublicDetail):
         root = model.model_json_schema()
         schemas.update(root.pop('$defs', {}))
         schemas[model.__name__] = root

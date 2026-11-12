@@ -1,0 +1,26 @@
+.erp-section { margin-top: 32px; }
+.erp-section > h2, .erp-section .lc-selected h2 { font-size: 20px; margin: 0 0 12px; }
+.erp-card { border: 1px solid var(--line); border-radius: 12px; padding: 16px 20px; margin-top: 12px; overflow-wrap: anywhere; }
+.erp-card h3 { margin: 0; font-size: 17px; line-height: 1.45; }
+.erp-tag { margin: 0 0 4px; font-size: 12px; font-weight: 650; color: var(--muted); }
+.erp-dates { display: flex; flex-wrap: wrap; gap: 4px 20px; margin: 10px 0 0; font-size: 13px; }
+.erp-dates div { display: flex; gap: 6px; }
+.erp-dates dt { color: var(--muted); }
+.erp-dates dd { margin: 0; font-weight: 600; }
+.erp-excerpt { white-space: pre-wrap; background: var(--soft); border-radius: 8px; padding: 12px 14px; margin: 12px 0 0; font-size: 14px; }
+.erp-links { list-style: none; margin: 12px 0 0; padding: 0; display: grid; gap: 6px; font-size: 14px; }
+.erp-links li { display: flex; flex-wrap: wrap; gap: 4px 12px; }
+.erp-hash { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; color: var(--muted); overflow-wrap: anywhere; }
+.erp-month { display: flex; gap: 8px; }
+.erp-table-wrap { overflow-x: auto; margin-top: 12px; }
+.erp-history { border-collapse: collapse; width: 100%; font-size: 13px; }
+.erp-history th, .erp-history td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--line); vertical-align: top; }
+.erp-history td:first-child, .erp-history td:last-child { white-space: nowrap; }
+.app-tabs { display: flex; gap: 8px; width: min(1200px, 100%); margin: auto; padding: 16px 24px 0; }
+.app-tabs button { border: 1px solid var(--line); background: var(--bg); border-radius: 999px; padding: 6px 16px; cursor: pointer; }
+.app-tabs button[aria-selected="true"] { background: var(--fg); color: var(--bg); border-color: var(--fg); }
+
+@media (max-width: 700px) {
+  .erp-card { padding: 14px; }
+  .app-tabs { padding: 12px 12px 0; }
+}

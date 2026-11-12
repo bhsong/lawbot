@@ -18,7 +18,7 @@ ROOT = SERVICE.parents[1]
 
 
 @contextlib.contextmanager
-def serve(tmp, *, development, database=None):
+def serve(tmp, *, development, database=None, erp_feed=None):
     with socket.socket() as sock:
         sock.bind(('127.0.0.1', 0))
         port = sock.getsockname()[1]
@@ -41,8 +41,13 @@ def serve(tmp, *, development, database=None):
             str(FRONTEND / 'dist'),
             '--port',
             str(port),
+            *(['--erp-feed', str(erp_feed)] if erp_feed is not None else []),
         ]
-    env = {key: value for key, value in os.environ.items() if not key.startswith(('LAWBOT_', 'LAW_MONITOR_'))}
+    env = {
+        key: value
+        for key, value in os.environ.items()
+        if not key.startswith(('LAWBOT_', 'LAW_MONITOR_', 'LAW_CALENDAR_'))
+    }
     log = tmp / 'calendar-server.log'
     with log.open('w') as out:
         proc = subprocess.Popen(args, cwd=FRONTEND, env=env, stdout=out, stderr=subprocess.STDOUT)
