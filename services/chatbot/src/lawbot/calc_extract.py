@@ -95,7 +95,7 @@ FIELD_DESCRIPTIONS: dict[str, tuple[str, dict[str, str], str]] = {
             'attendance_rate': '연차 산정 대상 1년의 출근율',
             'full_attendance_months': '개근하고 그 다음 날에도 재직한 달의 수',
             'employed_at_accrual': _YN + '연차 발생일(1년 또는 각 1개월 근로를 마친 다음 날)에 재직했는지',
-            'include_first_year': _YN + '최초 1년의 월 단위 연차까지 합산해 달라고 요청했는지',
+            'include_first_year': _YN + '첫해 월 단위 연차와 1주년 발생분을 합친 누적 일수를 달라고 명시했는지',
         },
         '',
     ),
@@ -103,7 +103,7 @@ FIELD_DESCRIPTIONS: dict[str, tuple[str, dict[str, str], str]] = {
         '주휴수당',
         {
             'hourly_wage': '통상시급',
-            'weekly_scheduled_hours': '1주 소정근로시간(고정값 또는 4주 평균)',
+            'weekly_scheduled_hours': '1주 소정근로시간(고정값 또는 "4주 평균 주 소정근로시간")',
             'four_week_scheduled_hours': '4주 동안의 본인 소정근로시간 총합(평균이 아닌 합계)',
             'paid_holiday_hours': '유급주휴시간',
             'reference_days_per_week': '비교 대상 통상근로자의 1주 소정근로일수',
@@ -117,8 +117,8 @@ FIELD_DESCRIPTIONS: dict[str, tuple[str, dict[str, str], str]] = {
         '최저임금 월 환산액',
         {
             'year': '적용 연도',
-            'weekly_scheduled_hours': '1주 소정근로시간',
-            'daily_scheduled_hours': '1일 소정근로시간',
+            'weekly_scheduled_hours': '1주 소정근로시간(한 주 합계)',
+            'daily_scheduled_hours': '1일(하루) 소정근로시간',
             'weekly_workdays': '1주 소정근로일수',
             'weekly_paid_holiday_hours': '1주 유급주휴시간',
             'monthly_basis_hours': '월 최저임금 적용기준시간(유급주휴 포함 월 환산 시간)',
