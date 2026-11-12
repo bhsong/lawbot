@@ -58,6 +58,18 @@ uv run --project services/law-calendar law-calendar --database services/law-cale
 
 조회 경로는 `/api/law-calendar?month=YYYY-MM`, `/api/law-events?date=YYYY-MM-DD`, `/api/law-changes/{id}`, `/api/law-calendar/status`다. API의 OpenAPI 계약은 `/openapi.json`에서 확인할 수 있다.
 
+## ERP 자료 탭
+
+화면 위의 탭에서 `법령 캘린더`와 `ERP 자료`를 고른다. `/#erp`로 접속하면 ERP 자료 탭이 바로 열린다. ERP 코드는 `frontend/src/erp/`에만 있고, 법령 달력 그리드와 챗봇 관리 화면에는 ERP가 나오지 않는다.
+
+- 데이터: [`services/erp-updates`](../erp-updates/README.md)가 승인한 항목만 담아 만든 공개 피드 파일이다. 서버는 `--erp-feed <파일>` 또는 서비스 `.env`(`services/law-calendar/.env`)의 `LAWBOT_CALENDAR_ERP_FEED=<절대 경로>`로 그 파일을 읽기만 한다. 캘린더 DB에는 쓰지 않는다.
+- `GET /api/erp-updates`: `state`가 `ok`이면 `items`·`relatedLaws`·`history`를 돌려준다. 파일이 없거나 설정하지 않았으면 `missing`, 형식이 맞지 않으면 `invalid`이고 둘 다 항목은 0건이다. 기존 조회 API의 응답은 바뀌지 않는다.
+- 화면 구성:
+  - **현재 적용 중**: 시행일이 오늘(KST) 이전인 항목과 현행 법령본 기준 항목
+  - **적용 예정**: 시행일이 오늘 이후인 항목
+  - **관련 법령 일정**: `relatedLaws`에 있는 법령만 골라 `/api/law-events` 결과를 월별로 보여 준다
+  - **수집 이력** 버튼: 어떤 항목을, 언제, 어느 원천(저장소 커밋이나 등록한 PDF의 SHA-256)에서 가져와 승인했는지 표로 보여 준다
+
 ## 저장된 모니터링 결과와 공개 검토
 
 기존 monitor의 `legalize_law` 이벤트 JSON과 원문 사본을 오프라인으로 가져온다. DB 초기화 명령은 새 DB와 기존 v1~v6 DB를 v7로 준비한다. v6에서 올릴 때는 SQLite backup으로 `.pre-v7.backup` 사본을 만든다. 이전 버전의 백업 규칙도 유지한다. v4~v6에서 기존 일정 조회와 검토를 지원한다. 최신 수집 코드의 예고 자동 공개와 첨부 처리 상태 저장은 v7이 필요하다. [v7 반영 절차](../../docs/operations.md#국회-입법예고-자동-공개용-캘린더-db-v7)

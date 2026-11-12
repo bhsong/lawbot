@@ -16,11 +16,12 @@ import uvicorn
 from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.responses import JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
+from pydantic import ValidationError
 
 from law_calendar import admin
 from law_calendar.automation import REASONS
 from law_calendar.db import NOTICE_CONTENT_VERSION, NOTICE_LIMIT_VERSION, read_database
-from law_calendar.models import CalendarMonth, CalendarStatus, ChangePage, HoldPage, PublicDetail
+from law_calendar.models import CalendarMonth, CalendarStatus, ChangePage, ErpFeed, ErpUpdates, HoldPage, PublicDetail
 from lawbot_common import envfile
 from lawbot_common.logs import logger
 
@@ -99,7 +100,19 @@ def notice_snapshot(conn: sqlite3.Connection, change_id: str) -> str | None:
     return row['id'] if row else None
 
 
-def create_app(database: Path, frontend: Path | None = None) -> FastAPI:
+def erp_updates(feed: Path | None) -> dict:
+    """Read the approved ERP feed; a missing or malformed file never affects the law calendar."""
+    if feed is None or not feed.is_file():
+        return {'state': 'missing'}
+    try:
+        parsed = ErpFeed.model_validate_json(feed.read_bytes())
+    except ValidationError:
+        logger('law_calendar', 'calendar').warning('ERP feed is invalid: %s', feed.name)
+        return {'state': 'invalid'}
+    return {'state': 'ok', **parsed.model_dump(exclude={'schemaVersion'})}
+
+
+def create_app(database: Path, frontend: Path | None = None, erp_feed: Path | None = None) -> FastAPI:
     app = FastAPI(title='Law Calendar', version='0.2.0')
 
     @app.middleware('http')
@@ -277,6 +290,10 @@ def create_app(database: Path, frontend: Path | None = None) -> FastAPI:
                 ]
         return {'items': items, 'total': total, 'page': page, 'page_size': page_size}
 
+    @app.get('/api/erp-updates', response_model=ErpUpdates)
+    def erp():
+        return erp_updates(erp_feed)
+
     app.include_router(admin.router(database))
     if frontend is not None:
         app.mount('/', StaticFiles(directory=frontend, html=True), name='calendar')
@@ -290,10 +307,11 @@ def main():
     parser.add_argument('--database', type=Path, default=os.environ.get('LAW_CALENDAR_DB'))
     parser.add_argument('--port', type=int, required=True)
     parser.add_argument('--frontend', type=Path)
+    parser.add_argument('--erp-feed', type=Path, default=os.environ.get('LAWBOT_CALENDAR_ERP_FEED'))
     args = parser.parse_args()
     if args.database is None or not 1 <= args.port <= 65535:
         parser.error('An explicit database and valid port are required')
-    uvicorn.run(create_app(args.database, args.frontend), host='127.0.0.1', port=args.port)
+    uvicorn.run(create_app(args.database, args.frontend, args.erp_feed), host='127.0.0.1', port=args.port)
 
 
 if __name__ == '__main__':

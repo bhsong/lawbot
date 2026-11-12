@@ -2,10 +2,10 @@ import 'pretendard/dist/web/variable/pretendardvariable-dynamic-subset.css'
 import './styles.css'
 import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
-import LawCalendarPage from './law-calendar/LawCalendarPage'
+import App from './App'
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
-    <LawCalendarPage />
+    <App />
   </StrictMode>,
 )

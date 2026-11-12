@@ -3,6 +3,7 @@
 - 작성: 2026-11-12 KST. 기준 `main` `7dd5f1e`. 운영 v5.6.2(`13eeb1c`).
 - 출발 자료: 사용자 인계 묶음 v2(`Lawbot_ERP_handoff_v2_2026-11-12.zip`, 레포 밖). 인계의 PR 5단계와 직접 수집기는 아래 사용자 결정으로 줄였다.
 - V6 임베딩 재학습보다 먼저 한다(사용자 지시).
+- 상태: PR 1(#126)·PR 2 구현, 병합 대기. 시연 준비는 병합 뒤 별도 승인.
 
 ## 사용자 결정 (2026-11-12)
 
@@ -82,7 +83,7 @@ monitor 저장소 사본 (읽기 전용 git show)      법제처 PDF (사람이 
 
 ### PR 2 `feat/law-calendar-erp-tab`: API와 화면
 
-- law-calendar `--erp-feed` 옵션과 환경 변수 `LAW_CALENDAR_ERP_FEED`(선택). `GET /api/erp-updates`는 상태(`ok`·`missing`·`invalid`)와 피드를 돌려준다.
+- law-calendar `--erp-feed` 옵션과 서비스 `.env`의 `LAWBOT_CALENDAR_ERP_FEED`(선택, `.env` 읽기는 `LAWBOT_*`만 허용). `GET /api/erp-updates`는 상태(`ok`·`missing`·`invalid`)와 피드를 돌려준다.
   - Pydantic으로 검증하고, 검증에 실패하면 `invalid`에 항목 0건으로 응답한다.
   - 기존 API와 TypeScript 생성 계약은 그대로 두고 새 모델만 추가한다.
 - 화면: 머리말 아래 탭 `법령 캘린더` / `ERP 자료`(`#erp`로 바로 연다). ERP 코드는 `frontend/src/erp/`에만 둔다.
@@ -120,4 +121,4 @@ PR 2:
 
 ## 시연 준비 (병합 뒤, 별도 승인)
 
-운영 monitor 저장소 사본을 읽어 `collect`를 실행하고, PDF 3건을 `attach`한다. 사용자가 승인한 뒤 `export`한다. 이어서 운영 캘린더에 `LAW_CALENDAR_ERP_FEED`를 설정하고 재시작한다. 운영 데이터와 서비스를 바꾸는 단계라서 diff, 명령, 대상을 보여 주고 승인을 받는다. 결과는 `docs/evals/`에 기록한다.
+운영 monitor 저장소 사본을 읽어 `collect`를 실행하고, PDF 3건을 `attach`한다. 사용자가 승인한 뒤 `export`한다. 이어서 운영 캘린더 `.env`에 `LAWBOT_CALENDAR_ERP_FEED`를 설정하고 재시작한다. 운영 데이터와 서비스를 바꾸는 단계라서 diff, 명령, 대상을 보여 주고 승인을 받는다. 결과는 `docs/evals/`에 기록한다.

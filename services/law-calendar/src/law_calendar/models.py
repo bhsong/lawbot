@@ -104,3 +104,59 @@ class HoldPage(BaseModel):
     total: int
     page: int
     page_size: int
+
+
+class ErpAttachment(BaseModel):
+    title: str
+    pdfUrl: str
+    sha256: str | None
+    bytes: int | None
+
+
+class ErpItem(BaseModel):
+    id: str
+    sourceKey: str
+    sourceTitle: str
+    category: str
+    kind: Literal['admrule', 'form', 'article']
+    title: str
+    agency: str | None
+    lawName: str | None
+    article: str | None
+    issuedNo: str | None
+    issuedOn: str | None
+    effectiveFrom: str | None
+    asOf: str | None
+    excerpt: str | None
+    sourceUrl: str | None
+    attachments: list[ErpAttachment]
+    contentSha256: str
+    collectedAt: str
+    reviewedAt: str
+
+
+class ErpHistory(BaseModel):
+    itemId: str
+    sourceKey: str
+    title: str
+    at: str
+    action: Literal['collected', 'unchanged', 'attached', 'approved', 'rejected']
+    origin: str | None
+
+
+class ErpFeed(BaseModel):
+    """File written by services/erp-updates (`erp-updates export`)."""
+
+    schemaVersion: Literal[1]
+    generatedAt: str
+    items: list[ErpItem]
+    relatedLaws: list[str]
+    history: list[ErpHistory]
+
+
+class ErpUpdates(BaseModel):
+    state: Literal['ok', 'missing', 'invalid']
+    generatedAt: str | None = None
+    items: list[ErpItem] = []
+    relatedLaws: list[str] = []
+    history: list[ErpHistory] = []
