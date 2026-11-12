@@ -463,11 +463,14 @@ def calculate(
     *,
     year: int,
     year_source: str | None = None,
+    facts: Mapping[str, bool] | None = None,
 ) -> Calculation:
     """Calculate from source spans or explain which input or fiscal year is missing.
 
     The caller verifies every supplied span against the question. Invalid numeric
-    spans raise ValueError so the router can record a conversion failure.
+    spans raise ValueError so the router can record a conversion failure. Labor
+    ``facts`` carry polarities the router already judged; without them a labor
+    module classifies the fact excerpts itself.
     """
     labor = LABOR_CALCULATORS.get(calculator)
     period = '적용연도' if labor else '귀속연도'
@@ -485,7 +488,7 @@ def calculate(
             ),
         )
     if labor is not None:
-        return labor.calculate(result, inputs, rules)
+        return labor.calculate(result, inputs, rules, facts)
     amounts = {
         key: parse_amount(inputs[key])
         for key in INPUT_FIELDS[calculator]

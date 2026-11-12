@@ -20,9 +20,10 @@ from openai import OpenAI
 from lawbot import deploy, envfile, manifest, security, service, settings
 from lawbot.api_client import ModelServerClient, request_timeout
 from lawbot.calc_corpus import calculator_compatibility
+from lawbot.calc_extract import FIELD_DESCRIPTIONS, SELECT_MAX_TOKENS, SELECT_SYSTEM, label_system
 from lawbot.calc_gate import is_calculation_question
-from lawbot.calc_router import PR1_ROUTER_SYSTEM, ROUTER_SYSTEM, route_calculation
-from lawbot.llm import LLM, ROUTER_MAX_TOKENS, TEMPERATURE
+from lawbot.calc_router import route_calculation
+from lawbot.llm import LLM, TEMPERATURE
 from lawbot.paths import ROOT
 from lawbot_common.api import CHAT_PATH, HEALTH_PATH, MODELS_PATH, ModelsResponse
 
@@ -30,14 +31,25 @@ VAL = ROOT / 'services/chatbot/tests/fixtures/calc_router_val.json'
 FIXTURES = VAL.parent
 SAMPLES = {'CR001', 'CR005', 'CR021', 'CR025', 'CR028', 'CR079', 'CR081', 'CR091'}
 UNSUPPORTED_PR1 = {'CR041', 'CR043', 'CR048', 'CR050', 'CR052', 'CR057'}
-POST_LIMITS = {'pr1': 190, 'labor-pr2': 383}
+# Each routed case may make two router requests (select, then label).
+POST_LIMITS = {'pr1': 298, 'labor-pr2': 634}
 HELDOUT_SUITE = 'labor-pr2-heldout'
 HELDOUT = FIXTURES / 'labor_router_heldout_test.json'
 HELDOUT_SHA256 = '1bb1e9624beb7dd818d7ad08fe046602776cac344fa778a94f583f88f2f445ac'
 HELDOUT_CORPUS = ROOT / 'data/v5/law_articles_v5_decree.csv'
-HELDOUT_POST_LIMIT = 60
+HELDOUT_CASES = 60
+# Suite name -> (fixture, pinned sha256, case count). Each case may use two router requests.
+HELDOUT_SUITES = {
+    HELDOUT_SUITE: (HELDOUT, HELDOUT_SHA256, HELDOUT_CASES),
+    'calc-pr3-heldout': (
+        FIXTURES / 'calc_router_heldout2_test.json',
+        '7344349dc21fab1814b6711f60bcaacdae018c4c1fcf309bb13701f9ecf8c55a',
+        52,
+    ),
+}
 HELDOUT_READ_TIMEOUT = 300
 GUIDANCE_REASONS = {'missing': 'missing_required', 'ambiguous': 'ambiguous_input'}
+NON_CALCULATION_STATUSES = {'lookup': 'lookup', 'general': 'lookup', 'unsupported': 'none'}
 SEOUL = ZoneInfo('Asia/Seoul')
 ANSWER_TIMINGS = ('ttft', 'first_text')
 STAGE_TIMINGS = ('search', 'rerank', 'decree_search', 'decree_rerank', 'total')
@@ -92,6 +104,14 @@ def _evaluation_cases(suite):
     return groups | {'pr2_regression': bridge, 'labor': labor}, samples
 
 
+def _router_sha256():
+    prompts = [SELECT_SYSTEM, *(label_system(name) for name in FIELD_DESCRIPTIONS)]
+    return sha256('\n'.join(prompts).encode()).hexdigest()
+
+
+ROUTER_MAX_TOKENS = {'select': SELECT_MAX_TOKENS, 'label': 'min(512, 8 * numbers + 80)'}
+
+
 def _time_guard():
     if time(6, 20) <= datetime.now(SEOUL).time() < time(6, 50):
         raise SystemExit('06:20–06:50 KST에는 계산 평가를 실행할 수 없습니다.')
@@ -121,8 +141,7 @@ def _configuration(cfg, client):
         'dataset_version': (manifest.load(cfg.profile.articles) or {}).get('dataset_version'),
         'articles_sha256': manifest.sha256(cfg.profile.articles),
         'system_sha256': sha256(service.system_text(cfg.profile, pro).encode()).hexdigest(),
-        'router_sha256': sha256(ROUTER_SYSTEM.encode()).hexdigest(),
-        'pr1_catalog_router_sha256': sha256(PR1_ROUTER_SYSTEM.encode()).hexdigest(),
+        'router_sha256': _router_sha256(),
         'temperature': TEMPERATURE,
         'router_max_tokens': ROUTER_MAX_TOKENS,
         'router_timeout_s': cfg.read_timeout,
@@ -227,15 +246,14 @@ def _latency_report(routes, answers):
 def _route_case(case, pro, compatibility, group):
     raw = None
     usage = {}
-    tax_only = group == 'pr1'
 
     def classify(question):
         nonlocal raw
-        raw = pro.route_calculation(question, tax_only=tax_only, metrics=usage)
+        raw = pro.route_calculation(question, metrics=usage)
         return raw
 
     started = perf_counter()
-    routed = route_calculation(case['question'], classify, compatibility, reference_year=2026, tax_only=tax_only)
+    routed = route_calculation(case['question'], classify, compatibility, reference_year=2026)
     route_ms = (perf_counter() - started) * 1000
     calculator = routed.payload['calculator'] or 'none'
     status = routed.payload['status']
@@ -273,7 +291,8 @@ def _quality(routes):
         group = groups.setdefault(row['group'], {})
         key = (
             f'{row["expected_calculator"]}/{row["kind"]}'
-            if row['group'] in ('labor', HELDOUT_SUITE) and row['kind'] not in ('general', 'unsupported')
+            if (row['group'] == 'labor' or row['group'] in HELDOUT_SUITES)
+            and row['kind'] not in ('general', 'unsupported', 'lookup')
             else row['kind']
         )
         totals = group.setdefault(key, {'matched': 0, 'total': 0})
@@ -403,7 +422,7 @@ def _heldout_configuration(client, model, fixture_sha256, articles_sha256):
         'model': {'id': pro.id, 'revision': pro.revision, 'loaded': pro.loaded},
         'fixture_sha256': fixture_sha256,
         'articles_sha256': articles_sha256,
-        'router_sha256': sha256(ROUTER_SYSTEM.encode()).hexdigest(),
+        'router_sha256': _router_sha256(),
         'router_max_tokens': ROUTER_MAX_TOKENS,
         'router_timeout_s': HELDOUT_READ_TIMEOUT,
         'temperature': TEMPERATURE,
@@ -411,14 +430,14 @@ def _heldout_configuration(client, model, fixture_sha256, articles_sha256):
     }
 
 
-def _heldout_cases(raw, expected_hash):
+def _heldout_cases(raw, expected_hash, count=HELDOUT_CASES):
     if sha256(raw).hexdigest() != expected_hash:
         raise _HeldoutStop('fixture_hash_mismatch')
     try:
         rows = json.loads(raw)
     except ValueError, RecursionError:
         raise _HeldoutStop('fixture_invalid') from None
-    if not isinstance(rows, list) or len(rows) != HELDOUT_POST_LIMIT:
+    if not isinstance(rows, list) or len(rows) != count:
         raise _HeldoutStop('fixture_invalid')
     for row in rows:
         if not isinstance(row, dict) or any(
@@ -430,9 +449,16 @@ def _heldout_cases(raw, expected_hash):
         if row['kind'] == 'calculated':
             if row['status'] != 'calculated' or not isinstance(results, dict) or not results:
                 raise _HeldoutStop('fixture_invalid')
+        elif row['kind'] in NON_CALCULATION_STATUSES:
+            if (
+                row['calculator'] != 'none'
+                or row['status'] != NON_CALCULATION_STATUSES[row['kind']]
+                or results is not None
+            ):
+                raise _HeldoutStop('fixture_invalid')
         elif row['kind'] not in GUIDANCE_REASONS or row['status'] != 'guidance' or results is not None:
             raise _HeldoutStop('fixture_invalid')
-    if len({row['id'] for row in rows}) != HELDOUT_POST_LIMIT:
+    if len({row['id'] for row in rows}) != count:
         raise _HeldoutStop('fixture_invalid')
     return rows
 
@@ -492,9 +518,10 @@ def _check_heldout_response(response):
         raise _HeldoutStop('invalid_response') from None
 
 
-def _live_heldout(fixture, expected_hash, output):
+def _live_heldout(fixture, expected_hash, output, *, suite=HELDOUT_SUITE, count=HELDOUT_CASES):
+    post_limit = 2 * count
     report = {
-        'suite': HELDOUT_SUITE,
+        'suite': suite,
         'status': 'running',
         'valid': False,
         'stop_reason': None,
@@ -510,7 +537,7 @@ def _live_heldout(fixture, expected_hash, output):
     def on_request(request):
         nonlocal failure
         try:
-            if request.method != 'POST' or request.url != endpoint or report['inference_posts'] >= HELDOUT_POST_LIMIT:
+            if request.method != 'POST' or request.url != endpoint or report['inference_posts'] >= post_limit:
                 raise _HeldoutStop('request_out_of_scope')
             report['memory_pressure_level'] = _heldout_guard()
             report['inference_posts'] += 1
@@ -530,7 +557,7 @@ def _live_heldout(fixture, expected_hash, output):
             raise
 
     try:
-        cases = _heldout_cases(fixture.read_bytes(), expected_hash)
+        cases = _heldout_cases(fixture.read_bytes(), expected_hash, count)
         report['memory_pressure_level'] = _heldout_guard()
         server, token, model = _heldout_settings()
         endpoint = httpx.URL(f'{server}{CHAT_PATH}')
@@ -553,7 +580,7 @@ def _live_heldout(fixture, expected_hash, output):
                 pro = LLM(model, client, '')
                 for case in cases:
                     report['pending_case_id'] = case['id']
-                    row = _route_case(case, pro, compatibility, HELDOUT_SUITE)
+                    row = _route_case(case, pro, compatibility, suite)
                     if failure is not None:
                         raise failure
                     if row['reason'] in (
@@ -592,7 +619,7 @@ def _live_heldout(fixture, expected_hash, output):
         }
         report['tokens'] = {
             key: _latency_summary(row.get(key) for row in report['routes'])
-            for key in ('router_prompt_tokens', 'router_completion_tokens')
+            for key in ('router_calls', 'router_prompt_tokens', 'router_completion_tokens')
         }
         _checkpoint(output, report)
     return 0 if report['valid'] else 2
@@ -603,15 +630,16 @@ def main(argv=None):
     parser.add_argument(
         '--live', action='store_true', help='Call the shared Pro model on the synthetic val and samples.'
     )
-    parser.add_argument('--suite', choices=(*POST_LIMITS, HELDOUT_SUITE), default='pr1')
+    parser.add_argument('--suite', choices=(*POST_LIMITS, *HELDOUT_SUITES), default='pr1')
     parser.add_argument('--output', type=Path, help='New JSON output file for the live run.')
     args = parser.parse_args(argv)
     if args.live and (args.output is None or args.output.exists() or not args.output.parent.is_dir()):
         parser.error('--live requires --output pointing to a new file in an existing directory')
-    if args.suite == HELDOUT_SUITE:
+    if args.suite in HELDOUT_SUITES:
+        fixture, digest, count = HELDOUT_SUITES[args.suite]
         if args.live:
-            return _live_heldout(HELDOUT, HELDOUT_SHA256, args.output)
-        print(json.dumps({'suite': HELDOUT_SUITE, 'post_limit': HELDOUT_POST_LIMIT, 'fixture_sha256': HELDOUT_SHA256}))
+            return _live_heldout(fixture, digest, args.output, suite=args.suite, count=count)
+        print(json.dumps({'suite': args.suite, 'post_limit': 2 * count, 'fixture_sha256': digest}))
         return 0
     groups, samples = _evaluation_cases(args.suite)
     cases = [row for group in groups.values() for row in group]

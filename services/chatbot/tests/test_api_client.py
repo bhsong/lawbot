@@ -15,6 +15,7 @@ import lawbot.service as service
 from chat_support import run
 from conftest import TEST_TOKEN
 from lawbot import security
+from lawbot.calc_extract import SELECT_MAX_TOKENS
 from lawbot_model_server import api as server_api
 from lawbot_model_server.config import ModelEntry
 from lawbot_model_server.registry import Registry
@@ -462,16 +463,10 @@ def test_calculation_router_through_real_server_app(env, real_server, tmp_path, 
 
     def stream(self, messages, **kwargs):
         self.calls.append((messages, kwargs))
-        if kwargs['max_tokens'] == 128:
-            output = {
-                'calculator': MEDICAL,
-                'inputs': {
-                    'gross_pay': '5천만 원',
-                    'medical_expenses': '300만 원',
-                    'insurance_reimbursement': '100만 원',
-                },
-            }
-            text = json.dumps(output, ensure_ascii=False)
+        if kwargs['max_tokens'] == SELECT_MAX_TOKENS:
+            text = MEDICAL
+        elif '계산 입력 분류기' in messages[0]['content']:
+            text = '1=x\n2=gross_pay\n3=medical_expenses\n4=insurance_reimbursement'
         else:
             text = answer
         yield types.SimpleNamespace(text=text, finish_reason='stop')
@@ -501,15 +496,22 @@ def test_calculation_router_through_real_server_app(env, real_server, tmp_path, 
     assert record['call_counts'] == {'router': 1, 'embedding': 1, 'search': 1, 'rerank': 1, 'llm': 1}
     assert not any(value in path.read_text(encoding='utf-8') for value in ('5천만', '75,000', '75000', question))
     chat = real_server.chat[app.models.specs['pro'].model]
-    (router_messages, router_kwargs), (answer_messages, answer_kwargs) = chat.calls
+    (router_messages, router_kwargs), (label_messages, label_kwargs), (answer_messages, answer_kwargs) = chat.calls
     assert router_messages[1]['content'] == question
-    assert router_kwargs == {'max_tokens': 128, 'temperature': 0.0, 'top_p': None, 'enable_thinking': False}
+    assert label_messages[1]['content'].startswith('[1:2026년] 총급여 [2:5천만 원]')
+    assert router_kwargs == {
+        'max_tokens': SELECT_MAX_TOKENS,
+        'temperature': 0.0,
+        'top_p': None,
+        'enable_thinking': False,
+    }
+    assert label_kwargs['max_tokens'] == 112 and label_kwargs['temperature'] == 0.0
     assert answer_kwargs['max_tokens'] == 1024
     assert answer_messages[1]['content'].startswith('[참고 조문]\n')
     assert f'[질문]\n{question}\n\n[계산 결과]\n' in answer_messages[1]['content']
     assert '계산 결과의 숫자를 그대로 쓰고 다시 계산하지 말 것.' in answer_messages[1]['content']
     posts = [line for line in capsys.readouterr().out.splitlines() if ' POST ' in line]
-    assert len(posts) == 4
+    assert len(posts) == 5
 
 
 def test_web_noncalculation_prompt_and_calls_unchanged(env, real_server, capsys):
@@ -555,9 +557,9 @@ def test_gated_lookup_uses_identical_rag_messages_and_no_calculation_event(env, 
     original_stream = Chat.stream
 
     def stream(self, messages, **kwargs):
-        if kwargs['max_tokens'] == 128:
+        if kwargs['max_tokens'] == SELECT_MAX_TOKENS:
             self.calls.append((messages, kwargs))
-            yield types.SimpleNamespace(text='{"calculator":"none","kind":"lookup"}', finish_reason='stop')
+            yield types.SimpleNamespace(text='lookup', finish_reason='stop')
         else:
             yield from original_stream(self, messages, **kwargs)
 
@@ -579,7 +581,7 @@ def test_gated_lookup_uses_identical_rag_messages_and_no_calculation_event(env, 
     assert 'done' in dict(events)
     assert all(event not in {'calculation', 'calculation_check'} for event, _ in events)
     _, (router, router_kwargs), (answer, answer_kwargs) = chat.calls
-    assert router[1]['content'] == question and router_kwargs['max_tokens'] == 128
+    assert router[1]['content'] == question and router_kwargs['max_tokens'] == SELECT_MAX_TOKENS
     assert [message['content'].encode() for message in answer] == [message['content'].encode() for message in baseline]
     assert answer_kwargs == baseline_kwargs
     posts = [line.split()[2] for line in capsys.readouterr().out.splitlines() if ' POST ' in line]
@@ -600,7 +602,7 @@ def test_router_queue_full_shows_temporary_guidance_and_continues_rag(env, real_
 
     def chat(self, model_id, messages, options):
         chat_tokens.append(options['max_tokens'])
-        if options['max_tokens'] == 128:
+        if options['max_tokens'] == SELECT_MAX_TOKENS:
             raise QueueFull(diagnostic)
         return original_chat(self, model_id, messages, options)
 
@@ -616,7 +618,7 @@ def test_router_queue_full_shows_temporary_guidance_and_continues_rag(env, real_
     assert events['done']['response_source'] == 'rag'
     assert events['done']['text'].startswith('예고해야 합니다.')
     assert 'error' not in events
-    assert chat_tokens == [128, 1024]
+    assert chat_tokens == [SELECT_MAX_TOKENS, 1024]
     [(messages, _)] = real_server.chat[app.models.specs['pro'].model].calls
     assert messages[1]['content'].startswith('[참고 조문]\n')
     assert '직접 계산하지 말고 계산에 필요한 정보와 근거 조문만 안내할 것.' in messages[1]['content']

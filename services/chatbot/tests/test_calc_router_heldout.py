@@ -43,6 +43,8 @@ def install_transport(monkeypatch, on_post=None):
             )
         assert request.url.path == '/v1/chat/completions'
         posts += 1
+        system = json.loads(request.content)['messages'][0]['content']
+        content = 'severance_pay' if system.startswith('계산 질문 분류기') else ''
         if on_post and (response := on_post(request, posts)) is not None:
             return response
         return httpx.Response(
@@ -57,7 +59,7 @@ def install_transport(monkeypatch, on_post=None):
                         'index': 0,
                         'message': {
                             'role': 'assistant',
-                            'content': '{"calculator":"severance_pay","inputs":{}}',
+                            'content': content,
                         },
                         'finish_reason': 'stop',
                     }
@@ -89,14 +91,15 @@ def test_heldout_router_only_complete_run(monkeypatch, tmp_path):
     assert report['valid'] is True and report['before'] == report['after']
     assert report['before']['fixture_sha256'] == digest
     assert report['before']['webapp_commit'] == report['before']['model_server_commit'] == COMMIT
-    assert report['inference_posts'] == len(report['routes']) == 60
+    assert report['inference_posts'] == 2 * len(report['routes']) == 120
     assert all(row['classification_match'] and row['reason'] == 'missing_required' for row in report['routes'])
-    assert [req.method for req in requests] == ['GET', 'GET', *(['POST'] * 60), 'GET', 'GET']
-    for req in requests[2:-2]:
+    assert [req.method for req in requests] == ['GET', 'GET', *(['POST'] * 120), 'GET', 'GET']
+    for index, req in enumerate(requests[2:-2]):
         body = json.loads(req.content)
         assert body['model'] == 'pro'
-        assert body['messages'][-1]['content'] == CASE['question']
-        assert body['max_tokens'] == 128 and body['temperature'] == 0
+        select = index % 2 == 0
+        assert body['messages'][-1]['content'] == CASE['question'] + ('' if select else '\n\n(숫자 없음)')
+        assert body['max_tokens'] == (12 if select else 80) and body['temperature'] == 0
         assert body['stream'] is False and body['chat_template_kwargs'] == {'enable_thinking': False}
         assert req.extensions['timeout']['read'] == 300
 
@@ -107,10 +110,10 @@ def test_heldout_stops_and_keeps_partial_json(monkeypatch, tmp_path, failure):
     output = tmp_path / 'report.json'
 
     def fail_second(request, count):
-        if count != 2:
+        if count != 3:
             return None
         checkpoint = json.loads(output.read_text())
-        assert checkpoint['inference_posts'] == 2
+        assert checkpoint['inference_posts'] == 3
         assert [row['id'] for row in checkpoint['routes']] == ['T000']
         if failure == 'http_error':
             return httpx.Response(503, json={'error': {'message': 'private failure details'}})
@@ -123,10 +126,10 @@ def test_heldout_stops_and_keeps_partial_json(monkeypatch, tmp_path, failure):
     report = json.loads(output.read_text())
     assert report['status'] == 'stopped' and report['valid'] is False and report['after'] is None
     assert report['stop_reason'] == failure
-    assert report['inference_posts'] == 2
+    assert report['inference_posts'] == 3
     assert report['routes'][0]['classification_match']
     assert 'private failure details' not in output.read_text()
-    assert [req.method for req in requests] == ['GET', 'GET', 'POST', 'POST']
+    assert [req.method for req in requests] == ['GET', 'GET', 'POST', 'POST', 'POST']
 
 
 def test_heldout_rejects_oversized_fixture_before_api(monkeypatch, tmp_path):
@@ -144,7 +147,7 @@ def test_heldout_invalidates_report_if_fixture_bytes_change(monkeypatch, tmp_pat
     output = tmp_path / 'report.json'
 
     def mutate_at_end(request, count):
-        if count == 60:
+        if count == 120:
             fixture.write_bytes(fixture.read_bytes() + b'\n')
 
     install_transport(monkeypatch, mutate_at_end)
@@ -159,7 +162,7 @@ def test_heldout_pressure_stop_does_not_send_next_post(monkeypatch, tmp_path):
     fixture, digest = fixture_file(tmp_path)
     output = tmp_path / 'report.json'
     requests = install_transport(monkeypatch)
-    levels = iter([1, 1, 4])
+    levels = iter([1, 1, 1, 4])
 
     def guard():
         level = next(levels)
@@ -171,8 +174,8 @@ def test_heldout_pressure_stop_does_not_send_next_post(monkeypatch, tmp_path):
     assert evaluator._live_heldout(fixture, digest, output) == 2
     report = json.loads(output.read_text())
     assert report['stop_reason'] == 'critical_memory_pressure'
-    assert report['inference_posts'] == len(report['routes']) == 1
-    assert [req.method for req in requests] == ['GET', 'GET', 'POST']
+    assert report['inference_posts'] == 2 * len(report['routes']) == 2
+    assert [req.method for req in requests] == ['GET', 'GET', 'POST', 'POST']
 
 
 def test_heldout_requires_exact_guidance_reason_and_no_results():
@@ -189,3 +192,10 @@ def test_heldout_rejects_critical_pressure_and_maintenance_window(monkeypatch):
         evaluator._heldout_guard(datetime(2026, 11, 12, 5, 30, tzinfo=evaluator.SEOUL))
     with pytest.raises(evaluator._HeldoutStop, match='maintenance_window'):
         evaluator._heldout_guard(datetime(2026, 11, 12, 6, 20, tzinfo=evaluator.SEOUL))
+
+
+def test_new_heldout_fixture_is_pinned_and_valid():
+    fixture, digest, count = evaluator.HELDOUT_SUITES['calc-pr3-heldout']
+    rows = evaluator._heldout_cases(fixture.read_bytes(), digest, count)
+    assert len(rows) == count == 52
+    assert {row['kind'] for row in rows} >= {'calculated', 'missing', 'ambiguous', 'lookup', 'general', 'unsupported'}

@@ -26,13 +26,6 @@ FIELDS = {
     'include_base': 'fact',
     'applicability': 'fact',
 }
-SCHEMA = (
-    '연장·야간·휴일 가산수당. staff_count 상시 근로자 수, ordinary_hourly_wage 통상시급. 휴게 제외 시간: '
-    'overtime_hours 평일 연장, night_hours 야간(다른 유형과 중첩 가능), holiday_hours 단일 휴일의 실근로. '
-    '복수 휴일은 당일 기준 8시간 이내분 holiday_within_hours와 초과분 holiday_excess_hours가 각각 명시된 경우만 복사. '
-    'include_base 기본임금 포함 또는 가산분만 요청한 원문, total_hours 중복 없는 총 실근로, '
-    'applicability 제56조 적용 또는 감시·단속 등 별도 적용 조건 원문.'
-)
 
 _HOURS_LABELS = {
     'overtime_hours': '평일 연장 실근로시간',
@@ -96,6 +89,19 @@ _EXPLICIT_HOLIDAY_SPLIT = re.compile(rf'(?:이내|이하|초과)\s*(?:분|시간
 _CHECK_SCOPE = '기본임금을 포함한 총액이 필요한지 확인해 주세요.'
 
 
+FACT_LABELS = {'include_base': '기본임금을 포함한 총액 요청 여부', 'applicability': '별도 가산 기준 적용 여부'}
+
+
+def fact_polarity(field: str, evidence: str) -> bool | None:
+    """Return the polarity the wording itself makes certain, or None."""
+    if field == 'include_base':
+        scope, _ = premium_pay_scope(evidence)
+        return {'base': True, 'premium': False}.get(scope)
+    if field == 'applicability' and _special_scope(evidence):
+        return True
+    return None
+
+
 def _special_scope(text: str) -> bool:
     return any(not _SCOPE_NEGATION.match(text, match.end()) for match in _SPECIAL_SCOPE.finditer(text))
 
@@ -124,12 +130,19 @@ def _unique_disjoint_duration(question: str, pattern: re.Pattern[str], inputs: M
     return None
 
 
-def reconcile_inputs(question: str, inputs: Mapping[str, str]) -> dict[str, str]:
+def reconcile_inputs(
+    question: str, inputs: Mapping[str, str], facts: Mapping[str, bool] | None = None
+) -> dict[str, str]:
     """Recover scope and hours only when original wording determines their roles."""
     reconciled = dict(inputs)
     scope, evidence = premium_pay_scope(question)
     flag = inputs.get('include_base')
-    if evidence is not None and (flag is None or (flag in question and premium_pay_scope(flag)[0] == 'unspecified')):
+    judged = facts is not None and 'include_base' in facts
+    if (
+        not judged
+        and evidence is not None
+        and (flag is None or (flag in question and premium_pay_scope(flag)[0] == 'unspecified'))
+    ):
         reconciled['include_base'] = evidence
 
     if (
@@ -151,7 +164,7 @@ def reconcile_inputs(question: str, inputs: Mapping[str, str]) -> dict[str, str]
     return reconciled
 
 
-def question_issue(question: str, inputs: Mapping[str, str]) -> str | None:
+def question_issue(question: str, inputs: Mapping[str, str], facts: Mapping[str, bool] | None = None) -> str | None:
     """Find facts in the question that cannot safely be inferred from excerpts alone."""
     if _special_scope(question):
         return '별도 가산 기준이 적용되는 근로인지 확인해 주세요.'
@@ -169,7 +182,10 @@ def question_issue(question: str, inputs: Mapping[str, str]) -> str | None:
     scope, _ = premium_pay_scope(question)
     if scope == 'ambiguous':
         return _CHECK_SCOPE
-    if (
+    if facts is not None and 'include_base' in facts:
+        if scope != 'unspecified' and (scope == 'base') != facts['include_base']:
+            return _CHECK_SCOPE
+    elif (
         (flag := inputs.get('include_base')) is not None
         and scope != 'unspecified'
         and premium_pay_scope(flag)[0] != scope
@@ -221,7 +237,9 @@ def _result(label: str, value: Fraction | int) -> Result:
     return {'label': label, 'value': _shown(value), 'unit': '원'}
 
 
-def _base_requested(inputs: Mapping[str, str]) -> bool | None:
+def _base_requested(inputs: Mapping[str, str], facts: Mapping[str, bool] | None) -> bool | None:
+    if facts is not None and 'include_base' in facts:
+        return facts['include_base']
     if (flag := inputs.get('include_base')) is None:
         return 'total_hours' in inputs
     scope, _ = premium_pay_scope(flag)
@@ -230,7 +248,12 @@ def _base_requested(inputs: Mapping[str, str]) -> bool | None:
     return scope == 'base'
 
 
-def calculate(base: Calculation, inputs: Mapping[str, str], rules: Mapping[str, Any]) -> Calculation:
+def calculate(
+    base: Calculation,
+    inputs: Mapping[str, str],
+    rules: Mapping[str, Any],
+    facts: Mapping[str, bool] | None = None,
+) -> Calculation:
     """Calculate premium pay from confirmed ordinary wage and actual working hours."""
     if 'staff_count' not in inputs:
         return replace(base, reason='missing_required', message='사업장의 상시 근로자 수를 알려 주세요.')
@@ -240,14 +263,19 @@ def calculate(base: Calculation, inputs: Mapping[str, str], rules: Mapping[str, 
         return replace(
             base, reason='missing_required', message='평일 연장·야간·휴일 중 해당하는 실근로시간을 알려 주세요.'
         )
-    if (scope := inputs.get('applicability')) is not None and (
-        _special_scope(scope) or not _ORDINARY_SCOPE.search(scope) or re.search(r'인지|모르|불명확', scope)
-    ):
+    scope = inputs.get('applicability')
+    if facts is not None and 'applicability' in facts:
+        special = facts['applicability']
+    else:
+        special = scope is not None and (
+            _special_scope(scope) or not _ORDINARY_SCOPE.search(scope) or re.search(r'인지|모르|불명확', scope)
+        )
+    if special:
         return replace(
             base, reason='ambiguous_input', message='근로기준법 제56조와 별도 가산 기준의 적용을 확인해 주세요.'
         )
 
-    include_base = _base_requested(inputs)
+    include_base = _base_requested(inputs, facts)
     if include_base is None:
         return replace(base, reason='ambiguous_input', message=_CHECK_SCOPE)
     if include_base and 'total_hours' not in inputs:

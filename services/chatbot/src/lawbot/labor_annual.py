@@ -31,12 +31,6 @@ FIELDS = {
     'include_first_year': 'fact',
     'year': 'year',
 }
-SCHEMA = (
-    '입사일 기준 연차 발생일수. workplace_size(상시 근로자수), weekly_hours(4주 평균 주 소정시간), '
-    'service_period(근속기간 전체) 또는 hire_date와 as_of_date(재직 기준일)/last_employed_date(마지막 재직일), '
-    'employed_at_accrual(발생일 재직 여부가 명시된 구간), attendance_rate(해당 1년 출근율), '
-    'full_attendance_months(개근하고 다음날에도 재직한 달의 수), include_first_year(최초 1년 월단위 발생분도 합산 요청).'
-)
 
 _ANNUAL = '근로기준법 제60조'
 _LABEL = '연차유급휴가 일수'
@@ -72,9 +66,31 @@ def has_annual_scope_request(text: str) -> bool:
     return '누적' in text or _FIRST_YEAR_SUM.search(normalize_fact(text)) is not None
 
 
-def reconcile_inputs(question: str, inputs: Mapping[str, str]) -> dict[str, str]:
+FACT_LABELS = {'employed_at_accrual': '해당 연차 발생일 재직 여부', 'include_first_year': '첫해 월 단위 연차 합산 요청'}
+
+
+def fact_polarity(field: str, evidence: str) -> bool | None:
+    """Return the polarity the wording itself makes certain, or None."""
+    if field == 'employed_at_accrual':
+        return classify_employment(evidence)
+    if field == 'include_first_year' and requests_first_year_sum(evidence):
+        return True
+    return None
+
+
+def _first_year_requested(inputs: Mapping[str, str], facts: Mapping[str, bool] | None) -> bool:
+    if facts is not None and 'include_first_year' in facts:
+        return facts['include_first_year']
+    return requests_first_year_sum(inputs.get('include_first_year', ''))
+
+
+def reconcile_inputs(
+    question: str, inputs: Mapping[str, str], facts: Mapping[str, bool] | None = None
+) -> dict[str, str]:
     result = dict(inputs)
     scope = result.get('include_first_year')
+    if facts is not None and 'include_first_year' in facts:
+        return result
     if isinstance(scope, str) and (
         scope.strip().casefold() in {'true', 'false'} or (scope in question and not has_annual_scope_request(question))
     ):
@@ -82,7 +98,7 @@ def reconcile_inputs(question: str, inputs: Mapping[str, str]) -> dict[str, str]
     return result
 
 
-def question_issue(question: str, inputs: Mapping[str, str]) -> str | None:
+def question_issue(question: str, inputs: Mapping[str, str], facts: Mapping[str, bool] | None = None) -> str | None:
     if _UNSUPPORTED.search(question):
         return '입사일 기준 통상근로자의 법정 연차 발생 일수에 필요한 조건을 확인해 주세요.'
     if re.search(r'(?:상시\s*(?:근로자|인원)|소정\s*근로시간)[^.!?\n]{0,24}(?:변동|달라|바뀌)', question):
@@ -93,9 +109,18 @@ def question_issue(question: str, inputs: Mapping[str, str]) -> str | None:
         return '상시 근로자수, 주 소정근로시간과 출근율을 확인해 주세요.'
     if 'full_attendance_months' in inputs and not re.search(r'개근|빠짐없이\s*출근|결근\s*없이', question):
         return '근속기간 중 개근하고 그 다음 날에도 재직한 월 수를 알려 주세요.'
-    if has_annual_scope_request(question) and not requests_first_year_sum(inputs.get('include_first_year', '')):
+    if has_annual_scope_request(question) and not _first_year_requested(inputs, facts):
         return '발생일별 연차와 합산할 기간을 확인해 주세요.'
-    if (source := inputs.get('employed_at_accrual')) and (fact := classify_employment(source)) is not None:
+    if facts is not None and 'employed_at_accrual' in facts:
+        clauses = re.split(r'[.!?\n]', question)
+        if any(
+            _ACCRUAL_EMPLOYMENT.search(normalize_fact(clause))
+            and (found := classify_employment(clause)) is not None
+            and found != facts['employed_at_accrual']
+            for clause in clauses
+        ):
+            return _ACCRUAL_MESSAGE
+    elif (source := inputs.get('employed_at_accrual')) and (fact := classify_employment(source)) is not None:
         evidence = [
             clause for clause in re.split(r'[.!?\n]', question) if _ACCRUAL_EMPLOYMENT.search(normalize_fact(clause))
         ]
@@ -125,14 +150,19 @@ def _done(base: Calculation, steps: tuple[Step, ...], days: int, message: str | 
     )
 
 
-def calculate(base: Calculation, inputs: Mapping[str, str], rules: Mapping[str, Any]) -> Calculation:
+def calculate(
+    base: Calculation,
+    inputs: Mapping[str, str],
+    rules: Mapping[str, Any],
+    facts: Mapping[str, bool] | None = None,
+) -> Calculation:
     workers = parse_count(inputs['workplace_size'], '명') if 'workplace_size' in inputs else None
     hours = parse_hours(inputs['weekly_hours']) if 'weekly_hours' in inputs else None
     full_months = parse_count(inputs['full_attendance_months'], '개월') if 'full_attendance_months' in inputs else None
     attendance = parse_quantity(inputs['attendance_rate'], '%') if 'attendance_rate' in inputs else None
     if (hours is not None and hours > 168) or (attendance is not None and not 0 <= attendance <= 100):
         raise ValueError('invalid annual leave input')
-    include_first = requests_first_year_sum(inputs.get('include_first_year', ''))
+    include_first = _first_year_requested(inputs, facts)
     count_rows = {'workplace_size': (workers, '명'), 'full_attendance_months': (full_months, '개월')}
     rows: list[InputRow] = []
     for field, label in _LABELS.items():
@@ -166,7 +196,10 @@ def calculate(base: Calculation, inputs: Mapping[str, str], rules: Mapping[str, 
     last = parse_labor_date(inputs['last_employed_date']) if 'last_employed_date' in inputs else None
     end = active_on or last
     employment = inputs.get('employed_at_accrual')
-    fact = classify_employment(employment) if employment is not None else None
+    if facts is not None and 'employed_at_accrual' in facts:
+        fact = facts['employed_at_accrual']
+    else:
+        fact = classify_employment(employment) if employment is not None else None
     if employment is not None and fact is None:
         return _guidance(base, _ACCRUAL_MESSAGE, 'ambiguous_input')
     if (active_on is not None and last is not None and active_on > last) or (

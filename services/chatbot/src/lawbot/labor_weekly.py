@@ -23,14 +23,6 @@ FIELDS = {
     'attendance': 'fact',
     'employment': 'fact',
 }
-SCHEMA = (
-    '주휴수당: hourly_wage(통상시급), weekly_scheduled_hours(4주 또는 4주 미만 해당 기간의 주 평균·고정 소정근로시간), '
-    'four_week_scheduled_hours(4주간 본인 소정근로시간 합계), paid_holiday_hours(유급주휴시간), '
-    'reference_days_per_week(비교 통상근로자의 고정 주 소정근로일수), '
-    'four_week_reference_days(동일한 4주간 비교 통상근로자의 소정근로일수 합계), '
-    'attendance(해당 주 개근·결근 사실 전체), employment(해당 주 7일 근로관계 유지·종료 사실 전체). '
-    '실근로시간이나 본인의 출근일수를 소정시간이나 비교 근로자의 일수로 쓰지 않는다.'
-)
 
 _ARTICLE_HOLIDAY = '근로기준법 제55조'
 _ARTICLE_ATTENDANCE = '근로기준법 시행령 제30조'
@@ -76,11 +68,28 @@ def _employment(source: str) -> bool | None:
     return classify_employment(source, weekly=True)
 
 
-def question_issue(question: str, inputs: Mapping[str, str]) -> str | None:
-    """Reject excerpts that omit material qualifications to an extracted fact."""
+FACT_LABELS = {field: _LABELS[field] for field in ('attendance', 'employment')}
+_FACT_PARSERS = {'attendance': _attendance, 'employment': _employment}
+
+
+def fact_polarity(field: str, evidence: str) -> bool | None:
+    """Return the polarity the wording itself makes certain, or None."""
+    parse = _FACT_PARSERS.get(field)
+    return parse(evidence) if parse is not None else None
+
+
+def question_issue(question: str, inputs: Mapping[str, str], facts: Mapping[str, bool] | None = None) -> str | None:
+    """Reject excerpts that omit material qualifications to an extracted fact.
+
+    With model-judged ``facts`` a clause vetoes only when its own wording has the
+    opposite certain polarity; without them the excerpt must match every clause.
+    """
     clauses = re.split(r'[!?\n,;]|(?<!\d)\.|\.(?!\d)', question)
-    for field, parse in (('attendance', _attendance), ('employment', _employment)):
-        if source := inputs.get(field):
+    for field, parse in _FACT_PARSERS.items():
+        if facts is not None and field in facts:
+            if any((found := parse(clause)) is not None and found != facts[field] for clause in clauses):
+                return f'{_LABELS[field]}를 확인해 주세요.'
+        elif source := inputs.get(field):
             parsed = parse(source)
             for clause in clauses:
                 in_context = parse(clause)
@@ -104,9 +113,11 @@ def _shown(value: Fraction | int) -> int | str:
     return int(value) if value == int(value) else f'{value:.4f}'.rstrip('0').rstrip('.')
 
 
-def calculate(base: Calculation, inputs: Mapping[str, str], rules: dict) -> Calculation:
+def calculate(
+    base: Calculation, inputs: Mapping[str, str], rules: dict, facts: Mapping[str, bool] | None = None
+) -> Calculation:
     rows: list[InputRow] = []
-    hours, days, facts = {}, {}, {}
+    hours, days, judged = {}, {}, {}
     hourly_wage = None
     try:
         for key, source in inputs.items():
@@ -123,7 +134,7 @@ def calculate(base: Calculation, inputs: Mapping[str, str], rules: dict) -> Calc
                 hourly_wage = parse_labor_amount(source)
                 rows.append({'label': _LABELS[key], 'value': hourly_wage, 'unit': '원', 'source': f'질문: {source}'})
             elif field_type == 'fact':
-                facts[key] = (_attendance if key == 'attendance' else _employment)(source)
+                judged[key] = facts[key] if facts is not None and key in facts else _FACT_PARSERS[key](source)
                 rows.append({'label': _LABELS[key], 'value': source, 'source': f'질문: {source}'})
     except ValueError:
         return replace(
@@ -164,9 +175,9 @@ def calculate(base: Calculation, inputs: Mapping[str, str], rules: dict) -> Calc
             f'주 평균 {minimum_hours}시간 미만',
             rules['minimum_weekly_hours']['article'],
         ),
-        (facts.get('attendance') is False, '해당 주 소정근로일에 결근', _ARTICLE_ATTENDANCE),
+        (judged.get('attendance') is False, '해당 주 소정근로일에 결근', _ARTICLE_ATTENDANCE),
         (
-            facts.get('employment') is False,
+            judged.get('employment') is False,
             f'해당 주 {week_days}일 동안 근로관계 미유지',
             rules['qualifying_week_days']['article'],
         ),
@@ -184,13 +195,13 @@ def calculate(base: Calculation, inputs: Mapping[str, str], rules: dict) -> Calc
     missing = []
     if weekly_hours is None:
         missing.append('4주 평균 주 소정근로시간')
-    missing.extend(_LABELS[key] for key in ('attendance', 'employment') if facts.get(key) is None)
+    missing.extend(_LABELS[key] for key in ('attendance', 'employment') if judged.get(key) is None)
     if hourly_wage is None:
         missing.append('통상시급')
     if missing:
         reason = (
             'ambiguous_input'
-            if any(key in facts and facts[key] is None for key in ('attendance', 'employment'))
+            if any(key in judged and judged[key] is None for key in ('attendance', 'employment'))
             else 'missing_required'
         )
         return guidance(f'{", ".join(missing)}를 알려 주시면 계산할 수 있습니다.', reason)
