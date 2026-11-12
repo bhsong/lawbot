@@ -1,0 +1,531 @@
+[
+ {
+  "id": "calc-heldout2-001",
+  "question": "2022.3.2에 입사해서 2026.6.30까지 출근하고 그만뒀습니다. 주 40시간 근무였고, 퇴직 전 3개월(91일) 동안 받은 임금이 모두 1,050만원이에요. 1일 통상임금은 11만원입니다. 법정 퇴직금은 얼마인가요?",
+  "calculator": "severance_pay",
+  "kind": "calculated",
+  "status": "calculated",
+  "expected_results": {
+   "법정 최소 퇴직금": 15003161
+  },
+  "basis": "퇴직급여법 제8조, 근로기준법 제2조. 첫 비재직일 2026-07-01까지 1,582일. 10,500,000÷91이 110,000보다 커서 평균임금×30×1,582÷365, 원 단위 반올림."
+ },
+ {
+  "id": "calc-heldout2-002",
+  "question": "1,180일이 회사가 인정한 제 계속근로일수예요. 4주 평균 주 소정근로시간은 30시간이었고, 통상임금 하한까지 반영한 퇴직금 산정용 일급은 9만 8천원이라고 합니다. 퇴직금 계산해 주세요.",
+  "calculator": "severance_pay",
+  "kind": "calculated",
+  "status": "calculated",
+  "expected_results": {
+   "법정 최소 퇴직금": 9504658
+  },
+  "basis": "퇴직급여법 제8조. 98,000×30×1,180÷365, 원 단위 반올림."
+ },
+ {
+  "id": "calc-heldout2-003",
+  "question": "2025년 11월 3일에 입사했고 2026년 9월 30일이 마지막 근무일이었어요. 주 40시간 일했고 직전 3개월 임금은 930만원, 1일 통상임금 10만원입니다. 법정 퇴직금이 나오나요?",
+  "calculator": "severance_pay",
+  "kind": "calculated",
+  "status": "calculated",
+  "expected_results": {
+   "법정 최소 퇴직금": 0
+  },
+  "basis": "퇴직급여법 제4조. 첫 비재직일 2026-10-01까지 332일로 1년 미만."
+ },
+ {
+  "id": "calc-heldout2-004",
+  "question": "4주 평균으로 주 소정근로시간 12시간인 아르바이트를 계속근로 2년 동안 했습니다. 통상임금 하한 반영 산정용 일급은 6만원이에요. 법정 퇴직금 대상이 되나요? 된다면 얼마죠?",
+  "calculator": "severance_pay",
+  "kind": "calculated",
+  "status": "calculated",
+  "expected_results": {
+   "법정 최소 퇴직금": 0
+  },
+  "basis": "퇴직급여법 제4조 제1항 단서. 4주 평균 주 소정근로시간 15시간 미만."
+ },
+ {
+  "id": "calc-heldout2-005",
+  "question": "월급 280만원을 받으면서 4년 3개월 다녔고 주 40시간 근무였어요. 대략적인 퇴직금이 얼마일까요?",
+  "calculator": "severance_pay",
+  "kind": "calculated",
+  "status": "calculated",
+  "expected_results": {
+   "평균임금 기준 퇴직금 추정": 11900000,
+   "통상임금 하한 적용 퇴직금 추정": 13665072
+  },
+  "basis": "근로기준법 제2조, 퇴직급여법 제8조 월급 추정. 기간 365×51÷12일. 평균임금 2,800,000÷30, 통상임금 하한 2,800,000÷209×8."
+ },
+ {
+  "id": "calc-heldout2-006",
+  "question": "2023-01-09 입사, 2026-03-31 마지막 근무였고 주 35시간 근무했습니다. 법정 퇴직금 얼마 받을 수 있나요?",
+  "calculator": "severance_pay",
+  "kind": "missing",
+  "status": "guidance",
+  "expected_results": null,
+  "basis": "근로기준법 제2조. 평균임금·통상임금 등 임금 정보가 없다."
+ },
+ {
+  "id": "calc-heldout2-007",
+  "question": "계속근로 2년 5개월이고 통상임금 하한 반영 산정용 일급은 8만원입니다. 그런데 주 소정근로시간이 계약서에는 14시간, 근무표에는 16시간으로 달라서 어느 쪽이 맞는지 모르겠어요. 법정 퇴직금은요?",
+  "calculator": "severance_pay",
+  "kind": "ambiguous",
+  "status": "guidance",
+  "expected_results": null,
+  "basis": "퇴직급여법 제4조. 주 15시간 기준 양쪽 값이 서로 다른 적용 결과를 낸다."
+ },
+ {
+  "id": "calc-heldout2-008",
+  "question": "2019년 4월 1일 입사해 2026년 4월 1일 현재도 다니고 있어요. 상시 근로자 30명, 주 40시간 근무, 직전 1년 출근율 92%입니다. 이번에 생기는 법정 연차는 며칠인가요?",
+  "calculator": "annual_leave_days",
+  "kind": "calculated",
+  "status": "calculated",
+  "expected_results": {
+   "연차유급휴가 일수": 18
+  },
+  "basis": "근로기준법 제60조 제1항·제4항. 완료 7년, 15+⌊6÷2⌋."
+ },
+ {
+  "id": "calc-heldout2-009",
+  "question": "입사 후 5개월 동안 매달 소정근로일을 빠짐없이 출근했고 각 달이 끝난 다음 날에도 계속 다니고 있습니다. 상시 근로자는 8명이고 주 소정근로시간은 25시간이에요. 지금까지 생긴 법정 연차는요?",
+  "calculator": "annual_leave_days",
+  "kind": "calculated",
+  "status": "calculated",
+  "expected_results": {
+   "연차유급휴가 일수": 5
+  },
+  "basis": "근로기준법 제60조 제2항. 1년 미만 개근월 5개에 각 1일."
+ },
+ {
+  "id": "calc-heldout2-010",
+  "question": "근속 만 3년이 된 날에도 그만두지 않고 계속 근무하고 있어요. 상시 근로자 45명, 4주 평균 주 소정근로시간 38시간, 해당 1년 출근율은 85%입니다. 이번에 발생한 연차 일수를 알려 주세요.",
+  "calculator": "annual_leave_days",
+  "kind": "calculated",
+  "status": "calculated",
+  "expected_results": {
+   "연차유급휴가 일수": 16
+  },
+  "basis": "근로기준법 제60조 제1항·제4항. 완료 3년, 15+⌊2÷2⌋."
+ },
+ {
+  "id": "calc-heldout2-011",
+  "question": "3명이 상시 근로자 전부인 가게에서 주 40시간씩 2년 일했고 출근율은 100%였어요. 법정 연차가 며칠 생기나요?",
+  "calculator": "annual_leave_days",
+  "kind": "calculated",
+  "status": "calculated",
+  "expected_results": {
+   "연차유급휴가 일수": 0
+  },
+  "basis": "근로기준법 제11조 및 시행령 별표 1. 상시 5명 미만 사업장에는 제60조가 적용되지 않는다."
+ },
+ {
+  "id": "calc-heldout2-012",
+  "question": "근속 만 21년이 된 날에도 재직 중이고 직전 1년 출근율 95.5%, 상시 120명, 주 40시간입니다. 법정 연차는 며칠인가요?",
+  "calculator": "annual_leave_days",
+  "kind": "calculated",
+  "status": "calculated",
+  "expected_results": {
+   "연차유급휴가 일수": 25
+  },
+  "basis": "근로기준법 제60조 제4항. 완료 21년, 15+⌊20÷2⌋=25일(상한 25일)."
+ },
+ {
+  "id": "calc-heldout2-013",
+  "question": "상시 50명 회사에서 주 40시간으로 근속 4년이 됐고 지금도 다니고 있습니다. 이번 연차는 며칠 생기나요?",
+  "calculator": "annual_leave_days",
+  "kind": "missing",
+  "status": "guidance",
+  "expected_results": null,
+  "basis": "근로기준법 제60조 제1항. 산정 대상 1년 출근율이 없다."
+ },
+ {
+  "id": "calc-heldout2-014",
+  "question": "상시 근로자가 4~6명 사이로 달마다 바뀌는 사업장입니다. 주 40시간, 근속 2년, 출근율 90%이고 발생일에도 재직 중이에요. 법정 연차는 며칠인가요?",
+  "calculator": "annual_leave_days",
+  "kind": "ambiguous",
+  "status": "guidance",
+  "expected_results": null,
+  "basis": "근로기준법 제11조. 상시 근로자 수가 5명 기준 양쪽에 걸친 범위다."
+ },
+ {
+  "id": "calc-heldout2-015",
+  "question": "통상시급 12,000원이고 주 5일 하루 8시간씩 주 40시간 일합니다. 비교 통상근로자도 주 5일이에요. 이번 주 소정근로일 모두 출근했고 7일 내내 재직했어요. 주휴수당 얼마예요?",
+  "calculator": "weekly_holiday_pay",
+  "kind": "calculated",
+  "status": "calculated",
+  "expected_results": {
+   "주휴수당": 96000
+  },
+  "basis": "근로기준법 제55조 및 시행령 제30조, 별표 2. 40÷5=8시간×12,000."
+ },
+ {
+  "id": "calc-heldout2-016",
+  "question": "4주 평균 주 소정근로시간이 20시간이고, 비교 통상근로자의 주 소정근로일수는 5일입니다. 시급 11,500원이고 이번 주 개근, 한 주 동안 근로관계 유지했어요. 주휴수당은 얼마인가요?",
+  "calculator": "weekly_holiday_pay",
+  "kind": "calculated",
+  "status": "calculated",
+  "expected_results": {
+   "주휴수당": 46000
+  },
+  "basis": "근로기준법 시행령 제9조 별표 2. 20÷5=4시간×11,500."
+ },
+ {
+  "id": "calc-heldout2-017",
+  "question": "4주간 제 소정근로시간을 다 더하면 70시간이고 같은 4주 동안 비교 통상근로자 소정근로일수 합계는 20일입니다. 통상시급 10,320원, 이번 주는 결근 없이 출근했고 7일간 근로관계가 계속됐어요. 주휴수당 계산해 주세요.",
+  "calculator": "weekly_holiday_pay",
+  "kind": "calculated",
+  "status": "calculated",
+  "expected_results": {
+   "주휴수당": 36120
+  },
+  "basis": "근로기준법 시행령 제9조 별표 2. 70÷4=17.5시간으로 기준 충족, 70÷20=3.5시간×10,320."
+ },
+ {
+  "id": "calc-heldout2-018",
+  "question": "통상시급 13,000원, 4주 평균 주 30시간, 유급주휴시간 6시간입니다. 이번 주 7일 동안 재직했지만 소정근로일 중 하루를 결근했어요. 주휴수당은요?",
+  "calculator": "weekly_holiday_pay",
+  "kind": "calculated",
+  "status": "calculated",
+  "expected_results": {
+   "주휴수당": 0
+  },
+  "basis": "근로기준법 제55조 및 시행령 제30조. 소정근로일 개근 요건 미충족."
+ },
+ {
+  "id": "calc-heldout2-019",
+  "question": "주 소정근로시간이 22.5시간(4주 평균)이고 비교 통상근로자는 주 5일 근무입니다. 통상시급 12,345원, 이번 주 개근했고 한 주 내내 근로계약이 유지됐어요. 주휴수당이 얼마죠?",
+  "calculator": "weekly_holiday_pay",
+  "kind": "calculated",
+  "status": "calculated",
+  "expected_results": {
+   "주휴수당": "55552.5"
+  },
+  "basis": "근로기준법 시행령 제9조 별표 2. 22.5÷5=4.5시간×12,345."
+ },
+ {
+  "id": "calc-heldout2-020",
+  "question": "4주 평균 주 소정근로시간 25시간, 유급주휴시간 5시간이고 이번 주 개근하고 7일간 근로관계가 유지됐습니다. 주휴수당은 얼마인가요?",
+  "calculator": "weekly_holiday_pay",
+  "kind": "missing",
+  "status": "guidance",
+  "expected_results": null,
+  "basis": "근로기준법 제55조. 통상시급이 없다."
+ },
+ {
+  "id": "calc-heldout2-021",
+  "question": "통상시급 11,000원이고 유급주휴시간은 3시간입니다. 4주 평균 주 소정근로시간이 15시간 안팎이라 정확한 값은 모르겠어요. 이번 주 개근했고 7일간 재직했습니다. 주휴수당 나오나요?",
+  "calculator": "weekly_holiday_pay",
+  "kind": "ambiguous",
+  "status": "guidance",
+  "expected_results": null,
+  "basis": "근로기준법 제18조 제3항. 주 15시간 경계 근처의 불확실한 값."
+ },
+ {
+  "id": "calc-heldout2-022",
+  "question": "2026년 기준으로 주 5일, 주 40시간 일하는 근로계약이에요. 월 최저임금이 얼마인가요?",
+  "calculator": "monthly_minimum_wage",
+  "kind": "calculated",
+  "status": "calculated",
+  "expected_results": {
+   "월 최저임금": 2156880
+  },
+  "basis": "2026년 고시. 표준 209시간×10,320."
+ },
+ {
+  "id": "calc-heldout2-023",
+  "question": "2025년 계약서에 유급주휴를 포함한 월 최저임금 적용기준시간이 150.5시간으로 적혀 있어요. 그해 월 최저임금으로 환산하면요?",
+  "calculator": "monthly_minimum_wage",
+  "kind": "calculated",
+  "status": "calculated",
+  "expected_results": {
+   "월 최저임금": 1509515
+  },
+  "basis": "최저임금법 시행령 제5조, 2025년 고시. 150.5×10,030."
+ },
+ {
+  "id": "calc-heldout2-024",
+  "question": "171시간 30분, 이게 유급주휴를 포함한 제 월 최저임금 적용기준시간입니다. 2027년 기준 월 최저임금은 얼마가 되나요?",
+  "calculator": "monthly_minimum_wage",
+  "kind": "calculated",
+  "status": "calculated",
+  "expected_results": {
+   "월 최저임금": 1835050
+  },
+  "basis": "최저임금법 시행령 제5조, 2027년 고시. 171.5×10,700."
+ },
+ {
+  "id": "calc-heldout2-025",
+  "question": "월 최저임금 적용기준시간(유급주휴 포함)이 104.25시간입니다. 2026년 최저임금 기준 월 금액을 계산해 주세요.",
+  "calculator": "monthly_minimum_wage",
+  "kind": "calculated",
+  "status": "calculated",
+  "expected_results": {
+   "월 최저임금": 1075860
+  },
+  "basis": "최저임금법 시행령 제5조, 2026년 고시. 104.25×10,320."
+ },
+ {
+  "id": "calc-heldout2-026",
+  "question": "지난달 실제로 일한 시간은 180시간이었고, 회사가 정한 월 최저임금 적용기준시간은 195시간입니다. 2026년 월 최저임금이 얼마인지 기준시간으로 계산해 주세요.",
+  "calculator": "monthly_minimum_wage",
+  "kind": "calculated",
+  "status": "calculated",
+  "expected_results": {
+   "월 최저임금": 2012400
+  },
+  "basis": "최저임금법 시행령 제5조, 2026년 고시. 실근로가 아닌 기준시간 195×10,320."
+ },
+ {
+  "id": "calc-heldout2-027",
+  "question": "2026년에 주 5일, 주 소정근로 30시간으로 일하는 단시간 근로자입니다. 월 최저임금은 얼마인가요?",
+  "calculator": "monthly_minimum_wage",
+  "kind": "missing",
+  "status": "guidance",
+  "expected_results": null,
+  "basis": "최저임금법 시행령 제5조. 표준 주 40시간이 아니고 월 적용기준시간이 주어지지 않았다."
+ },
+ {
+  "id": "calc-heldout2-028",
+  "question": "2027년 계약인데 유급주휴 포함 월 최저임금 적용기준시간이 대략 180시간 안팎이라고만 들었어요. 월 최저임금은 얼마인가요?",
+  "calculator": "monthly_minimum_wage",
+  "kind": "ambiguous",
+  "status": "guidance",
+  "expected_results": null,
+  "basis": "최저임금법 시행령 제5조. 기준시간이 확정되지 않았다."
+ },
+ {
+  "id": "calc-heldout2-029",
+  "question": "상시 근로자 10명인 회사에서 통상시급 13,000원을 받고 평일에 휴게 제외 2시간 연장근로를 했어요. 연장 가산수당만 얼마인가요?",
+  "calculator": "premium_pay",
+  "kind": "calculated",
+  "status": "calculated",
+  "expected_results": {
+   "법정 가산수당": 13000
+  },
+  "basis": "근로기준법 제56조 제1항. 13,000×2×0.5."
+ },
+ {
+  "id": "calc-heldout2-030",
+  "question": "상시 7명 사업장이고 통상시급은 14,000원이에요. 평일 밤 10시 이후 야간근로를 휴게 빼고 3시간 30분 했습니다. 야간 가산분만 알려 주세요.",
+  "calculator": "premium_pay",
+  "kind": "calculated",
+  "status": "calculated",
+  "expected_results": {
+   "법정 가산수당": 24500
+  },
+  "basis": "근로기준법 제56조 제3항. 14,000×3.5×0.5."
+ },
+ {
+  "id": "calc-heldout2-031",
+  "question": "상시 근로자 20명, 통상시급 12,000원입니다. 휴일 하루에 쉬는 시간을 빼고 9시간 일했고 야간근로는 없었어요. 휴일 가산수당만 계산해 주세요.",
+  "calculator": "premium_pay",
+  "kind": "calculated",
+  "status": "calculated",
+  "expected_results": {
+   "법정 가산수당": 60000
+  },
+  "basis": "근로기준법 제56조 제2항. 12,000×(8×0.5+1×1.0)."
+ },
+ {
+  "id": "calc-heldout2-032",
+  "question": "상시 근로자가 3명인 식당입니다. 통상시급 11,000원이고 평일 연장근로를 휴게 제외 4시간 했어요. 법정 연장 가산수당만 얼마인가요?",
+  "calculator": "premium_pay",
+  "kind": "calculated",
+  "status": "calculated",
+  "expected_results": {
+   "법정 가산수당": 0
+  },
+  "basis": "근로기준법 제11조 및 시행령 별표 1. 5명 미만 사업장에 제56조 가산 미적용."
+ },
+ {
+  "id": "calc-heldout2-033",
+  "question": "상시 15명, 통상시급 10,500원입니다. 평일에 휴게 제외 2시간 연장근로를 했고 중복 없이 센 총 실근로도 2시간이에요. 기본임금을 포함한 총액으로 계산해 주세요.",
+  "calculator": "premium_pay",
+  "kind": "calculated",
+  "status": "calculated",
+  "expected_results": {
+   "법정 가산수당": 10500,
+   "기본임금": 21000,
+   "기본임금 포함 합계": 31500
+  },
+  "basis": "근로기준법 제56조 제1항. 가산 10,500×2×0.5, 기본임금 10,500×2."
+ },
+ {
+  "id": "calc-heldout2-034",
+  "question": "상시 근로자 12명인 회사에서 평일 연장근로를 휴게 제외 3시간 했습니다. 연장 가산분만 얼마인가요?",
+  "calculator": "premium_pay",
+  "kind": "missing",
+  "status": "guidance",
+  "expected_results": null,
+  "basis": "근로기준법 제56조. 통상시급이 없다."
+ },
+ {
+  "id": "calc-heldout2-035",
+  "question": "상시 근로자가 4명인지 5명인지 회사도 정확히 모른다고 합니다. 통상시급 12,500원이고 평일 연장근로 휴게 제외 2시간이면 가산수당만 얼마인가요?",
+  "calculator": "premium_pay",
+  "kind": "ambiguous",
+  "status": "guidance",
+  "expected_results": null,
+  "basis": "근로기준법 제11조. 상시 근로자 수가 5명 기준 양쪽에 걸친다."
+ },
+ {
+  "id": "calc-heldout2-036",
+  "question": "2026년 총급여가 4,200만원이고 본인 치료비로 250만원을 썼는데 실손보험금 30만원을 받았어요. 의료비 세액공제는 얼마인가요?",
+  "calculator": "medical_expense_credit",
+  "kind": "calculated",
+  "status": "calculated",
+  "expected_results": {
+   "의료비 세액공제": 141000
+  },
+  "basis": "소득세법 제59조의4. (2,500,000−300,000−42,000,000×3%)×15%. 바뀌지 않은 세금 계산기로 확인."
+ },
+ {
+  "id": "calc-heldout2-037",
+  "question": "총급여 6천만원이고 2026년에 60세 아버지 의료비로 500만원을 냈어요. 실손보험금은 받지 않았습니다. 의료비 세액공제 얼마 받나요?",
+  "calculator": "medical_expense_credit",
+  "kind": "calculated",
+  "status": "calculated",
+  "expected_results": {
+   "의료비 세액공제": 480000
+  },
+  "basis": "소득세법 제59조의4. 일반 부양가족 (5,000,000−1,800,000)×15%, 한도 700만원 이내."
+ },
+ {
+  "id": "calc-heldout2-038",
+  "question": "2026년 5월에 퇴사했고 그 회사에서 받은 총급여가 1,800만원, 이미 원천징수된 소득세가 40만원입니다. 중도퇴사 연말정산하면 환급액은요?",
+  "calculator": "midyear_income_tax",
+  "kind": "calculated",
+  "status": "calculated",
+  "expected_results": {
+   "결정세액": 100850,
+   "개인지방소득세": 10085,
+   "소득세 환급액": 299150
+  },
+  "basis": "소득세법 제137조. 바뀌지 않은 세금 계산기로 계산한 값."
+ },
+ {
+  "id": "calc-heldout2-039",
+  "question": "올해 병원비로 400만원을 썼어요. 의료비 세액공제는 얼마나 받을 수 있나요?",
+  "calculator": "medical_expense_credit",
+  "kind": "missing",
+  "status": "guidance",
+  "expected_results": null,
+  "basis": "소득세법 제59조의4. 총급여가 없다."
+ },
+ {
+  "id": "calc-heldout2-040",
+  "question": "2026년 중도퇴사자입니다. 총급여가 2,900만원인지 3,300만원인지 원천징수영수증 두 장이 서로 달라요. 결정세액이 얼마인가요?",
+  "calculator": "midyear_income_tax",
+  "kind": "ambiguous",
+  "status": "guidance",
+  "expected_results": null,
+  "basis": "소득세법 제137조. 총급여 후보 두 값."
+ },
+ {
+  "id": "calc-heldout2-041",
+  "question": "근로기준법상 퇴직한 근로자에게 임금과 퇴직금을 지급해야 하는 기한은 퇴직 후 며칠 이내인가요?",
+  "calculator": "none",
+  "kind": "lookup",
+  "status": "lookup",
+  "expected_results": null,
+  "basis": "근로기준법 제36조. 법령 값 조회."
+ },
+ {
+  "id": "calc-heldout2-042",
+  "question": "연차유급휴가 청구권은 몇 년간 행사하지 않으면 소멸하나요?",
+  "calculator": "none",
+  "kind": "lookup",
+  "status": "lookup",
+  "expected_results": null,
+  "basis": "근로기준법 제60조 제7항. 법령 값 조회."
+ },
+ {
+  "id": "calc-heldout2-043",
+  "question": "사용자가 근로자에게 주어야 하는 유급휴일은 1주에 평균 며칠 이상인가요?",
+  "calculator": "none",
+  "kind": "lookup",
+  "status": "lookup",
+  "expected_results": null,
+  "basis": "근로기준법 제55조 제1항."
+ },
+ {
+  "id": "calc-heldout2-044",
+  "question": "최저임금 고시는 다음 연도 몇 월 며칠부터 효력이 생기나요?",
+  "calculator": "none",
+  "kind": "lookup",
+  "status": "lookup",
+  "expected_results": null,
+  "basis": "최저임금법 제10조 제2항."
+ },
+ {
+  "id": "calc-heldout2-045",
+  "question": "월급 300만원이면 국민연금·건강보험 같은 4대보험 근로자 부담분은 매달 얼마인가요?",
+  "calculator": "none",
+  "kind": "unsupported",
+  "status": "none",
+  "expected_results": null,
+  "basis": "지원하지 않는 계산(4대보험료)."
+ },
+ {
+  "id": "calc-heldout2-046",
+  "question": "육아휴직을 6개월 쓰려는데 월 통상임금이 350만원이면 육아휴직 급여를 매달 얼마 받나요?",
+  "calculator": "none",
+  "kind": "unsupported",
+  "status": "none",
+  "expected_results": null,
+  "basis": "지원하지 않는 계산(육아휴직 급여)."
+ },
+ {
+  "id": "calc-heldout2-047",
+  "question": "퇴직 전 평균임금이 하루 10만원이었는데 실업급여 구직급여는 하루 얼마 나오나요?",
+  "calculator": "none",
+  "kind": "unsupported",
+  "status": "none",
+  "expected_results": null,
+  "basis": "지원하지 않는 계산(구직급여)."
+ },
+ {
+  "id": "calc-heldout2-048",
+  "question": "퇴직금 2,000만원을 받으면 퇴직소득세는 얼마 떼이나요? 근속은 5년입니다.",
+  "calculator": "none",
+  "kind": "unsupported",
+  "status": "none",
+  "expected_results": null,
+  "basis": "지원하지 않는 계산(퇴직소득세)."
+ },
+ {
+  "id": "calc-heldout2-049",
+  "question": "안 쓴 연차가 5일 남았고 1일 통상임금이 12만원이면 연차미사용수당은 얼마인가요?",
+  "calculator": "none",
+  "kind": "unsupported",
+  "status": "none",
+  "expected_results": null,
+  "basis": "지원하지 않는 계산(연차미사용수당)."
+ },
+ {
+  "id": "calc-heldout2-050",
+  "question": "주휴수당을 받으려면 어떤 요건을 충족해야 하나요?",
+  "calculator": "none",
+  "kind": "general",
+  "status": "lookup",
+  "expected_results": null,
+  "basis": "일반 질의."
+ },
+ {
+  "id": "calc-heldout2-051",
+  "question": "연장근로를 하면 가산임금은 통상임금의 몇 배 이상으로 주도록 되어 있나요?",
+  "calculator": "none",
+  "kind": "general",
+  "status": "lookup",
+  "expected_results": null,
+  "basis": "일반 질의(법령 값)."
+ },
+ {
+  "id": "calc-heldout2-052",
+  "question": "퇴직금 중간정산을 할 수 있는 사유에는 어떤 것이 있나요?",
+  "calculator": "none",
+  "kind": "general",
+  "status": "lookup",
+  "expected_results": null,
+  "basis": "일반 질의."
+ }
+]
