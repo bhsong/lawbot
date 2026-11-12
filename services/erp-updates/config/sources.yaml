@@ -1,0 +1,28 @@
+# ERP reference sources read from monitor's clones (services/monitor/config/targets.yaml tracks the same documents).
+# One rule per kind: admrule = top agency folder + rule-name regex (checked again against front matter);
+# form = law file + 별표구분/번호/가지번호 from the 첨부파일 list; article = law file + article heading.
+sources:
+  - key: INS-01
+    title: 국민연금 기준소득월액 상·하한
+    category: insurance
+    admrule: {agency: 보건복지부, name: '^국민연금 기준소득월액 하한액과 상한액$'}
+  - key: INS-02H
+    title: 건강보험료율
+    category: insurance
+    article: {file: kr/국민건강보험법/시행령.md, article: 제44조}
+  - key: INS-02L
+    title: 장기요양보험료율
+    category: insurance
+    article: {file: kr/노인장기요양보험법/시행령.md, article: 제4조}
+  - key: INS-03
+    title: 사업종류별 산재보험료율
+    category: insurance
+    admrule: {agency: 고용노동부, name: '^\d{4}년도 사업종류별 산재보험료율$'}
+  - key: TAX-01
+    title: 근로소득 간이세액표
+    category: tax
+    form: {file: kr/소득세법/시행령.md, kind: 별표, number: '0002', branch: '00'}
+  - key: TAX-03
+    title: 원천징수이행상황신고서
+    category: tax
+    form: {file: kr/소득세법/시행규칙.md, kind: 서식, number: '0021', branch: '00'}

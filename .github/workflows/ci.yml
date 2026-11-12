@@ -37,6 +37,12 @@ jobs:
       - name: 독립 캘린더 API 타입 검사
         run: uv run pyright services/law-calendar/src && uv run python -m law_calendar.schema --check
 
+      - name: ERP 피드 생성기 설치·잠금·타입 검사
+        run: |
+          uv lock --check --project services/erp-updates
+          uv pip install --no-deps -e services/erp-updates
+          uv run pyright services/erp-updates/src
+
       - name: 린트 (ruff, 설정은 pyproject.toml)
         run: uv run ruff check --output-format=github
 

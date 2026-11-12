@@ -9,6 +9,7 @@
 members = ["services/*", "packages/*", "tools/*"]
 exclude = [
     "services/law-calendar",  # Independent API project and lock; no model dependencies.
+    "services/erp-updates",  # Independent ERP feed builder and lock; reads monitor clones only.
     "packages/lawbot-ui",  # Shared TypeScript source only.
 ]
 
@@ -38,7 +39,7 @@ dev = [
 ]
 
 [tool.pytest.ini_options]
-testpaths = ["services/chatbot/tests", "services/model-server/tests", "services/monitor/tests", "services/law-calendar/tests", "packages/lawbot-common/tests"]
+testpaths = ["services/chatbot/tests", "services/model-server/tests", "services/monitor/tests", "services/law-calendar/tests", "services/erp-updates/tests", "packages/lawbot-common/tests"]
 addopts = "-ra --strict-markers -m 'not models and not network and not e2e_live'"   # 실제 모델·외부 접속 테스트는 -m models / -m network / -m e2e_live로 따로 실행
 filterwarnings = [
     # OpenAI SDK가 TestClient(계약 테스트)에 요청마다 timeout을 넘김: 테스트 대역에서만 나는 경고
