@@ -58,6 +58,54 @@ test('stop aborts the request and marks the turn stopped', async () => {
   expect(result.current.busy).toBe(false)
 })
 
+test('synchronous sends share one active request and allow another after it ends', async () => {
+  const held = sseResponse(DONE, { hold: true })
+  const fetch = vi.fn().mockResolvedValueOnce(held.res).mockResolvedValueOnce(sseResponse(DONE).res)
+  vi.stubGlobal('fetch', fetch)
+  const { result } = renderHook(() => useChatStream({ onUnauthorized: vi.fn() }))
+  const pending: Promise<void>[] = []
+  act(() => {
+    pending.push(result.current.send('첫 질문', 'pro', 'full'))
+    pending.push(result.current.send('중복 질문', 'pro', 'full'))
+  })
+  held.close()
+  await act(async () => { await Promise.all(pending) })
+  expect(fetch).toHaveBeenCalledTimes(1)
+  expect(result.current.turns.map((t) => t.question)).toEqual(['첫 질문'])
+  await act(() => result.current.send('다음 질문', 'pro', 'full'))
+  expect(fetch).toHaveBeenCalledTimes(2)
+})
+
+test('unmount aborts the pending stream', async () => {
+  const held = sseResponse([], { hold: true })
+  const fetch = vi.fn((_url: string, init: RequestInit) => {
+    init.signal!.addEventListener('abort', () => held.fail(new DOMException('aborted', 'AbortError')))
+    return Promise.resolve(held.res)
+  })
+  vi.stubGlobal('fetch', fetch)
+  const { result, unmount } = renderHook(() => useChatStream({ onUnauthorized: vi.fn() }))
+  let pending: Promise<void>
+  act(() => { pending = result.current.send('질문', 'pro', 'full') })
+  unmount()
+  const aborted = fetch.mock.calls[0][1].signal!.aborted
+  if (!aborted) held.close()
+  await pending!
+  expect(aborted).toBe(true)
+})
+
+test('a malformed event cancels the response body', async () => {
+  const cancel = vi.fn()
+  const body = new ReadableStream({
+    start(controller) { controller.enqueue(enc.encode('event: answer\ndata: invalid\n\n')) },
+    cancel,
+  })
+  vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(body)))
+  const { result } = renderHook(() => useChatStream({ onUnauthorized: vi.fn() }))
+  await act(() => result.current.send('질문', 'pro', 'full'))
+  expect(cancel).toHaveBeenCalledOnce()
+  expect(result.current.turns[0]).toMatchObject({ done: true, error: expect.any(String) })
+})
+
 test('401 calls onUnauthorized, 400 shows the server message', async () => {
   const onUnauthorized = vi.fn()
   const fetch = vi

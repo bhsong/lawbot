@@ -77,7 +77,7 @@ def main(argv=None):
         f'[diff_answers] 같음 {len(r["same"])}/{n} · 다름 {len(r["diff"])} · '
         f'한쪽에만 있음 {len(r["only_base"]) + len(r["only_new"])}'
     )
-    ok = not (r['diff'] or r['only_base'] or r['only_new'])
+    ok = n > 0 and not (r['diff'] or r['only_base'] or r['only_new'])
     sys.exit(0 if ok else 1)
 
 

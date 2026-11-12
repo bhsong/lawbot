@@ -102,6 +102,21 @@ def test_builds_embedding_cache_with_model_server(folder, env, tmp_path, model_s
     assert [c[2] for c in calls] == [416, 1]  # 전체 + 확인용
 
 
+def test_reindex_loads_env_file_and_keeps_exported_values(folder, env, tmp_path, model_server):
+    from conftest import TEST_TOKEN
+
+    source = tmp_path / 'reindex.env'
+    source.write_text(f'LAWBOT_MODEL_TOKEN={TEST_TOKEN}\nLAWBOT_EMBED_CACHE=0\n', encoding='utf-8')
+    env.setenv('LAWBOT_ENV_FILE', str(source))
+    env.delenv('LAWBOT_MODEL_TOKEN')
+    env.setenv('LAWBOT_EMBED_CACHE', '1')
+    env.setattr(embed_cache, 'CACHE_DIR', tmp_path / 'cache')
+    env.setattr(reindex, 'ModelServerClient', model_server)
+    assert reindex.main([str(folder / V4_ARTICLES.name), *ARGS[:-1]]) == 0
+    assert len(list((tmp_path / 'cache').glob('*.npz'))) == 1
+    env.delenv('LAWBOT_MODEL_TOKEN', raising=False)
+
+
 def test_decree_cache_uses_the_decree_max_seq_setting(env, tmp_path, model_server):
     """하위법령 캐시는 웹앱과 같은 max_seq로 (LAWBOT_DECREE_MAX_SEQ). 상수 3072로 만들면 웹앱이 캐시를 못 쓰고 다시 임베딩한다
     (2026-11-04 4단계 A에서 발견)"""

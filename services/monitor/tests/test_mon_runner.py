@@ -1,12 +1,14 @@
 """실행기(실패 격리·요약·collector_failing)와 CLI·replay."""
 
 import json
+import subprocess
 
 import pytest
 
 from law_monitor import cli
 from law_monitor.app import AlreadyBootstrapped, BootstrapRequired
 from law_monitor.collectors.base import CollectResult
+from law_monitor.gitrepo import GitRepo
 from mon_helpers import LAW_PATH, SourceRepo, law_md, make_config, make_monitor
 
 
@@ -74,6 +76,29 @@ def test_collect_requires_bootstrap_and_bootstrap_once(tmp_path, legalize):
     with pytest.raises(AlreadyBootstrapped):
         mon.bootstrap(only='legalize_law')
     mon.bootstrap(only='legalize_law', force=True)
+
+
+def test_git_timeout_leaves_cursor_available_for_next_run(tmp_path, legalize, monkeypatch):
+    mon = make_monitor(tmp_path, make_config(legalize, laws=[{'name': '근로기준법', 'category': 1}]))
+    mon.bootstrap(only='legalize_law')
+    before = legalize.head()
+    after = legalize.commit({LAW_PATH: law_md('근로기준법', {'제1조 (목적)': '개정'})}, '개정')
+    run = subprocess.run
+
+    def time_out_on_fetch(args, **kwargs):
+        if args[:2] == ['git', 'fetch']:
+            assert kwargs.get('timeout', 0) > 0
+            raise subprocess.TimeoutExpired(args, kwargs['timeout'])
+        return run(args, **kwargs)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(subprocess, 'run', time_out_on_fetch)
+        result = mon.collect(only='legalize_law')
+    assert '시간 초과' in result.failed['legalize_law']
+    assert mon.state.cursor('legalize-kr') == before
+    assert GitRepo(mon.paths.repos / 'legalize-kr').head() == before
+    assert len(mon.collect(only='legalize_law').events) == 1
+    assert mon.state.cursor('legalize-kr') == after
 
 
 def test_replay_writes_separately_without_state(tmp_path, legalize):

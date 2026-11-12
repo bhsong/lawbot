@@ -5,6 +5,7 @@
 # 모델 연산은 GPU 스레드 하나가 맡는다 (scheduler.py). chat은 LAWBOT_MAX_CONCURRENT개까지 동시에 생성하고,
 # embeddings·rerank는 생성 스텝 사이에 실행한다. 스트림 중 클라이언트가 끊으면 다음 스텝에서 그 요청을 뺀다
 # 확장 필드: chat_template_kwargs.enable_thinking, 응답의 timings / embeddings의 input_type·max_seq_length / rerank의 instruction
+import asyncio
 import base64
 import hmac
 import json
@@ -13,9 +14,10 @@ import time
 import uuid
 
 import numpy as np
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, Request, Response
 from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import ValidationError
+from starlette.requests import ClientDisconnect
 
 from lawbot_common import api as contract
 from lawbot_common.logs import logger
@@ -68,9 +70,12 @@ def validation_message(e):
 
 
 async def parse(request, model):
-    body = await request.body()
-    if len(body) > request.app.state.max_body:
-        raise ApiError(413, f'요청 본문이 {request.app.state.max_body}바이트를 넘습니다')
+    limit = request.app.state.max_body
+    body = bytearray()
+    async for chunk in request.stream():
+        if len(body) + len(chunk) > limit:
+            raise ApiError(413, f'요청 본문이 {limit}바이트를 넘습니다')
+        body.extend(chunk)
     try:
         return model.model_validate_json(body or b'null')
     except ValidationError as e:
@@ -84,11 +89,35 @@ def ready(request):
     return reg
 
 
+async def before_disconnect(receive, work):
+    """Wait for the operation while listening for the client to disconnect."""
+
+    async def watch():
+        while (await receive())['type'] != 'http.disconnect':
+            continue
+
+    operation = asyncio.create_task(work)
+    disconnect = asyncio.create_task(watch())
+    try:
+        done, _ = await asyncio.wait((operation, disconnect), return_when=asyncio.FIRST_COMPLETED)
+        if disconnect in done:
+            disconnect.result()
+            raise ClientDisconnect
+        return operation.result()
+    finally:
+        operation.cancel()
+        disconnect.cancel()
+        await asyncio.gather(operation, disconnect, return_exceptions=True)
+
+
 async def run_call(request, fn):
     """embeddings·rerank처럼 한 번에 끝나는 연산 (GPU 스레드에서 생성 스텝 사이에 실행)"""
-    t = request.app.state.scheduler.call(fn)
     try:
-        kind, value = await t.next()
+        t = request.app.state.scheduler.call(fn)
+    except QueueFull as e:
+        raise ApiError(503, str(e), contract.SERVER_BUSY) from e
+    try:
+        kind, value = await before_disconnect(request.receive, t.next())
         if kind == 'error':  # 리랭커 점수 NaN 등 모델 연산 오류: 예외 이름을 code로 500
             if isinstance(value, (ApiError, UnknownModel)):
                 raise value
@@ -97,6 +126,8 @@ async def run_call(request, fn):
             ) from value
         await t.next()  # ('end', None)
         return value
+    except QueueFull as e:
+        raise ApiError(503, str(e), contract.SERVER_BUSY) from e
     finally:
         t.cancel()
 
@@ -128,6 +159,22 @@ def sse(obj):
     return f'data: {json.dumps(obj, ensure_ascii=False)}\n\n'
 
 
+class ChatStream(StreamingResponse):
+    """Cancel the GPU ticket on stream completion or client disconnect."""
+
+    def __init__(self, content, job):
+        super().__init__(content, media_type='text/event-stream', headers={'Cache-Control': 'no-cache'})
+        self.job = job
+
+    async def __call__(self, scope, receive, send):
+        try:
+            await before_disconnect(receive, self.stream_response(send))
+        except ClientDisconnect, OSError:
+            return
+        finally:
+            self.job.cancel()
+
+
 async def chat_completions(request: Request):
     req = await parse(request, ChatRequest)
     reg = ready(request)
@@ -147,30 +194,32 @@ async def chat_completions(request: Request):
         )  # 처음 쓰는 모델은 GPU 스레드가 불러옴 (LRU 교체)
     except QueueFull as e:
         raise ApiError(503, str(e), contract.SERVER_BUSY) from None
+    parts, last = [], None
+
+    async def collect():
+        kind, value = await job.next()
+        if not req.stream:
+            nonlocal last
+            while kind == 'item':
+                parts.append(value.text)
+                last = value
+                kind, value = await job.next()
+        return kind, value
+
+    streaming = False
     try:
-        kind, value = await job.next()  # 첫 토큰 전 오류(모델 불러오기 실패 등)는 HTTP 상태로 알린다
-    except BaseException:
-        job.cancel()
-        raise
+        kind, value = await before_disconnect(request.receive, collect())
+        streaming = req.stream and kind != 'error'
+    finally:
+        if not streaming:
+            job.cancel()
     if kind == 'error':
-        job.cancel()
         status, body = exception_body(value)
         return JSONResponse(body, status_code=status)
     cid, created = f'chatcmpl-{uuid.uuid4().hex[:24]}', int(time.time())
     base = {'id': cid, 'created': created, 'model': req.model, 'system_fingerprint': None}
 
     if not req.stream:
-        parts, last = [], None
-        try:
-            while kind == 'item':
-                parts.append(value.text)
-                last = value
-                kind, value = await job.next()
-        finally:
-            job.cancel()
-        if kind == 'error':
-            status, body = exception_body(value)
-            return JSONResponse(body, status_code=status)
         return JSONResponse(
             base
             | {
@@ -196,25 +245,22 @@ async def chat_completions(request: Request):
 
     async def events():
         k, v, last, first = kind, value, None, True
-        try:
-            while k == 'item':
-                delta = {'role': 'assistant', 'content': v.text} if first else {'content': v.text}
-                first = False
-                yield sse(chunk(delta))
-                last = v
-                k, v = await job.next()
-            if k == 'error':  # 생성 중 오류: OpenAI SDK는 error 이벤트를 예외로 올림
-                yield sse(exception_body(v)[1])
-                log.warning(f'생성 중 오류 {req.model}: {type(v).__name__}')
-                return
-            yield sse(chunk({'role': 'assistant'} if first else {}, finish_reason(last), timings=timings_of(last)))
-            if include_usage:
-                yield sse(base | {'object': 'chat.completion.chunk', 'choices': [], 'usage': usage_of(last)})
-            yield 'data: [DONE]\n\n'
-        finally:
-            job.cancel()  # 끊긴 경우: 다음 스텝에서 생성을 멈추고 자리를 비운다
+        while k == 'item':
+            delta = {'role': 'assistant', 'content': v.text} if first else {'content': v.text}
+            first = False
+            yield sse(chunk(delta))
+            last = v
+            k, v = await job.next()
+        if k == 'error':  # 생성 중 오류: OpenAI SDK는 error 이벤트를 예외로 올림
+            yield sse(exception_body(v)[1])
+            log.warning(f'생성 중 오류 {req.model}: {type(v).__name__}')
+            return
+        yield sse(chunk({'role': 'assistant'} if first else {}, finish_reason(last), timings=timings_of(last)))
+        if include_usage:
+            yield sse(base | {'object': 'chat.completion.chunk', 'choices': [], 'usage': usage_of(last)})
+        yield 'data: [DONE]\n\n'
 
-    return StreamingResponse(events(), media_type='text/event-stream', headers={'Cache-Control': 'no-cache'})
+    return ChatStream(events(), job)
 
 
 # ---- embeddings ----
@@ -330,6 +376,10 @@ def create_app(token, registry=None, max_body=MAX_BODY, max_concurrent=1, max_qu
     async def known_error(request, e):
         status, body = exception_body(e)
         return JSONResponse(body, status_code=status)
+
+    @app.exception_handler(ClientDisconnect)
+    async def disconnected(request, e):
+        return Response(status_code=499)
 
     @app.get(contract.HEALTH_PATH)
     async def health(request: Request, runtime: bool = False):

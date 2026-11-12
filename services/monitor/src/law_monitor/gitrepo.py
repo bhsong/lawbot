@@ -8,12 +8,18 @@ import os
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
+from tempfile import TemporaryDirectory
 
 ZERO = '0' * 40
+GIT_TIMEOUT = 120
 
 
 class GitError(RuntimeError):
     pass
+
+
+class GitTimeout(GitError):
+    """A Git operation exceeded its time limit."""
 
 
 @dataclass(frozen=True)
@@ -39,7 +45,12 @@ class GitRepo:
 
     def run(self, *args: str, cwd: Path | None = None) -> str:
         env = {**os.environ, 'GIT_TERMINAL_PROMPT': '0', 'LC_ALL': 'C'}
-        out = subprocess.run(['git', *args], cwd=cwd or self.path, env=env, capture_output=True, check=False)
+        try:
+            out = subprocess.run(
+                ['git', *args], cwd=cwd or self.path, env=env, capture_output=True, check=False, timeout=GIT_TIMEOUT
+            )
+        except subprocess.TimeoutExpired:
+            raise GitTimeout(f'git {args[0]} 시간 초과 ({GIT_TIMEOUT}초)') from None
         if out.returncode != 0:
             raise GitError(
                 f'git {" ".join(args[:3])} 실패 ({out.returncode}): {out.stderr.decode(errors="replace").strip()}'
@@ -50,8 +61,11 @@ class GitRepo:
         """없으면 부분 클론, 있으면 fetch."""
         if not (self.path / 'HEAD').exists():
             self.path.parent.mkdir(parents=True, exist_ok=True)
-            self.run('clone', '--bare', '--filter=blob:none', '--quiet', url, str(self.path), cwd=self.path.parent)
-            self.run('config', 'remote.origin.fetch', '+refs/heads/*:refs/heads/*')
+            with TemporaryDirectory(prefix=f'.{self.path.name}-', dir=self.path.parent) as staging:
+                clone = Path(staging) / 'repo'
+                self.run('clone', '--bare', '--filter=blob:none', '--quiet', url, str(clone), cwd=self.path.parent)
+                self.run('config', 'remote.origin.fetch', '+refs/heads/*:refs/heads/*', cwd=clone)
+                clone.rename(self.path)
             return
         self.run('fetch', '--prune', '--quiet', 'origin')
 
@@ -65,6 +79,8 @@ class GitRepo:
         try:
             self.run('cat-file', '-e', f'{sha}^{{commit}}')
             return True
+        except GitTimeout:
+            raise
         except GitError:
             return False
 
@@ -74,6 +90,8 @@ class GitRepo:
         try:
             self.run('merge-base', '--is-ancestor', older, newer)
             return True
+        except GitTimeout:
+            raise
         except GitError:
             return False
 

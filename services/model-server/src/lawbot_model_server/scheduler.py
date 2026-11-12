@@ -1,16 +1,19 @@
 # lawbot_model_server/scheduler.py  →  GPU 스레드 하나가 모든 모델 연산을 맡는다 (MLX·MPS를 여러 스레드에서 동시에 돌리지 않음)
 # HTTP 핸들러는 call()·chat()으로 작업을 넣고 Ticket(asyncio 큐)으로 결과를 받는다: ('item', x)* → ('end', None) / ('error', e)
-# 루프 한 바퀴: 수신함 비우기 → embeddings·rerank 같은 한 번짜리 작업 실행 → 자리가 있으면 chat 요청을 엔진에 넣기
+# 루프 한 바퀴: 수신함 비우기 → embeddings·rerank 한 건 실행 → 자리가 있으면 chat 요청을 엔진에 넣기
 #               → 생성 한 스텝 → 끊긴 요청 빼기
 # 동시 생성 상한은 max_concurrent. 다른 chat 모델 요청이 맨 앞에 오면 진행 중 생성이 끝난 뒤 모델을 바꾼다 (수신 순서 유지)
 # 아직 생성을 시작하지 않은 chat 요청이 max_queued개면 새 요청은 바로 QueueFull (api.py가 503 server_busy)
 import asyncio
 import queue
 import threading
+import time
 from collections import deque
+from concurrent.futures import Future
 
 MAX_CONCURRENT_LIMIT = 16
 MAX_QUEUED_DEFAULT = 32
+CALL_QUEUE_TIMEOUT = 30.0
 
 
 class ModelLoadError(RuntimeError):
@@ -18,7 +21,7 @@ class ModelLoadError(RuntimeError):
 
 
 class QueueFull(RuntimeError):
-    """대기 중인 chat 요청이 상한(max_queued)에 닿음"""
+    """A request could not enter or start within the queue limits."""
 
 
 class Ticket:
@@ -41,6 +44,42 @@ class Ticket:
         self.cancelled.set()
 
 
+class CallTicket(Ticket):
+    """Bound the wait to start a single GPU operation without timing out its execution."""
+
+    def __init__(self):
+        super().__init__()
+        self.deadline = time.monotonic() + CALL_QUEUE_TIMEOUT
+        self.started: Future[bool] = Future()
+        self.confirmed = False
+
+    def begin(self) -> bool:
+        if not self.started.set_running_or_notify_cancel():
+            return False
+        allowed = time.monotonic() < self.deadline and not self.cancelled.is_set()
+        self.started.set_result(allowed)
+        return allowed
+
+    async def next(self):
+        if not self.confirmed:
+            started = asyncio.wrap_future(self.started)
+            try:
+                async with asyncio.timeout(self.deadline - time.monotonic()):
+                    allowed = await asyncio.shield(started)
+            except TimeoutError:
+                if self.started.cancel():
+                    raise QueueFull('모델 연산 대기 시간이 지났습니다. 잠시 뒤 다시 보내세요') from None
+                allowed = await started
+            if not allowed:
+                raise QueueFull('모델 연산 대기 시간이 지났습니다. 잠시 뒤 다시 보내세요')
+            self.confirmed = True
+        return await super().next()
+
+    def cancel(self):
+        super().cancel()
+        self.started.cancel()
+
+
 def default_engine(model, max_concurrent):
     """모델이 만드는 생성 엔진 (ChatModel은 BatchEngine, 테스트의 가짜 모델은 FakeEngine)"""
     return model.engine(max_concurrent)
@@ -53,6 +92,7 @@ class Scheduler:
         self.registry, self.max_concurrent, self.make_engine = registry, max_concurrent, make_engine
         self.max_queued = max_queued
         self._queued, self.queue_lock = 0, threading.Lock()  # 생성을 시작하지 않은 chat 요청 수 (두 스레드가 만짐)
+        self._calls_queued = 0
         self.inbox = queue.Queue()
         self.calls, self.waiting = deque(), deque()  # GPU 스레드만 만짐
         self.engine, self.engine_model = None, None
@@ -62,7 +102,11 @@ class Scheduler:
     # ---- 이벤트 루프 쪽 ----
     def call(self, fn):
         """fn()을 GPU 스레드에서 실행. 결과는 ('item', 값) → ('end', None)"""
-        t = Ticket()
+        t = CallTicket()
+        with self.queue_lock:
+            if self._calls_queued >= self.max_queued:
+                raise QueueFull(f'대기 중인 모델 연산이 {self.max_queued}개라 받지 않습니다. 잠시 뒤 다시 보내세요')
+            self._calls_queued += 1
         self._submit(('call', t, fn))
         return t
 
@@ -111,18 +155,21 @@ class Scheduler:
             (self.calls if kind == 'call' else self.waiting).append((t, payload))
             block = False
 
-    def _run_calls(self):
+    def _run_call(self):
         while self.calls:
             t, fn = self.calls.popleft()
-            if t.cancelled.is_set():
+            with self.queue_lock:
+                self._calls_queued -= 1
+            if not t.begin():
                 continue
             try:
                 value = fn()
             except Exception as e:
                 t.put('error', e)
-                continue
-            t.put('item', value)
-            t.put('end')
+            else:
+                t.put('item', value)
+                t.put('end')
+            return
 
     def _close_engine(self):
         """닫다가 오류가 나도 엔진은 버린다 (GPU 스레드가 죽으면 모든 요청이 영원히 기다림)"""
@@ -190,7 +237,7 @@ class Scheduler:
         while True:
             try:
                 self._receive()
-                self._run_calls()
+                self._run_call()
                 self._drop_cancelled()
                 self._admit()
                 self._step()

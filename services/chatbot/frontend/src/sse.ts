@@ -14,7 +14,7 @@ export function sseParser(onEvent: (event: string, data: unknown) => void) {
 
   return {
     feed(chunk: string) {
-      buf += chunk.replace(/\r\n/g, '\n')
+      buf = (buf + chunk).replace(/\r\n/g, '\n')
       let end: number
       while ((end = buf.indexOf('\n\n')) >= 0) {
         block(buf.slice(0, end))

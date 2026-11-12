@@ -1,6 +1,7 @@
 # tests/test_eval_v4.py  →  v4 재평가 스크립트 (eval_v4): 인용 판정·문항 구성·단계별 실행·요약
 # 실제 모델 대신 가짜 검색기·리랭커·sLLM으로 모든 단계를 끝까지 돌린다 (data/는 읽기만)
 import json
+import subprocess
 import types
 from unittest.mock import Mock
 
@@ -471,6 +472,53 @@ def test_compare_warns(tmp_path, env, capsys):
     with pytest.raises(SystemExit) as e:
         ev.main()
     assert e.value.code == 1
+
+
+@pytest.mark.parametrize('problem', ['missing', 'nan', 'zero', 'duplicate'])
+def test_strict_compare_rejects_incomplete_metrics(tmp_path, env, problem):
+    env.setattr(ev, 'OUT', tmp_path)
+    base = tmp_path / 'summary_a.csv'
+    write_summary(base, 0.90)
+    data = pd.read_csv(base, **E)
+    match problem:
+        case 'missing':
+            data = data.iloc[1:]
+        case 'nan':
+            data.loc[0, 'value'] = float('nan')
+        case 'zero':
+            data.loc[0, 'n'] = 0
+        case 'duplicate':
+            data = pd.concat([data, data.iloc[:1]])
+    data.to_csv(tmp_path / 'summary_b.csv', index=False, **E)
+    env.setattr('sys.argv', ['lawbot-eval-v4', 'compare', '--base', 'a', '--new', 'b', '--strict'])
+    with pytest.raises(SystemExit) as exc:
+        ev.main()
+    assert exc.value.code == 1 or '중복' in str(exc.value)
+
+
+def test_compare_warns_when_no_main_metric_is_comparable(tmp_path, env):
+    env.setattr(ev, 'OUT', tmp_path)
+    for tag in ('a', 'b'):
+        row = {'section': '검색', 'group': '전체', 'metric': '임베딩 Recall@1', 'value': 0.8, 'n': 10}
+        pd.DataFrame([row]).to_csv(tmp_path / f'summary_{tag}.csv', index=False, **E)
+    assert ev.compare('a', 'b')
+
+
+def test_git_state_detects_changes_in_monorepo_source(tmp_path, env):
+    def git(*args):
+        return subprocess.run(['git', *args], cwd=tmp_path, check=True, capture_output=True, text=True).stdout.strip()
+
+    git('init', '-q')
+    source = tmp_path / 'services' / 'example.py'
+    source.parent.mkdir()
+    source.write_text('value = 1\n', encoding='utf-8')
+    git('add', '.')
+    git('-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid', 'commit', '-qm', 'initial')
+    env.setattr(ev, 'ROOT', tmp_path)
+    head = git('rev-parse', 'HEAD')
+    assert ev.git_state() == (head, False)
+    source.write_text('value = 2\n', encoding='utf-8')
+    assert ev.git_state() == (head, True)
 
 
 def test_resume_concurrent_keeps_order_and_resumes(tmp_path, monkeypatch):

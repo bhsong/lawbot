@@ -1,18 +1,20 @@
 # services/model-server/tests/test_ms_api.py  →  OpenAI 호환 API (가짜 모델 + FastAPI TestClient)
 # 형식은 OpenAI 공식 SDK로도 확인한다 (클라우드와 같은 코드로 쓸 수 있어야 함)
+import asyncio
 import base64
 import json
 import subprocess
 import sys
 import threading
 import time
+from types import SimpleNamespace
 
 import numpy as np
 import openai
 import pytest
 from fastapi.testclient import TestClient
 
-from lawbot_model_server import api
+from lawbot_model_server import api, scheduler
 
 from .ms_fakes import AUTH, TOKEN, Compute, FakeChat, FakeReranker, registry
 
@@ -73,6 +75,114 @@ def test_body_too_large():
     with TestClient(api.create_app(TOKEN, registry(), max_body=100)) as c:
         r = c.post('/v1/embeddings', headers=AUTH, json={'model': 'emb', 'input': 'x' * 200})
         assert r.status_code == 413
+
+
+async def post_asgi(app, path, receive):
+    sent = []
+
+    async def send(message):
+        sent.append(message)
+
+    scope = {
+        'type': 'http',
+        'asgi': {'spec_version': '2.4'},
+        'method': 'POST',
+        'path': path,
+        'query_string': b'',
+        'headers': [(k.lower().encode(), v.encode()) for k, v in AUTH.items()],
+    }
+    await asyncio.wait_for(app(scope, receive, send), 2)
+    return sent
+
+
+def test_body_limit_stops_reading_chunked_input():
+    app = api.create_app(TOKEN, registry(), max_body=100)
+    consumed = []
+
+    async def receive():
+        consumed.append(1)
+        return {'type': 'http.request', 'body': b' ' * 60, 'more_body': len(consumed) < 3}
+
+    messages = asyncio.run(post_asgi(app, '/v1/embeddings', receive))
+    assert messages[0]['status'] == 413 and len(consumed) == 2
+    assert app.state.scheduler.thread is None
+
+
+def test_body_limit_accepts_exact_size(reg):
+    body = b'{"model":"emb","input":"x"}'.ljust(100)
+    with TestClient(api.create_app(TOKEN, reg, max_body=len(body))) as client:
+        assert client.post('/v1/embeddings', headers=AUTH, content=body).status_code == 200
+
+
+@pytest.mark.parametrize(('stream', 'tokens'), [(False, 0), (False, 1), (True, 0), (True, 1)])
+def test_disconnect_cancels_chat_while_waiting_for_tokens(reg, stream, tokens):
+    async def exercise():
+        waiting = asyncio.Event()
+        submitted = False
+        cancelled = False
+
+        class Job:
+            async def next(self):
+                nonlocal tokens
+                if tokens:
+                    tokens -= 1
+                    return 'item', SimpleNamespace(text='부분')
+                waiting.set()
+                await asyncio.Future()
+
+            def cancel(self):
+                nonlocal cancelled
+                cancelled = True
+
+        app = api.create_app(TOKEN, reg)
+        app.state.scheduler = SimpleNamespace(chat=lambda *_: Job())
+
+        async def receive():
+            nonlocal submitted
+            if not submitted:
+                submitted = True
+                body = json.dumps({'model': 'chat-a', 'messages': MESSAGES, 'stream': stream}).encode()
+                return {'type': 'http.request', 'body': body, 'more_body': False}
+            await waiting.wait()
+            return {'type': 'http.disconnect'}
+
+        await post_asgi(app, '/v1/chat/completions', receive)
+        assert cancelled
+
+    asyncio.run(exercise())
+
+
+def test_single_call_queue_rejects_and_expires_before_computation(ms_env):
+    ms_env.setattr(scheduler, 'CALL_QUEUE_TIMEOUT', 0.2, raising=False)
+    s = scheduler.Scheduler(registry(), max_queued=1)
+    started, release = threading.Event(), threading.Event()
+    invoked = []
+
+    def block():
+        started.set()
+        assert release.wait(3)
+        return 'first'
+
+    async def exercise():
+        first = s.call(block)
+        try:
+            assert await asyncio.to_thread(started.wait, 2)
+            second = s.call(lambda: invoked.append('expired'))
+            with pytest.raises(scheduler.QueueFull):
+                s.call(lambda: invoked.append('overflow'))
+            with pytest.raises(scheduler.QueueFull):
+                await second.next()
+        finally:
+            release.set()
+        assert await first.next() == ('item', 'first')
+        deadline = time.monotonic() + 2
+        while s.pending():
+            assert time.monotonic() < deadline
+            await asyncio.sleep(0.005)
+        assert await s.call(lambda: 'next').next() == ('item', 'next')
+
+    asyncio.run(asyncio.wait_for(exercise(), 5))
+    assert not invoked
 
 
 def test_no_docs_endpoints(client):
@@ -239,6 +349,22 @@ def test_queue_full_is_503_server_busy(client):
         )
         err = r.json()['error']
         assert r.status_code == 503 and err['type'] == 'server_busy' and '32개' in err['message']
+
+
+@pytest.mark.parametrize(
+    ('path', 'body'),
+    [
+        ('/v1/embeddings', {'model': 'emb', 'input': 'x'}),
+        ('/v1/rerank', {'model': 'rr', 'query': 'x', 'documents': ['y']}),
+    ],
+)
+def test_single_call_queue_full_is_503_server_busy(client, path, body):
+    def full(_fn):
+        raise scheduler.QueueFull('대기열이 가득 찼습니다')
+
+    client.app.state.scheduler.call = full
+    response = client.post(path, headers=AUTH, json=body)
+    assert response.status_code == 503 and response.json()['error']['type'] == 'server_busy'
 
 
 def test_create_app_passes_queue_limit(reg):

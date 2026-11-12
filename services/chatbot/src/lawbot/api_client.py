@@ -140,7 +140,7 @@ class ModelServerClient:
         res = self._parsed(
             api.EmbeddingResponse, 'POST', api.EMBEDDINGS_PATH, req.model_dump(exclude_unset=True), timeout
         )
-        data = sorted(res.data, key=lambda d: d.index)
+        data = _ordered_results(res.data, len(req.input), api.EMBEDDINGS_PATH)
         if not all(isinstance(d.embedding, str) for d in data):
             raise ModelServerError('모델 서버 응답 형식이 아닙니다 (/v1/embeddings: base64가 아님)')
         return np.stack([np.frombuffer(base64.b64decode(str(d.embedding)), dtype='<f4') for d in data]).astype(
@@ -153,12 +153,15 @@ class ModelServerClient:
             model=model, query=query, documents=list(documents), **({'instruction': instruction} if instruction else {})
         )
         res = self._parsed(api.RerankResponse, 'POST', api.RERANK_PATH, req.model_dump(exclude_unset=True), timeout)
-        scores: list[float | None] = [None] * len(documents)
-        for item in res.results:
-            scores[item.index] = item.relevance_score
-        if any(s is None for s in scores):
-            raise ModelServerError('모델 서버 rerank 응답에 빠진 문서가 있습니다')
-        return scores
+        return [item.relevance_score for item in _ordered_results(res.results, len(req.documents), api.RERANK_PATH)]
+
+
+def _ordered_results[T: (api.EmbeddingItem, api.RerankResult)](items: list[T], count: int, path: str) -> list[T]:
+    """Return response items in input order, with exactly one item per input."""
+    ordered = sorted(items, key=lambda item: item.index)
+    if len(ordered) != count or any(item.index != index for index, item in enumerate(ordered)):
+        raise ModelServerError(f'모델 서버 응답 형식이 아닙니다 ({path}: index)')
+    return ordered
 
 
 class Embedder:

@@ -134,11 +134,22 @@ def test_rerank_maps_scores_to_input_order():
 
     assert mock_client(handler).rerank('rr', 'q', ['a', 'b', 'c'], 'TASK') == [0.5, 0.1, 0.9]
 
-    def partial(req):
-        return httpx.Response(200, json={'results': [{'index': 0, 'relevance_score': 0.5}]})
 
-    with pytest.raises(ac.ModelServerError, match='빠진 문서'):
-        mock_client(partial).rerank('rr', 'q', ['a', 'b'])
+@pytest.mark.parametrize('indices', [[0, -1], [0, 2], [0, 0], [0], [0, 1, 1]])
+@pytest.mark.parametrize('endpoint', ['embed', 'rerank'])
+def test_model_response_indices_must_match_inputs(endpoint, indices):
+    vector = base64.b64encode(np.zeros(4, '<f4').tobytes()).decode()
+    body = (
+        {'data': [{'index': i, 'embedding': vector} for i in indices]}
+        if endpoint == 'embed'
+        else {'results': [{'index': i, 'relevance_score': 0.5} for i in indices]}
+    )
+    client = mock_client(lambda _: httpx.Response(200, json=body))
+    with pytest.raises(ac.ModelServerError):
+        if endpoint == 'embed':
+            client.embed('emb', ['a', 'b'])
+        else:
+            client.rerank('rr', 'q', ['a', 'b'])
 
 
 def test_request_bodies_pass_server_validation():

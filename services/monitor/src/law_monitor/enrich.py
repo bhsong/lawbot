@@ -129,7 +129,7 @@ class LawGoEnricher:
         )
         pctx = parent['context']
         event = {
-            'event_id': make_event_id(source, f'{owner_id}|{item}', version),
+            'event_id': make_event_id(source, f'{owner_id}|{item}', f'{parent["event_id"]}:{version}'),
             'detected_at': parent['detected_at'],
             'category': cats[0] if cats else None,
             'categories': cats,

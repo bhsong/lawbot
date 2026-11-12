@@ -721,6 +721,7 @@ def print_failures(f):
 # ---- 두 실행 비교 ----
 # 경고 기준: 기준 실행보다 이만큼 나빠지면 경고
 TOL_RECALL, TOL_SCORE, TOL_CITE, TOL_FALSE_REFUSAL = 0.005, 0.02, 0.02, 0.01
+GIT_INPUT_PATHS = ('services', 'packages', 'tools', 'data', 'pyproject.toml', 'uv.lock')
 
 
 def compare_rules():
@@ -743,8 +744,13 @@ def compare(base, new, samples=5):
     for p in paths:
         if not p.exists():
             raise SystemExit(f'{p.name}이 없습니다: uv run lawbot-eval-v4 summary --tag {p.stem[8:]}')
-    b, n = (pd.read_csv(p, **E) for p in paths)
-    m = b.merge(n, on=['section', 'group', 'metric'], how='outer', suffixes=('_base', '_new'), sort=False)
+    keys = ['section', 'group', 'metric']
+    base_summary, new_summary = (pd.read_csv(p, **E) for p in paths)
+    for path, summary in zip(paths, (base_summary, new_summary), strict=True):
+        if summary.duplicated(keys).any():
+            raise SystemExit(f'{path.name}: 지표 키가 중복됩니다')
+        summary[['value', 'n']] = summary[['value', 'n']].apply(pd.to_numeric, errors='coerce')
+    m = base_summary.merge(new_summary, on=keys, how='outer', suffixes=('_base', '_new'), indicator=True)
     m['diff'] = (m['value_new'] - m['value_base']).round(4)
     pd.set_option('display.width', 200, 'display.max_rows', 300)
     print(
@@ -753,17 +759,28 @@ def compare(base, new, samples=5):
         .to_string(index=False)
     )
     warn = []
+    comparable = 0
     for section, group, metric, sign, limit in compare_rules():
         row = m[(m['section'] == section) & (m['group'] == group) & (m['metric'] == metric)]
-        if not len(row) or row[['value_base', 'value_new']].isna().any(axis=None):
+        if row.empty or row.iloc[0]['_merge'] == 'right_only':
             continue
         r = row.iloc[0]
+        if r['_merge'] == 'left_only':
+            warn.append(f'{group} {metric}: 비교 결과에 지표가 없습니다')
+            continue
+        counts = (r['n_base'], r['n_new'])
+        if not np.isfinite([r['value_base'], r['value_new'], *counts]).all() or any(n <= 0 or n % 1 for n in counts):
+            warn.append(f'{group} {metric}: 지표 값이나 문항 수가 유효하지 않습니다')
+            continue
+        comparable += 1
         if sign * (r['value_new'] - r['value_base']) < -limit:
             warn.append(f'{group} {metric}: {r["value_base"]:.4f} → {r["value_new"]:.4f} (기준 {limit})')
         if r['n_base'] != r['n_new']:
             warn.append(
                 f'{group} {metric}: 문항 수가 다름 ({int(r["n_base"])} / {int(r["n_new"])}). 같은 분할·표본인지 확인'
             )
+    if not comparable and not warn:
+        warn.append('비교할 주요 지표가 없습니다')
     fails = [OUT / f'fail_{t}.csv' for t in (base, new)]
     if all(p.exists() for p in fails):
         fb, fn = (pd.read_csv(p, keep_default_na=False, **E) for p in fails)
@@ -778,14 +795,14 @@ def compare(base, new, samples=5):
 
 # ---- 실행 기록 ----
 def git_state():
-    """(커밋 해시, 작업 트리 변경 여부). git이 없으면 (None, None)"""
+    """Return the commit and whether evaluation inputs differ from it."""
     try:
         head = subprocess.run(
             ['git', 'rev-parse', 'HEAD'], cwd=ROOT, capture_output=True, text=True, check=True
         ).stdout.strip()
         dirty = (
             subprocess.run(
-                ['git', 'status', '--porcelain', '--', 'src', 'data'],
+                ['git', 'status', '--porcelain', '--', *GIT_INPUT_PATHS],
                 cwd=ROOT,
                 capture_output=True,
                 text=True,
@@ -821,6 +838,7 @@ def run_meta(app, model, fmt, split, n, stages):
         'dataset': manifest.summary(manifest.load(app.profile.articles)),
         'commit': head,
         'dirty': dirty,
+        'dirty_paths': GIT_INPUT_PATHS,
         'decree': None
         if getattr(app, 'decree', None) is None
         else {

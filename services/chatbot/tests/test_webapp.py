@@ -356,6 +356,16 @@ def test_check_deploy_v4_placeholders_fail(env, tmp_path):
     assert len(fails) == 3 and all('없' in m for m in fails)  # 조문 CSV·기본 system·Pro system
 
 
+@pytest.mark.parametrize('content', ['', ' \n\t'])
+def test_check_deploy_reports_empty_system_and_continues(env, tmp_path, content):
+    system = tmp_path / 'empty-system.txt'
+    system.write_text(content, encoding='utf-8')
+    env.setenv('LAWBOT_V4_SYSTEM', str(system))
+    out = check_deploy.run()
+    failure = next(i for i, (level, message) in enumerate(out) if level == 'FAIL' and system.name in message)
+    assert any(level == 'OK' and '첫 줄:' in message for level, message in out[failure + 1 :])
+
+
 def test_check_deploy_article_number_format(env, tmp_path):
     csv = tmp_path / 'v4.csv'
     rows = {

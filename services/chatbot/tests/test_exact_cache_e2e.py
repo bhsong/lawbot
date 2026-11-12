@@ -99,9 +99,10 @@ def test_exact_cache_browser_flow(tmp_path, page, request):
         expect(page.get_by_test_id('source-card')).to_have_count(1)
         expect(page.get_by_test_id('source-card')).to_contain_text(ID)
         expect(page.get_by_text('정확 일치 캐시 조회', exact=False)).to_be_visible()
+        read_feedback = e2e.capture_response_body(page, '/api/feedback')
         with page.expect_response(stack.url + '/api/feedback', timeout=e2e.ANSWER_TIMEOUT) as response:
             page.get_by_role('button', name='좋아요').last.click()
-        assert response.value.json() == {'saved': True}
+        assert response.value.ok and json.loads(read_feedback()) == {'saved': True}
         assert hit['response_source'] == 'exact_cache' and set(hit['call_counts'].values()) == {0}
         with connect(corpus) as conn:
             record = json.loads(conn.execute('SELECT record FROM feedbacks').fetchone()[0])

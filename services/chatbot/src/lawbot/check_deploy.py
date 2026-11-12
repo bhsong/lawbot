@@ -159,6 +159,8 @@ def check_system_file(name, f, out):
     if not f.is_file():
         return out.append(('FAIL', f'{name} system 파일 없음: {f} (학습 노트북의 system 원문을 글자 그대로 저장)'))
     text = f.read_text(encoding='utf-8').strip()
+    if not text:
+        return out.append(('FAIL', f'{name} system 파일이 비어 있습니다: {f}'))
     out.append(
         (
             'OK',

@@ -206,6 +206,10 @@ def turn_record(app, question, hits, raw, shown, model_key, fmt, st):
     }
 
 
+class FeedbackWriteError(RuntimeError):
+    """The configured feedback sink could not persist the record."""
+
+
 class Feedback:
     """Keep recent turns in memory and persist feedback to one configured sink."""
 
@@ -216,6 +220,7 @@ class Feedback:
         self.recent = {}  # (turn_id, liked) → 마지막으로 받은 시각
         self.counts = OrderedDict()  # session → 다음 순번
         self.lock = threading.Lock()
+        self.write_lock = threading.Lock()
 
     def remember(self, session, n, record):
         """답변이 끝난 턴을 둔다. 같은 순번(재시도·실행 취소 뒤 새 답)은 새 기록으로 바꾼다"""
@@ -231,28 +236,25 @@ class Feedback:
             while len(self.turns) > MAX_SESSIONS:
                 self.turns.popitem(last=False)
 
-    def duplicate(self, tid, key, now):
-        with self.lock:
+    def save_row(self, tid, record, lab, key, now):
+        """Persist a record once per deduplication window and return it if saved."""
+        with self.write_lock:
             last = self.recent.get((tid, key))
+            row = None
+            if last is None or now - last >= DEDUP_S:
+                row = {
+                    'feedback_id': uuid.uuid4().hex,
+                    'turn_id': tid,
+                    'ts': time.strftime('%Y-%m-%dT%H:%M:%S%z'),
+                    'label': lab[0],
+                    'reason': lab[1],
+                } | record
+                self.write(row)
             self.recent[(tid, key)] = now
             if len(self.recent) > 1000:
                 cutoff = now - DEDUP_S
                 self.recent = {k: t for k, t in self.recent.items() if t >= cutoff}
-            return last is not None and now - last < DEDUP_S
-
-    def save_row(self, tid, record, lab, key, now):
-        """(label, reason) 한 줄 저장. 같은 key가 DEDUP_S 안에 다시 오면 저장하지 않고 None"""
-        if self.duplicate(tid, key, now):
-            return None
-        row = {
-            'feedback_id': uuid.uuid4().hex,
-            'turn_id': tid,
-            'ts': time.strftime('%Y-%m-%dT%H:%M:%S%z'),
-            'label': lab[0],
-            'reason': lab[1],
-        } | record
-        self.write(row)
-        return row
+            return row
 
     def remember_turn(self, session, record):
         """세션의 다음 순번에 끝난 턴을 두고 turn_id를 돌려준다"""
@@ -280,11 +282,15 @@ class Feedback:
         return self.folder / f'feedback_{time.strftime("%Y-%m")}.jsonl'
 
     def write(self, row):
-        """Append to the configured sink, warning on storage failure."""
+        """Append to the configured sink or raise FeedbackWriteError."""
         if self.db is not None:
             from lawbot import feedback_store
 
-            feedback_store.write(self.db, row)
+            try:
+                feedback_store.write(self.db, row)
+            except (OSError, RuntimeError, feedback_store.DatabaseError) as exc:
+                log.warning('경고: 피드백을 쓰지 못했습니다 (%s)', type(exc).__name__)
+                raise FeedbackWriteError from exc
             return
         path = self.path()
         line = (json.dumps(row, ensure_ascii=False, default=str) + '\n').encode('utf-8')
@@ -293,9 +299,20 @@ class Feedback:
             fd = os.open(path, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o600)
             try:
                 fcntl.flock(fd, fcntl.LOCK_EX)
-                while line:
-                    line = line[os.write(fd, line) :]
+                size = os.fstat(fd).st_size
+                try:
+                    remaining = memoryview(line)
+                    while remaining:
+                        written = os.write(fd, remaining)
+                        if written == 0:
+                            raise OSError('Feedback append made no progress')
+                        remaining = remaining[written:]
+                except OSError:
+                    if len(remaining) < len(line):
+                        os.ftruncate(fd, size)
+                    raise
             finally:
                 os.close(fd)  # 닫으면 잠금도 풀린다
-        except OSError as e:
-            log.warning(f'경고: 피드백을 쓰지 못했습니다 ({path}: {type(e).__name__})')
+        except OSError as exc:
+            log.warning('경고: 피드백을 쓰지 못했습니다 (%s)', type(exc).__name__)
+            raise FeedbackWriteError from exc

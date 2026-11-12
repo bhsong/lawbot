@@ -11,7 +11,7 @@ import { countSources } from './SourcesView'
 const PLUGINS = [remarkGfm, remarkCjkFriendly]
 
 export function AnswerMarkdown({ text }: { text: string }) {
-  return <Markdown remarkPlugins={PLUGINS}>{text}</Markdown>
+  return <Markdown remarkPlugins={PLUGINS} components={{ img: ({ alt }) => alt ?? null }}>{text}</Markdown>
 }
 
 type Props = {
@@ -20,12 +20,13 @@ type Props = {
   reasons: Option[] | null // null: feedback is off
   onSelect: () => void
   onRetry: () => void
+  retryDisabled?: boolean
   onFeedback: (fb: Feedback) => void
   onShowSources: () => void
 }
 
 /** One question and its answer. Clicking the answer shows its articles in the side panel. */
-export function TurnView({ turn, selected, reasons, onSelect, onRetry, onFeedback, onShowSources }: Props) {
+export function TurnView({ turn, selected, reasons, onSelect, onRetry, retryDisabled, onFeedback, onShowSources }: Props) {
   const n = countSources(turn.sources)
   return (
     <article className={`turn${selected ? ' selected' : ''}`}>
@@ -62,7 +63,7 @@ export function TurnView({ turn, selected, reasons, onSelect, onRetry, onFeedbac
           <div className="actions" onClick={(e) => e.stopPropagation()}>
             {turn.text && !turn.error && <CopyButton text={turn.text} />}
             {reasons && turn.turnId && <FeedbackButtons value={turn.feedback ?? null} reasons={reasons} onChange={onFeedback} />}
-            <button type="button" className="icon" aria-label="다시 묻기" title="다시 묻기" onClick={onRetry}>
+            <button type="button" className="icon" aria-label="다시 묻기" title="다시 묻기" onClick={onRetry} disabled={retryDisabled}>
               <Retry />
             </button>
             {n > 0 && (
@@ -78,21 +79,37 @@ export function TurnView({ turn, selected, reasons, onSelect, onRetry, onFeedbac
 }
 
 function CopyButton({ text }: { text: string }) {
-  const [done, setDone] = useState(false)
+  const [status, setStatus] = useState<'copied' | 'failed' | null>(null)
+  useEffect(() => {
+    if (status !== 'copied') return
+    const timer = setTimeout(() => setStatus(null), 1500)
+    return () => clearTimeout(timer)
+  }, [status])
+
   return (
-    <button
-      type="button"
-      className="icon"
-      aria-label={done ? '복사됨' : '답변 복사'}
-      title="답변 복사"
-      onClick={async () => {
-        await navigator.clipboard?.writeText(text)
-        setDone(true)
-        setTimeout(() => setDone(false), 1500)
-      }}
-    >
-      {done ? <Check /> : <Copy />}
-    </button>
+    <>
+      <button
+        type="button"
+        className="icon"
+        aria-label={status === 'copied' ? '복사됨' : '답변 복사'}
+        title="답변 복사"
+        onClick={async () => {
+          if (!navigator.clipboard) {
+            setStatus('failed')
+            return
+          }
+          try {
+            await navigator.clipboard.writeText(text)
+            setStatus('copied')
+          } catch {
+            setStatus('failed')
+          }
+        }}
+      >
+        {status === 'copied' ? <Check /> : <Copy />}
+      </button>
+      {status === 'failed' && <span className="note" role="status">답변을 복사하지 못했습니다.</span>}
+    </>
   )
 }
 

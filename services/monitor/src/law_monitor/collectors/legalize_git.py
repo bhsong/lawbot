@@ -14,7 +14,7 @@ from law_monitor import articles, frontmatter
 from law_monitor.collectors.base import CollectResult, RunContext
 from law_monitor.config import Config
 from law_monitor.events import make_event_id
-from law_monitor.gitrepo import ZERO, CommitInfo, GitError, GitRepo
+from law_monitor.gitrepo import ZERO, CommitInfo, GitError, GitRepo, GitTimeout
 from law_monitor.state import ItemState, State
 
 log = logging.getLogger('law_monitor.legalize_git')
@@ -202,6 +202,8 @@ class _Builder:
         snapshot = self.ctx.paths.files / f'{item.version_key}.md'
         try:
             text = snapshot.read_text(encoding='utf-8') if snapshot.exists() else self.repo.blob(item.version_key)
+        except GitTimeout:
+            raise
         except GitError:
             log.warning('%s: 이전 내용을 찾을 수 없음 (%s)', item.item_id, item.version_key[:12])
             return None
@@ -233,19 +235,21 @@ class _Builder:
         if groups:
             info = self.repo.info(sha)
             for key, (old, new) in groups.items():
-                self.emit(key, old, new, info)
+                self.emit(key, old, new, revision=sha, commit=info)
 
     def compare_with_head(self, head: str) -> None:
         found = self.scan(head)
         for key, new in found.items():
             item = self.current.get(key)
             if item is None or item.version_key != new.blob:
-                self.emit(key, None, new, None)
+                self.emit(key, None, new, revision=head)
         missing = [key for key, item in self.current.items() if key not in found and self.m.prefilter(item.file_path)]
         for key in missing:
-            self.emit(key, None, None, None)
+            self.emit(key, None, None, revision=head)
 
-    def emit(self, key: str, old: Version | None, new: Version | None, commit: CommitInfo | None) -> None:
+    def emit(
+        self, key: str, old: Version | None, new: Version | None, *, revision: str, commit: CommitInfo | None = None
+    ) -> None:
         if old is None and key in self.current:
             old = self.from_item(self.current[key])
         if old is None and new is None:
@@ -260,7 +264,7 @@ class _Builder:
         ref = new or old
         assert ref is not None  # 둘 다 None이면 위에서 끝남 (new가 없으면 ref는 old)
         cats = self.m.categories(ref)
-        version_key = new.blob if new else f'removed:{ref.blob}'
+        version_key = f'{revision}:{old.blob if old else ZERO}:{new.blob if new else ZERO}'
         event_id = make_event_id(self.collector.name, key, version_key)
         old_body, new_body = (old.body if old else ''), (new.body if new else '')
         diff_text = '\n'.join(

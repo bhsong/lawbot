@@ -162,6 +162,35 @@ def request_log(path):
     return [json.loads(line) for line in p.read_text(encoding='utf-8').splitlines()] if p.exists() else []
 
 
+def capture_response_body(page, path):
+    """Read a clone in the browser before Chromium discards a no-store response."""
+    page.evaluate(
+        """path => {
+            const fetch = window.fetch;
+            window.lawbotTestResponse = null;
+            window.fetch = async (...args) => {
+                const response = await fetch(...args);
+                if (new URL(response.url).pathname === path) {
+                    window.fetch = fetch;
+                    response.clone().text().then(
+                        body => { window.lawbotTestResponse = {body}; },
+                        error => { window.lawbotTestResponse = {error: String(error)}; },
+                    );
+                }
+                return response;
+            };
+        }""",
+        path,
+    )
+
+    def read():
+        result = page.wait_for_function('window.lawbotTestResponse', timeout=ANSWER_TIMEOUT).json_value()
+        assert 'body' in result, result['error']
+        return result['body']
+
+    return read
+
+
 # ---- 화면 조작 (역할·라벨·테스트 id로 찾는다) ----
 def textbox(page):
     return page.get_by_role('textbox', name='질문')

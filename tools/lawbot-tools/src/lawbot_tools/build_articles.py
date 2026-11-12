@@ -563,7 +563,7 @@ def _compose_history(path, asof, hist, mds):
         cur_order = list(arts)
         sched = schedule(md, fm, cur_order, asof, latest=mds[-1])
         addendum, owner = addendum_of(md, fm['공포번호'], mds[-1])
-        expiry_rules, expiry_unhandled = expiry_clauses(addendum or '')
+        expiry_rules, expiry_unhandled = expiry_clauses(addendum) if addendum and not owner else ([], [])
         expiries.extend(
             (no, paras, until, arts[no])
             for no, paras, until in expiry_rules

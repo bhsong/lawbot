@@ -41,6 +41,7 @@ def v4_articles():
             [('근로기준법 시행령', '제5조'), ('근로기준법', '제5조')],
         ),  # 하위법령 구분
         ('최저임금법 시행규칙 제2조, 제3조', [('최저임금법 시행규칙', '제2조'), ('최저임금법 시행규칙', '제3조')]),
+        ('「퇴직급여법 시행령」 제5조', [('근로자퇴직급여 보장법 시행령', '제5조')]),
         ('근로 기준법 제 26 조', [('근로기준법', '제26조')]),  # 띄어쓰기
         ('제26조, 제27조', [(None, '제26조'), (None, '제27조')]),  # 법령명 없음
         ('해당 없음 (제공된 조문: 근로기준법 제34조)', []),  # 거절 형식
@@ -55,6 +56,15 @@ def test_citations_reads_cite_section():
     ans = '【결론】근로기준법 제1조\n【근거 조문】근로기준법 시행령 제5조\n【설명】근로기준법 제99조'
     assert ci.citations(ans) == [('근로기준법 시행령', '제5조')]
     assert not ev.cite_gold(ans, '근로기준법 제5조')  # 시행령 조문은 법률 조문의 정답이 아님
+
+
+@pytest.mark.parametrize('name', ['민법', '「민법」'])
+def test_unregistered_explicit_law_changes_citation_context(name):
+    text = f'근로기준법 제1조, {name} 제26조, 제43조'
+    answer = f'【결론】답변\n【근거 조문】{text}'
+    assert ci.citations(answer) == [('근로기준법', '제1조'), ('민법', '제26조'), ('민법', '제43조')]
+    assert not ev.cite_gold(answer, '근로기준법 제26조')
+    assert cited_hits(text, HITS) == ([], ['제1조', '제26조', '제43조'])
 
 
 def test_eval_v4_uses_citation_module():
