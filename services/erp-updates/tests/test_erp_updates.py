@@ -195,3 +195,72 @@ def test_collect_leaves_monitor_repositories_unchanged(env):
     before = snapshot()
     assert run('collect', '--repos', str(repos)) == 0
     assert snapshot() == before
+
+
+def test_link_reissue_updates_stored_links_without_a_new_version(env, capsys):
+    tmp_path, repos, run = env
+    assert run('collect', '--repos', str(repos)) == 0
+    pdf = tmp_path / 'download.pdf'
+    pdf.write_bytes(PDF)
+    assert run('attach', '--file', str(pdf), '--url', 'https://law.example.invalid/f?flSeq=71003') == 0
+    trees = fx.baseline()
+    trees['legalize-kr'] = {path: text.replace('flSeq=71', 'flSeq=81') for path, text in trees['legalize-kr'].items()}
+    fx.publish(tmp_path, {'legalize-kr': trees['legalize-kr']})
+    assert run('collect', '--repos', str(repos)) == 0
+
+    rows = by_key(listing(run, capsys))
+    assert rows['TAX-01']['versions'] == 1
+    approve_all(run, [rows['TAX-01']])
+    new = 'https://law.example.invalid/f?flSeq=81003'
+    item = by_key(export(run, tmp_path)['items'])['TAX-01']
+    assert item['attachments'] == [
+        {'title': '가상 간이세액표(제1조 관련)', 'pdfUrl': new, 'sha256': None, 'bytes': None}
+    ]
+    assert run('attach', '--file', str(pdf), '--url', new) == 0
+
+
+def test_change_beyond_the_excerpt_limit_creates_a_new_version(env, capsys):
+    tmp_path, repos, run = env
+    trees = fx.baseline()
+    long_body = '가' * 5000
+    trees['admrule-kr'][fx.PENSION] = trees['admrule-kr'][fx.PENSION].replace(
+        '900천원', '900천원\n' + long_body + '끝1'
+    )
+    fx.publish(tmp_path, {'admrule-kr': trees['admrule-kr']})
+    assert run('collect', '--repos', str(repos)) == 0
+    trees['admrule-kr'][fx.PENSION] = trees['admrule-kr'][fx.PENSION].replace('끝1', '끝2')
+    fx.publish(tmp_path, {'admrule-kr': trees['admrule-kr']})
+    assert run('collect', '--repos', str(repos)) == 0
+    assert by_key(listing(run, capsys))['INS-01']['versions'] == 2
+
+
+def test_reads_stay_on_the_commit_seen_at_start(env, capsys, monkeypatch):
+    tmp_path, repos, run = env
+    from erp_updates import sources
+
+    listed = sources.Repo.paths
+
+    def move_head_after_listing(self):
+        result = listed(self)
+        trees = fx.baseline()
+        trees['admrule-kr'][fx.PENSION] = trees['admrule-kr'][fx.PENSION].replace('900천원', '999천원')
+        fx.publish(tmp_path, {'admrule-kr': trees['admrule-kr']})
+        return result
+
+    monkeypatch.setattr(sources.Repo, 'paths', move_head_after_listing)
+    first = fx.head(repos, 'admrule-kr')
+    assert run('collect', '--repos', str(repos)) == 0
+    monkeypatch.undo()
+    approve_all(run, [by_key(listing(run, capsys))['INS-01']])
+    feed = export(run, tmp_path)
+    assert '900천원' in by_key(feed['items'])['INS-01']['excerpt']
+    origins = {entry['origin'] for entry in feed['history'] if entry['sourceKey'] == 'INS-01' and entry['origin']}
+    assert origins == {f'admrule-kr@{first[:12]}'}
+
+
+def test_admrule_rule_without_any_match_is_a_source_error(env, capsys):
+    tmp_path, repos, run = env
+    config = tmp_path / 'sources.yaml'
+    config.write_text(fx.CONFIG.replace('^가상 연금 상한액$', '^없는 고시$'), encoding='utf-8')
+    assert run('collect', '--repos', str(repos)) == 1
+    assert 'INS-01' in capsys.readouterr().err

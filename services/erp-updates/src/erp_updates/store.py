@@ -50,9 +50,13 @@ def connect(data_dir: Path) -> sqlite3.Connection:
     return conn
 
 
-def content_sha256(data: dict) -> str:
-    """Hash the record without attachment links: the official site reissues every link on each amendment."""
-    stable = {**data, 'attachments': [entry['title'] for entry in data['attachments']]}
+def content_sha256(doc: Found) -> str:
+    """Hash the full text and record, without attachment links: the official site reissues every link on each amendment."""
+    stable = {
+        **doc.data,
+        'attachments': [entry['title'] for entry in doc.data['attachments']],
+        'fullText': doc.full_text,
+    }
     return hashlib.sha256(json.dumps(stable, ensure_ascii=False, sort_keys=True).encode()).hexdigest()
 
 
@@ -68,10 +72,17 @@ def save(conn: sqlite3.Connection, found: list[Found]) -> int:
         for doc in found:
             item_id = hashlib.sha1(f'{doc.source.key}:{doc.ref}'.encode()).hexdigest()[:16]
             conn.execute('INSERT OR IGNORE INTO items VALUES (?,?,?)', (item_id, doc.source.key, doc.ref))
-            digest = content_sha256(doc.data)
+            digest = content_sha256(doc)
             current = latest(conn, item_id)
-            action = 'unchanged' if current is not None and current['content_sha256'] == digest else 'collected'
-            if action == 'collected':
+            if current is not None and current['content_sha256'] == digest:
+                action = 'unchanged'
+                # Keep reissued links current; files stay tied to the old link because each edition's PDF differs.
+                conn.execute(
+                    'UPDATE versions SET data_json=? WHERE id=?',
+                    (json.dumps(doc.data, ensure_ascii=False), current['id']),
+                )
+            else:
+                action = 'collected'
                 conn.execute(
                     'INSERT INTO versions(item_id,content_sha256,data_json,collected_at) VALUES (?,?,?,?)',
                     (item_id, digest, json.dumps(doc.data, ensure_ascii=False), at),

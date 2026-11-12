@@ -35,13 +35,14 @@ class Source:
 
 @dataclass(frozen=True)
 class Found:
-    """One selected document version; `data` is the public record, links excluded from the version key."""
+    """One selected document; `data` is the public record and `full_text` the untruncated body for hashing."""
 
     source: Source
     ref: str
     repo: str
     commit: str
     data: dict = field(default_factory=dict)
+    full_text: str = ''
 
 
 def load_sources(path: Path) -> list[Source]:
@@ -54,7 +55,7 @@ def load_sources(path: Path) -> list[Source]:
 
 
 class Repo:
-    """Read-only view of a bare clone at HEAD."""
+    """Read-only view of a bare clone, pinned to the HEAD commit seen when opened."""
 
     def __init__(self, git_dir: Path):
         self.git_dir = git_dir
@@ -75,10 +76,10 @@ class Repo:
         return result.stdout
 
     def paths(self) -> list[str]:
-        return self._git('ls-tree', '-r', '-z', '--name-only', 'HEAD').split('\0')[:-1]
+        return self._git('ls-tree', '-r', '-z', '--name-only', self.commit).split('\0')[:-1]
 
     def read(self, path: str) -> str:
-        return self._git('cat-file', 'blob', f'HEAD:{path}')
+        return self._git('cat-file', 'blob', f'{self.commit}:{path}')
 
 
 def split_document(text: str) -> tuple[dict, str]:
@@ -94,10 +95,10 @@ def iso(value):
 
 
 def clean(text: str) -> str:
-    """Drop markdown emphasis/escapes and indentation so excerpts read like the official text."""
+    """Drop markdown emphasis/escapes and indentation so the text reads like the official text."""
     text = re.sub(r'\\(.)', r'\1', text.replace('**', ''))
     lines = [line.strip() for line in text.strip().splitlines()]
-    return re.sub(r'\n{3,}', '\n\n', '\n'.join(lines))[:EXCERPT_LIMIT]
+    return re.sub(r'\n{3,}', '\n\n', '\n'.join(lines))
 
 
 def attachments(meta: dict) -> list[dict]:
@@ -116,7 +117,7 @@ def find_admrules(source: Source, repo: Repo) -> list[Found]:
         if meta.get('소관부처명') != rule['agency'] or not pattern.search(str(meta.get('행정규칙명'))):
             continue
         title = str(meta['행정규칙명'])
-        body = re.sub(rf'^#\s+{re.escape(title)}\s*\n', '', body.strip())
+        text = clean(re.sub(rf'^#\s+{re.escape(title)}\s*\n', '', body.strip()))
         data = record(
             source,
             kind='admrule',
@@ -125,11 +126,13 @@ def find_admrules(source: Source, repo: Repo) -> list[Found]:
             issuedNo=meta.get('발령번호'),
             issuedOn=meta.get('발령일자'),
             effectiveFrom=meta.get('시행일자'),
-            excerpt=clean(body),
+            excerpt=text[:EXCERPT_LIMIT],
             sourceUrl=meta.get('출처'),
             attachments=attachments(meta),
         )
-        found.append(Found(source, f'admrule:{meta["행정규칙ID"]}', ADMRULE_REPO, repo.commit, data))
+        found.append(Found(source, f'admrule:{meta["행정규칙ID"]}', ADMRULE_REPO, repo.commit, data, text))
+    if not found:
+        raise SourceError(f'no administrative rule of {rule["agency"]} matches {rule["name"]}')
     return found
 
 
@@ -167,7 +170,7 @@ def find_article(source: Source, repo: Repo) -> list[Found]:
     if heading is None:
         raise SourceError(f'{rule["article"]} not found in {rule["file"]}')
     following = re.search(r'^#{1,5}\s', body[heading.end() :], re.M)
-    text = body[heading.end() : heading.end() + following.start() if following else None]
+    text = clean(body[heading.end() : heading.end() + following.start() if following else None])
     data = record(
         source,
         kind='article',
@@ -175,10 +178,10 @@ def find_article(source: Source, repo: Repo) -> list[Found]:
         lawName=meta['제목'],
         article=rule['article'],
         asOf=meta.get('시행일자'),
-        excerpt=clean(text),
+        excerpt=text[:EXCERPT_LIMIT],
         sourceUrl=meta.get('출처'),
     )
-    return [Found(source, f'article:{rule["file"]}#{rule["article"]}', LAW_REPO, repo.commit, data)]
+    return [Found(source, f'article:{rule["file"]}#{rule["article"]}', LAW_REPO, repo.commit, data, text)]
 
 
 def record(source: Source, **values) -> dict:
