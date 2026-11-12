@@ -21,14 +21,14 @@ export type Config = {
 
 export type Feedback = { label: 'like' | 'flag'; reason?: string } | null
 
-type CalculationRow = { label: string; value: number | string }
+type CalculationRow = { label: string; value: number | string; unit?: string }
 export type Calculation = {
   calculator: string | null
   status: 'calculated' | 'guidance' | 'none'
   year?: number
   inputs?: (CalculationRow & { source: string })[]
   steps?: (CalculationRow & { formula: string; article: string })[]
-  results?: { label: string; value: number }[]
+  results?: (CalculationRow & { condition?: string })[]
   articles?: string[]
   message?: string
 }

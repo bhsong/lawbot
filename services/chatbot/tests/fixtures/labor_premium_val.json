@@ -1,0 +1,182 @@
+[
+  {
+    "id": "LP001",
+    "kind": "calculated",
+    "question": "상시 근로자 5명, 통상시급 10,000원인 사업장에서 평일 휴게시간을 뺀 연장근로 2시간의 가산수당은 얼마인가요?",
+    "calculator": "premium_pay",
+    "status": "calculated",
+    "inputs": {"staff_count": "5명", "ordinary_hourly_wage": "10,000원", "overtime_hours": "2시간"},
+    "expected_results": {"법정 가산수당": 10000},
+    "basis": "근로기준법 제11조·제56조제1항. 10,000 × 2 × 0.5 = 10,000원."
+  },
+  {
+    "id": "LP002",
+    "kind": "calculated",
+    "question": "상시 11명 사업장에서 통상시급 12000원으로 쉬는 시간을 제외한 야간근로 5시간의 가산분을 구해 주세요.",
+    "calculator": "premium_pay",
+    "status": "calculated",
+    "inputs": {"staff_count": "11명", "ordinary_hourly_wage": "12000원", "night_hours": "5시간"},
+    "expected_results": {"법정 가산수당": 30000},
+    "basis": "근로기준법 제56조제3항. 12,000 × 5 × 0.5 = 30,000원."
+  },
+  {
+    "id": "LP003",
+    "kind": "calculated",
+    "question": "상시 15명 사업장이고 통상시급은 1만원입니다. 휴일 하루에 휴게 제외 8시간 일했을 때 가산수당을 계산해 주세요.",
+    "calculator": "premium_pay",
+    "status": "calculated",
+    "inputs": {"staff_count": "15명", "ordinary_hourly_wage": "1만원", "holiday_hours": "8시간"},
+    "expected_results": {"법정 가산수당": 40000},
+    "basis": "근로기준법 제56조제2항. 10,000 × 8 × 0.5 = 40,000원."
+  },
+  {
+    "id": "LP004",
+    "kind": "calculated",
+    "question": "상시 6명 회사에서 통상시급 12,000원인 근로자가 휴일 하루에 실제 10시간 일했습니다. 가산수당만 얼마인가요?",
+    "calculator": "premium_pay",
+    "status": "calculated",
+    "inputs": {"staff_count": "6명", "ordinary_hourly_wage": "12,000원", "holiday_hours": "10시간", "include_base": "가산수당만"},
+    "expected_results": {"법정 가산수당": 72000},
+    "basis": "근로기준법 제56조제2항. 12,000 × (8 × 0.5 + 2 × 1) = 72,000원."
+  },
+  {
+    "id": "LP005",
+    "kind": "calculated",
+    "question": "상시근로자 9명이고 통상시급은 12,000원입니다. 휴일 하루에 휴게 제외 10시간 일했고 그중 야간은 4시간입니다. 가산수당을 구해 주세요.",
+    "calculator": "premium_pay",
+    "status": "calculated",
+    "inputs": {"staff_count": "9명", "ordinary_hourly_wage": "12,000원", "holiday_hours": "10시간", "night_hours": "4시간"},
+    "expected_results": {"법정 가산수당": 96000},
+    "basis": "근로기준법 제56조제2항·제3항. 12,000 × (8 × 0.5 + 2 × 1 + 4 × 0.5) = 96,000원."
+  },
+  {
+    "id": "LP006",
+    "kind": "calculated",
+    "question": "상시 20명, 통상시급 15,000원입니다. 대상 평일의 실근로시간은 중복 없이 총 4시간이고 평일 연장이 3시간, 야간이 2시간입니다. 기본임금 포함 총액은?",
+    "calculator": "premium_pay",
+    "status": "calculated",
+    "inputs": {"staff_count": "20명", "ordinary_hourly_wage": "15,000원", "overtime_hours": "3시간", "night_hours": "2시간", "total_hours": "4시간", "include_base": "기본임금 포함"},
+    "expected_results": {"법정 가산수당": 37500, "기본임금": 60000, "기본임금 포함 합계": 97500},
+    "basis": "근로기준법 제56조제1항·제3항. 15,000 × (3 + 2) × 0.5 = 37,500원. 기본 15,000 × 4 = 60,000원, 합계 97,500원."
+  },
+  {
+    "id": "LP007",
+    "kind": "calculated",
+    "question": "상시 4명 사업장입니다. 통상시급 10,000원, 중복 없는 실제 총 근로 5시간 중 야간 3시간일 때 기본임금 포함 총액을 알려 주세요.",
+    "calculator": "premium_pay",
+    "status": "calculated",
+    "inputs": {"staff_count": "4명", "ordinary_hourly_wage": "10,000원", "night_hours": "3시간", "total_hours": "5시간", "include_base": "기본임금 포함"},
+    "expected_results": {"법정 가산수당": 0, "기본임금": 50000, "기본임금 포함 합계": 50000},
+    "basis": "근로기준법 제11조, 시행령 제7조 및 별표 1. 제56조 가산분 0원, 기본 10,000 × 5 = 50,000원."
+  },
+  {
+    "id": "LP008",
+    "kind": "calculated",
+    "question": "상시 인원 12명, 통상시급 16,000원입니다. 평일 연장은 휴일근무와 별도로 2시간이고, 휴일 하루 실근로 7시간 중 야간이 4시간입니다. 법정 가산분은 얼마죠?",
+    "calculator": "premium_pay",
+    "status": "calculated",
+    "inputs": {"staff_count": "12명", "ordinary_hourly_wage": "16,000원", "overtime_hours": "2시간", "holiday_hours": "7시간", "night_hours": "4시간"},
+    "expected_results": {"법정 가산수당": 104000},
+    "basis": "근로기준법 제56조제1항부터 제3항까지. 16,000 × (2 + 7 + 4) × 0.5 = 104,000원."
+  },
+  {
+    "id": "LP009",
+    "kind": "calculated",
+    "question": "상시 17명이고 통상시급은 10000원입니다. 휴일 두 날의 실제 근로를 날짜별로 나누니 각 8시간 이내분의 합계 16시간, 초과분의 합계 4시간, 야간근로 1시간입니다. 가산수당을 계산해 주세요.",
+    "calculator": "premium_pay",
+    "status": "calculated",
+    "inputs": {"staff_count": "17명", "ordinary_hourly_wage": "10000원", "holiday_within_hours": "16시간", "holiday_excess_hours": "4시간", "night_hours": "1시간"},
+    "expected_results": {"법정 가산수당": 125000},
+    "basis": "근로기준법 제56조제2항·제3항. 10,000 × (16 × 0.5 + 4 × 1 + 1 × 0.5) = 125,000원."
+  },
+  {
+    "id": "LP010",
+    "kind": "calculated",
+    "question": "상시 7명, 통상시급 11,001원입니다. 휴게 제외 야간근로 0.5시간의 가산수당은 얼마인가요?",
+    "calculator": "premium_pay",
+    "status": "calculated",
+    "inputs": {"staff_count": "7명", "ordinary_hourly_wage": "11,001원", "night_hours": "0.5시간"},
+    "expected_results": {"법정 가산수당": "2750.25"},
+    "basis": "근로기준법 제56조제3항. 11,001 × 0.5 × 0.5 = 2,750.25원."
+  },
+  {
+    "id": "LP011",
+    "kind": "calculated",
+    "question": "상시 21명 사업장에서 통상시급 12000원이고 야간 실근로는 0시간입니다. 야간 가산수당은 얼마인지 계산해 주세요.",
+    "calculator": "premium_pay",
+    "status": "calculated",
+    "inputs": {"staff_count": "21명", "ordinary_hourly_wage": "12000원", "night_hours": "0시간"},
+    "expected_results": {"법정 가산수당": 0},
+    "basis": "근로기준법 제56조제3항. 12,000 × 0 × 0.5 = 0원."
+  },
+  {
+    "id": "LP012",
+    "kind": "calculated",
+    "question": "상시 8명, 통상시급 12,000원입니다. 휴일 하루의 휴게 제외 실근로 8시간 중 야간이 2시간입니다. 전체 실근로시간은 중복 없이 8시간이며 기본임금 포함 지급액을 구해 주세요.",
+    "calculator": "premium_pay",
+    "status": "calculated",
+    "inputs": {"staff_count": "8명", "ordinary_hourly_wage": "12,000원", "holiday_hours": "8시간", "night_hours": "2시간", "total_hours": "8시간", "include_base": "기본임금 포함"},
+    "expected_results": {"법정 가산수당": 60000, "기본임금": 96000, "기본임금 포함 합계": 156000},
+    "basis": "근로기준법 제56조제2항·제3항. 가산 12,000 × (8 + 2) × 0.5 = 60,000원. 기본 12,000 × 8 = 96,000원, 합계 156,000원."
+  },
+  {
+    "id": "LP013",
+    "kind": "missing",
+    "question": "통상시급 15,000원으로 쉬는 시간을 빼고 야간에 5시간 일했습니다. 야간 가산수당은 얼마인가요?",
+    "calculator": "premium_pay",
+    "status": "guidance",
+    "inputs": {"ordinary_hourly_wage": "15,000원", "night_hours": "5시간"},
+    "expected_results": {},
+    "basis": "근로기준법 제11조. 상시 근로자 수가 필요하다."
+  },
+  {
+    "id": "LP014",
+    "kind": "missing",
+    "question": "상시 8명 사업장에서 휴일 하루에 실제 9시간 일했습니다. 가산수당을 계산해 주세요.",
+    "calculator": "premium_pay",
+    "status": "guidance",
+    "inputs": {"staff_count": "8명", "holiday_hours": "9시간"},
+    "expected_results": {},
+    "basis": "근로기준법 제56조제2항. 가산의 기준인 통상시급이 필요하다."
+  },
+  {
+    "id": "LP015",
+    "kind": "missing",
+    "question": "상시 6명, 통상시급 13000원입니다. 평일 연장근로 4시간에 야간근로 2시간이 겹쳤는데, 기본임금 포함 총액이 얼마인가요?",
+    "calculator": "premium_pay",
+    "status": "guidance",
+    "inputs": {"staff_count": "6명", "ordinary_hourly_wage": "13000원", "overtime_hours": "4시간", "night_hours": "2시간", "include_base": "기본임금 포함"},
+    "expected_results": {},
+    "basis": "근로기준법 제2조·제56조. 기본임금은 주어진 가산 대상 시간의 합이 아니라 확인된 실근로시간으로 산출한다."
+  },
+  {
+    "id": "LP016",
+    "kind": "ambiguous",
+    "question": "상시 10명 사업장, 통상시급 12000원입니다. 휴일 이틀에 합계 10시간 일했는데 각 날의 근로시간은 모르겠습니다. 가산수당은 얼마인가요?",
+    "calculator": "premium_pay",
+    "status": "guidance",
+    "inputs": {"staff_count": "10명", "ordinary_hourly_wage": "12000원", "holiday_hours": "10시간"},
+    "expected_results": {},
+    "basis": "근로기준법 제56조제2항. 하루 8시간 기준이라 휴일별 실제 근로시간이 필요하다."
+  },
+  {
+    "id": "LP017",
+    "kind": "ambiguous",
+    "question": "상시 12명이고 통상시급 16000원입니다. 평일 연장 3시간과 휴일 하루 근로 4시간인데, 중복 없는 실근로는 총 6시간으로 적혀 있습니다. 기본임금 포함 지급액은 얼마인가요?",
+    "calculator": "premium_pay",
+    "status": "guidance",
+    "inputs": {"staff_count": "12명", "ordinary_hourly_wage": "16000원", "overtime_hours": "3시간", "holiday_hours": "4시간", "total_hours": "6시간", "include_base": "기본임금 포함"},
+    "expected_results": {},
+    "basis": "근로기준법 제56조제1항·제2항. 서로 다른 평일 연장과 휴일 근로의 합계 7시간보다 제시한 총시간이 작다."
+  },
+  {
+    "id": "LP018",
+    "kind": "ambiguous",
+    "question": "상시 30명, 통상시급 15000원이며 감시·단속적 근로 적용 제외 승인을 받은 근로자의 휴일 하루 실근로 10시간과 야간 2시간 가산수당을 계산해 주세요.",
+    "calculator": "premium_pay",
+    "status": "guidance",
+    "inputs": {"staff_count": "30명", "ordinary_hourly_wage": "15000원", "holiday_hours": "10시간", "night_hours": "2시간", "applicability": "감시·단속적 근로 적용 제외 승인"},
+    "expected_results": {},
+    "basis": "근로기준법 제63조. 별도 적용 조건을 확인하는 안내 경로다."
+  }
+]

@@ -311,6 +311,12 @@ button {
   font-variant-numeric: tabular-nums;
 }
 
+.calculation-condition {
+  display: block;
+  color: var(--muted);
+  font-size: 13px;
+}
+
 .calculation details {
   margin-top: 8px;
   padding-top: 8px;

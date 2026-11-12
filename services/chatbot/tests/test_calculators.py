@@ -307,7 +307,15 @@ def test_article_hashes_are_for_the_exact_v5_bodies():
             for row in csv.DictReader(file):
                 if row['deleted'] == '0':
                     articles[row['article_id']] = hashlib.sha256(row['text'].encode()).hexdigest()
-    assert set(ARTICLE_HASHES) == {MEDICAL, MIDYEAR}
+    assert set(ARTICLE_HASHES) == {
+        MEDICAL,
+        MIDYEAR,
+        'severance_pay',
+        'annual_leave_days',
+        'weekly_holiday_pay',
+        'monthly_minimum_wage',
+        'premium_pay',
+    }
     for hashes in ARTICLE_HASHES.values():
         assert hashes
         assert hashes == {article: articles[article] for article in hashes}

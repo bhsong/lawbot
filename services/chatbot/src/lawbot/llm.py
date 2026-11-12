@@ -97,14 +97,19 @@ class LLM:
             {'role': 'user', 'content': build_prompt(hits, question)},
         ]
 
-    def route_calculation(self, question: str) -> str | None:
+    def route_calculation(
+        self, question: str, *, tax_only: bool = False, metrics: dict[str, int] | None = None
+    ) -> str | None:
         """Classify once with the Pro client's endpoint and configured read timeout."""
-        from lawbot.calc_router import ROUTER_SYSTEM
+        from lawbot.calc_router import PR1_ROUTER_SYSTEM, ROUTER_SYSTEM
 
+        system = PR1_ROUTER_SYSTEM if tax_only else ROUTER_SYSTEM
+        if metrics is not None:
+            metrics['router_system_chars'] = len(system)
         try:
             result = self.client.chat.completions.create(
                 model=self.model,
-                messages=[{'role': 'system', 'content': ROUTER_SYSTEM}, {'role': 'user', 'content': question}],
+                messages=[{'role': 'system', 'content': system}, {'role': 'user', 'content': question}],
                 max_tokens=ROUTER_MAX_TOKENS,
                 temperature=TEMPERATURE,
                 stream=False,
@@ -118,6 +123,9 @@ class LLM:
             if type(converted) is RuntimeError:
                 converted = ModelServerError('계산 라우터 응답 오류')
             raise converted from exc
+        if metrics is not None and (usage := getattr(result, 'usage', None)) is not None:
+            metrics['router_prompt_tokens'] = usage.prompt_tokens
+            metrics['router_completion_tokens'] = usage.completion_tokens
         if not result.choices or result.choices[0].finish_reason == 'length':
             return None
         return result.choices[0].message.content

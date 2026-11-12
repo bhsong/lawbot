@@ -17,8 +17,15 @@ _INTENT = re.compile(
     r'(?:공제액|공제금액|결정세액|환급액|납부액|정산액|실수령액|지급액)\s*은?\s*[?？]|'
     r'(?:얼마|금액|세금|소득세)\s*(?:을|를)?\s*(?:구해|계산)'
 )
+_LABOR_INTENT = re.compile(
+    r'(?:퇴직금|주휴수당|연차(?:유급휴가)?(?:\s*일수)?|가산(?:수당|분)|월\s*환산액|기본임금\s*포함\s*총액)'
+    r'\s*(?:을|를|은|는|이|가)?\s*(?:구해|알려|발생하나요|요?\s*[?？])'
+)
+_ARTICLE_NUMBER = re.compile(r'제\s*\d+\s*조(?:의\s*\d+)?')
 
 
 def is_calculation_question(question: str) -> bool:
     normalized = unicodedata.normalize('NFKC', question)
-    return bool(_QUANTITY.search(normalized) and _INTENT.search(normalized))
+    if _INTENT.search(normalized):
+        return _QUANTITY.search(normalized) is not None
+    return bool(_LABOR_INTENT.search(normalized) and _QUANTITY.search(_ARTICLE_NUMBER.sub(' ', normalized)))

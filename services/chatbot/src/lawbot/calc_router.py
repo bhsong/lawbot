@@ -3,47 +3,85 @@
 import json
 import re
 import time
-from collections import Counter
+import unicodedata
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
+from decimal import Decimal, InvalidOperation
 from typing import Any, Literal
 from zoneinfo import ZoneInfo
 
 from lawbot.answer_format import sections
 from lawbot.api_client import ModelLoadError, ModelServerError, ModelServerTimeout, RouterTimeout
-from lawbot.calc_numbers import amount_spans, complete_amount_span, parse_year
-from lawbot.calculators import ARTICLE_HASHES, INPUT_FIELDS, MEDICAL, MEDICAL_GROUPING, MIDYEAR, calculate
+from lawbot.calc_numbers import (
+    AmbiguousQuantity,
+    amount_spans,
+    can_assign_spans,
+    complete_amount_spans,
+    complete_labor_spans,
+    labor_hour_context_matches,
+    labor_quantity_excerpt,
+    parse_count,
+    parse_year,
+    restore_labor_unit,
+)
+from lawbot.calculators import (
+    ARTICLE_HASHES,
+    INPUT_FIELDS,
+    LABOR_CALCULATORS,
+    MEDICAL,
+    MEDICAL_GROUPING,
+    MIDYEAR,
+    TAX_CALCULATORS,
+    calculate,
+)
+from lawbot.labor_dates import parse_labor_date
+from lawbot.labor_language import is_uncertain
 from lawbot_common.api import SERVER_BUSY
 
-ROUTER_SYSTEM = """계산 질문 분류기. JSON 한 개만 출력한다.
+PR1_ROUTER_SYSTEM = """계산 질문 분류기. JSON 한 개만 출력한다.
 사용자가 준 금액·기간·인원수로 금액·일수·세액을 구해야 답할 수 있는 질문은 계산이다. 지원하는 계산기가 없으면(일반 연말정산, 퇴직소득세 등) {"calculator":"none","kind":"calculation"}.
 법령에 적힌 값·기한·요건을 묻는 질문은 조회다. 질문에 숫자가 있어도 그 숫자로 계산하지 않으면 {"calculator":"none","kind":"lookup"}.
+개인 조건으로 구하는 월액·휴가일수도 계산이다. 실업·육아휴직 급여, 4대보험료, 임대료 환산 등 목록 밖 산출은 미지원이다.
 지원 계산의 형식은 {"calculator":"계산기 이름","inputs":{}}.
-지원: medical_expense_credit(의료비 세액공제), midyear_income_tax(중도퇴사 근로소득세 기본 공제).
 지원 계산이면 필수 값이 없어도 계산기 이름을 선택한다. inputs 값은 질문에 있는 정확한 연속 문자열이다.
-금액은 전체 숫자와 단위만 복사한다. 숫자를 바꾸거나 추론하지 않는다. 없는 값은 생략한다.
-두 계산기 공통: gross_pay(해당 귀속연도 근무기간의 총급여, 월급·계약 연봉 제외), year(귀속연도).
-의료비: medical_expenses(실손 차감 전 총의료비), net_medical_expenses(이미 실손 차감한 실제 부담액),
-insurance_reimbursement(총 실손보험금), medical_category(의료비 대상 한 종류, 대상 또는 치료명 원문).
-구분별 금액이 있으면 general_expenses(일반), unlimited_expenses(본인·65세 이상·장애인·6세 이하 등),
-premature_expenses(미숙아·선천성이상아), infertility_expenses(난임). 같은 구분의 실손보험금은
-general_reimbursement, unlimited_reimbursement, premature_reimbursement, infertility_reimbursement.
-중도정산: pension_premium(연금보험료), health_premium(건강보험료), long_term_care_premium(별도 장기요양보험료),
-employment_premium(고용보험료). 건강·장기요양보험료 합계만 있으면 health_premium에 한 번만 넣는다.
-withheld_income_tax(기납부 소득세), withheld_local_tax(기납부 지방소득세).
-수치가 범위이거나 소득·보험금·세액 구분이 불명확하면 ambiguity에 불명확한 원문 구간을 복사한다."""
+숫자·단위 전체와 부정 표현을 복사한다. 추론한 값은 생략한다. 합계 한 곳은 둘로 복사하지 않는다.
+세금 공통 gross_pay=근무기간의 총급여(월급·계약연봉 제외). 세금 귀속연도는 생략.
+medical_expense_credit 의료비: medical_expenses(실손 전), net_medical_expenses(실손 후), insurance_reimbursement(총실손), medical_category(대상·치료명).
+구분별 *_expenses, *_reimbursement의 접두어 general(일반), unlimited(본인·65세이상·장애인·6세이하), premature(미숙아·선천성이상), infertility(난임).
+midyear_income_tax 중도퇴사: pension_premium 연금, health_premium 건강, long_term_care_premium 장기요양, employment_premium 고용, withheld_income_tax 기납부소득세, withheld_local_tax 기납부지방세. 건강·요양 합계는 health_premium 한 번.
+범위나 구분이 불명확하면 ambiguity에 원문을 복사한다."""
+
+ROUTER_SYSTEM = (
+    PR1_ROUTER_SYSTEM + '\n' + '\n'.join(f'{name} {module.SCHEMA}' for name, module in LABOR_CALCULATORS.items())
+)
 
 CALCULATED_INSTRUCTION = '계산 결과의 숫자를 그대로 쓰고 다시 계산하지 말 것. 결론에는 결과 항목과 금액(원)을 표의 순서대로 쓰고 중간 금액은 설명에 둘 것.'
+CALCULATED_UNITS_INSTRUCTION = '표의 결과 항목과 숫자·단위를 결론에 그대로 쓰고 다시 계산하지 말 것.'
+CONDITIONAL_INSTRUCTION = (
+    '계산 결과의 숫자를 그대로 쓰고 다시 계산하지 말 것. '
+    '결론에는 message의 조건과 두 금액을 그대로 쓰고, 가정에 따른 추정임을 명시할 것.'
+)
 GUIDANCE_INSTRUCTION = '직접 계산하지 말고 계산에 필요한 정보와 근거 조문만 안내할 것.'
 NO_CALCULATOR_MESSAGE = '이 질문은 계산 결과를 제공할 수 없습니다. 계산에 필요한 정보와 근거 조문을 확인해 주세요.'
 TEMPORARY_ROUTER_MESSAGE = '계산 판정을 일시적으로 하지 못했습니다. 계산에 필요한 정보와 근거 조문을 확인해 주세요.'
 _AMBIGUOUS_INPUT_MESSAGE = '계산에 사용할 금액과 그 금액이 어떤 항목에 해당하는지 확인해 주세요.'
+_LABOR_AMBIGUOUS_MESSAGE = '계산에 필요한 근로 조건과 수량을 확인해 주세요.'
+_WORKFORCE_FIELDS = ('staff_count', 'workplace_size')
+_LABOR_FACT_LABELS = {
+    'attendance': '해당 주 소정근로일 개근 여부',
+    'employment': '해당 주 근로관계 존속 여부',
+    'employed_at_accrual': '해당 연차 발생일 재직 여부',
+}
 _KST = ZoneInfo('Asia/Seoul')
 _RELATIVE_YEARS = {'재작년': -2, '작년': -1, '지난해': -1, '올해': 0, '내년': 1}
 _YEARS = re.compile(
     r'(?<![0-9０-９])([0-9０-９]{4}\s*년도?|[0-9０-９]{4}(?=\s*귀속)|'
     r'(?<=귀속연도 )[0-9０-９]{4}|재작년|작년|지난해|올해|내년)'
+)
+_DATE_TEXT = r'\d{4}(?:\s*년\s*\d{1,2}\s*월\s*\d{1,2}\s*일|[./-]\d{1,2}[./-]\d{1,2})'
+_HIRE_DATES = re.compile(
+    rf'(?:(?:입사|채용)(?:일)?\s*(?:은|는|이|가|:)?\s*{_DATE_TEXT}|{_DATE_TEXT}\s*(?:에|부터)?\s*(?:입사|채용))'
 )
 _AMOUNT_RANGE = re.compile(
     r'\d[\d,.조억만천백십원 \t]*\s*(?:[~～∼–−-]|또는)\s*\d[\d,.조억만천백십 \t]*[조억만천백십원]'
@@ -149,12 +187,33 @@ def _combined_medical_span(question: str, inputs: dict[str, str]) -> str | None:
     return None
 
 
+def _reconcile_workforce(inputs: dict[str, str], allowed: set[str]) -> bool:
+    for field, alias in (_WORKFORCE_FIELDS, _WORKFORCE_FIELDS[::-1]):
+        if field in allowed or (source := inputs.pop(field, None)) is None:
+            continue
+        if alias not in allowed:
+            continue
+        if (existing := inputs.get(alias)) is None:
+            inputs[alias] = source
+            continue
+        if existing == source:
+            continue
+        try:
+            if parse_count(existing, '명') == parse_count(source, '명'):
+                continue
+        except ValueError:
+            pass
+        return False
+    return True
+
+
 def route_calculation(
     question: str,
     classify: Callable[[str], str | None] | None,
     compatibility: Mapping[str, tuple[str, ...]] | Callable[[], Mapping[str, tuple[str, ...]]],
     *,
     reference_year: int | None = None,
+    tax_only: bool = False,
 ) -> Routing:
     elapsed_ms = None
     calculator = None
@@ -215,18 +274,47 @@ def route_calculation(
     name, inputs = obj['calculator'], obj['inputs']
     if not isinstance(name, str) or name not in INPUT_FIELDS or not isinstance(inputs, dict):
         return none('invalid_schema')
-    calculator = name
-    allowed = set(INPUT_FIELDS[calculator]) | {'year', 'ambiguity'}
-    top_ambiguity = obj.get('ambiguity')
-    spans = [*inputs.values()]
-    if 'ambiguity' in obj:
-        spans.append(top_ambiguity)
-    if not inputs.keys() <= allowed or any(not isinstance(span, str) or not span.strip() for span in spans):
+    if tax_only and name not in TAX_CALCULATORS:
         return none('invalid_schema')
-
+    calculator = name
+    labor = LABOR_CALCULATORS.get(calculator)
+    allowed = set(INPUT_FIELDS[calculator]) | {'year', 'ambiguity'}
+    allowed_extras = set(_WORKFORCE_FIELDS) if labor is not None else set()
+    top_ambiguity = obj.get('ambiguity')
+    if not inputs.keys() <= allowed | allowed_extras or any(
+        not isinstance(span, str) or not span.strip() for span in inputs.values()
+    ):
+        return none('invalid_schema')
+    if 'ambiguity' in obj and (not isinstance(top_ambiguity, str) or not top_ambiguity.strip()):
+        return none('invalid_schema')
+    workforce_conflict = False
+    if labor is None:
+        # The tax year is derived from the question. Older responses may still carry a year.
+        inputs.pop('year', None)
+    else:
+        workforce_conflict = not _reconcile_workforce(inputs, allowed)
+        if reconcile := getattr(labor, 'reconcile_inputs', None):
+            inputs = reconcile(question, inputs)
+    spans = [*inputs.values()]
+    if top_ambiguity is not None:
+        spans.append(top_ambiguity)
+    uncertain_labor_fact = (
+        next(
+            (
+                field
+                for field, source in inputs.items()
+                if labor.FIELDS.get(field) == 'fact' and source in question and is_uncertain(source)
+            ),
+            None,
+        )
+        if labor is not None
+        else None
+    )
     ambiguous = (
         _AMOUNT_RANGE.search(question) is not None
         or _AMBIGUOUS_AMOUNT.search(question) is not None
+        or workforce_conflict
+        or uncertain_labor_fact is not None
         or any(span is not None and span in question for span in (top_ambiguity, inputs.get('ambiguity')))
     )
     # Guidance for an ambiguous question does not use the extracted inputs.
@@ -237,42 +325,78 @@ def route_calculation(
         return none('corpus_mismatch')
 
     if ambiguous:
-        return guidance(_AMBIGUOUS_INPUT_MESSAGE)
-    if _UNSUPPORTED_DETAILS[calculator].search(question):
+        if label := _LABOR_FACT_LABELS.get(uncertain_labor_fact or ''):
+            return guidance(f'{label}를 확인해 주세요.')
+        return guidance(_LABOR_AMBIGUOUS_MESSAGE if labor is not None else _AMBIGUOUS_INPUT_MESSAGE)
+    if calculator in _UNSUPPORTED_DETAILS and _UNSUPPORTED_DETAILS[calculator].search(question):
         return guidance(
             '계산기의 적용 범위를 벗어난 항목이 있습니다. 해당 항목의 공제 요건과 공제 대상 금액을 확인해 주세요.',
             'unsupported_input',
         )
     if calculator == MEDICAL and (combined := _combined_medical_span(question, inputs)):
         inputs['medical_category'] = combined
-    year_source = inputs.pop('year', None)
     reference = reference_year if reference_year is not None else datetime.now(_KST).year
-    years = {match[0]: _year_value(match[0], reference) for match in _YEARS.finditer(question)}
+    quantity_positions: dict[str, tuple[tuple[int, int], ...]] = {}
+    quantity_sources: dict[str, str] = {}
+    if labor is not None:
+        for field, source in inputs.items():
+            if (kind := labor.FIELDS.get(field)) is not None:
+                restored = restore_labor_unit(question, source, field, kind)
+                if restored is None or (kind == 'hours' and not labor_hour_context_matches(field, restored)):
+                    return guidance(_LABOR_AMBIGUOUS_MESSAGE)
+                try:
+                    inputs[field], quantity_positions[field] = labor_quantity_excerpt(question, restored, field, kind)
+                    if quantity_positions[field]:
+                        quantity_sources[field] = restored
+                except AmbiguousQuantity:
+                    return guidance(_LABOR_AMBIGUOUS_MESSAGE)
+                except ValueError:
+                    return guidance('입력한 수량과 단위를 확인해 다시 알려 주세요.', 'unresolved_input')
+        if calculator == 'premium_pay' and not can_assign_spans(
+            [positions for field, positions in quantity_positions.items() if labor.FIELDS[field] == 'hours']
+        ):
+            return guidance(_LABOR_AMBIGUOUS_MESSAGE)
+        check_question = getattr(labor, 'question_issue', None)
+        if check_question is not None and (issue := check_question(question, inputs)):
+            return guidance(issue)
+        for field, source in inputs.items():
+            kind = labor.FIELDS.get(field)
+            if (
+                kind is not None
+                and kind not in ('money', 'fact')
+                and not any(complete_labor_spans(question, source, kind))
+            ):
+                return none('incomplete_quantity_span')
+    try:
+        years = _calculation_years(question, inputs, reference, calculator)
+    except ValueError, OverflowError:
+        return guidance('입력한 수량과 단위를 확인해 다시 알려 주세요.', 'unresolved_input')
     if len(set(years.values())) > 1:
         return guidance('어느 귀속연도를 기준으로 계산할지 알려 주세요.')
     year = next(iter(years.values()), reference)
-    if year_source is not None:
-        try:
-            model_year = _year_value(year_source, reference)
-        except ValueError:
-            return none('conversion_failed')
-        if model_year not in years.values():
-            return none('incomplete_year_span')
     year_source = next(iter(years), None)
+    if labor is not None and 'year' in labor.FIELDS:
+        inputs.pop('year', None)
+        if year_source is not None:
+            inputs['year'] = year_source
 
-    amount_sources = Counter(source for field, source in inputs.items() if field != 'medical_category')
-    for source, occurrences in amount_sources.items():
-        if complete_amount_span(question, source, occurrences=occurrences):
-            continue
-        if occurrences > 1:
-            return guidance(_AMBIGUOUS_INPUT_MESSAGE)
+    candidates = [
+        quantity_positions[field] if labor else tuple(complete_amount_spans(question, source))
+        for field, source in inputs.items()
+        if (labor.FIELDS.get(field) == 'money' if labor else field != 'medical_category')
+    ]
+    if not all(candidates):
         return none('incomplete_amount_span')
+    if not can_assign_spans(candidates):
+        return guidance(_AMBIGUOUS_INPUT_MESSAGE)
     try:
-        calculation = calculate(calculator, inputs, year=year, year_source=year_source)
+        calculation = calculate(calculator, inputs | quantity_sources, year=year, year_source=year_source)
+    except AmbiguousQuantity:
+        return guidance(_LABOR_AMBIGUOUS_MESSAGE)
     except ValueError:
-        return none('conversion_failed')
+        return guidance('입력한 수량과 단위를 확인해 다시 알려 주세요.', 'unresolved_input')
     payload = calculation.as_dict()
-    if payload['status'] == 'calculated':
+    if labor is None and payload['status'] == 'calculated':
         if label := _unaccounted_optional(question, calculator, inputs):
             return guidance(f'계산에 사용할 {label} 항목을 확인해 주세요.', 'unresolved_input')
         if calculator == MEDICAL and _missing_medical_category(question, inputs):
@@ -280,24 +404,65 @@ def route_calculation(
     return Routing(payload, calculation.reason or 'selected', elapsed_ms)
 
 
+def _calculation_years(question: str, inputs: dict[str, str], reference: int, calculator: str) -> dict[str, int]:
+    if calculator in LABOR_CALCULATORS:
+        event_fields = ('as_of_date', 'retirement_date', 'last_employed_date')
+        for field in event_fields:
+            if source := inputs.get(field):
+                event = parse_labor_date(source)
+                if calculator == 'severance_pay' and field == 'last_employed_date':
+                    event += timedelta(days=1)
+                return {source: event.year}
+        year_context = _HIRE_DATES.sub(' ', question)
+        explicit = {match[0]: _year_value(match[0], reference) for match in _YEARS.finditer(year_context)}
+        if explicit:
+            return explicit
+        if (source := inputs.get('year')) and re.fullmatch(r'[0-9０-９]{4}', source.strip()):
+            # A bare year is accepted only outside a longer number.
+            if re.search(rf'(?<!\d){re.escape(source.strip())}(?!\d|[./-]\d)', year_context):
+                return {source: int(source)}
+        return {}
+    return {match[0]: _year_value(match[0], reference) for match in _YEARS.finditer(question)}
+
+
 def prompt_suffix(payload: dict[str, Any]) -> str:
-    instruction = CALCULATED_INSTRUCTION if payload['status'] == 'calculated' else GUIDANCE_INSTRUCTION
-    return f'\n\n[계산 결과]\n{json.dumps(payload, ensure_ascii=False)}\n{instruction}'
+    instruction = GUIDANCE_INSTRUCTION
+    if payload['status'] == 'calculated':
+        results = payload['results']
+        if any(row.get('condition') for row in results):
+            instruction = CONDITIONAL_INSTRUCTION
+        elif any(row.get('unit', '원') != '원' for row in results):
+            instruction = CALCULATED_UNITS_INSTRUCTION
+        else:
+            instruction = CALCULATED_INSTRUCTION
+    return f'\n\n[계산 결과]\n{json.dumps(payload, ensure_ascii=False, separators=(",", ":"))}\n{instruction}'
+
+
+def _display_values(row: dict[str, Any]) -> set[tuple[str, Decimal]]:
+    value = row['value']
+    if isinstance(value, int) or 'unit' in row:
+        try:
+            return {(row.get('unit', '원'), Decimal(str(value).replace(',', '')))}
+        except InvalidOperation:
+            return set()
+    return {('원', Decimal(amount)) for _, amount in amount_spans(value)}
 
 
 def check_conclusion(raw: str, payload: dict[str, Any]) -> Literal['match', 'mismatch', 'missing']:
     marked = sections(raw)
     conclusion = marked.get('결론', '' if marked else raw)
     conclusion = re.sub(r'(?m)^[ \t]*-[ \t]+', '', conclusion)
-    observed = {value for _, value in amount_spans(conclusion)}
+    required = {item for result in payload['results'] for item in _display_values(result)}
+    observed = {('원', Decimal(value)) for _, value in amount_spans(conclusion)}
+    if any(unit == '일' for unit, _ in required):
+        days_text = re.sub(r'\d{1,2}\s*월\s*\d{1,2}\s*일', '', unicodedata.normalize('NFKC', conclusion))
+        day_amounts = re.findall(r'(?<![\d.,])[-−]?\s*(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?\s*(?=일)', days_text)
+        observed.update(
+            ('일', Decimal(''.join(value.split()).replace('−', '-').replace(',', ''))) for value in day_amounts
+        )
     if not observed:
         return 'missing'
-    required = {result['value'] for result in payload['results']}
     allowed = required.copy()
     for row in (*payload['inputs'], *payload['steps']):
-        value = row['value']
-        if isinstance(value, str):
-            allowed.update(amount for _, amount in amount_spans(value))
-        else:
-            allowed.add(value)
+        allowed.update(_display_values(row))
     return 'match' if required <= observed <= allowed else 'mismatch'

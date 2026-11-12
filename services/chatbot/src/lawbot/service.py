@@ -9,6 +9,7 @@ import threading
 import time
 import uuid
 from dataclasses import dataclass
+from functools import partial
 from pathlib import Path
 from typing import cast
 
@@ -543,15 +544,20 @@ def ask(
         REQUEST_ID.set(st['request_id'])
         if calculation_candidate:
             stage = 'router'
+            route_started = time.perf_counter()
             classify = None
+            router_usage: dict[str, int] = {}
             if 'pro' in app.models.specs:
                 pro, _ = app.models.get('pro')
                 classify = getattr(pro, 'route_calculation', None)
+                if isinstance(pro, LLM):
+                    classify = partial(pro.route_calculation, metrics=router_usage)
             if classify is not None:
                 if 'call_counts' in st:
                     st['call_counts']['router'] = 0
                 count_call(st, 'router')
             routing = route_calculation(question, classify, lambda: active_calculators(app))
+            route_ms = (time.perf_counter() - route_started) * 1000
             payload = routing.payload
             is_lookup = payload['status'] == 'lookup'
             st['calculation_metrics'] = {
@@ -559,11 +565,14 @@ def ask(
                 'calculation_status': 'none' if is_lookup else payload['status'],
                 'router_reason': routing.reason,
                 'router_ms': routing.elapsed_ms,
+                'router_validation_ms': round(max(0, route_ms - (routing.elapsed_ms or 0)), 3),
                 'calculation_check': 'not_run',
+                **router_usage,
             }
             if not is_lookup:
                 st['_calculation'] = payload
                 suffix = prompt_suffix(payload)
+                st['calculation_metrics']['calculation_event_ms'] = round((time.perf_counter() - t0) * 1000, 3)
                 yield 'calculation', [], '', st
             stage = 'search'
             REQUEST_ID.set(st['request_id'])

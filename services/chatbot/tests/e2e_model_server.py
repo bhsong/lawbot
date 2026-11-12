@@ -44,6 +44,31 @@ def calculation_chunks(prompt, system, kw):
         elif '의료비 300만 원이면 의료비 세액공제액' in prompt:
             calculator = 'medical_expense_credit'
             spans = {'gross_pay': '5천만 원', 'medical_expenses': '300만 원', 'year': '2026년'}
+        elif '월급 300만원으로 3년 일했습니다' in prompt:
+            calculator = 'severance_pay'
+            spans = {'monthly_wage': '300만원', 'service_period': '3년'}
+        elif '근속 2년을 마쳤고 연차 발생일에도 재직' in prompt:
+            calculator = 'annual_leave_days'
+            spans = {
+                'workplace_size': '5명',
+                'weekly_hours': '40시간',
+                'service_period': '2년',
+                'employed_at_accrual': '연차 발생일에도 재직',
+                'attendance_rate': '96%',
+            }
+        elif '근속 2년하고 11개월' in prompt:
+            calculator = 'annual_leave_days'
+            spans = {'service_period': '2년하고 11개월'}
+        elif '입사일은 2024년 2월 30일' in prompt:
+            calculator = 'annual_leave_days'
+            spans = {
+                'workplace_size': '8명',
+                'weekly_hours': '40시간',
+                'attendance_rate': '92%',
+                'hire_date': '2024년 2월 30일',
+                'as_of_date': '2026년 3월 1일',
+                'employed_at_accrual': '재직 중',
+            }
         else:
             return ['{"calculator":"none","kind":"calculation"}']
         inputs = {field: span for field, span in spans.items() if span in prompt}
@@ -52,8 +77,20 @@ def calculation_chunks(prompt, system, kw):
     if '계산 결과의 숫자를 그대로 쓰고 다시 계산하지 말' in prompt:
         if '장기요양보험료 5만원' in prompt:
             return ['【결론】', '결정세액은 146,750원이고 개인지방소득세는 14,675원입니다.', cite]
+        if '월급 300만원으로 3년 일했습니다' in prompt:
+            return [
+                '【결론】',
+                '계속근로 1년 이상이고 4주 평균 주 소정근로시간이 15시간 이상이라는 전제에서, '
+                '최근 3개월 월급이 일정하고 평균임금을 적용하면 9,000,000원으로 추정됩니다. '
+                '월급 전액을 통상임금으로 보고 월 209시간과 1일 8시간을 가정하면 10,334,928원으로 추정됩니다.',
+                '\n【근거 조문】\n근로자퇴직급여 보장법 제8조',
+            ]
         return ['【결론】', '의료비 세액공제액은 1원입니다.', cite]
+    if '표의 결과 항목과 숫자·단위를 결론에 그대로 쓰고' in prompt:
+        return ['【결론】', '연차유급휴가 일수는 15일입니다.', '\n【근거 조문】\n근로기준법 제60조']
     if '직접 계산하지 말고' in prompt:
+        if '근속 2년하고 11개월' in prompt or '입사일은 2024년 2월 30일' in prompt:
+            cite = '\n【근거 조문】\n근로기준법 제60조'
         return ['【결론】', '계산에 필요한 자료와 근거 조문을 확인해 주세요.', cite]
     return answer_chunks(prompt)
 
