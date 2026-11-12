@@ -165,7 +165,9 @@ _QUANTITY = re.compile(
             r'(?P<date>[0-9]{4}\s*년\s*[0-9]{1,2}\s*월\s*[0-9]{1,2}\s*일'
             r'|[0-9]{4}([-./])\s*[0-9]{1,2}\2\s*[0-9]{1,2}(?![0-9]))',
             rf'(?P<money>{_N}(?:\s*[{_KOREAN_UNITS}])*(?:\s*(?:{_N}|[{_KOREAN_DIGITS}])(?:\s*[{_KOREAN_UNITS}])+)*'
-            rf'(?:\s*{_N})?\s*원|(?<![가-힣])[{_KOREAN_DIGITS}{_KOREAN_UNITS}]{{2,}}\s*원)',
+            rf'(?:\s*{_N})?\s*원|(?<![가-힣])[{_KOREAN_DIGITS}{_KOREAN_UNITS}]{{2,}}\s*원'
+            # Amounts may omit 원 when a large Korean unit marks them as money.
+            rf'|{_N}(?:\s*[천백십]?\s*[억만])+(?!\s*(?:명|인|개|일|시간|주|회|번)))',
             rf'(?P<period>{_N}\s*년(?:{_JOIN}{_N}\s*개월)?(?:{_JOIN}{_N}\s*일)?(?!\s*[0-9]+\s*월)'
             rf'|{_N}\s*개월(?:{_JOIN}{_N}\s*일)?)',
             rf'(?P<hours>{_N}\s*시간(?:\s*{_N}\s*분)?)',
@@ -260,8 +262,9 @@ def _evidence(question: str, text: str) -> str | None:
 def compose_route(question: str, selection: str | None, labels: str | None = None) -> str | None:
     """Convert stage outputs to the router JSON, or None when stage 1 was unusable.
 
-    Unlabeled numbers, numbers judged uncertain and fields given two different
-    numbers become the ``ambiguity`` span so the router asks instead of guessing.
+    Unlabeled numbers, numbers judged uncertain, numbers given an unknown field
+    and fields given two different numbers become the ``ambiguity`` span so the
+    router asks instead of guessing.
     A number labeled with a field its unit cannot fill is treated as not an input.
     """
     if selection is None:
@@ -303,6 +306,9 @@ def compose_route(question: str, selection: str | None, labels: str | None = Non
             ambiguity = ambiguity or token
             continue
         kind = kinds.get(label)
+        if kind is None and label != 'x':
+            ambiguity = ambiguity or token
+            continue
         if kind is None or kind in ('fact', 'phrase') or (allowed is not None and kind not in allowed):
             continue
         if label in inputs and re.sub(r'\s', '', inputs[label]) != re.sub(r'\s', '', token):

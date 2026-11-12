@@ -222,3 +222,23 @@ def test_llm_router_makes_select_then_label_requests():
     assert requests[1]['messages'][1]['content'] == '시급 [1:10,000원], 주 [2:5일]\n\n(숫자 2개: 1~2번)'
     assert [body['max_tokens'] for body in requests] == [SELECT_MAX_TOKENS, 96]
     assert metrics == {'router_calls': 2, 'router_prompt_tokens': 20, 'router_completion_tokens': 4}
+
+
+def test_amount_without_won_keeps_its_korean_unit():
+    question = '총급여 5000만, 본인 의료비 300만 썼어요. 의료비 세액공제는?'
+    assert [text for text, _ in quantity_tokens(question)] == ['5000만', '300만']
+    routed = route(question, 'medical_expense_credit', '1=gross_pay\n2=unlimited_expenses')
+    assert routed.reason == 'selected'
+
+
+def test_unknown_label_is_ambiguous_not_dropped():
+    question = '상시 10명, 통상시급 10,000원, 평일 연장 2시간, 밤에 일한 3시간(야간근로입니다). 가산분만 계산해 주세요.'
+    labels = '1=staff_count\n2=ordinary_hourly_wage\n3=overtime_hours\n4=night_hour'
+    assert json.loads(compose_route(question, 'premium_pay', labels))['ambiguity'] == '3시간'
+    assert route(question, 'premium_pay', labels).payload['status'] == 'guidance'
+
+
+def test_decimal_hours_described_as_worked_are_rejected():
+    question = '2026년에 월 100.5시간 실제 근무했습니다. 월 최저임금은 얼마인가요?'
+    routed = route(question, 'monthly_minimum_wage', '1=year\n2=monthly_basis_hours')
+    assert routed.payload['status'] == 'guidance'

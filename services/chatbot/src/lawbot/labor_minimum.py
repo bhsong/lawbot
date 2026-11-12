@@ -75,7 +75,8 @@ def question_issue(question: str, inputs: Mapping[str, str], facts: Mapping[str,
     stated = {re.sub(r'\s+', '', match[1] or match[2]) for match in _MONTH_BASIS.finditer(normalized_question)}
     source = inputs.get('monthly_basis_hours', '')
     described_as_worked = bool(source) and any(
-        source in clause and _ACTUAL_HOURS.search(clause) for clause in re.split(r'[.!?\n,;]', question)
+        source in clause and _ACTUAL_HOURS.search(clause)
+        for clause in re.split(r'[!?\n,;]|(?<!\d)\.|\.(?!\d)', question)
     )
     if (
         _MONTH_BASIS_RANGE.search(normalized_question)
