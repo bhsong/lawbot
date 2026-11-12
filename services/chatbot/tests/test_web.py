@@ -406,7 +406,7 @@ def test_chat_rejects_body_over_the_limit_before_processing(authed, env):
     assert calls == []
 
 
-def test_chat_bounds_waiters_and_releases_slots(lawbot, env):
+def test_chat_bounds_waiters_and_keeps_waiting_past_thirty_seconds(lawbot, env):
     started, release = Event(), Event()
     calls = []
 
@@ -418,7 +418,6 @@ def test_chat_bounds_waiters_and_releases_slots(lawbot, env):
         yield 'done', {'text': question}
 
     env.setattr(web, 'chat_events', generate)
-    env.setattr(web, 'CHAT_QUEUE_TIMEOUT', 0.5, raising=False)
     app = web.create_app(lawbot, (USER, PW), dist=None)
 
     async def exercise():
@@ -443,7 +442,16 @@ def test_chat_bounds_waiters_and_releases_slots(lawbot, env):
                 await asyncio.wait_for(waiting.wait(), 2)
                 third = await asyncio.wait_for(chat(client, question='third'), 2)
                 assert third.status_code == 503
-                assert [kind for kind, _ in events(await asyncio.wait_for(second, 2))] == ['status', 'error']
+                loop = asyncio.get_running_loop()
+                real_clock = loop.time
+                env.setattr(loop, 'time', lambda: real_clock() + 40)
+                await asyncio.sleep(0)
+                await asyncio.sleep(0)
+                release.set()
+                assert events(await asyncio.wait_for(second, 2)) == [
+                    ('status', {'text': web.WAITING}),
+                    ('done', {'text': 'second'}),
+                ]
             finally:
                 release.set()
                 await asyncio.wait_for(first, 2)
@@ -452,7 +460,7 @@ def test_chat_bounds_waiters_and_releases_slots(lawbot, env):
             assert names(events(await chat(client, question='next'))) == ['done']
 
     asyncio.run(exercise())
-    assert calls == ['first', 'next']
+    assert calls == ['first', 'second', 'next']
 
 
 def test_chat_disabled_model(env, lawbot):

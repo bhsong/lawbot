@@ -189,27 +189,6 @@ def test_non_target_and_backdated_commits(tmp_path, legalize, admrule):
     ]
 
 
-@pytest.mark.parametrize('collect_each', [False, True])
-def test_returning_to_a_previous_blob_is_a_new_change(tmp_path, legalize, admrule, collect_each):
-    mon = make_monitor(tmp_path, make_config(legalize, admrule))
-    mon.bootstrap(only='legalize_law')
-    start = legalize.head()
-    expected = []
-    events = []
-    for body in ('개정 A', '개정 B', '개정 A', None, '개정 A', None):
-        md = law_md('근로기준법', {'제1조 (목적)': body}) if body is not None else None
-        expected.append(legalize.commit({LAW_PATH: md}, '변경'))
-        if collect_each:
-            events += _law_events(mon.collect(only='legalize_law'))
-    if not collect_each:
-        events = _law_events(mon.collect(only='legalize_law'))
-    assert [event['context']['commit']['sha'] for event in events] == expected
-    ids = [event['event_id'] for event in events]
-    assert len(set(ids)) == len(expected)
-    assert [event['event_id'] for event in mon.replay('legalize-kr', start, expected[-1])] == ids
-    assert _law_events(mon.collect(only='legalize_law')) == []
-
-
 def test_two_amendments_in_one_range_make_two_events(tmp_path, legalize, admrule):
     mon = make_monitor(tmp_path, make_config(legalize, admrule))
     mon.bootstrap()

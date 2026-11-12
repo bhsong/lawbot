@@ -1,6 +1,6 @@
 # 코드 리뷰 수정 검증 (2026-11-12)
 
-기준은 `main` `3b42ee9`다. 개발 트리에서 가짜 모델, 브라우저, 합성 Git 원천과 임시 SQLite를 사용했다. 공유 모델 서버 추론은 0회였다. [수정 계획](../archives/code-review-findings.md)
+PR #122의 첫 head `768ed44`에 대한 기록이다. 기준은 `main` `3b42ee9`다. 개발 트리에서 가짜 모델, 브라우저, 합성 Git 원천과 임시 SQLite를 사용했다. 공유 모델 서버 추론은 0회였다. [수정 계획](../archives/code-review-findings.md) · [재리뷰 반영 검증](2026-11-12-pr-122-review.md)
 
 ## 리뷰 항목 확인
 

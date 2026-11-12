@@ -62,7 +62,6 @@ LOGIN_FAIL_DELAY = 1.0  # 초. 비밀번호 대입을 느리게
 LOGIN_ATTEMPT_CAPACITY = 1024
 JSON_BODY_LIMIT = ADMIN_BODY_LIMIT = 64 * 1024
 MAX_QUESTION = 2000  # 글자. 모델 서버에 보내는 입력 길이 상한
-CHAT_QUEUE_TIMEOUT = 30.0
 CHAT_BUSY = '앞 질문을 처리 중입니다. 잠시 뒤 다시 질문해 주세요.'
 WAITING = '⏳ 앞 질문을 기다리는 중…'
 CONFIG_ERROR = '웹앱 설정 오류로 답하지 못했습니다. 서버 로그를 확인하세요.'
@@ -587,22 +586,14 @@ def create_app(
     async def stream(events):
         if slots.locked():
             yield sse('status', {'text': WAITING})
-        try:
-            async with asyncio.timeout(CHAT_QUEUE_TIMEOUT):
-                await slots.acquire()
-        except TimeoutError:
-            yield sse('error', {'kind': 'queue_timeout', 'message': CHAT_BUSY})
-            return
-        try:
-            while (item := await anyio.to_thread.run_sync(next, events, None)) is not None:
-                if item[0] != TICK:
-                    yield sse(*item)
-        finally:
+        async with slots:
             try:
+                while (item := await anyio.to_thread.run_sync(next, events, None)) is not None:
+                    if item[0] != TICK:
+                        yield sse(*item)
+            finally:
                 with anyio.CancelScope(shield=True):
                     await anyio.to_thread.run_sync(events.close)
-            finally:
-                slots.release()
 
     @api.post('/api/feedback', dependencies=[Depends(require_json)])
     async def feedback_(request: Request, who: Who):

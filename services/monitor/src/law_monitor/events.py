@@ -1,4 +1,4 @@
-"""Persist changes under their deterministic event IDs."""
+"""변경 이벤트 저장. event_id는 내용 기반이라 같은 변경을 여러 번 저장해도 파일이 하나다."""
 
 import hashlib
 import json

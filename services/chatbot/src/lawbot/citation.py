@@ -94,27 +94,19 @@ def article_keys(retriever):
 
 
 # ---- 인용 파싱 ----
-_ALIAS = {norm(alias): law for law, aliases in LAW_ALIASES.items() for alias in aliases}
-_LAW_NAMES = _ALIAS | {alias + suffix: f'{law} {suffix}' for alias, law in _ALIAS.items() for suffix in SUB_LAWS}
-_KNOWN_LAW = '|'.join(r'\s*'.join(map(re.escape, name)) for name in sorted(_ALIAS, key=len, reverse=True))
-_SUB_LAW = '|'.join(r'\s*'.join(name) for name in SUB_LAWS)
-_ARTICLE = r'(?P<add>부\s*칙\s*(?:[<(（\[]?\s*(?P<num>제\s*\d+\s*호)\s*[>)）\]]?)?\s*)?'
-_ARTICLE += r'(?P<no>제\s*\d+\s*조(?:\s*의\s*\d+)?)'
-_UNREGISTERED_LAW = r'(?<![가-힣·])[가-힣·]+(?:법률|법|조례|규칙)|(?<![가-힣·])법률'
+_ALIAS = sorted(((norm(a), law) for law, al in LAW_ALIASES.items() for a in al), key=lambda x: -len(x[0]))
 _TOKEN = re.compile(
-    rf'(?:「(?P<quoted>[^」\n]+)」|(?P<unknown>{_UNREGISTERED_LAW}))(?:\s*(?P<unknown_sub>{_SUB_LAW}))?'
-    r'(?=\s*(?:부\s*칙|제\s*\d+\s*조))'
-    rf'|(?P<law>{_KNOWN_LAW})(?:\s*(?P<sub>{_SUB_LAW}))?|{_ARTICLE}'
+    '(?P<law>' + '|'.join(re.escape(a) for a, _ in _ALIAS) + ')(?P<sub>' + '|'.join(SUB_LAWS) + ')?'
+    r'|(?P<add>부칙(?:[<(（\[]?(?P<num>제\d+호)[>)）\]]?)?)?(?P<no>제\d+조(?:의\d+)?)'
 )
 
 
 def article_no(m: re.Match) -> str:
     """'제26조', 부칙 특례 '부칙<제20903호>제4조' (데이터 article_no 형식). 공포번호 없는 '부칙 제4조'는 어느 부칙인지
     몰라 '부칙제4조' (본칙 제4조와 섞이지 않게)"""
-    no = norm(m['no'])
     if not m['add']:
-        return no
-    return f'부칙<{norm(m["num"])}>{no}' if m['num'] else f'부칙{no}'
+        return m['no']
+    return f'부칙<{m["num"]}>{m["no"]}' if m['num'] else f'부칙{m["no"]}'
 
 
 def cite_section(answer):
@@ -130,14 +122,11 @@ def parse(text):
     거절 형식('해당 없음 (제공된 조문: …)')은 빈 목록"""
     if str(text).strip().startswith('해당 없음'):
         return []
+    alias = dict(_ALIAS)
     law, out = None, []
-    text = str(text).replace('ㆍ', '·').replace('・', '·')
-    for m in _TOKEN.finditer(text):
-        if name := m['law'] or m['quoted'] or m['unknown']:
-            if m['unknown'] and name in ('이법', '동법', '같은법'):
-                continue
-            sub = m['sub'] or m['unknown_sub']
-            law = _LAW_NAMES.get(norm(name), name.strip()) + (' ' + norm(sub) if sub else '')
+    for m in _TOKEN.finditer(norm(text)):
+        if m['law']:
+            law = alias[m['law']] + (' ' + m['sub'] if m['sub'] else '')
         else:
             no = article_no(m)
             if (law, no) not in out:
