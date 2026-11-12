@@ -57,11 +57,12 @@ def test_replay_ambiguous_live_responses(case_id, response):
     assert route.reason == 'ambiguous_input'
 
 
-def test_replay_cr092_from_second_evaluation_rejects_reusing_the_combined_amount():
+@pytest.mark.parametrize('infertility', ['700만원', '700만'])
+def test_replay_cr092_from_second_evaluation_rejects_reusing_the_combined_amount(infertility):
     case = _VAL_CASES['CR092']
     response = (
         '{"calculator":"medical_expense_credit","inputs":{"gross_pay":"5000만원",'
-        '"general_expenses":"700만원","infertility_expenses":"700만원"}}'
+        f'"general_expenses":"700만원","infertility_expenses":"{infertility}"}}}}'
     )
     route = route_calculation(case['question'], lambda _: response, {MEDICAL: ()}, reference_year=2026)
     assert route.payload['calculator'] == MEDICAL
@@ -69,6 +70,17 @@ def test_replay_cr092_from_second_evaluation_rejects_reusing_the_combined_amount
     assert route.reason == 'ambiguous_input'
     assert route.payload['message'] == '계산에 사용할 금액과 그 금액이 어떤 항목에 해당하는지 확인해 주세요.'
     assert 'results' not in route.payload
+
+
+def test_equal_amounts_at_separate_positions_can_be_assigned():
+    question = '2026년 총급여 5천만원이고 일반 의료비 700만원, 난임 시술비 700만 원이면 의료비 세액공제는 얼마인가요?'
+    response = (
+        '{"calculator":"medical_expense_credit","inputs":{"gross_pay":"5천만원",'
+        '"general_expenses":"700만원","infertility_expenses":"700만"}}'
+    )
+    route = route_calculation(question, lambda _: response, {MEDICAL: ()}, reference_year=2026)
+    assert route.payload['status'] == 'calculated'
+    assert route.payload['results'] == [{'label': '의료비 세액공제', 'value': 2_925_000}]
 
 
 # The first evaluation retained only the failed responses. These four responses use the frozen

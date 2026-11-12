@@ -15,13 +15,30 @@ export default function App() {
   const [admin, setAdmin] = useState(false)
   const [config, setConfig] = useState<Config | null>(null)
   const [error, setError] = useState('')
+  const [signingOut, setSigningOut] = useState(false)
+  const [logoutError, setLogoutError] = useState('')
 
   const signedOut = useCallback(() => {
     setAdmin(false)
     setConfig(null)
     setError('')
+    setLogoutError('')
     setState('out')
   }, [])
+
+  async function signOut() {
+    setSigningOut(true)
+    setLogoutError('')
+    try {
+      await api.logout()
+      signedOut()
+    } catch (e) {
+      if (e instanceof ApiError && e.status === 401) signedOut()
+      else setLogoutError(e instanceof ApiError ? e.message : NETWORK_ERROR)
+    } finally {
+      setSigningOut(false)
+    }
+  }
 
   useEffect(() => {
     if (state !== 'checking') return
@@ -58,26 +75,38 @@ export default function App() {
   if (state === 'out') return <Login onDone={() => setState('checking')} />
   if (error) return <p className="error page-error" role="alert">{error}</p>
   if (state === 'checking' || !config) return null
-  if (admin) return <AdminSession config={config} onSignedOut={signedOut} />
-  return <Chat config={config} onSignedOut={signedOut} />
+  const logout = { pending: signingOut, error: logoutError, run: signOut }
+  if (admin) return <AdminSession config={config} onSignedOut={signedOut} logout={logout} />
+  return <Chat config={config} onSignedOut={signedOut} logout={logout} />
 }
 
 const adminViews = [{ value: 'chat', label: '채팅' }, { value: 'manage', label: '피드백 & 법령 관리' }]
+type LogoutAction = { pending: boolean; error: string; run: () => Promise<void> }
 
-function AdminSession({ config, onSignedOut }: { config: Config; onSignedOut: () => void }) {
+function LogoutControl({ action }: { action: LogoutAction }) {
+  return <>
+    <button type="button" className="icon" aria-label="로그아웃" title="로그아웃" disabled={action.pending} onClick={action.run}>
+      <Logout />
+    </button>
+    {action.error && <span className="error" role="alert">{action.error}</span>}
+  </>
+}
+
+function AdminSession({ config, onSignedOut, logout }: { config: Config; onSignedOut: () => void; logout: LogoutAction }) {
   const [view, setView] = useState('chat')
   return <div className="admin-shell">
     <nav className="admin-switch" aria-label="관리자 화면">
       <Segmented label="화면 전환" items={adminViews} value={view} onChange={setView} />
-      {view === 'manage' && <button type="button" className="icon" aria-label="로그아웃" title="로그아웃"
-        onClick={() => void api.logout().then(onSignedOut, onSignedOut)}><Logout /></button>}
+      {view === 'manage' && <LogoutControl action={logout} />}
     </nav>
-    <div className="admin-chat" hidden={view !== 'chat'}><Chat config={config} onSignedOut={onSignedOut} /></div>
+    <div className="admin-chat" hidden={view !== 'chat'}>
+      <Chat config={config} onSignedOut={onSignedOut} logout={view === 'chat' ? logout : undefined} />
+    </div>
     {view === 'manage' && <AdminPage onUnauthorized={onSignedOut} />}
   </div>
 }
 
-function Chat({ config, onSignedOut }: { config: Config; onSignedOut: () => void }) {
+function Chat({ config, onSignedOut, logout }: { config: Config; onSignedOut: () => void; logout?: LogoutAction }) {
   const first = config.models.find((m) => m.key === config.default_model) ?? config.models[0]
   const [model, setModel] = useState(first.key)
   const [format, setFormat] = useState(first.format)
@@ -135,15 +164,7 @@ function Chat({ config, onSignedOut }: { config: Config; onSignedOut: () => void
               }}
             />
             <Segmented label="답변 형식" items={config.formats} value={format} disabled={chat.busy} onChange={setFormat} />
-            <button
-              type="button"
-              className="icon"
-              aria-label="로그아웃"
-              title="로그아웃"
-              onClick={() => api.logout().finally(onSignedOut)}
-            >
-              <Logout />
-            </button>
+            {logout && <LogoutControl action={logout} />}
           </div>
         </header>
         <div className="scroll" ref={scroller}>
@@ -169,6 +190,7 @@ function Chat({ config, onSignedOut }: { config: Config; onSignedOut: () => void
                   reasons={config.feedback.enabled ? config.feedback.reasons : null}
                   onSelect={() => setSelected(t.id === chat.turns.at(-1)?.id ? null : t.id)}
                   onRetry={() => send(t.question)}
+                  retryDisabled={chat.busy}
                   onFeedback={(fb) => feedback(t, fb)}
                   onShowSources={() => setSheet(t.id)}
                 />

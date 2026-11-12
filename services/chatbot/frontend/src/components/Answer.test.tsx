@@ -1,5 +1,5 @@
 import { fireEvent, render, screen, within } from '@testing-library/react'
-import { TurnView } from './TurnView'
+import { AnswerMarkdown, TurnView } from './TurnView'
 import type { Turn } from '../types'
 
 const turn: Turn = {
@@ -16,6 +16,28 @@ test('bold next to Korean particles renders as bold', () => {
   render(<TurnView turn={turn} selected reasons={null} onSelect={vi.fn()} onRetry={vi.fn()} onFeedback={vi.fn()} onShowSources={vi.fn()} />)
   expect(screen.getByText('30일분 이상의 통상임금(해고예고수당)').tagName).toBe('STRONG')
 })
+
+test('answer Markdown preserves image alt text without loading the image', () => {
+  render(<AnswerMarkdown text="![도표](https://example.invalid/image.png) [원문](https://example.invalid/article)" />)
+  expect(screen.queryByRole('img')).not.toBeInTheDocument()
+  expect(screen.getByText('도표')).toBeVisible()
+  expect(screen.getByRole('link', { name: '원문' })).toHaveAttribute('href', 'https://example.invalid/article')
+})
+
+test.each([undefined, { writeText: () => Promise.reject(new Error('Clipboard permission denied')) }])(
+  'copy reports when the clipboard is unavailable or rejects',
+  async (clipboard) => {
+    vi.stubGlobal('navigator', { clipboard })
+    try {
+      render(<TurnView turn={turn} selected reasons={null} onSelect={vi.fn()} onRetry={vi.fn()} onFeedback={vi.fn()} onShowSources={vi.fn()} />)
+      fireEvent.click(screen.getByRole('button', { name: '답변 복사' }))
+      expect(await screen.findByText('답변을 복사하지 못했습니다.')).toHaveAttribute('role', 'status')
+      expect(screen.queryByRole('button', { name: '복사됨' })).not.toBeInTheDocument()
+    } finally {
+      vi.unstubAllGlobals()
+    }
+  },
+)
 
 test('feedback buttons only when feedback is on and the turn has an id', () => {
   const { rerender } = render(<TurnView turn={turn} selected reasons={null} onSelect={vi.fn()} onRetry={vi.fn()} onFeedback={vi.fn()} onShowSources={vi.fn()} />)

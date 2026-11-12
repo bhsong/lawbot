@@ -13,7 +13,7 @@ from pathlib import Path
 
 import pandas as pd
 
-from lawbot import deploy, manifest, settings
+from lawbot import deploy, envfile, manifest, settings
 from lawbot.api_client import Embedder, ModelServerClient, wait_ready
 from lawbot.check_deploy import ARTICLE_NO, COLUMNS, DECREE_COLUMNS
 from lawbot.embed_cache import EmbedCache
@@ -94,6 +94,7 @@ def manifest_path(csv):
 
 
 def build_cache(csv, live):
+    envfile.load()
     cfg = settings.load()
     if cfg.embed_cache is None:
         print('[reindex] 임베딩 캐시 꺼짐 (LAWBOT_EMBED_CACHE=0): 웹앱이 시작할 때 전체를 임베딩합니다')

@@ -90,8 +90,27 @@ def test_api_requires_login(client, env):
     for method, path in PROTECTED:
         r = client.request(method, path, json={'question': QUESTION, 'model': 'fast', 'format': 'full'})
         assert r.status_code == 401, (method, path)
+        assert r.headers.get('cache-control') == 'no-store'
         assert '노동법' not in r.text and 'fast' not in r.text  # 설정·모델 정보가 나가지 않음
     assert calls == []
+
+
+def test_authenticated_api_responses_are_not_stored(client):
+    assert login(client).headers.get('cache-control') == 'no-store'
+    assert client.get('/api/me').headers.get('cache-control') == 'no-store'
+    assert client.get('/api/config').headers.get('cache-control') == 'no-store'
+    assert chat(client).headers.get('cache-control') == 'no-store'
+
+
+def test_login_rate_limit_without_admin(client, env):
+    now = [0.0]
+    env.setattr(web, 'time', SimpleNamespace(monotonic=lambda: now[0]))
+    for _ in range(5):
+        response = login(client, pw='wrong')
+        assert response.status_code == 401 and 'set-cookie' not in response.headers
+    assert login(client).status_code == 429
+    now[0] = 15 * 60
+    assert login(client).status_code == 200
 
 
 @pytest.mark.parametrize(
@@ -363,6 +382,7 @@ def test_chat_empty_answer(authed, env):
     [
         {'question': '  ', 'model': 'fast', 'format': 'full'},
         {'question': QUESTION, 'model': 'nope', 'format': 'full'},
+        *[{'question': QUESTION, 'model': model, 'format': 'full'} for model in ([], {}, 3, None)],
         {'question': QUESTION, 'model': 'fast', 'format': 'long'},
         {'question': QUESTION, 'model': 'fast'},
         {'question': 3, 'model': 'fast', 'format': 'full'},
@@ -375,6 +395,72 @@ def test_chat_invalid_inputs(authed, env, body):
     r = authed.post('/api/chat', json=body)
     assert r.status_code == 400 and r.json()['detail']
     assert calls == []
+
+
+def test_chat_rejects_body_over_the_limit_before_processing(authed, env):
+    calls = []
+    env.setattr(web, 'ask', lambda *a, **kw: calls.append(a) or iter(()))
+    chunks = iter([b'{"unused":"', b'x' * (64 * 1024), b'","question":"q","model":"fast","format":"full"}'])
+    response = authed.post('/api/chat', content=chunks, headers={'Content-Type': 'application/json'})
+    assert response.status_code == 413
+    assert calls == []
+
+
+def test_chat_bounds_waiters_and_keeps_waiting_past_thirty_seconds(lawbot, env):
+    started, release = Event(), Event()
+    calls = []
+
+    def generate(app, question, *_args, **_kwargs):
+        calls.append(question)
+        if question == 'first':
+            started.set()
+            assert release.wait(5)
+        yield 'done', {'text': question}
+
+    env.setattr(web, 'chat_events', generate)
+    app = web.create_app(lawbot, (USER, PW), dist=None)
+
+    async def exercise():
+        waiting = asyncio.Event()
+
+        async def observed_app(scope, receive, send):
+            async def observe(message):
+                if web.WAITING.encode() in message.get('body', b''):
+                    waiting.set()
+                await send(message)
+
+            await app(scope, receive, observe)
+
+        transport = httpx.ASGITransport(app=observed_app)
+        async with httpx.AsyncClient(transport=transport, base_url='http://testserver') as client:
+            assert (await login(client)).status_code == 200
+            first = asyncio.create_task(chat(client, question='first'))
+            second = None
+            try:
+                assert await asyncio.to_thread(started.wait, 2)
+                second = asyncio.create_task(chat(client, question='second'))
+                await asyncio.wait_for(waiting.wait(), 2)
+                third = await asyncio.wait_for(chat(client, question='third'), 2)
+                assert third.status_code == 503
+                loop = asyncio.get_running_loop()
+                real_clock = loop.time
+                env.setattr(loop, 'time', lambda: real_clock() + 40)
+                await asyncio.sleep(0)
+                await asyncio.sleep(0)
+                release.set()
+                assert events(await asyncio.wait_for(second, 2)) == [
+                    ('status', {'text': web.WAITING}),
+                    ('done', {'text': 'second'}),
+                ]
+            finally:
+                release.set()
+                await asyncio.wait_for(first, 2)
+                if second is not None:
+                    await asyncio.wait_for(second, 2)
+            assert names(events(await chat(client, question='next'))) == ['done']
+
+    asyncio.run(exercise())
+    assert calls == ['first', 'second', 'next']
 
 
 def test_chat_disabled_model(env, lawbot):
@@ -519,15 +605,36 @@ def test_feedback_http_sqlite_contract(lawbot, env, tmp_path, caplog, db_failure
         assert c.post('/api/feedback', json=payload | {'label': 'unknown'}).status_code == 400
         assert c.post('/api/feedback', json=payload | {'turn_id': 'unknown'}).status_code == 404
         response = c.post('/api/feedback', json=payload)
+        if db_failure:
+            assert response.status_code == 503
+            with connection.connect(path, write=True) as conn:
+                assert conn.execute('SELECT count(*) FROM feedbacks').fetchone() == (0,)
+                conn.execute('DROP TRIGGER fail_feedback')
+            response = c.post('/api/feedback', json=payload)
         assert response.status_code == 200 and response.json() == {'saved': True}
         assert c.post('/api/feedback', json=payload).json() == {'saved': False}
 
     with connection.connect(path) as conn:
         rows = conn.execute('SELECT turn_id, label FROM feedbacks').fetchall()
-    assert rows == ([] if db_failure else [(done['turn_id'], 'like')])
+    assert rows == [(done['turn_id'], 'like')]
     assert not (tmp_path / 'fallback').exists()
     assert ('피드백을 쓰지 못했습니다' in caplog.text) is db_failure
     assert QUESTION not in caplog.text
+
+
+def test_feedback_http_jsonl_write_failure_can_be_retried(lawbot, tmp_path):
+    fb = feedback.Feedback(tmp_path)
+    blocked = fb.path()
+    blocked.mkdir()
+    with make_client(lawbot, fb=fb) as client:
+        assert login(client).status_code == 200
+        turn_id = events(chat(client))[-1][1]['turn_id']
+        payload = {'turn_id': turn_id, 'label': 'like'}
+        assert client.post('/api/feedback', json=payload).status_code == 503
+        blocked.rmdir()
+        assert client.post('/api/feedback', json=payload).json() == {'saved': True}
+        assert client.post('/api/feedback', json=payload).json() == {'saved': False}
+    assert [row['turn_id'] for row in saved(tmp_path)] == [turn_id]
 
 
 def test_feedback_requests_keep_click_order(lawbot, env, tmp_path):

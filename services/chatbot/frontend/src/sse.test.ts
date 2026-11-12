@@ -24,6 +24,13 @@ test('accepts CRLF and ignores blocks without event or data', () => {
   expect(got).toEqual([['status', { text: 'a' }]])
 })
 
+test('accepts CRLF split between carriage return and line feed', () => {
+  const { got, p } = collect()
+  for (const byte of 'event: status\r\ndata: {"text":"대기"}\r\n\r\nevent: done\r\ndata: {"text":"완료"}\r\n\r\n') p.feed(byte)
+  p.end()
+  expect(got).toEqual([['status', { text: '대기' }], ['done', { text: '완료' }]])
+})
+
 test('flushes the last block on end', () => {
   const { got, p } = collect()
   p.feed('event: done\ndata: {"text": "x"}')

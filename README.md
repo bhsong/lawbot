@@ -35,7 +35,7 @@ Lawbot은 대한민국 노동법 질문에 조문을 근거로 답하는 검색 
 
 ### 주요 지표
 
-현재 웹앱 구성(v4: 튜닝 임베딩 → 리랭커 → Qwen3.8-27B)의 최종 결과입니다. 모든 평가 기록은 [docs/evals/](docs/evals/README.md)에 있습니다.
+아래 표는 v4 웹앱 구성(튜닝 임베딩 → 리랭커 → Qwen3.8-27B)에서 측정한 기준선입니다. 확장 조문과 계산기를 사용하는 v5.6.0의 구성은 운영 반영 기록에 있습니다. [전체 평가 기록](docs/evals/README.md) · [v5.6.0 반영 기록](docs/evals/2026-11-12-deploy-v5.6.0.md)
 
 | 평가 | 결과 |
 | --- | --- |
@@ -139,7 +139,7 @@ Details are in [docs/architecture.md](docs/architecture.md) (Korean).
 
 ### Key results
 
-Final results of the current web app setup (v4: fine-tuned embedding → reranker → Qwen3.8-27B). All evaluation records are in [docs/evals/](docs/evals/README.md) (Korean).
+The table below records the v4 web app baseline (fine-tuned embedding → reranker → Qwen3.8-27B). The v5.6.0 deployment record describes the expanded corpus and calculators. [Evaluation records](docs/evals/README.md) · [v5.6.0 deployment record](docs/evals/2026-11-12-deploy-v5.6.0.md)
 
 | Evaluation | Result |
 | --- | --- |

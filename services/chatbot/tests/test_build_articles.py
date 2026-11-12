@@ -1200,6 +1200,17 @@ def test_build_rows_keeps_only_scoped_articles_and_their_addendum_overrides(tmp_
     ]
 
 
+@pytest.mark.parametrize(('owner', 'deleted'), [('', 1), ('(다른법)', 0)])
+def test_build_rows_applies_expiry_only_to_the_law_that_owns_the_addendum(tmp_path, owner, deleted):
+    addendum = (
+        f'부칙{owner} <제300호,2020.1.1>\n\n제1조(시행일) 이 법은 공포한 날부터 시행한다.\n\n'
+        '제2조(유효기간) 제1조의 개정규정은 2020년 12월 31일까지 효력을 가진다.'
+    )
+    repo = make_repo(tmp_path, [('2020-01-01', '300', '2020-01-01', V1, addendum)])
+    rows, _ = b.build_rows(repo, {'시험법': PATH}, '2026-10-20', [('시험법', '법률', {'제1조'})])
+    assert [(row['article_no'], row['deleted']) for row in rows] == [('제1조', deleted)]
+
+
 def test_csv_names_follow_the_dataset_version():
     assert b.csv_names('v4') == (b.LAW_CSV, b.DECREE_CSV) == ('articles_v4.csv', 'law_articles_v4_decree.csv')
     assert b.csv_names('v5') == ('articles_v5.csv', 'law_articles_v5_decree.csv')

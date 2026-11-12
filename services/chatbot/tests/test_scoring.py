@@ -55,10 +55,13 @@ def test_cited_articles():
     assert cited_articles('근거 조문 표시 없음 제26조') == []
 
 
-@pytest.mark.parametrize('name', ['refusal_v1_4bit.csv', 'oos_v1_4bit.csv'])
-def test_refusal_rule_matches_recorded_results(name):
+@pytest.mark.parametrize(
+    ('name', 'count', 'key'), [('refusal_v1_4bit.csv', 200, ['test', 'id']), ('oos_v1_4bit.csv', 82, ['id'])]
+)
+def test_refusal_rule_matches_recorded_results(name, count, key):
     # v1 기록(docs/evals) 거절률 수치의 근거가 된 판정을 지금 규칙으로 그대로 재현해야 함
     o = results(name)
+    assert len(o) == count and not o.duplicated(key).any()
     assert (o['answer'].fillna('').map(is_refusal) == o['refusal']).all()
 
 
@@ -167,6 +170,7 @@ def test_reference_answers_score_full_marks(ev):
 )
 def test_scorer_reproduces_recorded_scores(ev, name):
     o = results(name).fillna({'answer': ''})
+    assert len(o) == 100 and o['id'].is_unique
     gold = ev.set_index('id')
     for _, r in o.iterrows():
         s = score_one(gold.loc[r['id']], r['answer'])

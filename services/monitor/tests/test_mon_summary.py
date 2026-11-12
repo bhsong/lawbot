@@ -110,6 +110,42 @@ def test_one_call_per_amendment_and_md(tmp_path, legalize):
     assert result.path.read_text(encoding='utf-8') == md  # 앞 파일은 그대로
 
 
+def test_summary_files_at_the_same_time_are_preserved(tmp_path):
+    mon = make_monitor(tmp_path, make_config(), collectors=[], llm=FakeLLM().client())
+    reports = [mon.summarize(run_line=f'실행 {i}').path for i in range(3)]
+    assert len(set(reports)) == 3
+    assert all(f'실행 {i}' in path.read_text(encoding='utf-8') for i, path in enumerate(reports))
+
+
+@pytest.mark.parametrize('missing_all', [False, True])
+def test_missing_event_files_remain_pending_and_can_be_recovered(tmp_path, legalize, missing_all):
+    mon = monitor_with_events(tmp_path, legalize, FakeLLM().client())
+    items = mon.state.pending_events()
+    attachments = [
+        item for item in items if json.loads((mon.paths.home / item[1]).read_text())['source'] == 'lawgo_forms'
+    ]
+    selected = items if missing_all else attachments[:1]
+    assert len(selected) == (3 if missing_all else 1)
+    renamed = []
+    for _, rel in selected:
+        path = mon.paths.home / rel
+        saved = path.with_suffix('.missing')
+        path.rename(saved)
+        renamed.append((path, saved))
+    result = mon.summarize()
+    assert result.failed and result.pending == len(selected) == mon.state.pending_count()
+    assert result.calls == (0 if missing_all else 1)
+    assert mon.state.last_run()['status'] == 'failed'
+    report = result.path.read_text(encoding='utf-8')
+    assert '새 변경 없음' not in report and '이벤트 파일' in report
+    assert all(event_id in report for event_id, _ in selected)
+    for path, saved in renamed:
+        saved.rename(path)
+    restored = mon.summarize()
+    assert restored.failed is None and restored.events == len(selected) and restored.pending == 0
+    assert mon.state.pending_count() == 0
+
+
 def test_header_states_detection_window(tmp_path, legalize):
     """파일 날짜는 실행일. 대상은 '지난 요약(없으면 bootstrap) ~ 이번 실행' 사이에 저장소에서 새로 감지된 변경."""
     from datetime import datetime

@@ -9,9 +9,7 @@ from pathlib import Path
 
 from lawbot import audit_store, dataset_store
 from lawbot.db.connection import connect, transaction
-from lawbot_common.logs import logger
 
-log = logger('lawbot', 'lawbot')
 DatabaseError = sqlite3.Error
 FIELDS = (
     'feedback_id',
@@ -54,12 +52,9 @@ def append(conn: sqlite3.Connection, row: dict) -> None:
 
 
 def write(path: Path, row: dict) -> None:
-    """Write to the validated DB, warning without including record contents on failure."""
-    try:
-        with connect(path, write=True) as conn:
-            append(conn, row)
-    except (OSError, RuntimeError, sqlite3.Error) as exc:
-        log.warning('경고: 피드백을 쓰지 못했습니다 (%s: %s)', path, type(exc).__name__)
+    """Write and commit a feedback record to the validated DB."""
+    with connect(path, write=True) as conn:
+        append(conn, row)
 
 
 def read_records(path: Path) -> list[dict]:

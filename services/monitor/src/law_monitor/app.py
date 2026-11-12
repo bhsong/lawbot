@@ -158,7 +158,7 @@ class Monitor:
                     (p.stem, self.paths.rel(p) if p.is_relative_to(self.paths.home) else str(p))
                     for p in sorted(folder.glob('*.json'))
                 ]
-                events, paths = load_events(self.paths.home, items)
+                events, paths, unavailable = load_events(self.paths.home, items)
                 out = folder / 'summary.md'
                 window = f'replay 구간 `{folder.name}`'
             else:
@@ -170,11 +170,13 @@ class Monitor:
                 )
                 run_id = f'{now.strftime("%Y%m%dT%H%M%S")}-{uuid.uuid4().hex[:6]}'
                 self.state.start_run(run_id, 'summarize', now.isoformat(timespec='seconds'))
-                events, paths = load_events(self.paths.home, self.state.pending_events())
+                events, paths, unavailable = load_events(self.paths.home, self.state.pending_events())
                 day = now.strftime('%Y-%m-%d')
                 out = self.paths.data / 'summaries' / f'{day}.md'
                 if out.exists():  # 같은 날 두 번째 실행: 앞 파일을 덮지 않음
                     out = out.with_name(f'{day}-{now.strftime("%H%M%S")}.md')
+                if out.exists():
+                    out = out.with_name(f'{day}-{run_id}.md')
             result, done = write_summary(
                 events,
                 paths,
@@ -186,6 +188,8 @@ class Monitor:
                 ran_at=now.isoformat(timespec='seconds'),
                 window=window,
                 checks=checks,
+                unavailable=unavailable,
+                overwrite=run_id is None,
             )
             if run_id is not None:
                 finished = self.now().isoformat(timespec='seconds')

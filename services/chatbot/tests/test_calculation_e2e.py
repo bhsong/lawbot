@@ -105,9 +105,11 @@ def ui(calculation_stack, page, request):
 
 
 def ask_with_events(page, stack, question):
+    read_body = e2e.capture_response_body(page, '/api/chat')
     with page.expect_response(f'{stack.url}/api/chat', timeout=e2e.ANSWER_TIMEOUT) as response:
         e2e.ask(page, question)
-    events = list(dict.fromkeys(re.findall(r'^event: (\S+)', response.value.text(), re.MULTILINE)))
+    assert response.value.ok
+    events = list(dict.fromkeys(re.findall(r'^event: (\S+)', read_body(), re.MULTILINE)))
     assert 'done' in events, events
     e2e.wait_done(page)
     return events

@@ -41,13 +41,19 @@ export const api = {
   /** Stream one question; calls onEvent for each server event until the response ends. */
   async chat(body: { question: string; model: string; format: string }, signal: AbortSignal, onEvent: (e: string, d: unknown) => void) {
     const res = await post('/api/chat', body, signal)
+    if (!res.body) return
     const parser = sseParser(onEvent)
-    const reader = res.body!.pipeThrough(new TextDecoderStream()).getReader()
-    for (;;) {
-      const { done, value } = await reader.read()
-      if (done) break
-      parser.feed(value)
+    const reader = res.body.pipeThrough(new TextDecoderStream()).getReader()
+    try {
+      for (;;) {
+        const { done, value } = await reader.read()
+        if (done) break
+        parser.feed(value)
+      }
+      parser.end()
+    } finally {
+      await reader.cancel().catch(() => undefined)
+      reader.releaseLock()
     }
-    parser.end()
   },
 }

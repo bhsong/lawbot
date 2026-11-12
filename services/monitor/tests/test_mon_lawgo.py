@@ -3,6 +3,7 @@
 import json
 import os
 
+import httpx
 import pytest
 
 from law_monitor import attachments, cli, secrets
@@ -75,6 +76,24 @@ def test_parse_effective_dates_glued_together():
     }
     assert attachments.parse_effective('') == {}
     assert attachments.parse_effective('20260320:서식24,별표220260701:서식24')['서식24'] == ['2026-03-20', '2026-07-01']
+
+
+def test_malformed_lawgo_response_does_not_leak_body(tmp_path, legalize):
+    def handler(_request):
+        return httpx.Response(200, json={'error': {'message': f'응답 오류 {TEST_OC}'}})
+
+    client = LawGoClient(TEST_OC, HttpClient(transport=httpx.MockTransport(handler), min_interval=0))
+    with pytest.raises(LawGoError) as exc:
+        client.law_body(NEW_MST)
+    assert TEST_OC not in str(exc.value)
+
+    mon = make_monitor(tmp_path, config_for(legalize), lawgo=client)
+    mon.bootstrap(only='legalize_law')
+    amend(legalize)
+    result = mon.collect(only='legalize_law')
+    assert result.failed and TEST_OC not in str(result.failed)
+    assert TEST_OC not in mon.state.last_run()['summary_json']
+    assert all(TEST_OC not in file.read_text(encoding='utf-8') for file in mon.paths.logs.glob('*.log'))
 
 
 def test_label_and_text():

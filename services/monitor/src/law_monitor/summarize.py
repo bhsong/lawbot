@@ -221,6 +221,8 @@ def write_summary(
     ran_at: str,
     window: str | None = None,
     checks: list | None = None,
+    unavailable: tuple[str, ...] = (),
+    overwrite: bool = True,
 ) -> tuple[SummaryResult, list[str]]:
     """요약 md를 쓰고 (결과, 요약을 끝낸 event_id 목록)을 돌려준다."""
     assembly = [e for e in events if e.get('source') in SOURCES and e.get('change_type') != 'collector_failing']
@@ -252,7 +254,11 @@ def write_summary(
         rendered.append((_section(g), _render(g, reply.text, paths, truncated=reply.finish_reason == 'length')))
         done += [e['event_id'] for e in g.events]
 
-    pending = len(events) - len(done)
+    if unavailable:
+        file_error = f'읽을 수 없는 이벤트 파일 {len(unavailable)}건: {", ".join(unavailable)}'
+        failed = f'{failed} · {file_error}' if failed else file_error
+    total = len(events) + len(unavailable)
+    pending = total - len(done)
     counts = {
         '법령': sum(e.get('source') == 'legalize_law' for e in events),
         '행정규칙': sum(e.get('source') == 'legalize_admrule' for e in events),
@@ -268,10 +274,10 @@ def write_summary(
         f'- 실행: {ran_at}',
         *([f'- 대상: {window}'] if window else []),
         f'- 수집: {run_line or "(이번에는 summarize만 실행)"}',
-        f'- 이벤트 {len(events)}건 ({", ".join(f"{k} {v}" for k, v in counts.items())}) · 모델 호출 {calls}번',
+        f'- 이벤트 {total}건 ({", ".join(f"{k} {v}" for k, v in counts.items())}) · 모델 호출 {calls}번',
         '',
     ]
-    if not events:
+    if not total:
         md += ['## 새 변경 없음', '']
     current = None
     for section, text in rendered:
@@ -307,9 +313,10 @@ def write_summary(
             md.append(f'- `{w.get("source")}` 수집기 {c.get("consecutive_failures")}회 연속 실패: {c.get("error")}')
         md.append('')
     out_path.parent.mkdir(parents=True, exist_ok=True)
-    out_path.write_text('\n'.join(md).rstrip('\n') + '\n', encoding='utf-8')
-    log.info('summarize events=%d calls=%d pending=%d → %s', len(events), calls, pending, out_path.name)
-    return SummaryResult(out_path, len(events), calls, failed, pending), done
+    with out_path.open('w' if overwrite else 'x', encoding='utf-8') as output:
+        output.write('\n'.join(md).rstrip('\n') + '\n')
+    log.info('summarize events=%d calls=%d pending=%d → %s', total, calls, pending, out_path.name)
+    return SummaryResult(out_path, total, calls, failed, pending), done
 
 
 def check_lines(results: list) -> list[str]:
@@ -319,13 +326,18 @@ def check_lines(results: list) -> list[str]:
     return ['## 점검', '', *(f'- {r.name} — {r.status}: `{r.line}`' for r in results), '']
 
 
-def load_events(home: Path, items: list[tuple[str, str | None]]) -> tuple[list[dict], dict[str, str]]:
-    events, paths = [], {}
+def load_events(home: Path, items: list[tuple[str, str | None]]) -> tuple[list[dict], dict[str, str], tuple[str, ...]]:
+    events, paths, unavailable = [], {}, []
     for event_id, rel in items:
-        path = home / rel if rel else None
-        if path is None or not path.exists():
-            log.warning('이벤트 파일 없음: %s (%s)', event_id, rel)
-            continue
-        events.append(json.loads(path.read_text(encoding='utf-8')))
-        paths[event_id] = rel
-    return events, paths
+        if rel:
+            try:
+                event = json.loads((home / rel).read_text(encoding='utf-8'))
+            except OSError, ValueError:
+                event = None
+            if isinstance(event, dict) and event.get('event_id') == event_id:
+                events.append(event)
+                paths[event_id] = rel
+                continue
+        log.warning('이벤트 파일을 읽을 수 없습니다: %s', event_id)
+        unavailable.append(event_id)
+    return events, paths, tuple(unavailable)

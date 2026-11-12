@@ -21,6 +21,7 @@ from fastapi import Depends, FastAPI, HTTPException, Request, Response
 from fastapi.exception_handlers import http_exception_handler
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
+from starlette.datastructures import MutableHeaders
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from lawbot import audit_store, envfile, feedback, security, settings, view
@@ -59,8 +60,9 @@ SESSION_TTL = 7 * 24 * 3600  # 초. 서버를 다시 띄워도 세션이 사라�
 MAX_SESSIONS = 200
 LOGIN_FAIL_DELAY = 1.0  # 초. 비밀번호 대입을 느리게
 LOGIN_ATTEMPT_CAPACITY = 1024
-ADMIN_BODY_LIMIT = 64 * 1024
+JSON_BODY_LIMIT = ADMIN_BODY_LIMIT = 64 * 1024
 MAX_QUESTION = 2000  # 글자. 모델 서버에 보내는 입력 길이 상한
+CHAT_BUSY = '앞 질문을 처리 중입니다. 잠시 뒤 다시 질문해 주세요.'
 WAITING = '⏳ 앞 질문을 기다리는 중…'
 CONFIG_ERROR = '웹앱 설정 오류로 답하지 못했습니다. 서버 로그를 확인하세요.'
 TICK = 'tick'  # 화면에 보낼 것이 없는 생성 단계 (보내지 않고 연결 끊김만 확인)
@@ -352,14 +354,19 @@ def require_same_origin(request: Request):
         raise AdminError(403, '관리자 요청의 출처가 올바르지 않습니다.', 'bad_origin')
 
 
-async def read_admin_body(request: Request) -> bytes:
-    """Return the raw body for an admin POST, enforcing the limit while streaming."""
+async def read_limited_body(request: Request, limit: int, too_large: Exception) -> bytearray:
+    """Read a request body without buffering past its byte limit."""
     body = bytearray()
     async for chunk in request.stream():
-        if len(body) + len(chunk) > ADMIN_BODY_LIMIT:
-            raise AdminError(413, '관리자 요청 본문이 너무 큽니다.', 'body_too_large')
+        if len(body) + len(chunk) > limit:
+            raise too_large
         body.extend(chunk)
-    return bytes(body)
+    return body
+
+
+async def read_admin_body(request: Request) -> bytes:
+    too_large = AdminError(413, '관리자 요청 본문이 너무 큽니다.', 'body_too_large')
+    return bytes(await read_limited_body(request, ADMIN_BODY_LIMIT, too_large))
 
 
 async def require_admin_post_rate(request: Request, who: AdminWho):
@@ -377,8 +384,9 @@ def require_json(request: Request):
 
 
 async def read_json(request):
+    body = await read_limited_body(request, JSON_BODY_LIMIT, HTTPException(413, '요청 본문이 너무 큽니다.'))
     try:
-        return await request.json()
+        return json.loads(body)
     except (json.JSONDecodeError, UnicodeDecodeError) as e:
         raise HTTPException(400, 'JSON 형식이 아닙니다.') from e
 
@@ -394,7 +402,7 @@ def valid_chat(app, body):
         raise HTTPException(400, f'질문이 너무 깁니다 (최대 {MAX_QUESTION}자).')
     if any(s.key == model_key for s in app.profile.disabled):
         raise HTTPException(400, view.DISABLED_MODEL)
-    if model_key not in app.models.specs:
+    if not isinstance(model_key, str) or model_key not in app.models.specs:
         raise HTTPException(400, '알 수 없는 답변 모델입니다.')
     if fmt not in ('concise', 'full'):
         raise HTTPException(400, '알 수 없는 답변 형식입니다.')
@@ -422,6 +430,24 @@ def config_data(app, fb):
     }
 
 
+class ApiCacheControl:
+    """Mark API responses as private without buffering streams or static files."""
+
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope['type'] != 'http' or not (scope['path'] == '/api' or scope['path'].startswith('/api/')):
+            return await self.app(scope, receive, send)
+
+        async def send_no_store(message):
+            if message['type'] == 'http.response.start':
+                MutableHeaders(scope=message)['Cache-Control'] = 'no-store'
+            await send(message)
+
+        return await self.app(scope, receive, send_no_store)
+
+
 def create_app(
     app,
     auth: tuple[str, str],
@@ -439,7 +465,9 @@ def create_app(
     if admin is not None and db is None:
         raise RuntimeError('관리자 계정을 쓰려면 LAWBOT_DB를 설정하세요.')
     api = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
+    api.add_middleware(ApiCacheControl)
     sessions, slots = Sessions(), asyncio.Semaphore(concurrency)
+    chat_requests = 0
     feedback_writes = asyncio.Lock()
     api.state.sessions = sessions
     api.state.admin_post_limit = auth_logic.AttemptWindow(30, 60, MAX_SESSIONS)
@@ -460,16 +488,15 @@ def create_app(
         return hmac.compare_digest(user.encode(), user_b) & hmac.compare_digest(pw.encode(), pw_b)
 
     async def verify_login(user: str, pw: object, role: auth_logic.Role | None):
-        assert admin is not None and admin_b is not None
         encoded_user = user.encode()
-        is_admin = hmac.compare_digest(encoded_user, admin_b)
+        is_admin = admin_b is not None and hmac.compare_digest(encoded_user, admin_b)
         key = hashlib.sha256(encoded_user).hexdigest()
         async with login_lock:
             blocked = not failures.allowed(key)
             if blocked:
                 role = None
             else:
-                if isinstance(pw, str):
+                if admin is not None and isinstance(pw, str):
                     stored = admin.password_hash if is_admin else auth_logic.DUMMY_HASH
                     verified = await anyio.to_thread.run_sync(auth_logic.verify_password, pw, stored)
                     if is_admin and verified:
@@ -478,7 +505,7 @@ def create_app(
                     failures.record(key)
                 else:
                     failures.clear(key)
-        if is_admin and db is not None:
+        if is_admin and admin is not None and db is not None:
             async with audit_lock:
                 await anyio.to_thread.run_sync(audit_store.record_login, db, admin.user, role == 'admin')
         return role, blocked
@@ -491,7 +518,7 @@ def create_app(
             'user' if isinstance(user, str) and isinstance(pw, str) and matches(user, pw) else None
         )
         blocked = False
-        if admin is not None and isinstance(user, str):
+        if isinstance(user, str):
             role, blocked = await verify_login(user, pw, role)
         if role is None:
             await asyncio.sleep(LOGIN_FAIL_DELAY)
@@ -524,23 +551,44 @@ def create_app(
         started = time.perf_counter()
         question, model_key, fmt = valid_chat(app, await read_json(request))
         remember = partial(fb.remember_turn, who[1]) if fb is not None else None
-        return StreamingResponse(
-            stream(request, chat_events(app, question, model_key, fmt, remember, started=started)),
-            media_type='text/event-stream',
-            headers={'Cache-Control': 'no-cache'},
-        )
+        return ChatResponse(stream(chat_events(app, question, model_key, fmt, remember, started=started)))
 
-    async def stream(request, events):
-        """동시 처리 수(LAWBOT_CHAT_CONCURRENCY)만큼만 생성. 자리가 없으면 기다린다
-        ask는 동기 생성기라 한 단계씩 스레드에서 돌린다. 연결이 끊기면 닫아서 요청 로그에 cancelled를 남긴다
-        끊김은 조각마다 직접 확인한다 (보내기 실패만으로는 브라우저 중지를 놓친다: 2026-11-02 e2e_stub에서 확인)"""
+    class ChatResponse(StreamingResponse):
+        def __init__(self, content):
+            super().__init__(content, media_type='text/event-stream')
+            self.content = content
+
+        async def __call__(self, scope, receive, send):
+            nonlocal chat_requests
+            # Allow one waiting request per active slot.
+            if chat_requests >= 2 * concurrency:
+                return await JSONResponse({'detail': CHAT_BUSY}, status_code=503)(scope, receive, send)
+            chat_requests += 1
+            try:
+                async with anyio.create_task_group() as group:
+
+                    async def cancel_on_disconnect():
+                        await self.listen_for_disconnect(receive)
+                        group.cancel_scope.cancel()
+
+                    group.start_soon(cancel_on_disconnect)
+                    try:
+                        await self.stream_response(send)
+                    finally:
+                        group.cancel_scope.cancel()
+            finally:
+                try:
+                    with anyio.CancelScope(shield=True):
+                        await self.content.aclose()
+                finally:
+                    chat_requests -= 1
+
+    async def stream(events):
         if slots.locked():
             yield sse('status', {'text': WAITING})
         async with slots:
             try:
                 while (item := await anyio.to_thread.run_sync(next, events, None)) is not None:
-                    if await request.is_disconnected():
-                        return
                     if item[0] != TICK:
                         yield sse(*item)
             finally:
@@ -565,6 +613,8 @@ def create_app(
             raise HTTPException(400, '알 수 없는 피드백입니다.') from e
         except LookupError as e:
             raise HTTPException(404, '기록이 없는 답변입니다.') from e
+        except feedback.FeedbackWriteError as e:
+            raise HTTPException(503, '피드백을 저장하지 못했습니다. 다시 시도해 주세요.') from e
         return {'saved': row is not None}
 
     if admin is not None:

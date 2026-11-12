@@ -74,9 +74,10 @@ def test_feedback_button_saves_turn(stack, ui, feedback_db):
     e2e.wait_done(ui)
     expect(e2e.answer(ui)).to_contain_text(FAKE_ANSWER)
     like = ui.get_by_role('button', name='좋아요')
+    read_feedback = e2e.capture_response_body(ui, '/api/feedback')
     with ui.expect_response(f'{stack.url}/api/feedback', timeout=e2e.ANSWER_TIMEOUT) as response:
         like.click()
-    assert response.value.ok and response.value.json() == {'saved': True}
+    assert response.value.ok and json.loads(read_feedback()) == {'saved': True}
     expect(like).to_have_attribute('aria-pressed', 'true')
 
     with connect(feedback_db) as conn:
@@ -161,14 +162,18 @@ def test_admin_reviews_and_promotes_a_like(admin_stack, page, width):
     dialog.get_by_label('근거 조문 검색').fill('근로기준법 제26조')
     dialog.get_by_role('button', name='근로기준법 제26조', exact=True).click()
     assert page.evaluate('document.documentElement.scrollWidth <= document.documentElement.clientWidth')
-    with page.expect_response(f'{s.url}/api/admin/feedbacks/admin-like/review', timeout=e2e.ANSWER_TIMEOUT) as review:
+    review_path = '/api/admin/feedbacks/admin-like/review'
+    read_review = e2e.capture_response_body(page, review_path)
+    with page.expect_response(f'{s.url}{review_path}', timeout=e2e.ANSWER_TIMEOUT) as review:
         dialog.get_by_role('button', name='검수 저장', exact=True).click()
-    assert review.value.status == 201 and review.value.json()['status'] == 'reviewed'
+    assert review.value.status == 201 and json.loads(read_review())['status'] == 'reviewed'
     likes.get_by_label('상태').select_option('reviewed')
     likes.get_by_role('checkbox', name='해고 예고가 필요한가요? 선택').check()
-    with page.expect_response(f'{s.url}/api/admin/feedbacks/promote-up', timeout=e2e.ANSWER_TIMEOUT) as promotion:
+    promotion_path = '/api/admin/feedbacks/promote-up'
+    read_promotion = e2e.capture_response_body(page, promotion_path)
+    with page.expect_response(f'{s.url}{promotion_path}', timeout=e2e.ANSWER_TIMEOUT) as promotion:
         likes.get_by_role('button', name='선택 승격 (1)').click()
-    assert promotion.value.ok and promotion.value.json()['results'][0]['ok']
+    assert promotion.value.ok and json.loads(read_promotion())['results'][0]['ok']
     likes.get_by_label('상태').select_option('promoted')
     expect(likes.get_by_role('list', name='피드백 목록').get_by_text('승격됨', exact=True)).to_be_visible()
 
@@ -262,20 +267,29 @@ def test_request_log_api_mode(stack, ui):
     assert QUESTION not in stack.request_log.read_text(encoding='utf-8')  # 질문 원문은 남기지 않음
 
 
-def test_stop_button(stack, ui):
+@pytest.mark.parametrize('action', ['중지', '로그아웃'])
+def test_leaving_a_running_answer_cancels_generation(stack, ui, action):
     stack.ensure('long')  # 결론 뒤 설명이 길다: 간결형은 그동안 화면 글이 바뀌지 않음
     before = len(e2e.request_log(stack.request_log))
+    ended_before = sum(line.startswith('e2e chat end') for line in stack.ms.output().splitlines())
     e2e.ask(ui, QUESTION)
     e2e.answer(ui).get_by_text('가짜 모델').wait_for(timeout=e2e.ANSWER_TIMEOUT)
-    ui.get_by_role('button', name='중지').click()
-    e2e.answer(ui).get_by_text('답변을 중지했습니다').wait_for()
+    ui.get_by_role('button', name=action).click()
+    if action == '중지':
+        e2e.answer(ui).get_by_text('답변을 중지했습니다').wait_for()
+    else:
+        expect(ui.get_by_role('button', name='로그인')).to_be_visible()
+        assert ui.request.get(f'{stack.url}/api/me', timeout=e2e.ANSWER_TIMEOUT).status == 401
     deadline = time.monotonic() + 15
     while not new_log_rows(stack, before):
         assert time.monotonic() < deadline, '요청 로그가 남지 않음'
         ui.wait_for_timeout(100)
     assert [r['status'] for r in new_log_rows(stack, before)] == ['cancelled']
     deadline = time.monotonic() + 15  # 모델 서버는 다음 스텝에서 취소를 알아챈다
-    while not (ends := [line for line in stack.ms.output().splitlines() if line.startswith('e2e chat end')]):
+    while (
+        len(ends := [line for line in stack.ms.output().splitlines() if line.startswith('e2e chat end')])
+        <= ended_before
+    ):
         assert time.monotonic() < deadline, f'모델 서버의 생성이 끝나지 않음\n{stack.ms.output()}'
         ui.wait_for_timeout(100)
     sent, total = map(int, ends[-1].split()[-1].split('/'))

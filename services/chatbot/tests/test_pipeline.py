@@ -293,16 +293,19 @@ def web(env, fake_models):
     return web
 
 
-def test_import_does_not_check_auth_or_load_models(env):
-    # import만으로는 인증 검사·모델 로딩을 하지 않는다 (둘 다 main에서)
-    FakeRetriever.created = FakeLLM.created = 0
-    env.setattr(service, 'Retriever', FakeRetriever)
-    env.setattr(service, 'LLM', FakeLLM)
-    sys.modules.pop('lawbot.web', None)
-    try:
-        assert FakeRetriever.created == 0 and FakeLLM.created == 0
-    finally:
-        sys.modules.pop('lawbot.web', None)
+def test_import_does_not_check_auth_or_load_models(tmp_path):
+    code = """
+import socket
+import uvicorn
+from lawbot import envfile, service, settings
+
+def unexpected(*args, **kwargs):
+    raise AssertionError('Unexpected side effect while importing lawbot.web')
+
+envfile.load = service.load_app = settings.load = uvicorn.run = socket.socket.connect = unexpected
+import lawbot.web
+"""
+    subprocess.run([sys.executable, '-B', '-c', code], cwd=tmp_path, check=True, capture_output=True, text=True)
 
 
 def test_create_app_with_fakes_needs_no_auth_check(web):

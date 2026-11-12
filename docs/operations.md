@@ -154,7 +154,7 @@ v5 Pro는 간결형에 `data/v5/system_v5_concise.txt`를 쓰고, 화면에서 "
 | `LAWBOT_LLM_ALLOW_EXTERNAL` | 외부 API면 예 | `1`: 질문이 이 맥 밖으로 나가는 것을 허용 (https만) |
 | `LAWBOT_PORT` | 아니요 | 웹앱 포트 (1024–65535). 없으면 기존 기본값. 운영·개발을 함께 띄울 때는 서로 다른 값 |
 | `LAWBOT_INSTANCE` | 아니요 | 화면·탭 제목에 붙일 이름 (예: `운영`, `개발`, 40자 이하) |
-| `LAWBOT_CHAT_CONCURRENCY` | 아니요 | 웹앱이 동시에 처리하는 질문 수 (1–16, 기본 `1`). 모델 서버의 `LAWBOT_MAX_CONCURRENT`보다 크면 넘는 질문은 서버에서 기다림 |
+| `LAWBOT_CHAT_CONCURRENCY` | 아니요 | 웹앱이 동시에 처리하는 질문 수 (1–16, 기본 `1`). 처리 슬롯당 질문 한 개가 앞 질문 완료까지 대기하며 대기열이 차면 503으로 응답합니다. |
 | `LAWBOT_EMBED_CACHE` | 아니요 | `1`(기본)이면 조문 임베딩을 `cache/embeddings/`(Git 제외)에 저장해 다음 시작 때 다시 쓴다. 시작할 때 조문 1개만 다시 임베딩해 확인하고, 다르면(모델 폴더가 바뀜) 전체를 다시 임베딩. `0`이면 매번 임베딩 |
 | `LAWBOT_REQUEST_LOG` | 아니요 | 요청 로그 파일 하나로 정함 (기본: 레포 최상위 `logs/requests-YYYY-MM.jsonl`, 달마다 새 파일). 빈 값이면 기록하지 않음 |
 | `LAWBOT_FEEDBACK` | 아니요 | `1`이면 답변마다 👍·깃발 버튼을 달고 누른 답을 저장 (기본 `0`, `0`·`1`만) |

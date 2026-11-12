@@ -14,7 +14,8 @@ ROWS = [
 
 
 def write(path, rows):
-    pd.DataFrame(rows).to_csv(path, index=False, **E)
+    frame = pd.DataFrame(rows) if rows else pd.DataFrame(columns=['id', 'answer'])
+    frame.to_csv(path, index=False, **E)
     return str(path)
 
 
@@ -53,6 +54,12 @@ def test_missing_id(tmp_path, capsys):
     assert r['only_base'] == ['Q3'] and r['only_new'] == ['Q9'] and not r['diff']
     code, out = run(capsys, a, b)
     assert code == 1 and '[비교 파일에 없음] 1개: Q3' in out and '[기준 파일에 없음] 1개: Q9' in out
+
+
+@pytest.mark.parametrize(('base', 'new'), [([], []), (ROWS, []), (ROWS, [{'id': 'Q9', 'answer': ''}])])
+def test_compare_requires_at_least_one_common_answer(tmp_path, capsys, base, new):
+    code, out = run(capsys, write(tmp_path / 'a.csv', base), write(tmp_path / 'b.csv', new))
+    assert code == 1 and '겹치는 id가 없습니다' in out
 
 
 def test_bad_files(tmp_path):

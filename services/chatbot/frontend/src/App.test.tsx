@@ -34,8 +34,8 @@ function sse(answer: string, title: string) {
 }
 
 /** Fake lawbot-web: login state + one queued chat answer per question. */
-function server({ loggedIn = true, role, adminRoutes }: {
-  loggedIn?: boolean; role?: 'user' | 'admin'; adminRoutes?: (url: URL, init?: RequestInit) => Response | Promise<Response>
+function server({ loggedIn = true, role, adminRoutes, logoutStatus = 200 }: {
+  loggedIn?: boolean; role?: 'user' | 'admin'; adminRoutes?: (url: URL, init?: RequestInit) => Response | Promise<Response>; logoutStatus?: number
 } = {}) {
   let session = loggedIn
   const answers: [string, string][] = []
@@ -50,6 +50,10 @@ function server({ loggedIn = true, role, adminRoutes }: {
     if (!session) return json(401, { detail: '로그인이 필요합니다.' })
     if (url === '/api/me') return json(200, { user: 'u', role })
     if (url === '/api/config') return json(200, config)
+    if (url === '/api/logout') {
+      if (logoutStatus === 200 || logoutStatus === 401) session = false
+      return json(logoutStatus, { detail: '로그아웃을 처리하지 못했습니다.' })
+    }
     if (url.startsWith('/api/admin/')) {
       const path = new URL(url, 'http://testserver')
       return adminRoutes?.(path, init) ?? json(503, { code: 'calendar_not_configured', detail: '미설정' })
@@ -94,6 +98,24 @@ test('a session with an admin role still opens the chat', async () => {
   expect(await screen.findByRole('textbox', { name: '질문' })).toBeInTheDocument()
   expect(screen.getByRole('radio', { name: '채팅' })).toHaveAttribute('aria-checked', 'true')
   expect(screen.getByRole('radio', { name: '피드백 & 법령 관리' })).toBeVisible()
+})
+
+test.each(['user', 'admin'] as const)('a failed %s logout keeps the session view and shows the error', async (role) => {
+  server({ role, logoutStatus: 503 })
+  render(<App />)
+  expect(await screen.findByRole('textbox', { name: '질문' })).toBeVisible()
+  if (role === 'admin') await userEvent.click(screen.getByRole('radio', { name: '피드백 & 법령 관리' }))
+  await userEvent.click(screen.getByRole('button', { name: '로그아웃' }))
+  expect(await screen.findByText('로그아웃을 처리하지 못했습니다.')).toHaveAttribute('role', 'alert')
+  expect(screen.getByRole('button', { name: '로그아웃' })).toBeEnabled()
+  expect(screen.queryByRole('button', { name: '로그인' })).not.toBeInTheDocument()
+})
+
+test.each([200, 401])('logout returns to login when the server session is gone (%s)', async (logoutStatus) => {
+  server({ logoutStatus })
+  render(<App />)
+  await userEvent.click(await screen.findByRole('button', { name: '로그아웃' }))
+  expect(await screen.findByRole('button', { name: '로그인' })).toBeVisible()
 })
 
 test.each([undefined, 'user'] as const)('role %s has no management switch', async (role) => {

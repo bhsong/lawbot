@@ -44,7 +44,7 @@ class LawGoClient:
                 raise LawGoError(f'법제처 {target} {key}={value}: JSON이 아닌 응답') from None
             root = data.get(next(iter(data))) if isinstance(data, dict) and len(data) == 1 else None
             if not isinstance(root, dict) or required not in root:
-                raise LawGoError(f'법제처 {target} {key}={value}: 알 수 없는 응답 ({str(data)[:120]})')
+                raise LawGoError(f'법제처 {target} {key}={value}: 예상한 응답 형식이 아닙니다')
             self._cache[cache_key] = data
         return self._cache[cache_key]
 
