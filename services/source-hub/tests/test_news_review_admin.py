@@ -19,7 +19,6 @@ POST = {
     'revision': 1,
     'review_id': None,
     'decision': 'approve',
-    'reason': '공개 조건 확인',
 }
 
 
@@ -53,22 +52,25 @@ def test_admin_review_comparison_conflict_and_publication(setup, tmp_path):
             client.post(BASE + '/reviews', auth=AUTH, headers=headers, json=POST | {'revision': 2}).status_code == 200
         )
         [approved] = client.get(BASE + '/reviews?status=approved', auth=AUTH).json()['items']
+        assert approved['reason'] == ''
+        withdrawal = POST | {'revision': 2, 'review_id': approved['review_id'], 'decision': 'withdraw'}
+        assert client.post(BASE + '/reviews', auth=AUTH, headers=headers, json=withdrawal).status_code == 422
+        assert (
+            client.post(BASE + '/reviews', auth=AUTH, headers=headers, json=withdrawal | {'reason': '  '}).status_code
+            == 422
+        )
         assert (
             client.post(
                 BASE + '/reviews',
                 auth=AUTH,
                 headers=headers,
-                json=POST
-                | {
-                    'revision': 2,
-                    'review_id': approved['review_id'],
-                    'decision': 'withdraw',
-                },
+                json=withdrawal | {'reason': '공개 철회 확인'},
             ).status_code
             == 200
         )
         assert news.build(registry, database)['agencies']['moel']['items'] == []
-        assert client.get(BASE + '/reviews?status=withdrawn', auth=AUTH).json()['total'] == 1
+        [withdrawn] = client.get(BASE + '/reviews?status=withdrawn', auth=AUTH).json()['items']
+        assert withdrawn['reason'] == '공개 철회 확인'
 
 
 def test_admin_cannot_publish_to_an_invalid_existing_file(setup, tmp_path):
@@ -96,7 +98,7 @@ def test_admin_browser_reviews_correction_and_refreshes_public_snapshot(setup, t
         publish = panel.get_by_role('button', name='공개 스냅샷 갱신')
         expect(panel.get_by_text('이전 승인판 없음')).to_be_visible()
         panel.get_by_role('button', name='공개 승인', exact=True).click()
-        dialog.get_by_label('검토 사유').fill('기준 공지 검토')
+        expect(dialog.get_by_label('철회 사유')).to_be_hidden()
         dialog.get_by_role('button', name='결정 저장').click()
         expect(panel.get_by_text('해당 검토 자료가 없습니다.')).to_be_visible()
         assert not out.exists()
@@ -111,7 +113,7 @@ def test_admin_browser_reviews_correction_and_refreshes_public_snapshot(setup, t
         expect(panel.get_by_text('기준 공지', exact=True)).to_be_visible()
         expect(panel.get_by_role('heading', name='정정 공지')).to_be_visible()
         panel.get_by_role('button', name='새 버전 승인').click()
-        dialog.get_by_label('검토 사유').fill('정정 공지 검토')
+        expect(dialog.get_by_label('철회 사유')).to_be_hidden()
         dialog.get_by_role('button', name='결정 저장').click()
         expect(panel.get_by_text('해당 검토 자료가 없습니다.')).to_be_visible()
         publish.click()
@@ -120,7 +122,9 @@ def test_admin_browser_reviews_correction_and_refreshes_public_snapshot(setup, t
 
         panel.get_by_label('검토 상태').select_option('approved')
         panel.get_by_role('button', name='공개 철회').click()
-        dialog.get_by_label('검토 사유').fill('공개 철회 확인')
+        dialog.get_by_role('button', name='결정 저장').click()
+        expect(dialog.get_by_text('철회 사유를 입력하세요.')).to_be_visible()
+        dialog.get_by_label('철회 사유').fill('공개 철회 확인')
         dialog.get_by_role('button', name='결정 저장').click()
         expect(panel.get_by_text('반영되지 않았습니다.', exact=False)).to_be_visible()
         publish.click()

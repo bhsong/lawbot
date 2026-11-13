@@ -39,7 +39,7 @@ def parser() -> argparse.ArgumentParser:
     review.add_argument('revision', type=int)
     review.add_argument('decision', choices=('approve', 'withdraw'))
     review.add_argument('--materials', type=Path, required=True)
-    review.add_argument('--reason', required=True)
+    review.add_argument('--reason', default='', help='철회할 때 필수')
     export = commands.add_parser('export-news')
     export.add_argument('--materials', type=Path, required=True)
     export.add_argument('--out', type=Path, required=True)

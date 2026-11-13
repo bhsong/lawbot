@@ -300,7 +300,7 @@ function renderReview(row) {
   versions.className = 'review-versions'
   versions.append(renderVersion('이전 승인판', row.previous), renderVersion('현재 수집판', row.current))
   item.append(versions)
-  if (row.reviewed_at) item.append(element('p', row.reviewed_at + ' · ' + row.actor + ' · ' + row.reason))
+  if (row.reviewed_at) item.append(element('p', [row.reviewed_at, row.actor, row.reason].filter(Boolean).join(' · ')))
   if (row.status === 'approved') {
     item.append(button('공개 철회', event => openReview(row, 'withdraw', event.currentTarget)))
   } else if (row.can_approve) {
@@ -358,13 +358,15 @@ async function loadPublication() {
 
 function openReview(row, decision, trigger) {
   selectedReview = { row, decision, trigger }
-  byId('review-dialog-title').textContent = decision === 'approve' ? '공개 승인' : '공개 철회'
+  const withdrawing = decision === 'withdraw'
+  byId('review-dialog-title').textContent = trigger.textContent
   byId('review-dialog-description').textContent = row.current.title + ' · 버전 ' + row.current.revision +
-    (decision === 'approve' ? ' · 공식 출처, 공개 이용 조건, 개인정보를 확인했는지 검토하세요.' : '')
+    (withdrawing ? '' : ' · 공식 출처, 공개 이용 조건, 개인정보를 확인했는지 검토하세요.')
+  byId('review-reason-field').hidden = !withdrawing
   byId('review-reason').value = ''
   byId('review-write-status').textContent = ''
   byId('review-dialog').showModal()
-  byId('review-reason').focus()
+  byId(withdrawing ? 'review-reason' : 'cancel-review').focus()
 }
 
 byId('open-reviews').addEventListener('click', () => {
@@ -389,12 +391,13 @@ byId('review-dialog').addEventListener('close', () => {
   else byId('reload-reviews').focus()
 })
 byId('save-review').addEventListener('click', async () => {
+  const { row, decision } = selectedReview
   const reason = byId('review-reason').value.trim()
-  if (!reason) {
-    byId('review-write-status').textContent = '검토 사유를 입력하세요.'
+  if (decision === 'withdraw' && !reason) {
+    byId('review-write-status').textContent = '철회 사유를 입력하세요.'
+    byId('review-reason').focus()
     return
   }
-  const { row, decision } = selectedReview
   const { source_id, upstream_id, review_id } = row
   byId('save-review').disabled = byId('cancel-review').disabled = true
   try {

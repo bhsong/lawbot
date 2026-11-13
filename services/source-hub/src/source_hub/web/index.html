@@ -77,8 +77,10 @@
 <dialog id="review-dialog" aria-labelledby="review-dialog-title">
   <h2 id="review-dialog-title"></h2>
   <p id="review-dialog-description"></p>
-  <label for="review-reason">검토 사유</label>
-  <textarea id="review-reason" maxlength="500" rows="3" required></textarea>
+  <div id="review-reason-field" hidden>
+    <label for="review-reason">철회 사유</label>
+    <textarea id="review-reason" maxlength="500" rows="3" required></textarea>
+  </div>
   <p id="review-write-status" role="alert"></p>
   <div class="actions">
     <button id="cancel-review" type="button">취소</button>

@@ -35,7 +35,7 @@ class NewsDecision(BaseModel):
     revision: int = Field(ge=1)
     review_id: int | None = Field(ge=1)
     decision: Literal['approve', 'withdraw']
-    reason: str = Field(min_length=1, max_length=500)
+    reason: str = Field(default='', max_length=500)
 
 
 class PublishNews(BaseModel):

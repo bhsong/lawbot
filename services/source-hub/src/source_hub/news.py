@@ -32,14 +32,19 @@ def review(
     revision: int,
     decision: str,
     actor: str,
-    reason: str,
+    reason: str = '',
     *,
     require_current: bool = False,
     expected_review_id: int | None = None,
     agency: Agency | None = None,
 ) -> None:
-    if decision not in {'approve', 'withdraw'} or not actor.strip() or not 1 <= len(reason.strip()) <= 500:
-        raise ValueError('검토 결정과 사유를 입력하세요')
+    reason = reason.strip()
+    if decision not in {'approve', 'withdraw'} or not actor.strip():
+        raise ValueError('검토 결정과 담당자를 확인하세요')
+    if decision == 'withdraw' and not reason:
+        raise ValueError('철회 사유를 입력하세요')
+    if len(reason) > 500:
+        raise ValueError('검토 사유는 500자까지 입력할 수 있습니다')
     with closing(sqlite3.connect(database.resolve().as_uri() + '?mode=rw', uri=True, timeout=5)) as conn, conn:
         conn.execute('PRAGMA foreign_keys=ON')
         conn.execute('BEGIN IMMEDIATE')
@@ -75,7 +80,7 @@ def review(
                 raise Conflict('이미 같은 공개 결정이 기록되어 있습니다')
         conn.execute(
             'INSERT INTO news_reviews(source_id,upstream_id,revision,decision,actor,reason,reviewed_at) VALUES (?,?,?,?,?,?,?)',
-            (source_id, upstream_id, revision, decision, actor, reason.strip(), datetime.now(KST).isoformat()),
+            (source_id, upstream_id, revision, decision, actor, reason, datetime.now(KST).isoformat()),
         )
 
 
