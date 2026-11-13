@@ -1,7 +1,7 @@
 import { useCallback, useId, useRef, useState } from 'react'
 import { ChangeView, EventList, Modal, MonthCalendar, dateLabel, dateRoleLabel, todayKst } from '@lawbot/ui'
 import type { CalendarChange, CalendarDay } from '@lawbot/ui'
-import { AdminApiError, adminGet, adminMessage, calendarPath, useAdminRead } from './adminApi'
+import { AdminApiError, adminGet, adminMessage, useAdminRead } from './adminApi'
 import { CalendarHoldReview } from './CalendarHoldReview'
 
 type CalendarStatus = { collectedAt: string | null; verifiedAt: string | null; delayed: boolean }
@@ -51,8 +51,7 @@ function CalendarDetail({ changeId, onClose, onUnauthorized }: {
   const header = data.assembly ? dateRoleLabel(data.assembly.dateRole)
     : data.kind === 'notice' ? '입법예고 · 게시일 기준' : '시행 조문 · 시행일 기준'
   return <Modal header={header} closeLabel="변경 상세 닫기" labelledBy={`${id}-title`} describedBy={`${id}-description`} onClose={onClose}>
-    <ChangeView change={data} demo={false} titleId={`${id}-title`} descriptionId={`${id}-description`}
-      comparisonPageSrc={(change, page) => calendarPath(`law-changes/${encodeURIComponent(change)}/notice-comparison/${page}`)} />
+    <ChangeView change={data} demo={false} titleId={`${id}-title`} descriptionId={`${id}-description`} />
   </Modal>
 }
 

@@ -1,11 +1,10 @@
-"""Read an official notice body and its own bill attachment."""
+"""Read official notice HTML and identify its bill PDF link."""
 
 import re
 import time
 from html.parser import HTMLParser
-from posixpath import normpath
 from urllib.error import HTTPError, URLError
-from urllib.parse import parse_qs, urljoin, urlsplit
+from urllib.parse import parse_qs, urlsplit
 from urllib.request import HTTPRedirectHandler, Request, build_opener
 
 from law_calendar.assembly_ingest import NOTICE_ENDPOINTS
@@ -26,73 +25,53 @@ class NoRedirect(HTTPRedirectHandler):
         return None
 
 
-def _pdf_id(url: str, *, redirect: bool = False) -> str | None:
+def _is_official_pdf_url(url: str) -> bool:
     parsed = urlsplit(url)
     query = parse_qs(parsed.query, keep_blank_values=True)
     ids = query.get('bookId', [])
-    path_ok = parsed.path == PDF_PATH or (redirect and re.fullmatch(r'/filegate/sender\d+', normpath(parsed.path)))
-    if (
+    return (
         parsed.scheme == 'https'
         and parsed.netloc == PDF_HOST
-        and path_ok
+        and parsed.path == PDF_PATH
         and not parsed.fragment
         and query.get('type') == ['1']
-        and set(query) <= ({'bookId', 'type', 'dummy'} if redirect else {'bookId', 'type'})
+        and set(query) == {'bookId', 'type'}
         and len(ids) == 1
-        and re.fullmatch(r'[A-Za-z0-9-]{1,80}', ids[0])
+        and re.fullmatch(r'[A-Za-z0-9-]{1,80}', ids[0]) is not None
+    )
+
+
+def fetch_official(url: str) -> bytes:
+    """Fetch only the official notice detail page, without following redirects."""
+    parsed = urlsplit(url)
+    params = parse_qs(parsed.query, keep_blank_values=True)
+    ids = params.get('lgsltPaId', [])
+    if (
+        parsed.scheme != 'https'
+        or parsed.netloc != 'pal.assembly.go.kr'
+        or parsed.path not in DETAIL_PATHS
+        or parsed.fragment
+        or set(params) != {'lgsltPaId'}
+        or len(ids) != 1
+        or not re.fullmatch(r'[A-Za-z0-9_]+', ids[0])
     ):
-        return ids[0]
-    return None
-
-
-def fetch_official(url: str, *, pdf: bool = False) -> bytes:
-    """Use bounded public HTTPS reads; follow only the same official file identity."""
-    if pdf:
-        identity = _pdf_id(url)
-        if identity is None:
-            raise NoticeSourceError('Invalid official bill PDF link')
-    else:
-        parsed = urlsplit(url)
-        params = parse_qs(parsed.query, keep_blank_values=True)
-        ids = params.get('lgsltPaId', [])
-        if (
-            parsed.scheme != 'https'
-            or parsed.netloc != 'pal.assembly.go.kr'
-            or parsed.path not in DETAIL_PATHS
-            or parsed.fragment
-            or set(params) != {'lgsltPaId'}
-            or len(ids) != 1
-            or not re.fullmatch(r'[A-Za-z0-9_]+', ids[0])
-        ):
-            raise NoticeSourceError('Invalid official notice link')
-        identity = None
-
+        raise NoticeSourceError('Invalid official notice link')
     deadline = time.monotonic() + 12
     opener = build_opener(NoRedirect)
-    for _ in range(3):
-        try:
-            remaining = deadline - time.monotonic()
-            if remaining <= 0:
-                raise NoticeSourceError('Official read timed out')
-            request = Request(url, headers={'User-Agent': 'law-calendar/0.1', 'Accept-Encoding': 'identity'})
-            with opener.open(request, timeout=min(remaining, 8)) as response:
-                payload = bytearray()
-                while chunk := response.read1(65536):
-                    payload.extend(chunk)
-                    if len(payload) > MAX_BYTES or time.monotonic() >= deadline:
-                        raise NoticeSourceError('Official response exceeded its size or time limit')
-                return bytes(payload)
-        except HTTPError as exc:
-            location = exc.headers.get('Location')
-            exc.close()
-            if not identity or exc.code not in (301, 302, 303, 307, 308) or not location:
-                raise NoticeSourceError(f'Official server returned HTTP {exc.code}') from None
-            url = urljoin(url, location)
-            if _pdf_id(url, redirect=True) != identity:
-                raise NoticeSourceError('Official bill PDF redirect did not match its identity') from None
-        except (URLError, OSError) as exc:
-            raise NoticeSourceError('Official source read failed') from exc
-    raise NoticeSourceError('Official PDF redirect limit exceeded')
+    request = Request(url, headers={'User-Agent': 'law-calendar/0.1', 'Accept-Encoding': 'identity'})
+    try:
+        with opener.open(request, timeout=8) as response:
+            payload = bytearray()
+            while chunk := response.read1(65536):
+                payload.extend(chunk)
+                if len(payload) > MAX_BYTES or time.monotonic() >= deadline:
+                    raise NoticeSourceError('Official response exceeded its size or time limit')
+            return bytes(payload)
+    except HTTPError as exc:
+        exc.close()
+        raise NoticeSourceError(f'Official server returned HTTP {exc.code}') from None
+    except (URLError, OSError) as exc:
+        raise NoticeSourceError('Official source read failed') from exc
 
 
 class NoticeDetail(HTMLParser):
@@ -181,5 +160,5 @@ def parse_notice_detail(html: str, bill_no: str, start: str | None, end: str) ->
     summary = re.sub(r'\n{3,}', '\n\n', '\n'.join(lines)).strip()
     if len(summary) > 30000:
         raise NoticeSourceError('Official notice body exceeded the storage limit')
-    pdf_urls = {url for url in matches[0] if _pdf_id(url)}
+    pdf_urls = {url for url in matches[0] if _is_official_pdf_url(url)}
     return summary or None, next(iter(pdf_urls)) if len(pdf_urls) == 1 else None

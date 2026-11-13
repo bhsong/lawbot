@@ -177,9 +177,13 @@ SCHEMA_V7 = """
 ALTER TABLE assembly_notice_content ADD COLUMN pdf_limit_reason TEXT
  CHECK(pdf_limit_reason IS NULL OR (pdf_pending=0 AND pdf_limit_reason IN ('page_limit','image_limit')));
 """
+SCHEMA_V8 = """
+DROP TABLE assembly_notice_pages;
+ALTER TABLE assembly_notice_content DROP COLUMN pdf_limit_reason;
+ALTER TABLE assembly_notice_content DROP COLUMN pdf_pending;
+"""
 NOTICE_CONTENT_VERSION = 5
-NOTICE_LIMIT_VERSION = 7
-CURRENT_VERSION = NOTICE_LIMIT_VERSION
+CURRENT_VERSION = 8
 SUPPORTED_VERSIONS = range(4, CURRENT_VERSION + 1)
 
 
@@ -205,6 +209,7 @@ def migrate(path: Path) -> None:
                 4: '.pre-v5.backup',
                 5: '.pre-v6.backup',
                 6: '.pre-v7.backup',
+                7: '.pre-v8.backup',
             }
             backup = path.with_suffix(path.suffix + suffix[version])
             os.close(os.open(backup, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600))
@@ -212,9 +217,13 @@ def migrate(path: Path) -> None:
                 conn.backup(target)
         conn.execute('PRAGMA journal_mode=WAL')
         conn.execute('PRAGMA foreign_keys=ON')
+        # Wipe freed image data in the active database as the obsolete table is removed.
+        conn.execute('PRAGMA secure_delete=ON')
         script = ''.join(
             schema
-            for index, schema in enumerate((SCHEMA, SCHEMA_V2, SCHEMA_V3, SCHEMA_V4, SCHEMA_V5, SCHEMA_V6, SCHEMA_V7))
+            for index, schema in enumerate(
+                (SCHEMA, SCHEMA_V2, SCHEMA_V3, SCHEMA_V4, SCHEMA_V5, SCHEMA_V6, SCHEMA_V7, SCHEMA_V8)
+            )
             if version <= index
         )
         conn.executescript(f'BEGIN IMMEDIATE;\n{script}\nPRAGMA user_version={CURRENT_VERSION}; COMMIT;')

@@ -25,8 +25,7 @@ const storedChange: CalendarChange = {
 }
 
 function renderChange(change: CalendarChange) {
-  return render(<ChangeView change={change} demo={false} titleId="lc-detail-title" descriptionId="lc-detail-notice"
-    comparisonPageSrc={(_id, page) => `/fixtures/notice-comparison/${page}`} />)
+  return render(<ChangeView change={change} demo={false} titleId="lc-detail-title" descriptionId="lc-detail-notice" />)
 }
 
 test('shows both stored originals with highlighting and separate verification status', () => {

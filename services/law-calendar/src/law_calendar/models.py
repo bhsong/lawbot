@@ -45,8 +45,6 @@ class PublicChange(BaseModel):
 class PublicNoticeContent(BaseModel):
     summary: str | None
     pdfUrl: str | None
-    comparisonPages: list[int]
-    comparisonLimited: bool = False
 
 
 class PublicDetail(PublicChange):

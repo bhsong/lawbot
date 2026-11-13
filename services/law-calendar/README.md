@@ -114,7 +114,7 @@ uv run --project services/law-calendar --frozen --no-sync python -m law_calendar
 
 sync는 monitor state.db의 최신 수집 결과를 읽고, 캘린더에 기록된 이벤트 ID는 JSON을 열기 전에 건너뛴다. 미등록 이벤트는 공통 법령 범위의 Legalize KR 폴더나 국회 제목 키워드를 대조해 가져온다. 기존 일정과 스냅숏을 보존하며 명시적으로 지정한 이벤트의 오프라인 import도 지원한다. [공통 법령 범위](../../packages/lawbot-common/src/lawbot_common/law_scope.json)
 
-법령·의안·예고 출처별로 검증하고 변경이 0건인 정상 실행도 각 마지막 수집 시각을 기록한다. 실패한 출처는 시각과 기존 데이터를 보존하고 다른 출처의 입력은 진행한다. 다음 실행에서 실패한 이벤트를 재시도하며 웹앱 관리자 캘린더의 **가져오기 실패**에서 실패 기록을 확인할 수 있다. 입력 실패는 종료 코드 2, 입법예고 검토 대기나 PDF 재시도는 종료 코드 1로 점검 결과에 표시된다.
+법령·의안·예고 출처별로 검증하고 변경이 0건인 정상 실행도 각 마지막 수집 시각을 기록한다. 실패한 출처는 시각과 기존 데이터를 보존하고 다른 출처의 입력은 진행한다. 다음 실행에서 실패한 이벤트를 재시도하며 웹앱 관리자 캘린더의 **가져오기 실패**에서 실패 기록을 확인할 수 있다. 입력 실패는 종료 코드 2, 입법예고 검토 대기나 본문 조회 실패는 종료 코드 1로 점검 결과에 표시된다.
 
 ### 국회 이벤트 공개 검토
 
@@ -132,9 +132,9 @@ uv run --project services/law-calendar python -m law_calendar.manage --database 
 
 같은 명령에서 `reject` 또는 `withdraw`로 반려·철회한다. 공개 화면은 공식 예고 시작·종료일과 법률안 발의·의결일을 구분하며, 같은 예고의 시작과 종료가 같은 날이면 한 건으로 집계한다.
 
-### 입법예고 주요 변경 내용과 공식 대비표
+### 입법예고 주요 변경 내용과 공식 원문
 
-정기 sync는 한 번에 최대 24건을 대조해 본문과 대비표를 함께 저장한다. 일시적인 PDF 조회 오류는 다음 정기 sync에서 재시도한다. PDF가 150쪽 또는 대비표 PNG 한 장이 2MiB를 초과하면 상세창에서 공식 PDF로 안내하고, 기존 이미지는 이전에 저장한 대비표로 표시한다. 한도 초과 건은 새 스냅샷을 수집하거나 `--refresh`를 실행할 때 다시 확인한다. 이미 공개한 자료를 별도로 보강하려면 캘린더 DB를 v7로 올린 뒤 다음 명령을 실행한다.
+정기 sync는 한 번에 최대 24건의 공식 상세를 대조해 본문과 확인된 PDF 링크를 저장한다. 이미 공개한 자료를 별도로 보강하려면 캘린더 DB를 v8로 올린 뒤 다음 명령을 실행한다.
 
 ```bash
 uv sync --project services/law-calendar --locked
@@ -142,8 +142,8 @@ uv run --project services/law-calendar python -m law_calendar.db "$CALENDAR_DB"
 uv run --project services/law-calendar python -m law_calendar.manage --database "$CALENDAR_DB" notice-content
 ```
 
-명령은 국회 상세의 의안번호·예고기간과 저장된 현재 snapshot을 대조한다. 주요내용을 평문으로 저장하고, 국회가 제안이유와 주요내용을 한 문단으로 제공하면 그 문단을 보존한다. 공식 PDF에서 확인한 신·구조문대비표는 원본 페이지 이미지와 PDF 원문 링크로 제공한다. 상세창에서 대비표를 펼치면 같은 화면에서 확인할 수 있다.
+명령은 국회 상세의 의안번호·예고기간과 저장된 현재 snapshot을 대조한다. 주요내용을 평문으로 저장하고, 국회가 제안이유와 주요내용을 한 문단으로 제공하면 그 문단을 보존한다. 사용자는 상세창에서 공식 상세 페이지나 확인된 PDF 링크를 직접 열 수 있다.
 
-수동 명령은 현재 승인 snapshot 중 보강이나 PDF 재시도가 필요한 자료를 최대 150건 읽으며, `--limit`으로 배치 크기를 줄일 수 있다. 이미 보강한 자료를 다시 대조할 때는 `--refresh`를 사용한다. 재조회에 실패하면 기존 대비표를 보존한다. PDF는 메모리에서 처리하고, 공개 API는 SQLite에 저장한 본문과 PNG 데이터를 읽는다.
+수동 명령은 현재 승인 snapshot 중 본문 확인이 필요한 자료를 최대 150건 읽으며, `--limit`으로 배치 크기를 줄일 수 있다. 이미 보강한 자료를 다시 대조할 때는 `--refresh`를 사용한다. 재조회에 실패하면 기존 본문과 링크를 보존한다.
 
-`--refresh` 출력에 `nextAfterSnapshot` 값이 있으면 다음 실행에 `--refresh --after-snapshot "$NEXT_SNAPSHOT"`을 넣어 이어서 처리한다. 값이 `null`이면 마지막 배치까지 도달한 것이다. 실패한 항목은 각 배치의 `failed`와 `pdfErrors`, 한도 초과는 `pdfLimits`에 기록된다.
+`--refresh` 출력에 `nextAfterSnapshot` 값이 있으면 다음 실행에 `--refresh --after-snapshot "$NEXT_SNAPSHOT"`을 넣어 이어서 처리한다. 값이 `null`이면 마지막 배치까지 도달한 것이다. 실패한 항목은 각 배치의 `failed`에 기록된다.

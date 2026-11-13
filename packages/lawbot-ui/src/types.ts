@@ -61,6 +61,4 @@ interface CalendarAssembly {
 interface CalendarNoticeContent {
   summary: string | null
   pdfUrl: string | null
-  comparisonPages: number[]
-  comparisonLimited?: boolean
 }

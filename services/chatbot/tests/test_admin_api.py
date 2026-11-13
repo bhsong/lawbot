@@ -469,7 +469,6 @@ def test_calendar_proxy_filters_paths_and_credentials(db, admin_hash, monkeypatc
             'law-calendar/status',
             'law-events',
             'law-changes/notice:42',
-            'law-changes/notice:42/notice-comparison/2',
         ):
             res = client.get(ROOT + '/calendar/' + path + '?q=a%2Bb&q=c', headers={'Authorization': 'Bearer fixture'})
             assert (res.status_code, res.content, res.headers['content-type']) == (202, b'fixture-body', 'image/png')
@@ -483,7 +482,7 @@ def test_calendar_proxy_filters_paths_and_credentials(db, admin_hash, monkeypatc
         for path in (
             'law-holds/anything',
             'law-changes/42/anything',
-            'law-changes/42/notice-comparison/wrong',
+            'law-changes/notice:42/notice-comparison/2',
             '%2E%2E%2Fsecret',
         ):
             assert client.get(ROOT + '/calendar/' + path).status_code == 404
@@ -491,7 +490,7 @@ def test_calendar_proxy_filters_paths_and_credentials(db, admin_hash, monkeypatc
         assert (res.status_code, res.json()['code']) == (405, 'method_not_allowed')
         res = post(client, CALENDAR_REVIEW, {'idempotency_key': 'disabled', 'decision': 'approve'})
         assert (res.status_code, res.json()['code']) == (503, 'calendar_review_disabled')
-        assert len(requests) == 6 and all(req.method == 'GET' for req in requests)
+        assert len(requests) == 5 and all(req.method == 'GET' for req in requests)
 
 
 @pytest.mark.parametrize('timeout', [False, True])

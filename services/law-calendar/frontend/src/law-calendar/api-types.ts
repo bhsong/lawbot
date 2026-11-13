@@ -165,6 +165,4 @@ export interface PublicDetail {
 export interface PublicNoticeContent {
   summary: string | null
   pdfUrl: string | null
-  comparisonPages: (number)[]
-  comparisonLimited?: boolean
 }
