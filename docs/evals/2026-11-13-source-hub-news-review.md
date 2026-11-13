@@ -1,0 +1,22 @@
+# 기관 소식 공개 검토 관리자 화면 검증
+
+2026-11-13 KST. 기준 `68af3f9`. [작업 계획](../plans/source-hub-news-review.md)
+
+| 항목 | 실행 결과 |
+| --- | --- |
+| 인증·쓰기 계약 | 인증 없이 조회 시 401, 동일 출처 헤더 없이 변경 시 403. 중복 승인과 이전 리비전 재승인 요청은 409로 거부했다. |
+| Chromium 대역 | 임시 DB에서 신규 1건을 승인하고, 정정 수집 후 이전 승인판의 제목과 새 제목이 함께 표시되는 것을 확인했다. 재승인 후 새 제목, 철회 후 게시물 0건을 각각 공개 파일에서 확인했다. |
+| 공개 파일 안전 | 1 MiB를 초과하는 파일은 관리자에서 유효하지 않은 상태로 표시하고 갱신 요청을 422로 거부했다. 원래 파일 내용이 보존됐다. |
+| 수집 설정 패키지 | `50 passed in 3.08s`. 수집기는 공식 RSS·게시판 응답 대역을 사용했다. |
+| 기본 전체 | `1930 passed, 13 deselected in 151.57s`. 단위, 모델 대역 계약, 통합, Chromium 대역 E2E를 포함한다. |
+| 프런트엔드 | 챗봇 Vitest 55건, 캘린더 Vitest 26건. 각 typecheck·빌드 통과. |
+| 정적 검사 | Ruff 검사·포맷, Pyright, compileall, 생성 스키마 확인, 잠금 파일 3개, 관리자 JavaScript 구문 검사 통과. |
+| 외부·운영 | 실제 기관 수집, 운영 반영, 실발송, 실제 모델 E2E, 모델 스모크, 품질 평가는 실행 안 함. |
+
+관리자 화면에서 기록한 승인과 철회는 **공개 스냅샷 갱신**을 누르면 지정된 파일에 반영된다. 화면의 일치 상태는 그 파일에 대한 확인이다. 운영 캘린더가 같은 파일을 사용하도록 연결하는 방법은 서비스 문서에 있다. [관리자 실행 방법](../../services/source-hub/README.md#기관별-최신-소식-검토와-내보내기)
+
+```fish
+uv --no-cache run --no-sync pytest -q services/source-hub/tests --tb=short
+uv --no-cache run --no-sync pytest -q --tb=short
+uv --no-cache run --no-sync python -m law_calendar.schema --check
+```

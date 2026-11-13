@@ -47,3 +47,12 @@ dialog::backdrop { background: #16253488; }
 #laws details { padding: .35rem 0; }
 #laws button { margin-inline-end: .5rem; }
 #audit pre { white-space: pre-wrap; overflow-wrap: anywhere; }
+.review-item { border-top: 1px solid #dae3ef; padding-block: .8rem; overflow-wrap: anywhere; }
+.review-item h3, .review-item h4 { margin: 0 0 .4rem; }
+.review-item h4 { font-size: .95rem; }
+.review-item p { margin: .25rem 0; }
+.review-versions { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .7rem; margin-block: .6rem; }
+.review-versions > div { padding: .6rem; background: #f3f6fa; border-radius: .3rem; }
+#review-reason { display: block; box-sizing: border-box; width: 100%; }
+#review-write-status { color: #a12626; }
+@media (max-width: 550px) { .review-versions { grid-template-columns: 1fr; } }

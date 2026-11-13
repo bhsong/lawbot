@@ -8,6 +8,7 @@ from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, model_validato
 
 Agency = Literal['lawgo', 'moel', 'mofe', 'nts', 'hometax']
 AGENCIES = ('lawgo', 'moel', 'mofe', 'nts', 'hometax')
+SNAPSHOT_MAX_BYTES = 1_048_576
 NEWS_HOSTS = {
     'lawgo': {'www.law.go.kr', 'law.go.kr'},
     'moel': {'www.moel.go.kr'},
