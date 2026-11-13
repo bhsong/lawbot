@@ -1,6 +1,6 @@
 # 기관 소식 공개 검토 관리자 화면 검증
 
-2026-11-13 KST. 기준 `68af3f9`. [작업 계획](../plans/source-hub-news-review.md)
+2026-11-13 KST. 기준 `68af3f9`. [작업 계획](../archives/source-hub-news-review.md)
 
 | 항목 | 실행 결과 |
 | --- | --- |

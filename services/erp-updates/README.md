@@ -26,6 +26,8 @@ uv run erp-updates export --out <피드 경로>                     # 임시 파
 
 `--data`로 데이터 폴더를, `--config`로 설정 파일을 바꿀 수 있습니다. `collect`는 자료 하나라도 읽지 못하면 종료 코드 1을 냅니다.
 
+카드를 추가할 때는 `sources.yaml`에 고유 키와 기존 선택 규칙 중 하나를 등록합니다. 두 업무가 같은 조문·서식을 사용해도 각 항목의 원문 승인, 첨부 및 적용판은 키별로 관리합니다. 같은 PDF 링크를 여러 항목에서 쓸 때는 `attach --item $item_id`로 대상을 지정합니다. 등록한 원천이 monitor 사본에 없으면 허가된 수집 경로를 먼저 구성해야 합니다.
+
 ## 버전과 검토
 
 - 내용(공개 필드)의 SHA-256이 달라지면 새 버전이 생기고 `pending`으로 시작합니다.
@@ -49,6 +51,42 @@ uv run erp-updates export --out <피드 경로>                     # 임시 파
 | `history[]` | `itemId`, `sourceKey`, `title`, `at`, `action`, `origin` |
 
 검토자 이름, 반려 사유, 로컬 경로는 피드에 넣지 않습니다.
+
+## 적용 기준 버전과 피드 v2
+
+업무 항목은 설정의 `sourceKey`로 식별합니다. 출처가 같은 개정판은 적용 대상별 `scopeId`에 기록합니다. `rule-sources`에서 승인된 원천의 리비전 ID를 확인한 뒤, 공식 근거에서 검증한 내용을 검토 파일에 적습니다. 문서의 기존 공개 승인만으로 적용 기준이 만들어지지 않습니다.
+
+```fish
+uv run erp-updates rule-sources INS-01
+uv run erp-updates review-rule --file $review_file --reviewer $reviewer
+uv run erp-updates rule-history $version_id
+uv run erp-updates export-rules --out $rules_feed
+```
+
+다음은 실제 법정 기준이 아닌 입력 형식 예입니다.
+
+```json
+{
+  "sourceKey": "INS-01",
+  "scopeId": "standard",
+  "scope": "예시 적용 대상",
+  "applicability": "insurance_month",
+  "ruleVersionId": "example-2027",
+  "predecessorId": "example-2026",
+  "sourceRevisionId": 2,
+  "decision": "confirmed",
+  "effectiveFrom": "2027-01-01",
+  "appliesFrom": "2027-01-01",
+  "evidenceKind": "final_notice",
+  "evidenceUrl": "https://www.law.go.kr/행정규칙/예시",
+  "valueText": "공식 원문에서 확인한 기준"
+}
+```
+
+- `effectiveFrom`은 시행일, `appliesFrom`과 선택 `appliesUntil`은 업무 적용 범위입니다. 종료일은 포함합니다. 귀속연도와 보험료 적용월은 각각 그 해와 달의 첫날을 적습니다. 적용 유형은 `legal_effective_date`, `payment_date`, `work_period`, `income_year`, `insurance_month`, `filing_date`, `other`입니다.
+- 적용 범위의 첫 판은 `predecessorId`를 생략합니다. 후속 판에는 직전 판 ID를 적습니다. 초안은 `decision: proposed`와 `evidenceKind: proposal`로 등록하고 판 ID와 공식 링크를 제공합니다. 확정판의 날짜와 값은 생략합니다.
+- 예정판의 시행·적용이 시작되면 그날 이후 같은 판을 다시 확인해 `confirmed`를 기록합니다. 근거를 재확인해야 하면 같은 판에 `recheck_required`를 기록합니다. 시행 연기·정정은 기존 판을 `withdrawn`으로 기록하고 사유를 남긴 뒤 새 판 ID를 사용합니다. 철회된 판의 내용은 비공개 DB의 이력에만 남습니다.
+- 공개 파일은 v1 및 DB와 별개입니다. 변경 뒤 `export-rules`를 다시 실행합니다. 공식 근거 링크와 검증한 문구만 제공하며 비교표는 원문에서 확인합니다. [캘린더에서 설정](../law-calendar/README.md#erp-적용-기준-v2)
 
 ## 테스트
 

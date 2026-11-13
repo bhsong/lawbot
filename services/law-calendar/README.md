@@ -76,6 +76,12 @@ ERP 탭의 기관 버튼에서 검토된 소식 최대 10건과 게시판별 마
 
 Source Hub가 내보낸 공개 파일을 `LAWBOT_CALENDAR_NEWS_FEED` 또는 `law-calendar --news-feed`로 지정합니다. 캘린더에 비공개 수집 DB를 연결할 필요가 없습니다. 파일이 준비되지 않으면 드로어에 대기 상태를 표시합니다. `GET /api/erp-news/latest?agency=moel&limit=10`으로 확인할 수 있습니다. [검토 및 내보내기](../source-hub/README.md#기관별-최신-소식-검토와-내보내기)
 
+## ERP 적용 기준 v2
+
+`erp-updates export-rules`로 만든 공개 파일을 `LAWBOT_CALENDAR_ERP_RULES_FEED` 또는 `law-calendar --erp-rules-feed`로 지정합니다. 기존 `GET /api/erp-updates`는 계속 v1 자료와 이력을 읽습니다. `GET /api/erp-updates/v2`는 업무 항목의 적용 범위별 현행판, 확정 예정판과 별도의 검토 중 링크를 반환합니다.
+
+선택 매개변수 `asOf`는 한국 표준시 기준일, `targetOn`은 지급·귀속·보험료 등에 적용할 업무 대상일입니다. 둘 다 `YYYY-MM-DD` 형식입니다. `asOf`를 생략하면 오늘, `targetOn`을 생략하면 기준일을 사용합니다. 철회된 내용은 공개 응답에서 빠지고 기존 결정은 ERP 내부 이력에서 조회할 수 있습니다. [검토 및 내보내기](../erp-updates/README.md#적용-기준-버전과-피드-v2)
+
 ## 저장된 모니터링 결과와 공개 검토
 
 기존 monitor의 `legalize_law` 이벤트 JSON과 원문 사본을 오프라인으로 가져온다. DB 초기화 명령은 새 DB와 기존 v1~v6 DB를 v7로 준비한다. v6에서 올릴 때는 SQLite backup으로 `.pre-v7.backup` 사본을 만든다. 이전 버전의 백업 규칙도 유지한다. v4~v6에서 기존 일정 조회와 검토를 지원한다. 최신 수집 코드의 예고 자동 공개와 첨부 처리 상태 저장은 v7이 필요하다. [v7 반영 절차](../../docs/operations.md#국회-입법예고-자동-공개용-캘린더-db-v7)

@@ -4,8 +4,12 @@ version = "0.1.0"
 description = "ERP reference items read from monitor's law repository clones; no network access."
 requires-python = ">=3.14"
 dependencies = [
+    "lawbot-common",
     "pyyaml>=6.0.3",
 ]
+
+[tool.uv.sources]
+lawbot-common = { path = "../../packages/lawbot-common", editable = true }
 
 [project.scripts]
 erp-updates = "erp_updates.cli:main"
