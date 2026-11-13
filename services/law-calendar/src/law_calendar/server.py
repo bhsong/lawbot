@@ -18,7 +18,7 @@ from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import ValidationError
 
-from law_calendar import admin, news
+from law_calendar import admin, erp_rules, news
 from law_calendar.automation import REASONS
 from law_calendar.db import NOTICE_CONTENT_VERSION, read_database
 from law_calendar.models import (
@@ -33,6 +33,7 @@ from law_calendar.models import (
 )
 from lawbot_common import envfile
 from lawbot_common.erp_news import Agency
+from lawbot_common.erp_rules import ErpRules
 from lawbot_common.logs import logger
 
 KST = timezone(timedelta(hours=9))
@@ -123,7 +124,12 @@ def erp_updates(feed: Path | None) -> dict:
 
 
 def create_app(
-    database: Path, frontend: Path | None = None, erp_feed: Path | None = None, *, news_feed: Path | None = None
+    database: Path,
+    frontend: Path | None = None,
+    erp_feed: Path | None = None,
+    *,
+    news_feed: Path | None = None,
+    rules_feed: Path | None = None,
 ) -> FastAPI:
     app = FastAPI(title='Law Calendar', version='0.2.0')
 
@@ -282,6 +288,12 @@ def create_app(
     def erp():
         return erp_updates(erp_feed)
 
+    @app.get('/api/erp-updates/v2', response_model=ErpRules)
+    def erp_rule_versions(asOf: str | None = None, targetOn: str | None = None):
+        as_of = Date.fromisoformat(civil_date(asOf)) if asOf is not None else erp_rules.today_kst()
+        target = Date.fromisoformat(civil_date(targetOn)) if targetOn is not None else as_of
+        return erp_rules.read(rules_feed, as_of, target)
+
     @app.get('/api/erp-news/latest', response_model=ErpNews)
     def latest_news(agency: Agency, limit: int = Query(10, ge=1, le=10)):
         return news.response(database, news_feed, agency, limit)
@@ -301,11 +313,14 @@ def main():
     parser.add_argument('--frontend', type=Path)
     parser.add_argument('--erp-feed', type=Path, default=os.environ.get('LAWBOT_CALENDAR_ERP_FEED'))
     parser.add_argument('--news-feed', type=Path, default=os.environ.get('LAWBOT_CALENDAR_NEWS_FEED'))
+    parser.add_argument('--erp-rules-feed', type=Path, default=os.environ.get('LAWBOT_CALENDAR_ERP_RULES_FEED'))
     args = parser.parse_args()
     if args.database is None or not 1 <= args.port <= 65535:
         parser.error('An explicit database and valid port are required')
     uvicorn.run(
-        create_app(args.database, args.frontend, args.erp_feed, news_feed=args.news_feed),
+        create_app(
+            args.database, args.frontend, args.erp_feed, news_feed=args.news_feed, rules_feed=args.erp_rules_feed
+        ),
         host='127.0.0.1',
         port=args.port,
     )

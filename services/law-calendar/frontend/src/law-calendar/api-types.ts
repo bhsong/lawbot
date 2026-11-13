@@ -77,6 +77,36 @@ export interface ErpNews {
   items?: (NewsItem)[]
 }
 
+export interface ErpRule {
+  ruleId: string
+  sourceKey: string
+  title: string
+  scopes: (ErpRuleScope)[]
+  proposalLinks: (ErpRuleProposal)[]
+}
+
+export interface ErpRuleProposal {
+  ruleVersionId: string
+  evidenceUrl: string
+}
+
+export interface ErpRuleScope {
+  scopeId: string
+  scope: string
+  applicability: "legal_effective_date" | "payment_date" | "work_period" | "income_year" | "insurance_month" | "filing_date" | "other"
+  targetOn: string
+  currentVersion: VerifiedErpRuleVersion | null
+  scheduledChanges: (VerifiedErpRuleVersion)[]
+  recheckRequired: boolean
+}
+
+export interface ErpRules {
+  state: "ok" | "unconfigured" | "missing" | "invalid"
+  generatedAt?: string | null
+  asOfDate: string
+  rules?: (ErpRule)[]
+}
+
 export interface ErpUpdates {
   state: "ok" | "missing" | "invalid"
   generatedAt?: string | null
@@ -190,4 +220,17 @@ export interface PublicNewsBoard {
 export interface PublicNoticeContent {
   summary: string | null
   pdfUrl: string | null
+}
+
+export interface VerifiedErpRuleVersion {
+  ruleVersionId: string
+  sourceRevisionId: number
+  predecessorId?: string | null
+  effectiveFrom: string
+  appliesFrom: string
+  appliesUntil?: string | null
+  evidenceKind: "promulgated_law" | "final_notice" | "final_specification"
+  evidenceUrl: string
+  valueText: string
+  verifiedAt: string
 }
