@@ -148,5 +148,5 @@ def from_snapshot(
         'state': 'ok',
         'generatedAt': snapshot.generatedAt.astimezone(KST).isoformat(),
         'boards': boards,
-        'items': latest(items)[:limit],
+        'items': [item.model_dump(mode='json') for item in latest(items)[:limit]],
     }

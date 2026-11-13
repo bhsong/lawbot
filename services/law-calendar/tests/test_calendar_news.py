@@ -1,7 +1,9 @@
 import json
 import sqlite3
+import sys
 from contextlib import closing
 from datetime import datetime, timedelta, timezone
+from subprocess import run
 
 from fastapi.testclient import TestClient
 
@@ -139,6 +141,61 @@ def test_law_news_only_uses_approved_promulgations_and_hometax_is_link_only(data
         assert client.get('/api/erp-news/latest?agency=moel').json()['state'] == 'invalid'
         assert client.get('/api/erp-updates').json()['state'] == 'missing'
         assert client.get('/api/law-calendar?month=2026-11').status_code == 200
+
+
+def test_offline_erp_capture_serializes_approved_law_and_agency_news(dataset, tmp_path):
+    file = tmp_path / 'news.json'
+    payload = snapshot()
+    payload['agencies']['moel']['items'] = [
+        {
+            'id': 'notice',
+            'title': '가상 기관 공지',
+            'board': '공지',
+            'publishedOn': '2026-11-10',
+            'officialUrl': 'https://www.moel.go.kr/news/notice',
+        }
+    ]
+    replace_file(file, payload)
+    erp = tmp_path / 'erp.json'
+    replace_file(
+        erp,
+        {
+            'schemaVersion': 1,
+            'generatedAt': NOW.isoformat(),
+            'items': [],
+            'relatedLaws': [],
+            'history': [],
+        },
+    )
+    rules = tmp_path / 'rules.json'
+    replace_file(rules, {'schemaVersion': 2, 'generatedAt': NOW.isoformat(), 'rules': []})
+    output = tmp_path / 'capture.json'
+    result = run(
+        [
+            sys.executable,
+            '-m',
+            'law_calendar.erp_capture',
+            '--database',
+            str(dataset),
+            '--erp',
+            str(erp),
+            '--rules',
+            str(rules),
+            '--news',
+            str(file),
+            '--out',
+            str(output),
+            '--cutoff',
+            NOW.isoformat(),
+        ],
+        capture_output=True,
+        text=True,
+        timeout=10,
+    )
+    assert result.returncode == 0, result.stderr
+    news = json.loads(output.read_bytes())['news']
+    assert [(i['id'], i['publishedOn']) for i in news['lawgo']['items']] == [('effective', '2026-10-01')]
+    assert news['moel']['items'] == [payload['agencies']['moel']['items'][0] | {'effectiveOn': None}]
 
 
 def test_nonofficial_or_nonpublic_fields_fail_closed(dataset, tmp_path):
