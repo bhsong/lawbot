@@ -32,6 +32,8 @@ def parser() -> argparse.ArgumentParser:
         rss = commands.add_parser(command)
         rss.add_argument('source_id', choices=moel.CHANNELS)
         rss.add_argument('--materials', type=Path, required=True)
+        if command == 'collect':
+            rss.add_argument('--reconcile', action='store_true')
     for command in ('set', 'add'):
         edit = commands.add_parser(command)
         if command == 'set':
@@ -76,8 +78,8 @@ def main(argv: list[str] | None = None) -> int:
         elif args.command == 'runs':
             result = registry.runs(args.source_id)
         elif args.command == 'collect':
-            result = moel.collect(registry, args.materials, args.source_id)
-            if result['outcome'] in {'blocked', 'error', 'unverified', 'busy'}:
+            result = moel.collect(registry, args.materials, args.source_id, reconcile=args.reconcile)
+            if result['outcome'] in {'blocked', 'error', 'unverified', 'busy', 'partial'}:
                 status = 2
         elif args.command == 'documents':
             result = moel.documents(args.materials, args.source_id)

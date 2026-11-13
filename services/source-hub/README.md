@@ -41,3 +41,13 @@ $hub --database $collector_db runs moel-rss-notice
 ```
 
 첫 성공 응답의 `baseline_count`는 시작 시 이미 있던 게시물입니다. 후속 실행에서는 신규와 수정 건수를 표시합니다. 소스·기관·그룹 중 하나라도 OFF이면 `disabled`, 수집 간격이 지나지 않았으면 `not_due`이며 두 경우 모두 외부 요청은 0건입니다. 접근 제한은 `blocked`, 피드 구조 오류는 `error`로 남습니다. 수집 이력과 문서는 OFF 이후에도 조회할 수 있습니다.
+
+### 공식 게시판 목록 대조
+
+게시판 목록도 비교할 때 `--reconcile`을 추가합니다. 소스의 수집 간격과 별도의 목록 대조 간격이 지난 실행에서 최대 2페이지를 읽습니다. 기본 목록 대조 간격은 7일입니다.
+
+```fish
+$hub --database $collector_db collect moel-rss-notice --materials $materials_db --reconcile
+```
+
+RSS와 목록에서 같은 `bbs_seq`는 한 게시물로 저장합니다. 첫 대조에서 확인한 목록 전용 글은 기준선에 포함합니다. 목록에서 확인한 제목과 게시일은 다음 대조까지 유지합니다. `board_only_count`는 이번 RSS 응답에서 볼 수 없었던 목록 게시물 수입니다. 게시판 읽기나 검증이 실패하면 `partial`과 상세 오류를 출력하고 RSS 자료를 저장합니다. 게시물 상세와 첨부는 요청하지 않습니다.

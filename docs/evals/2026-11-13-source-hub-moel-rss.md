@@ -1,6 +1,6 @@
 # 고용노동부 공식 RSS 수집 검증
 
-2026-11-13 KST. 기준 `b14d666`. [작업 계획](../plans/source-hub-moel-rss.md)
+2026-11-13 KST. 기준 `b14d666`. [작업 계획](../archives/source-hub-moel-rss.md)
 
 ## 공식 경로와 실제 응답
 

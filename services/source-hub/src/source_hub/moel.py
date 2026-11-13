@@ -9,23 +9,22 @@ from email.utils import parsedate_to_datetime
 from http.client import IncompleteRead
 from pathlib import Path
 from urllib.error import HTTPError, URLError
-from urllib.parse import parse_qsl, urlsplit
 from urllib.request import HTTPRedirectHandler, Request, build_opener
 from uuid import uuid4
 from xml.etree import ElementTree
 
-from source_hub import materials, robots
+from source_hub import materials, moel_board, robots
 from source_hub.materials import Article
 from source_hub.materials import documents as documents
 from source_hub.store import KST, Registry, Run
 
-HOST = 'https://www.moel.go.kr'
+HOST = moel_board.HOST
 ROBOTS = HOST + '/robots.txt'
 USER_AGENT = robots.PRODUCT + '/1.0'
 CHANNELS = {
-    'moel-rss-notice': ('/rss/notice.do', '/news/notice/noticeView.do'),
-    'moel-rss-policy': ('/rss/policy.do', '/policy/policydata/view.do'),
-    'moel-rss-lawinfo': ('/rss/lawinfo.do', '/info/lawinfo/lawmaking/view.do'),
+    'moel-rss-notice': ('/rss/notice.do', '/news/notice/noticeView.do', '/news/notice/noticeList.do'),
+    'moel-rss-policy': ('/rss/policy.do', '/policy/policydata/view.do', '/policy/policydata/list.do'),
+    'moel-rss-lawinfo': ('/rss/lawinfo.do', '/info/lawinfo/lawmaking/view.do', '/info/lawinfo/lawmaking/list.do'),
 }
 ROBOTS_LIMIT = 512_000
 FEED_LIMIT = 2_097_152
@@ -66,12 +65,21 @@ def read_response(url: str, media: set[str], limit: int) -> bytes:
     return data
 
 
-def access_failure(feed_url: str) -> str | None:
+def robots_rules() -> list[str]:
     try:
-        lines = read_response(ROBOTS, {'text/plain'}, ROBOTS_LIMIT).decode('utf-8-sig').splitlines()
+        return read_response(ROBOTS, {'text/plain'}, ROBOTS_LIMIT).decode('utf-8-sig').splitlines()
     except FetchError, UnicodeError:
-        return 'robots_unavailable'
-    return robots.access_failure(lines, urlsplit(feed_url).path)
+        raise FetchError('robots_unavailable') from None
+
+
+def checked_read(rules: list[str], path: str, media: set[str]) -> bytes:
+    if error := robots.access_failure(rules, path):
+        raise FetchError(error)
+    return read_response(HOST + path, media, FEED_LIMIT)
+
+
+def is_blocked(error: str) -> bool:
+    return error.startswith('robots_') or error in {'http_401', 'http_403', 'http_429'}
 
 
 class RssTree(ElementTree.TreeBuilder):
@@ -100,37 +108,55 @@ def parse_feed(data: bytes, article_path: str) -> list[Article]:
     for entry in entries:
         title = ' '.join(entry.findtext('title', '').split())
         link = entry.findtext('link', '').strip()
-        url = urlsplit(link)
-        query = parse_qsl(url.query, keep_blank_values=True, strict_parsing=True, max_num_fields=2)
-        if (
-            not title
-            or len(title) > 500
-            or not link
-            or len(link) > 1000
-            or re.search(r'[\s\\\x00-\x1f\x7f]', link)
-            or url.scheme != 'https'
-            or url.netloc != 'www.moel.go.kr'
-            or url.path != article_path
-            or url.fragment
-            or len(query) != 1
-            or query[0][0] != 'bbs_seq'
-            or not re.fullmatch(r'[0-9]{1,32}', query[0][1])
-        ):
-            raise ValueError('RSS entry does not link to the reviewed official board')
-        upstream_id = query[0][1]
+        if not title or len(title) > 500:
+            raise ValueError('Unexpected RSS title')
+        upstream_id, link = moel_board.post_link(link, article_path)
         guid = entry.findtext('guid', '').strip() or None
         if guid and len(guid) > 1000:
             raise ValueError('RSS identifier too long')
         article = Article(
             upstream_id,
             title,
-            f'{HOST}{article_path}?bbs_seq={upstream_id}',
+            link,
             published_date(entry.findtext(DC_DATE, entry.findtext('pubDate', '')).strip()),
             guid,
         )
         if articles.setdefault(upstream_id, article) != article:
             raise ValueError('Conflicting metadata for the same official post')
     return list(articles.values())
+
+
+def reconcile_board(
+    rules: list[str], board_path: str, article_path: str, articles: list[Article]
+) -> tuple[list[Article] | None, dict]:
+    page_count = 0
+    try:
+        first = moel_board.parse_board(checked_read(rules, board_path, {'text/html'}), HOST + board_path, article_path)
+        page_count = 1
+        listed = first.articles
+        if first.has_second_page:
+            page_path = board_path + '?pageIndex=2'
+            second = moel_board.parse_board(
+                checked_read(rules, page_path, {'text/html'}), HOST + page_path, article_path
+            )
+            if second.articles.keys() <= listed.keys() or any(
+                listed[key] != second.articles[key] for key in listed.keys() & second.articles.keys()
+            ):
+                raise ValueError('Repeated page or conflicting board rows')
+            listed = listed | second.articles
+            page_count = 2
+    except FetchError as exc:
+        error = str(exc)
+        return None, {'outcome': 'blocked' if is_blocked(error) else 'error', 'error': error, 'pages': page_count}
+    except ValueError:
+        return None, {'outcome': 'error', 'error': 'invalid_board', 'pages': page_count}
+    missing = listed.keys() - {article.upstream_id for article in articles}
+    return list(listed.values()), {
+        'outcome': 'ok',
+        'pages': page_count,
+        'listed_count': len(listed),
+        'board_only_count': len(missing),
+    }
 
 
 @contextmanager
@@ -150,14 +176,16 @@ def collect_lock(registry: Registry):
         os.close(fd)
 
 
-def collect(registry: Registry, database: Path, source_id: str, *, now: datetime | None = None) -> dict:
+def collect(
+    registry: Registry, database: Path, source_id: str, *, now: datetime | None = None, reconcile: bool = False
+) -> dict:
     if source_id not in CHANNELS:
         raise ValueError('지원되는 고용노동부 RSS 수집원 ID를 선택하세요')
     plan = registry.snapshot()
     source = next((row for row in plan['sources'] if row['source_id'] == source_id), None)
     if source is None or not source['effective_enabled']:
         return {'outcome': 'disabled'}
-    feed_path, article_path = CHANNELS[source_id]
+    feed_path, article_path, board_path = CHANNELS[source_id]
     feed_url = HOST + feed_path
     if not source['runnable'] or (
         source['group'],
@@ -189,20 +217,32 @@ def collect(registry: Registry, database: Path, source_id: str, *, now: datetime
             source['interval_minutes'] * 60
         ):
             return {'outcome': 'not_due'}
-        outcome = 'blocked'
-        error = access_failure(feed_url)
+        outcome, error = 'ok', None
         counts = {}
         articles: list[Article] = []
-        if error is None:
-            try:
-                articles = parse_feed(read_response(feed_url, RSS_MEDIA, FEED_LIMIT), article_path)
-            except FetchError as exc:
-                error = str(exc)
-                outcome = 'blocked' if error in {'http_401', 'http_403', 'http_429'} else 'error'
-            except ElementTree.ParseError, ValueError:
-                error, outcome = 'invalid_feed', 'error'
-            else:
-                outcome = 'ok'
+        board: list[Article] | None = None
+        reconciliation = {}
+        board_attempted = False
+        try:
+            rules = robots_rules()
+            articles = parse_feed(checked_read(rules, feed_path, RSS_MEDIA), article_path)
+        except FetchError as exc:
+            error = str(exc)
+            outcome = 'blocked' if is_blocked(error) else 'error'
+        except ElementTree.ParseError, ValueError:
+            error, outcome = 'invalid_feed', 'error'
+        else:
+            if reconcile:
+                last = materials.last_board_attempt(path, source_id)
+                board_attempted = last is None or (started - datetime.fromisoformat(last)).total_seconds() >= (
+                    source['reconcile_interval_minutes'] * 60
+                )
+                if board_attempted:
+                    board, reconciliation = reconcile_board(rules, board_path, article_path, articles)
+                    if board is None:
+                        outcome, error = 'partial', 'board_' + reconciliation['error']
+                else:
+                    reconciliation = {'outcome': 'not_due'}
         run = Run(
             run_id=uuid4().hex,
             source_id=source_id,
@@ -214,7 +254,19 @@ def collect(registry: Registry, database: Path, source_id: str, *, now: datetime
             modified_count=0 if outcome == 'ok' else None,
             error=error,
         )
-        if outcome == 'ok':
-            run, counts = materials.save(path, articles, run, source['baseline_policy'])
+        if articles:
+            run, counts = materials.save(
+                path,
+                articles,
+                run,
+                source['baseline_policy'],
+                board=board,
+                board_attempted=board_attempted,
+            )
         registry.record_run(run)
-    return {'outcome': outcome, 'run_id': run.run_id, **(counts if error is None else {'error': error})}
+    result = {'outcome': outcome, 'run_id': run.run_id, **counts}
+    if error:
+        result['error'] = error
+    if reconciliation:
+        result['reconciliation'] = reconciliation
+    return result
