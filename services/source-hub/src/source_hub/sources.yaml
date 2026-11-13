@@ -18,12 +18,17 @@ sources:
   - {<<: *moel_board, source_id: moel-press, board_name: 보도자료, category_tags: [보도자료]}
 
   - &mofe {source_id: mofe-rss, group: erp, agency: mofe, board_name: 공식 RSS 채널, official_homepage: 'https://mofe.go.kr/mn/siteguide/rssService.do?menuNo=2060000', adapter: mofe, mode: rss, category_tags: [공지, 보도자료]}
-  - &mofe_board {<<: *mofe, source_id: mofe-tax-reform, board_name: 세제개편안·후속 시행령, mode: html, category_tags: [세무, 법령]}
-  - {<<: *mofe_board, source_id: mofe-qa, board_name: 세제 문답자료, category_tags: [세무]}
-  - {<<: *mofe_board, source_id: mofe-press, board_name: 보도·설명자료, category_tags: [보도자료]}
-  - {<<: *mofe_board, source_id: mofe-laws, board_name: 법령자료실, category_tags: [법령]}
-  - {<<: *mofe_board, source_id: mofe-notice, board_name: 고시·공고, category_tags: [고시, 공지]}
-  - {<<: *mofe_board, source_id: mofe-publications, board_name: 세법해석·발간자료, category_tags: [세무, 발간물]}
+  - &mofe_feed {<<: *mofe, source_id: mofe-rss-press, board_name: 보도·참고자료 RSS, source_url: 'https://mofe.go.kr/com/detailRssTagService.do?bbsId=MOSFBBS_000000000028', verification: ready, license_state: links_only, category_tags: [보도자료, 세무]}
+  - {<<: *mofe_feed, source_id: mofe-rss-explanation, board_name: 설명·반박자료 RSS, source_url: 'https://mofe.go.kr/com/detailRssTagService.do?bbsId=MOSFBBS_000000000029'}
+  - {<<: *mofe_feed, source_id: mofe-rss-notice, board_name: 공지 RSS, source_url: 'https://mofe.go.kr/com/detailRssTagService.do?bbsId=MOSFBBS_000000000030', category_tags: [공지]}
+  - {<<: *mofe_feed, source_id: mofe-rss-policy, board_name: 정책게시판 RSS, source_url: 'https://mofe.go.kr/com/detailRssTagService.do?bbsId=MOSFBBS_000000000039', category_tags: [정책, 세무]}
+  - {<<: *mofe_feed, source_id: mofe-rss-economy, board_name: 최근경제동향 RSS, source_url: 'https://mofe.go.kr/com/detailRssTagService.do?bbsId=MOSFBBS_000000000044', category_tags: [발간물]}
+  - &mofe_board {<<: *mofe, source_id: mofe-tax-reform, board_name: 입법·행정예고, mode: html, source_url: 'https://mofe.go.kr/lw/lap/TbPrvntcList.do?bbsId=MOSFBBS_000000000055&menuNo=7050300', verification: ready, license_state: links_only, category_tags: [세무, 법령]}
+  - {<<: *mofe, mode: html, source_id: mofe-qa, board_name: 세제 문답자료, verification: manual_review, category_tags: [세무]}
+  - {<<: *mofe, mode: html, source_id: mofe-press, board_name: 보도·설명자료, verification: manual_review, category_tags: [보도자료]}
+  - {<<: *mofe_board, source_id: mofe-laws, board_name: 법령자료실, source_url: 'https://mofe.go.kr/com/bbs/ComtnbbsList.do?bbsId=MOSFBBS_000000000059&menuNo=7080200', category_tags: [법령]}
+  - {<<: *mofe_board, source_id: mofe-notice, board_name: 고시·공고·지침, source_url: 'https://mofe.go.kr/lw/denm/TbDenmList.do?bbsId=MOSFBBS_000000000120&menuNo=7090200', category_tags: [고시, 공지]}
+  - {<<: *mofe, mode: html, source_id: mofe-publications, board_name: 세법해석·발간자료, source_url: 'https://mofe.go.kr/pl/policydta/pblictn.do?menuNo=5020300', verification: manual_review, category_tags: [세무, 발간물]}
 
   - &nts {source_id: nts-notice, group: erp, agency: nts, board_name: 공지사항, official_homepage: 'https://www.nts.go.kr/', adapter: nts, mode: html, category_tags: [공지]}
   - {<<: *nts, source_id: nts-rules, board_name: 국세청 고시, source_url: 'https://www.nts.go.kr/nts/na/ntt/selectNttList.do?bbsId=1120&mi=2205', category_tags: [고시]}

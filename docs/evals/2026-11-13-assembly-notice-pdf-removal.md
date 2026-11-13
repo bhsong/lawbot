@@ -1,6 +1,6 @@
 # 국회 입법예고 PDF 미리보기 제거 검증
 
-- 2026-11-13 KST. 기준 커밋 `58707fe`, 개발 브랜치 `fix/remove-assembly-pdf-preview`. [구현 계획](../plans/remove-assembly-notice-pdf-preview.md)
+- 2026-11-13 KST. 기준 커밋 `58707fe`, 개발 브랜치 `fix/remove-assembly-pdf-preview`. [구현 계획](../archives/remove-assembly-notice-pdf-preview.md)
 - 기존 동작에서 ‘정기 sync 중 PDF 요청 0건’ 시험이 실패했다. 상세 HTML을 읽은 뒤 PDF를 요청하는 기존 호출이 원인이었다. 수정 뒤 정기 sync와 수동 `notice-content --refresh` 모두 상세 HTML만 요청하고 같은 공식 PDF 링크를 제공했다.
 
 | 항목 | 결과 |

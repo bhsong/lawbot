@@ -12,12 +12,13 @@ import uvicorn
 import yaml
 from pydantic import ValidationError
 
-from source_hub import moel
+from source_hub import materials, moel, mofe
 from source_hub.config import CONFIG_PATH, load
 from source_hub.server import create_app
 from source_hub.store import Registry
 
 TARGETS = ('group', 'agency', 'source', 'law', 'law-part')
+COLLECTORS = dict.fromkeys(moel.CHANNELS, moel.collect) | dict.fromkeys(mofe.CHANNELS, mofe.collect)
 
 
 def parser() -> argparse.ArgumentParser:
@@ -30,8 +31,10 @@ def parser() -> argparse.ArgumentParser:
     commands.add_parser('runs').add_argument('source_id')
     for command in ('collect', 'documents'):
         rss = commands.add_parser(command)
-        rss.add_argument('source_id', choices=moel.CHANNELS)
+        rss.add_argument('source_id', choices=COLLECTORS)
         rss.add_argument('--materials', type=Path, required=True)
+        if command == 'collect':
+            rss.add_argument('--reconcile', action='store_true')
     for command in ('set', 'add'):
         edit = commands.add_parser(command)
         if command == 'set':
@@ -76,11 +79,11 @@ def main(argv: list[str] | None = None) -> int:
         elif args.command == 'runs':
             result = registry.runs(args.source_id)
         elif args.command == 'collect':
-            result = moel.collect(registry, args.materials, args.source_id)
-            if result['outcome'] in {'blocked', 'error', 'unverified', 'busy'}:
+            result = COLLECTORS[args.source_id](registry, args.materials, args.source_id, reconcile=args.reconcile)
+            if result['outcome'] in {'blocked', 'error', 'unverified', 'busy', 'partial'}:
                 status = 2
         elif args.command == 'documents':
-            result = moel.documents(args.materials, args.source_id)
+            result = materials.documents(args.materials, args.source_id)
         else:
             snapshot = registry.snapshot()
             result = (

@@ -2,7 +2,7 @@
 
 - 작성일 2026-11-13 KST. 개발 기준 `main` `58707fec0d742a5eefa2207cb3c487aca071a9b2`.
 - 별도 수정 PR에서 구현한다. 운영 적용과 데이터 정리는 구현 및 사본 검증 뒤 대상과 명령을 확인해 승인받는다.
-- 개발 브랜치 `fix/remove-assembly-pdf-preview`에서 구현했다. 운영 반영과 운영 원본 DB 정리는 승인 대기다.
+- 개발 브랜치 `fix/remove-assembly-pdf-preview`에서 구현했다. 운영 원본 DB 정리와 v5.7.1 배포를 완료했다.
 
 ## 목표와 화면 동작
 

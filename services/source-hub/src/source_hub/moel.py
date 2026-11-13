@@ -1,40 +1,33 @@
 """Collect metadata from the three RSS channels published by the Ministry of Employment and Labor."""
 
-import fcntl
-import os
 import re
-from contextlib import contextmanager
 from datetime import datetime
 from email.utils import parsedate_to_datetime
 from http.client import IncompleteRead
 from pathlib import Path
 from urllib.error import HTTPError, URLError
-from urllib.parse import parse_qsl, urlsplit
 from urllib.request import HTTPRedirectHandler, Request, build_opener
-from uuid import uuid4
 from xml.etree import ElementTree
 
-from source_hub import materials, robots
+from source_hub import collector, moel_board, robots
+from source_hub.collector import FetchError as FetchError
+from source_hub.collector import is_blocked
 from source_hub.materials import Article
 from source_hub.materials import documents as documents
-from source_hub.store import KST, Registry, Run
+from source_hub.store import KST, Registry
 
-HOST = 'https://www.moel.go.kr'
+HOST = moel_board.HOST
 ROBOTS = HOST + '/robots.txt'
 USER_AGENT = robots.PRODUCT + '/1.0'
 CHANNELS = {
-    'moel-rss-notice': ('/rss/notice.do', '/news/notice/noticeView.do'),
-    'moel-rss-policy': ('/rss/policy.do', '/policy/policydata/view.do'),
-    'moel-rss-lawinfo': ('/rss/lawinfo.do', '/info/lawinfo/lawmaking/view.do'),
+    'moel-rss-notice': ('/rss/notice.do', '/news/notice/noticeView.do', '/news/notice/noticeList.do'),
+    'moel-rss-policy': ('/rss/policy.do', '/policy/policydata/view.do', '/policy/policydata/list.do'),
+    'moel-rss-lawinfo': ('/rss/lawinfo.do', '/info/lawinfo/lawmaking/view.do', '/info/lawinfo/lawmaking/list.do'),
 }
 ROBOTS_LIMIT = 512_000
 FEED_LIMIT = 2_097_152
 RSS_MEDIA = {'text/xml', 'application/xml', 'application/rss+xml'}
 DC_DATE = '{http://purl.org/dc/elements/1.1/}date'
-
-
-class FetchError(Exception):
-    """A bounded fetch failure safe to persist in the run log."""
 
 
 class NoRedirect(HTTPRedirectHandler):
@@ -66,12 +59,17 @@ def read_response(url: str, media: set[str], limit: int) -> bytes:
     return data
 
 
-def access_failure(feed_url: str) -> str | None:
+def robots_rules() -> list[str]:
     try:
-        lines = read_response(ROBOTS, {'text/plain'}, ROBOTS_LIMIT).decode('utf-8-sig').splitlines()
+        return read_response(ROBOTS, {'text/plain'}, ROBOTS_LIMIT).decode('utf-8-sig').splitlines()
     except FetchError, UnicodeError:
-        return 'robots_unavailable'
-    return robots.access_failure(lines, urlsplit(feed_url).path)
+        raise FetchError('robots_unavailable') from None
+
+
+def checked_read(rules: list[str], path: str, media: set[str]) -> bytes:
+    if error := robots.access_failure(rules, path):
+        raise FetchError(error)
+    return read_response(HOST + path, media, FEED_LIMIT)
 
 
 class RssTree(ElementTree.TreeBuilder):
@@ -100,31 +98,16 @@ def parse_feed(data: bytes, article_path: str) -> list[Article]:
     for entry in entries:
         title = ' '.join(entry.findtext('title', '').split())
         link = entry.findtext('link', '').strip()
-        url = urlsplit(link)
-        query = parse_qsl(url.query, keep_blank_values=True, strict_parsing=True, max_num_fields=2)
-        if (
-            not title
-            or len(title) > 500
-            or not link
-            or len(link) > 1000
-            or re.search(r'[\s\\\x00-\x1f\x7f]', link)
-            or url.scheme != 'https'
-            or url.netloc != 'www.moel.go.kr'
-            or url.path != article_path
-            or url.fragment
-            or len(query) != 1
-            or query[0][0] != 'bbs_seq'
-            or not re.fullmatch(r'[0-9]{1,32}', query[0][1])
-        ):
-            raise ValueError('RSS entry does not link to the reviewed official board')
-        upstream_id = query[0][1]
+        if not title or len(title) > 500:
+            raise ValueError('Unexpected RSS title')
+        upstream_id, link = moel_board.post_link(link, article_path)
         guid = entry.findtext('guid', '').strip() or None
         if guid and len(guid) > 1000:
             raise ValueError('RSS identifier too long')
         article = Article(
             upstream_id,
             title,
-            f'{HOST}{article_path}?bbs_seq={upstream_id}',
+            link,
             published_date(entry.findtext(DC_DATE, entry.findtext('pubDate', '')).strip()),
             guid,
         )
@@ -133,88 +116,62 @@ def parse_feed(data: bytes, article_path: str) -> list[Article]:
     return list(articles.values())
 
 
-@contextmanager
-def collect_lock(registry: Registry):
-    db = registry.database.resolve()
-    lock = db.with_name(db.name + '.moel.lock')
-    lock.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-    fd = os.open(lock, os.O_WRONLY | os.O_CREAT | os.O_NOFOLLOW, 0o600)
+def reconcile_board(
+    rules: list[str], board_path: str, article_path: str, articles: list[Article]
+) -> tuple[list[Article] | None, dict]:
+    page_count = 0
     try:
-        try:
-            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except BlockingIOError:
-            yield False
-        else:
-            yield True
-    finally:
-        os.close(fd)
+        first = moel_board.parse_board(checked_read(rules, board_path, {'text/html'}), HOST + board_path, article_path)
+        page_count = 1
+        listed = first.articles
+        if first.has_second_page:
+            page_path = board_path + '?pageIndex=2'
+            second = moel_board.parse_board(
+                checked_read(rules, page_path, {'text/html'}), HOST + page_path, article_path
+            )
+            if second.articles.keys() <= listed.keys() or any(
+                listed[key] != second.articles[key] for key in listed.keys() & second.articles.keys()
+            ):
+                raise ValueError('Repeated page or conflicting board rows')
+            listed = listed | second.articles
+            page_count = 2
+    except FetchError as exc:
+        error = str(exc)
+        return None, {'outcome': 'blocked' if is_blocked(error) else 'error', 'error': error, 'pages': page_count}
+    except ValueError:
+        return None, {'outcome': 'error', 'error': 'invalid_board', 'pages': page_count}
+    missing = listed.keys() - {article.upstream_id for article in articles}
+    return list(listed.values()), {
+        'outcome': 'ok',
+        'pages': page_count,
+        'listed_count': len(listed),
+        'board_only_count': len(missing),
+    }
 
 
-def collect(registry: Registry, database: Path, source_id: str, *, now: datetime | None = None) -> dict:
+def collect(
+    registry: Registry, database: Path, source_id: str, *, now: datetime | None = None, reconcile: bool = False
+) -> dict:
     if source_id not in CHANNELS:
         raise ValueError('지원되는 고용노동부 RSS 수집원 ID를 선택하세요')
-    plan = registry.snapshot()
-    source = next((row for row in plan['sources'] if row['source_id'] == source_id), None)
-    if source is None or not source['effective_enabled']:
-        return {'outcome': 'disabled'}
-    feed_path, article_path = CHANNELS[source_id]
-    feed_url = HOST + feed_path
-    if not source['runnable'] or (
-        source['group'],
-        source['adapter'],
-        source['mode'],
-        source['source_url'],
-        source['parser_version'],
-    ) != (
-        'erp',
-        'moel',
-        'rss',
-        feed_url,
-        '1',
-    ):
-        return {'outcome': 'unverified'}
-    path = database.resolve()
-    registry_db = registry.database.resolve()
-    if path == registry_db or (path.exists() and registry_db.exists() and path.samefile(registry_db)):
-        raise ValueError('등록부와 수집 자료 DB에는 별도 경로를 사용하세요')
-    started = now or datetime.now(KST)
-    with collect_lock(registry) as locked:
-        if not locked:
-            return {'outcome': 'busy'}
-        materials.initialize(path)
-        if previous := materials.latest_success(path, source_id):
-            registry.record_run(previous)
-        latest = registry.runs(source_id)
-        if latest and (started - datetime.fromisoformat(latest[0]['started_at'])).total_seconds() < (
-            source['interval_minutes'] * 60
-        ):
-            return {'outcome': 'not_due'}
-        outcome = 'blocked'
-        error = access_failure(feed_url)
-        counts = {}
-        articles: list[Article] = []
-        if error is None:
-            try:
-                articles = parse_feed(read_response(feed_url, RSS_MEDIA, FEED_LIMIT), article_path)
-            except FetchError as exc:
-                error = str(exc)
-                outcome = 'blocked' if error in {'http_401', 'http_403', 'http_429'} else 'error'
-            except ElementTree.ParseError, ValueError:
-                error, outcome = 'invalid_feed', 'error'
-            else:
-                outcome = 'ok'
-        run = Run(
-            run_id=uuid4().hex,
-            source_id=source_id,
-            config_version=plan['config_version'],
-            started_at=started,
-            finished_at=now or datetime.now(KST),
-            outcome=outcome,
-            new_count=0 if outcome == 'ok' else None,
-            modified_count=0 if outcome == 'ok' else None,
-            error=error,
-        )
-        if outcome == 'ok':
-            run, counts = materials.save(path, articles, run, source['baseline_policy'])
-        registry.record_run(run)
-    return {'outcome': outcome, 'run_id': run.run_id, **(counts if error is None else {'error': error})}
+    feed_path, article_path, board_path = CHANNELS[source_id]
+    source, version, outcome = collector.source_plan(registry, source_id, 'moel', 'rss', HOST + feed_path)
+    if source is None:
+        return {'outcome': outcome}
+
+    def read_articles(rules: list[str]) -> list[Article]:
+        return parse_feed(checked_read(rules, feed_path, RSS_MEDIA), article_path)
+
+    def read_board(rules: list[str], articles: list[Article]) -> tuple[list[Article] | None, dict]:
+        return reconcile_board(rules, board_path, article_path, articles)
+
+    return collector.collect(
+        registry,
+        database,
+        source,
+        version,
+        read_rules=robots_rules,
+        read_articles=read_articles,
+        read_board=read_board if reconcile else None,
+        now=now,
+    )
