@@ -185,3 +185,22 @@ test('a configured rule feed failure keeps documents as references and preserves
   expect(within(references).queryByText(/상한액 : 900천원/)).not.toBeInTheDocument()
   expect(screen.getByRole('button', { name: '수집 이력' })).toBeVisible()
 })
+
+test('a seventh registered rule uses the same card and reference links without a source-specific renderer', async () => {
+  const [first] = rules.rules ?? []
+  const registered = ['INS-01', 'INS-02H', 'INS-02L', 'INS-03', 'TAX-01', 'TAX-03', 'NEW-07']
+    .map((key) => ({ ruleId: key, sourceKey: key, title: key, scopes: [], proposalLinks: [] }))
+  const seventh = { ...first, ruleId: 'NEW-07', sourceKey: 'NEW-07', title: '일곱 번째 가상 기준' }
+  const legacyLoader: ErpLoader = async () => ({
+    ...feed, items: [...(feed.items ?? []), { ...base, id: 'seventh', sourceKey: 'NEW-07', title: '공유 원천 자료' }],
+  })
+  const ruleLoader: ErpRuleLoader = async () => ({ ...rules, rules: [...registered.slice(0, 6), seventh] })
+  render(<ErpPage loader={legacyLoader} ruleLoader={ruleLoader} lawLoader={lawLoader} today="2026-11-12" />)
+  const card = await screen.findByRole('article', { name: '일곱 번째 가상 기준' })
+  expect(screen.getAllByRole('article')).toHaveLength(7)
+  const content = within(card)
+  expect(content.getByText('검증된 가상 현행값')).toBeVisible()
+  expect(content.getByText('검증된 가상 예정값')).toBeVisible()
+  await userEvent.click(content.getByText('기존 자료와 첨부 1건'))
+  expect(content.getByRole('link', { name: /국가법령정보센터 원문/ })).toHaveAttribute('href', base.sourceUrl)
+})
