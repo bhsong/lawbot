@@ -57,9 +57,9 @@ def build_parser() -> argparse.ArgumentParser:
     return p
 
 
-def _check(monitor: Monitor) -> tuple[list, int]:
+def _check(monitor: Monitor, *, articles_enabled: bool = True) -> tuple[list, int]:
     """점검 실행·출력. 종료 코드: 점검 실패가 있으면 1 (확인 필요는 0)"""
-    results = monitor.check()
+    results = monitor.check() if articles_enabled else monitor.check(articles_enabled=False)
     for r in results:
         print(f'check {r.name} — {r.status}: {r.line}')
     return results, (1 if any(r.failed for r in results) else 0)
@@ -81,6 +81,7 @@ class DailySelection:
     run_id: str
     collectors: list[str]
     law_paths: list[str] | None
+    articles_enabled: bool
 
 
 def _daily_selection(path: Path) -> DailySelection:
@@ -101,12 +102,16 @@ def _daily_selection(path: Path) -> DailySelection:
         or not all(isinstance(path, str) and re.fullmatch(r'kr/[^/\r\n]+/[^/\r\n]+\.md', path) for path in law_paths)
     ):
         raise ValueError('Source Hub 법령 범위를 확인하세요')
-    return DailySelection(run_id, collectors, law_paths)
+    articles_enabled = data.get('articles_enabled')
+    if not isinstance(articles_enabled, bool) or (not articles_enabled and 'legalize_law' in collectors):
+        raise ValueError('Source Hub 조문 갱신 설정을 확인하세요')
+    return DailySelection(run_id, collectors, law_paths, articles_enabled)
 
 
 def _daily(monitor: Monitor, only: str | None, *, selection: DailySelection | None = None) -> int:
     code, line = 0, None
-    if selection is not None and 'legalize_law' not in selection.collectors:
+    articles_enabled = selection is None or selection.articles_enabled
+    if selection is not None and articles_enabled and 'legalize_law' not in selection.collectors:
         try:
             monitor.refresh_article_repo()
         except GitError, OSError:
@@ -123,7 +128,7 @@ def _daily(monitor: Monitor, only: str | None, *, selection: DailySelection | No
     except (BootstrapRequired, MissingSecret) as e:
         print(f'law-monitor: {e}', file=sys.stderr)
         code = 2
-    results, check_code = _check(monitor)
+    results, check_code = _check(monitor, articles_enabled=articles_enabled)
     code = max(code, check_code)
     try:
         code = max(code, _summarize(monitor, run_line=line, checks=results))

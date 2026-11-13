@@ -1,7 +1,9 @@
 import json
 from types import SimpleNamespace
 
-from law_monitor import cli
+import pytest
+
+from law_monitor import checks, cli
 from law_monitor.app import Monitor
 from law_monitor.collectors.base import CollectResult
 from law_monitor.config import load
@@ -9,7 +11,8 @@ from law_monitor.paths import Paths
 from mon_helpers import FakeLawGo, SourceRepo, law_md, make_config, make_monitor
 
 
-def test_managed_daily_uses_one_normal_run_and_preserves_checks(tmp_path, monkeypatch):
+@pytest.mark.parametrize('articles_enabled', [True, False], ids=['law-not-due', 'law-disabled'])
+def test_managed_daily_uses_one_normal_run_and_respects_law_switch(tmp_path, monkeypatch, articles_enabled):
     calls = []
 
     class Collector:
@@ -24,11 +27,40 @@ def test_managed_daily_uses_one_normal_run_and_preserves_checks(tmp_path, monkey
 
     monitor = Monitor(Paths(tmp_path), load(), collectors=[Collector()])
     monkeypatch.setattr(monitor, 'refresh_article_repo', lambda: calls.append('article_input'), raising=False)
-    monkeypatch.setattr(monitor, 'check', lambda: calls.extend(['calendar', 'articles']) or [])
+
+    def run(command, **_):
+        if 'law_calendar.sync' in command:
+            calls.append('calendar')
+        else:
+            assert command[0].endswith('/lawbot-articles-update')
+            calls.append('articles')
+        return SimpleNamespace(returncode=0, stdout='ok', stderr='')
+
+    monkeypatch.setattr(checks.subprocess, 'run', run)
     monkeypatch.setattr(cli, '_summarize', lambda *args, **kwargs: calls.append('summary') or 0)
-    selection = SimpleNamespace(run_id='daily-abc', collectors=['assembly_bill'], law_paths=None)
+    plan_file = tmp_path / 'plan.json'
+    plan_file.write_text(
+        json.dumps(
+            {
+                'run_id': 'daily-abc',
+                'collectors': ['assembly_bill'],
+                'law_paths': None,
+                'articles_enabled': articles_enabled,
+            }
+        )
+    )
+    selection = cli._daily_selection(plan_file)
     assert cli._daily(monitor, None, selection=selection) == 0
-    assert calls == ['article_input', 'assembly_bill', 'calendar', 'articles', 'summary']
+    expected = (
+        ['article_input', 'assembly_bill', 'calendar', 'articles', 'summary']
+        if articles_enabled
+        else [
+            'assembly_bill',
+            'calendar',
+            'summary',
+        ]
+    )
+    assert calls == expected
     rows = monitor.state.conn.execute("SELECT * FROM runs WHERE mode='normal'").fetchall()
     [row] = rows
     assert row['run_id'] == selection.run_id
@@ -65,3 +97,19 @@ def test_managed_scope_excludes_disabled_law_and_recovers_it_on_reenable(tmp_pat
     assert [event['target']['item_id'] for event in summary.events] == [enabled]
     summary = monitor.collect_managed('daily-02', ['legalize_law'], [enabled, disabled])
     assert [event['target']['item_id'] for event in summary.events] == [disabled]
+
+
+def test_managed_plan_cannot_select_the_git_collector_with_article_input_off(tmp_path):
+    plan = tmp_path / 'plan.json'
+    plan.write_text(
+        json.dumps(
+            {
+                'run_id': 'daily-inconsistent',
+                'collectors': ['legalize_law'],
+                'law_paths': None,
+                'articles_enabled': False,
+            }
+        )
+    )
+    with pytest.raises(ValueError, match='조문 갱신 설정'):
+        cli._daily_selection(plan)

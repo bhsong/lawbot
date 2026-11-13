@@ -230,6 +230,9 @@ def legacy_selection(rows: dict, previous: dict, state: dict, now: datetime) -> 
         'run_id': state['run_id'],
         'collectors': selected,
         'law_paths': paths if registered else None,
+        'articles_enabled': bool(
+            (law_source := rows.get('legalize_law')) and law_source['adapter'] == 'legacy' and law_source['runnable']
+        ),
     }
 
 

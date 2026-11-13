@@ -135,10 +135,13 @@ class Monitor:
             )
         return result.events
 
-    def check(self) -> list:
+    def check(self, *, articles_enabled: bool = True) -> list:
         """설정의 점검(checks) 명령을 차례로 실행 (law_monitor.checks). 상태는 바꾸지 않는다"""
+        checks = self.config.checks
+        if not articles_enabled:
+            checks = tuple(check for check in checks if not check.uses_article_repo)
         with _file_log(self.paths, self.now()):
-            return checks_mod.run(self.config.checks, self.paths)
+            return checks_mod.run(checks, self.paths)
 
     def summarize(self, *, events_dir=None, run_line: str | None = None, checks: list | None = None) -> SummaryResult:
         """대기 이벤트(processed_at 없음)를 요약해 data/summaries/YYYY-MM-DD.md를 쓴다 (2단계).

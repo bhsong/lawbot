@@ -17,6 +17,38 @@ from test_source_hub import registry as registry
 STAMP = datetime(2026, 11, 13, 6, 30, tzinfo=KST)
 
 
+@pytest.mark.parametrize(
+    ('setting', 'enabled'),
+    [(None, True), (('group', 'law'), False), (('agency', 'lawgo'), False), (('source', 'legalize_law'), False)],
+)
+def test_daily_plan_distinguishes_law_source_off_from_not_due(registry, setting, enabled):
+    if setting:
+        registry.patch(*setting, {'enabled': False}, actor='fixture', reason='fixture', version=0)
+    rows = {row['source_id']: row for row in registry.snapshot()['sources']}
+    plan = daily.legacy_selection(
+        rows,
+        {'legalize_law': {'lastAttemptAt': STAMP.isoformat()}},
+        {'run_id': 'daily-fixture'},
+        STAMP,
+    )
+    assert 'legalize_law' not in plan['collectors']
+    assert plan['articles_enabled'] is enabled
+
+
+def test_daily_plan_pauses_articles_when_all_individual_laws_are_off(registry):
+    law_source = next(source for source in registry.snapshot()['sources'] if source['source_id'] == 'legalize_law')
+    version = 0
+    for law in law_source['laws']:
+        version = registry.patch(
+            'law', law['law_id'], {'enabled': False}, actor='fixture', reason='fixture', version=version
+        )
+    rows = {row['source_id']: row for row in registry.snapshot()['sources']}
+    plan = daily.legacy_selection(rows, {}, {'run_id': 'daily-fixture'}, STAMP)
+    assert plan['articles_enabled'] is False
+    assert 'legalize_law' not in plan['collectors']
+    assert 'legalize_admrule' in plan['collectors']
+
+
 def test_daily_reuses_one_snapshot_and_exposes_same_public_data(registry, tmp_path, monkeypatch):
     version = registry.patch(
         'source', 'assembly_notice', {'enabled': False}, actor='fixture', reason='fixture', version=0
