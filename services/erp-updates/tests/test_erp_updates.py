@@ -176,7 +176,8 @@ def test_export_replaces_feed_atomically(env, capsys):
     assert sorted(path.name for path in (tmp_path / 'public').iterdir()) == ['erp_calendar_public.json']
 
 
-def test_seventh_source_shares_an_existing_document_and_uses_the_same_review_pipeline(env, capsys):
+def test_seventh_source_shares_an_existing_document_and_uses_the_same_review_pipeline(env, capsys, monkeypatch):
+    monkeypatch.setattr(store, 'now', lambda: '2026-11-13T06:30:00+09:00')
     root, repos, run = env
     trees = fx.baseline()
     trees['legalize-kr'] = {

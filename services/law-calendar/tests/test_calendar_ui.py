@@ -9,7 +9,7 @@ import pytest
 from playwright.sync_api import expect
 
 import calendar_ui_support as support
-from law_calendar.assembly_ingest import import_assembly, review_assembly
+from law_calendar.assembly_ingest import import_assembly
 from law_calendar.sync import synchronize
 from test_calendar_api import dataset as dataset
 from test_calendar_assembly import register
@@ -164,11 +164,10 @@ def test_database_to_public_calendar_and_comparison(dataset, tmp_path, calendar_
 def test_assembly_notice_and_bill_dates_remain_separate(scheduled, tmp_path, calendar_page, width, monkeypatch):
     (database, home, _, _), state = scheduled
     register(home, state)
-    bill = register(home, state, source='assembly_bill', date='2026-11-05')
+    register(home, state, source='assembly_bill', date='2026-11-05')
     html = detail_html('2200012', '2026-11-04~2026-11-05', '정식 적용 범위를 확대하는 안입니다.')
     monkeypatch.setattr('law_calendar.notice_content.fetch_official', lambda _url: html.encode())
     assert synchronize(database, home)['notice_auto_published'] == 1
-    review_assembly(database, bill, 'approve', reviewer='tester', note='공식 날짜 확인')
     page = calendar_page
     page.set_viewport_size({'width': width, 'height': 900})
     page.clock.install(time=datetime.datetime(2026, 11, 5, tzinfo=datetime.UTC))
