@@ -43,6 +43,12 @@ jobs:
           uv pip install --no-deps -e services/erp-updates
           uv run pyright services/erp-updates/src
 
+      - name: 수집 설정 서비스 설치·잠금·타입 검사
+        run: |
+          uv lock --check --project services/source-hub
+          uv pip install --no-deps -e services/source-hub
+          uv run pyright services/source-hub/src
+
       - name: 린트 (ruff, 설정은 pyproject.toml)
         run: uv run ruff check --output-format=github
 

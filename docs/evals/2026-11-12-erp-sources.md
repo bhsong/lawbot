@@ -1,6 +1,6 @@
 # ERP 자료 원천 확인과 법제처 PDF 1회 수집 (2026-11-12)
 
-[계획](../plans/erp-calendar.md)의 출발 자료다. 모델 호출은 없다. 운영 monitor 데이터는 사용자 승인 아래 읽기만 했다.
+[계획](../archives/erp-calendar.md)의 출발 자료다. 모델 호출은 없다. 운영 monitor 데이터는 사용자 승인 아래 읽기만 했다.
 
 ## 운영 monitor 데이터 (읽기 전용)
 

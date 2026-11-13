@@ -34,6 +34,7 @@ data/db/
 services/monitor/data/
 services/law-calendar/data/
 services/erp-updates/data/
+services/source-hub/data/
 
 # 조문 임베딩 캐시 (lawbot.embed_cache, 다시 만들 수 있음)
 cache/
