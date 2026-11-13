@@ -11,6 +11,17 @@
 .erp-links { list-style: none; margin: 12px 0 0; padding: 0; display: grid; gap: 6px; font-size: 14px; }
 .erp-links li { display: flex; flex-wrap: wrap; gap: 4px 12px; }
 .erp-hash { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; color: var(--muted); overflow-wrap: anywhere; }
+.erp-rule-scope { margin-top: 16px; padding-top: 12px; border-top: 1px solid var(--line); }
+.erp-rule-scope h4, .erp-rule-version h5 { margin: 0; font-size: 15px; }
+.erp-rule-meta { margin: 6px 0; color: var(--muted); font-size: 13px; }
+.erp-rule-version { margin: 10px 0; padding: 12px; border: 1px solid var(--line); border-radius: 8px; }
+.erp-rule-version-upcoming { border-inline-start: 3px solid var(--muted); }
+.erp-rule-version .erp-excerpt { margin-top: 8px; }
+.erp-rule-version > a { display: inline-block; margin-top: 8px; font-size: 14px; }
+.erp-rule-details { margin-top: 12px; }
+.erp-rule-details > summary { cursor: pointer; width: fit-content; }
+.erp-rule-reference { margin-top: 10px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 8px; overflow-wrap: anywhere; }
+.erp-rule-reference h4 { margin: 0; font-size: 15px; }
 .erp-month { display: flex; gap: 8px; }
 .erp-table-wrap { overflow-x: auto; margin-top: 12px; }
 .erp-history { border-collapse: collapse; width: 100%; font-size: 13px; }

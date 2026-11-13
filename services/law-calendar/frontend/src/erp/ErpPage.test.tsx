@@ -2,9 +2,9 @@ import { render, screen, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import type { CalendarChange } from '@lawbot/ui'
 import type { CalendarLoader } from '../law-calendar/types'
-import type { ErpItem, ErpUpdates } from '../law-calendar/api-types'
+import type { ErpItem, ErpRules, ErpUpdates, VerifiedErpRuleVersion } from '../law-calendar/api-types'
 import ErpPage from './ErpPage'
-import type { ErpLoader } from './data'
+import type { ErpLoader, ErpRuleLoader } from './data'
 
 const base: ErpItem = {
   id: 'pension', sourceKey: 'INS-01', sourceTitle: '[예시] 연금 상·하한', category: 'insurance', kind: 'admrule',
@@ -43,6 +43,7 @@ const lawLoader: CalendarLoader = async (month) => ({
   demo: true, delayed: false, collectedAt: null, verifiedAt: null,
 })
 const loader: ErpLoader = async () => feed
+const unconfigured: ErpRuleLoader = async (asOfDate) => ({ state: 'unconfigured', asOfDate })
 
 const originalShow = Object.getOwnPropertyDescriptor(HTMLDialogElement.prototype, 'showModal')
 const originalClose = Object.getOwnPropertyDescriptor(HTMLDialogElement.prototype, 'close')
@@ -60,7 +61,7 @@ afterAll(() => {
 })
 
 test('splits current and upcoming items and shows dates, excerpts and file hashes', async () => {
-  render(<ErpPage loader={loader} lawLoader={lawLoader} today="2026-11-12" />)
+  render(<ErpPage loader={loader} ruleLoader={unconfigured} lawLoader={lawLoader} today="2026-11-12" />)
   const current = await screen.findByRole('region', { name: '현재 적용 중' })
   const upcoming = screen.getByRole('region', { name: '적용 예정' })
   expect(within(current).getByRole('heading', { name: '[예시] 가상 연금 상한액' })).toBeInTheDocument()
@@ -73,7 +74,7 @@ test('splits current and upcoming items and shows dates, excerpts and file hashe
 })
 
 test('related law schedule keeps only laws named by the feed', async () => {
-  render(<ErpPage loader={loader} lawLoader={lawLoader} today="2026-11-12" />)
+  render(<ErpPage loader={loader} ruleLoader={unconfigured} lawLoader={lawLoader} today="2026-11-12" />)
   const related = await screen.findByRole('region', { name: /관련 법령 일정/ })
   expect(await within(related).findByText('관련 시행 요약')).toBeInTheDocument()
   expect(within(related).queryByText('무관 요약')).not.toBeInTheDocument()
@@ -82,7 +83,7 @@ test('related law schedule keeps only laws named by the feed', async () => {
 })
 
 test('history button lists what was collected and when', async () => {
-  render(<ErpPage loader={loader} lawLoader={lawLoader} today="2026-11-12" />)
+  render(<ErpPage loader={loader} ruleLoader={unconfigured} lawLoader={lawLoader} today="2026-11-12" />)
   await userEvent.click(await screen.findByRole('button', { name: '수집 이력' }))
   const dialog = screen.getByRole('dialog', { name: '수집 이력' })
   const rows = within(dialog).getAllByRole('row').slice(1)
@@ -99,7 +100,7 @@ test.each([
   ['missing', 'ERP 자료가 아직 준비되지 않았습니다.'],
   ['invalid', 'ERP 자료 파일을 확인하지 못했습니다. 법령 캘린더는 그대로 이용할 수 있습니다.'],
 ] as const)('%s feed shows a notice and no items', async (state, message) => {
-  render(<ErpPage loader={async () => ({ state })} lawLoader={lawLoader} today="2026-11-12" />)
+  render(<ErpPage loader={async () => ({ state })} ruleLoader={unconfigured} lawLoader={lawLoader} today="2026-11-12" />)
   expect(await screen.findByText(message)).toBeInTheDocument()
   const hometax = screen.getByRole('link', { name: '홈택스 공식 홈' })
   expect(hometax).toHaveAttribute('href', 'https://www.hometax.go.kr/')
@@ -111,7 +112,95 @@ test.each([
 test('load failure can be retried', async () => {
   let calls = 0
   const flaky: ErpLoader = async () => { calls += 1; if (calls === 1) throw new Error('down'); return feed }
-  render(<ErpPage loader={flaky} lawLoader={lawLoader} today="2026-11-12" />)
+  render(<ErpPage loader={flaky} ruleLoader={unconfigured} lawLoader={lawLoader} today="2026-11-12" />)
   await userEvent.click(await screen.findByRole('button', { name: '다시 시도' }))
   expect(await screen.findByRole('region', { name: '현재 적용 중' })).toBeInTheDocument()
+})
+
+const verified: VerifiedErpRuleVersion = {
+  ruleVersionId: 'old', sourceRevisionId: 1, effectiveFrom: '2026-01-01', appliesFrom: '2026-01-01',
+  evidenceKind: 'final_notice', evidenceUrl: 'https://www.law.go.kr/행정규칙/가상현행',
+  valueText: '검증된 가상 현행값', verifiedAt: '2026-11-12T20:05:00+09:00',
+}
+const next = {
+  ...verified, ruleVersionId: 'new', sourceRevisionId: 2, effectiveFrom: '2027-01-01', appliesFrom: '2027-02-01',
+  evidenceUrl: 'https://www.law.go.kr/행정규칙/가상예정', valueText: '검증된 가상 예정값',
+}
+const rules: ErpRules = {
+  state: 'ok', asOfDate: '2026-11-12', rules: [
+    {
+      ruleId: 'INS-01', sourceKey: 'INS-01', title: '가상 연금 기준',
+      scopes: [
+        {
+          scopeId: 'standard', scope: '일반 가입자', applicability: 'insurance_month', targetOn: '2026-11-01',
+          currentVersion: verified, recheckRequired: false,
+          scheduledChanges: [next, {
+            ...next, ruleVersionId: 'later', effectiveFrom: '2027-07-01', appliesFrom: '2027-07-01',
+            valueText: '검증된 추가 변경',
+          }],
+        },
+        {
+          scopeId: 'partial', scope: '일부 가입자', applicability: 'payment_date', targetOn: '2026-11-12',
+          currentVersion: null, recheckRequired: true, scheduledChanges: [],
+        },
+      ],
+      proposalLinks: [{ ruleVersionId: 'draft', evidenceUrl: 'https://pal.assembly.go.kr/napal/lgsltpa/예시' }],
+    },
+    { ruleId: 'INS-03', sourceKey: 'INS-03', title: '가상 산재 기준', scopes: [], proposalLinks: [] },
+  ],
+}
+
+test('shows current, upcoming, additional stages, and proposals within a single rule card', async () => {
+  const loaderWithFuture: ErpLoader = async () => ({
+    ...feed, items: [...(feed.items ?? []), { ...base, id: 'duplicate', effectiveFrom: '2028-01-01' }],
+  })
+  render(<ErpPage loader={loaderWithFuture} ruleLoader={async () => rules} lawLoader={lawLoader} today="2026-11-12" />)
+  const card = await screen.findByRole('article', { name: '가상 연금 기준' })
+  expect(screen.getAllByRole('article', { name: '가상 연금 기준' })).toHaveLength(1)
+  const content = within(card)
+  expect(content.getByRole('heading', { name: '현재 유효' })).toBeVisible()
+  expect(content.getByRole('heading', { name: '변경 예정 · 적용 시작 2027년 2월' })).toBeVisible()
+  expect(content.getByText('검증된 가상 현행값')).toBeVisible()
+  expect(content.getByText('검증된 가상 예정값')).toBeVisible()
+  expect(content.getByText('현행 기준 확인 필요')).toBeVisible()
+  expect(content.getByText('예정 변경 재확인 필요')).toBeVisible()
+  expect(content.getByRole('heading', { name: '검토 중' })).toBeVisible()
+  expect(content.getByRole('link', { name: '검토 중인 공식 원문' })).toHaveAttribute('target', '_blank')
+  const later = content.getByText('이후 변경 1건')
+  expect(later.closest('details')).not.toHaveAttribute('open')
+  await userEvent.click(later)
+  expect(content.getByText('검증된 추가 변경')).toBeVisible()
+  expect(await screen.findByRole('heading', { name: '가상 산재 기준' })).toBeVisible()
+  expect(screen.queryByRole('article', { name: '[예시] 2027년도 가상 요율' })).not.toBeInTheDocument()
+  const references = content.getByText('기존 자료와 첨부 2건')
+  expect(references.closest('details')).not.toHaveAttribute('open')
+})
+
+test('a configured rule feed failure keeps documents as references and preserves the existing history', async () => {
+  render(<ErpPage loader={loader} ruleLoader={async () => ({ state: 'invalid', asOfDate: '2026-11-12' })}
+    lawLoader={lawLoader} today="2026-11-12" />)
+  expect(await screen.findByText('ERP 적용 기준을 확인하지 못했습니다.')).toBeVisible()
+  const references = screen.getByRole('region', { name: '현행 기준 확인 필요' })
+  expect(within(references).getByRole('heading', { name: base.title })).toBeVisible()
+  expect(within(references).queryByText(/상한액 : 900천원/)).not.toBeInTheDocument()
+  expect(screen.getByRole('button', { name: '수집 이력' })).toBeVisible()
+})
+
+test('a seventh registered rule uses the same card and reference links without a source-specific renderer', async () => {
+  const [first] = rules.rules ?? []
+  const registered = ['INS-01', 'INS-02H', 'INS-02L', 'INS-03', 'TAX-01', 'TAX-03', 'NEW-07']
+    .map((key) => ({ ruleId: key, sourceKey: key, title: key, scopes: [], proposalLinks: [] }))
+  const seventh = { ...first, ruleId: 'NEW-07', sourceKey: 'NEW-07', title: '일곱 번째 가상 기준' }
+  const legacyLoader: ErpLoader = async () => ({
+    ...feed, items: [...(feed.items ?? []), { ...base, id: 'seventh', sourceKey: 'NEW-07', title: '공유 원천 자료' }],
+  })
+  const ruleLoader: ErpRuleLoader = async () => ({ ...rules, rules: [...registered.slice(0, 6), seventh] })
+  render(<ErpPage loader={legacyLoader} ruleLoader={ruleLoader} lawLoader={lawLoader} today="2026-11-12" />)
+  const card = await screen.findByRole('article', { name: '일곱 번째 가상 기준' })
+  expect(screen.getAllByRole('article')).toHaveLength(7)
+  const content = within(card)
+  expect(content.getByText('검증된 가상 현행값')).toBeVisible()
+  expect(content.getByText('검증된 가상 예정값')).toBeVisible()
+  await userEvent.click(content.getByText('기존 자료와 첨부 1건'))
+  expect(content.getByRole('link', { name: /국가법령정보센터 원문/ })).toHaveAttribute('href', base.sourceUrl)
 })

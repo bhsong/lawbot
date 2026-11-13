@@ -1,11 +1,20 @@
-import type { ErpHistory, ErpUpdates } from '../law-calendar/api-types'
+import type { ErpHistory, ErpRules, ErpUpdates } from '../law-calendar/api-types'
 
 export type ErpLoader = (signal: AbortSignal) => Promise<ErpUpdates>
+export type ErpRuleLoader = (asOf: string, signal: AbortSignal) => Promise<ErpRules>
 
 export const loadErp: ErpLoader = async (signal) => {
   const response = await fetch('/api/erp-updates', { signal, credentials: 'omit', cache: 'no-store' })
   if (!response.ok) throw new Error('ERP API unavailable')
   return response.json() as Promise<ErpUpdates>
+}
+
+export const loadErpRules: ErpRuleLoader = async (asOf, signal) => {
+  const response = await fetch('/api/erp-updates/v2?' + new URLSearchParams({ asOf }),
+    { signal, credentials: 'omit', cache: 'no-store' })
+  if (response.status === 404) return { state: 'unconfigured', asOfDate: asOf }
+  if (!response.ok) throw new Error('ERP rule API unavailable')
+  return response.json() as Promise<ErpRules>
 }
 
 export const ACTION_LABELS: Record<ErpHistory['action'], string> = {
