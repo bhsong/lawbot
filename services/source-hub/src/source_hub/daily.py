@@ -50,6 +50,18 @@ class FeedPaths:
     news: Path
     output: Path
     include_laws: bool = True
+    law_since: datetime | None = None
+
+
+def morning_path(monitor_home: Path, run_id: str) -> Path:
+    if not re.fullmatch(r'daily-[a-zA-Z0-9-]{1,70}', run_id):
+        raise ValueError('Invalid managed daily run ID')
+    return monitor_home / 'data' / 'summaries' / 'managed' / f'{run_id}.json'
+
+
+def daily_lock(database: Path) -> Path:
+    database = database.resolve()
+    return database.with_name(database.name + '.daily') / '.lock'
 
 
 def command(config: DailyConfig, project: str, *args: str, timeout: int = 360) -> subprocess.CompletedProcess[str]:
@@ -165,6 +177,7 @@ def capture(config: DailyConfig, paths: FeedPaths, cutoff: datetime) -> dict:
         '--cutoff',
         cutoff.isoformat(),
         *([] if paths.include_laws else ['--without-law-news']),
+        *(['--law-since', paths.law_since.isoformat()] if paths.law_since is not None else []),
     )
     if result.returncode:
         raise ValueError('ERP public snapshot capture failed')
@@ -370,6 +383,7 @@ def change_records(
                     'url': item['canonical_url'],
                     'revision': item['revision'],
                     'event': item['event'],
+                    **({'publishedOn': item['published_on']} if item.get('published_on') else {}),
                 }
     for item in feeds['erp'].get('items', []):
         visible['erp:' + item['id']] = {
@@ -378,6 +392,7 @@ def change_records(
             'url': item['sourceUrl'],
             'content': item['contentSha256'],
             'attachments': item['attachments'],
+            **({'excerpt': item['excerpt']} if item.get('excerpt') else {}),
         }
     if feeds['rules']:
         for rule in RuleSnapshot.model_validate(feeds['rules']).rules:
@@ -394,21 +409,44 @@ def change_records(
                         'ruleId': rule.ruleId,
                         'title': rule.title,
                         'scope': scope.scope,
+                        'applicability': scope.applicability,
                         'version': version.model_dump(mode='json'),
+                        'predecessor': next(
+                            (
+                                older.version.model_dump(mode='json')
+                                for older in scope.editions
+                                if older.version.ruleVersionId == version.predecessorId
+                                and older.reviews[-1].decision == 'confirmed'
+                                and older.reviews[-1].at.astimezone(KST).date().isoformat() <= day
+                            ),
+                            None,
+                        ),
                     }
     changes = []
     for key, value in sorted(visible.items()):
-        digest = snapshot_hash(value)
+        # Keep prior snapshot ledger hashes valid when adding presentation fields.
+        digest = snapshot_hash(
+            {k: v for k, v in value.items() if k not in ('publishedOn', 'excerpt', 'applicability', 'predecessor')}
+        )
+        attachment_key = 'attachments:' + key
+        if value['kind'] == 'erp':
+            ledger[attachment_key] = snapshot_hash(
+                {'files': sorted((a['title'], a.get('sha256') or '') for a in value['attachments'])}
+            )
+        attachment_changed = (
+            value['kind'] == 'erp' and attachment_key in previous and ledger[attachment_key] != previous[attachment_key]
+        )
         if digest != previous.get(key) and (value['kind'] != 'news' or value['event'] != 'baseline'):
             changes.append(
                 value
                 | {
                     'id': key,
-                    'change': ('modified' if key in previous or value.get('event') == 'post_modified' else 'new'),
+                    'change': 'modified' if key in previous or value.get('event') == 'post_modified' else 'new',
+                    **({'attachmentChanged': True} if attachment_changed else {}),
                 }
             )
         ledger[key] = digest
-    return changes, ledger
+    return [*feeds.get('lawChanges', []), *changes], ledger
 
 
 def report(snapshot: dict, *, reused: bool) -> dict:
@@ -456,7 +494,7 @@ def _run(registry: Registry, config: DailyConfig, now: Callable[[], datetime], r
     ):
         raise ValueError('Use a distinct daily publication file')
     home = private.with_name(private.name + '.daily')
-    with file_lock(home / '.lock') as locked:
+    with file_lock(daily_lock(private)) as locked:
         if not locked:
             return {'status': 'busy', 'day_kst': day}
         prior = old_snapshot(public)
@@ -499,12 +537,22 @@ def _run(registry: Registry, config: DailyConfig, now: Callable[[], datetime], r
         public.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
         plan = state['plan']
         previous = {entry['sourceId']: entry for entry in prior.get('sources', [])}
+        reference = prior
+        if republish:
+            before = sorted(path for path in home.glob('????-??-??/published.json') if path.parent.name < day)
+            reference = read_snapshot(before[-1]) if before else {}
+        since = (
+            datetime.fromisoformat(reference['cutoffAt'])
+            if reference
+            else started.replace(hour=0, minute=0, second=0, microsecond=0)
+        )
         paths = FeedPaths(
             working / 'erp.json',
             working / 'rules.json',
             working / 'news.json',
             working / 'capture.json',
             include_laws=any(row['source_id'] == 'legalize_law' and row['runnable'] for row in plan['sources']),
+            law_since=since,
         )
         statuses = collect_sources(registry, config, state, journal, previous, datetime.fromisoformat(state['started']))
         cutoff = now().astimezone(KST)
@@ -523,13 +571,10 @@ def _run(registry: Registry, config: DailyConfig, now: Callable[[], datetime], r
                 and prior.get('configHash') == plan['seed_sha256']
             ):
                 feeds['news']['lawgo']['items'] = old_law_news['items']
-        reference = prior
-        if republish:
-            before = sorted(path for path in home.glob('????-??-??/published.json') if path.parent.name < day)
-            reference = read_snapshot(before[-1]) if before else {}
         ledger_file = home / 'ledger' / (reference.get('snapshotHash', '') + '.json')
         previous_ledger = json.loads(ledger_file.read_bytes()) if ledger_file.is_file() else {}
         changes, ledger = change_records(plan, records, feeds, day, previous_ledger)
+        feeds.pop('lawChanges', None)
         status = (
             'partial'
             if any(row['stale'] for row in statuses)

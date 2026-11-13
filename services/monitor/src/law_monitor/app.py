@@ -11,6 +11,7 @@ import uuid
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
 from law_monitor import checks as checks_mod
 from law_monitor.assembly import SOURCES, AssemblyClient
@@ -25,7 +26,8 @@ from law_monitor.lawgo import LawGoClient
 from law_monitor.llm import ChatClient
 from law_monitor.paths import Paths
 from law_monitor.state import State
-from law_monitor.summarize import SummaryResult, load_events, write_summary
+from law_monitor.summarize import SummaryCapture, SummaryResult, load_events, write_summary
+from lawbot_common.erp_daily import replace_file
 
 KST = timezone(timedelta(hours=9), 'KST')
 FAILING_AFTER = 3
@@ -143,7 +145,14 @@ class Monitor:
         with _file_log(self.paths, self.now()):
             return checks_mod.run(checks, self.paths)
 
-    def summarize(self, *, events_dir=None, run_line: str | None = None, checks: list | None = None) -> SummaryResult:
+    def summarize(
+        self,
+        *,
+        events_dir=None,
+        run_line: str | None = None,
+        checks: list | None = None,
+        managed_summary: tuple[Path, str] | None = None,
+    ) -> SummaryResult:
         """대기 이벤트(processed_at 없음)를 요약해 data/summaries/YYYY-MM-DD.md를 쓴다 (2단계).
 
         events_dir를 주면 그 폴더의 이벤트 JSON(replay 결과)을 요약해 그 폴더의 summary.md에 쓰고 상태는 바꾸지 않는다.
@@ -155,6 +164,7 @@ class Monitor:
             )
         now = self.now()
         run_id = None
+        capture = SummaryCapture({}) if managed_summary else None
         with _file_log(self.paths, now):
             if events_dir is not None:
                 folder = self.paths.home / events_dir if not events_dir.is_absolute() else events_dir
@@ -174,7 +184,7 @@ class Monitor:
                 )
                 run_id = f'{now.strftime("%Y%m%dT%H%M%S")}-{uuid.uuid4().hex[:6]}'
                 self.state.start_run(run_id, 'summarize', now.isoformat(timespec='seconds'))
-                events, paths, unavailable = load_events(self.paths.home, self.state.pending_events())
+                events, paths, unavailable = load_events(self.paths.home, self.state.pending_events(), capture)
                 day = now.strftime('%Y-%m-%d')
                 out = self.paths.data / 'summaries' / f'{day}.md'
                 if out.exists():  # 같은 날 두 번째 실행: 앞 파일을 덮지 않음
@@ -194,7 +204,14 @@ class Monitor:
                 checks=checks,
                 unavailable=unavailable,
                 overwrite=run_id is None,
+                capture=capture,
             )
+            if capture is not None and managed_summary is not None:
+                target, managed_run = managed_summary
+                try:
+                    replace_file(target, {'runId': managed_run, 'entries': capture.entries})
+                except OSError, ValueError:
+                    log.warning('Unable to export the managed morning summary')
             if run_id is not None:
                 finished = self.now().isoformat(timespec='seconds')
                 self.state.mark_processed(done, finished)

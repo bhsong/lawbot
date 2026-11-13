@@ -1,6 +1,6 @@
 # 통합 일일 실행과 공개 ERP 스냅샷 검증
 
-2026-11-13 KST. 기준 `2f7094b`. [작업 계획](../plans/source-hub-daily.md)
+2026-11-13 KST. 기준 `2f7094b`. [작업 계획](../archives/source-hub-daily.md)
 
 | 항목 | 결과 |
 | --- | --- |

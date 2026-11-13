@@ -66,9 +66,22 @@ def _check(monitor: Monitor, *, articles_enabled: bool = True) -> tuple[list, in
 
 
 def _summarize(
-    monitor: Monitor, run_line: str | None = None, events_dir: Path | None = None, checks: list | None = None
+    monitor: Monitor,
+    run_line: str | None = None,
+    events_dir: Path | None = None,
+    checks: list | None = None,
+    managed_run: str | None = None,
 ) -> int:
-    result = monitor.summarize(events_dir=events_dir, run_line=run_line, checks=checks)
+    result = monitor.summarize(
+        events_dir=events_dir,
+        run_line=run_line,
+        checks=checks,
+        **(
+            {'managed_summary': (monitor.paths.data / 'summaries' / 'managed' / f'{managed_run}.json', managed_run)}
+            if managed_run
+            else {}
+        ),
+    )
     print(f'summarize events={result.events} calls={result.calls} pending={result.pending} → {result.path}')
     if result.failed:
         print(f'law-monitor: 요약 실패: {result.failed}', file=sys.stderr)
@@ -140,7 +153,12 @@ def _daily(monitor: Monitor, only: str | None, *, selection: DailySelection | No
     results, check_code = _check(monitor, articles_enabled=articles_enabled)
     code = max(code, check_code)
     try:
-        code = max(code, _summarize(monitor, run_line=line, checks=results))
+        summary_code = (
+            _summarize(monitor, run_line=line, checks=results, managed_run=selection.run_id)
+            if selection is not None
+            else _summarize(monitor, run_line=line, checks=results)
+        )
+        code = max(code, summary_code)
     except MissingSecret as e:
         print(f'law-monitor: {e}', file=sys.stderr)
         code = 2

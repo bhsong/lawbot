@@ -101,3 +101,16 @@ $hub --database $collector_db daily --root $PWD --monitor-home $monitor_home \
 - 당일 승인·철회·정정 사항은 같은 명령에 `--republish`를 추가해 반영합니다. 재발행은 수집 없이 새 해시를 발행합니다. 일일 실행 기록은 설정 DB 옆 `<파일명>.daily/`에 저장됩니다.
 - 캘린더에는 같은 `daily_feed`를 지정합니다. 기존 단독 파일의 관리자 갱신은 이 통합 공개 파일과 별개입니다. [캘린더 설정](../law-calendar/README.md#erp-일일-스냅샷)
 - 운영 전환용 [launchd 템플릿](deploy/com.lawbot.monitor.plist.example)은 기존과 같은 작업 라벨과 KST 시스템의 06:30을 사용합니다. 운영 승인 뒤 기존 작업을 해제하고 대상 경로와 서비스별 uv 환경을 확인한 뒤 교체합니다.
+
+## ERP 일일 이메일
+
+`email-digest`는 캘린더에 설정한 같은 공개 파일을 읽습니다. `--database`에는 `daily`와 동일한 등록부 경로를 지정해 공개 갱신과 발송이 겹치지 않게 합니다. `--outbox`는 다른 서비스 DB와 분리된 전송 기록 경로입니다. `--monitor-home`을 주면 같은 실행에서 생성한 아침 Qwen 요약을 대조합니다. 기존 Markdown에 적힌 점검 결과나 내부 경로는 이메일에 포함되지 않습니다.
+
+비공개 설정 JSON은 소유자만 읽고 쓸 수 있게 저장합니다. `erp_page`는 HTTPS 공개 ERP 탭 URL입니다. `enabled`와 `model_enabled`의 기본값은 각각 `false`입니다. `send_at_kst`는 기본 `07:30`, `send_unchanged`는 기본 `true`, `item_limit`은 절당 기본 20건입니다. 실발송에는 `sender`와 `recipients`가 필요하며, `recipients`에는 수신자 별칭과 이메일 주소를 매핑합니다. OAuth 클라이언트 ID·시크릿과 갱신 토큰은 비공개 실행 환경의 `ERP_GMAIL_CLIENT_ID`, `ERP_GMAIL_CLIENT_SECRET`, `ERP_GMAIL_REFRESH_TOKEN`에 설정합니다. 토큰은 `gmail.send` 권한으로 발급합니다. 선택적인 새 ERP 자료 보강에는 기존 모델 주소와 토큰을 `LAWBOT_MODEL_SERVER`, `LAWBOT_MODEL_TOKEN`으로 전달합니다. [Gmail 발송 권한](https://developers.google.com/workspace/gmail/api/reference/rest/v1/users.messages/send)
+
+```fish
+$hub --database $collector_db email-digest --snapshot $daily_feed --outbox $email_outbox \
+    --settings $email_settings --monitor-home $monitor_home --preview
+```
+
+미리보기는 메일이나 모델 요청을 보내지 않습니다. 운영 승인 뒤 스케줄러에서 같은 명령을 `--preview` 없이 실행합니다. KST 설정 시각 이전은 `not_due`, 당일 공개 스냅샷을 기다리는 동안은 `awaiting_snapshot`입니다. 당일 부분 수집본은 실패 상태를 포함하며, 이전 날짜 스냅샷은 당일 자료로 발송하지 않습니다. 스케줄러가 재호출하면 확실한 일시 실패는 최소 10분 간격으로 총 3회까지 시도합니다. Gmail `accepted`는 발송 API 수락을 뜻합니다. `unknown`과 공개 파일 교체 후 `awaiting_review`는 자동 재발송 없이 확인 대상으로 남습니다. 작업을 되돌릴 때는 발송을 비활성화하고 중복 방지를 위해 아웃박스를 보존합니다.

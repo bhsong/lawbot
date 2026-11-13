@@ -6,13 +6,15 @@ import json
 import os
 import sqlite3
 import sys
+from datetime import datetime
 from pathlib import Path
 
+import httpx
 import uvicorn
 import yaml
 from pydantic import ValidationError
 
-from source_hub import daily, materials, news
+from source_hub import daily, digest_cli, materials, news
 from source_hub.config import CONFIG_PATH, load
 from source_hub.server import create_app
 from source_hub.store import Registry
@@ -48,6 +50,11 @@ def parser() -> argparse.ArgumentParser:
     run_day.add_argument(
         '--republish', action='store_true', help='refresh today’s approved publication without collecting'
     )
+    mail = commands.add_parser('email-digest', help='send the current approved daily ERP snapshot')
+    for name in ('snapshot', 'outbox', 'settings'):
+        mail.add_argument('--' + name, type=Path, required=True)
+    mail.add_argument('--monitor-home', type=Path)
+    mail.add_argument('--preview', action='store_true')
     for command in ('collect', 'documents'):
         rss = commands.add_parser(command)
         rss.add_argument('source_id', choices=COLLECTORS)
@@ -73,6 +80,19 @@ def main(argv: list[str] | None = None) -> int:
     args = parser().parse_args(argv)
     status = 0
     try:
+        if args.command == 'email-digest':
+            with httpx.Client(timeout=30, trust_env=False, follow_redirects=False) as http:
+                result = digest_cli.run(args, http, datetime.now().astimezone())
+            print(json.dumps(result, ensure_ascii=False, indent=2))
+            return (
+                2
+                if result['status'] in {'awaiting_snapshot', 'busy'}
+                or any(
+                    state in {'retryable', 'failed', 'unknown', 'awaiting_review'}
+                    for state in result.get('deliveries', {}).values()
+                )
+                else 0
+            )
         registry = Registry(load(args.config), args.database)
         if args.command == 'serve':
             user = os.environ.get('SOURCE_HUB_ADMIN_USER', '')
