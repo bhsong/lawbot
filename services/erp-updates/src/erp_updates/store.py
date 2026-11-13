@@ -71,7 +71,12 @@ def save(conn: sqlite3.Connection, found: list[Found]) -> int:
     with conn:
         for doc in found:
             item_id = hashlib.sha1(f'{doc.source.key}:{doc.ref}'.encode()).hexdigest()[:16]
-            conn.execute('INSERT OR IGNORE INTO items VALUES (?,?,?)', (item_id, doc.source.key, doc.ref))
+            # Existing IDs keep their original references. New rows qualify the reference so
+            # two business items can use the same upstream document independently.
+            conn.execute(
+                'INSERT INTO items VALUES (?,?,?) ON CONFLICT(id) DO NOTHING',
+                (item_id, doc.source.key, f'{doc.source.key}:{doc.ref}'),
+            )
             digest = content_sha256(doc)
             current = latest(conn, item_id)
             if current is not None and current['content_sha256'] == digest:
@@ -110,19 +115,21 @@ def review(conn: sqlite3.Connection, item_id: str, decision: str, reviewer: str,
         conn.execute('INSERT INTO history(item_id,at,action) VALUES (?,?,?)', (item_id, at, decision))
 
 
-def attach(conn: sqlite3.Connection, data_dir: Path, path: Path, url: str) -> str:
-    """Store a manually downloaded PDF for the item whose latest version lists `url`. Returns the item id."""
+def attach(conn: sqlite3.Connection, data_dir: Path, path: Path, url: str, *, item_id: str | None = None) -> str:
+    """Attach an official PDF to an exact item, or infer the item from a unique listed URL."""
     content = path.read_bytes()
     if not content.startswith(PDF_MAGIC):
         raise StoreError(f'{path.name} is not a PDF')
     matches = [
         version
-        for (item_id,) in conn.execute('SELECT id FROM items ORDER BY id')
-        if (version := latest(conn, item_id)) is not None
+        for (candidate,) in conn.execute('SELECT id FROM items WHERE ? IS NULL OR id=? ORDER BY id', (item_id, item_id))
+        if (version := latest(conn, candidate)) is not None
         and url in {entry['pdfUrl'] for entry in json.loads(version['data_json'])['attachments']}
     ]
-    if len(matches) != 1:
-        raise StoreError(f'{url} is listed by {len(matches)} current items, expected 1')
+    if not matches:
+        raise StoreError(f'{url} is not listed by any matching current item')
+    if len(matches) > 1:
+        raise StoreError(f'{url} is listed by {len(matches)} current items; select one with --item')
     version = matches[0]
     digest = hashlib.sha256(content).hexdigest()
     files = data_dir / 'files'

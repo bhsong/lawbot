@@ -24,6 +24,7 @@ def parser() -> argparse.ArgumentParser:
     attach = commands.add_parser('attach', help='register a downloaded official PDF')
     attach.add_argument('--file', type=Path, required=True)
     attach.add_argument('--url', required=True, help='PDF link listed by the source front matter')
+    attach.add_argument('--item', help='item ID when several ERP items list this URL')
 
     listing = commands.add_parser('list', help='latest version per item')
     listing.add_argument('--json', action='store_true')
@@ -62,14 +63,14 @@ def main(argv: list[str] | None = None) -> int:
 
 def run(args: argparse.Namespace, conn) -> int:
     if args.command == 'collect':
-        found, errors = sources.collect(sources.load_sources(args.config), args.repos)
+        found, errors = sources.collect(load_config(args.config), args.repos)
         created = store.save(conn, found)
         print(f'collected={len(found)} new_versions={created} errors={len(errors)}')
         for line in errors:
             print(f'erp-updates: {line}', file=sys.stderr)
         return 1 if errors else 0
     if args.command == 'attach':
-        print(f'attached item={store.attach(conn, args.data, args.file, args.url)}')
+        print(f'attached item={store.attach(conn, args.data, args.file, args.url, item_id=args.item)}')
         return 0
     if args.command == 'review':
         decision = 'approved' if args.decision == 'approve' else 'rejected'
@@ -103,6 +104,13 @@ def run(args: argparse.Namespace, conn) -> int:
     return 0
 
 
+def load_config(path: Path) -> list[sources.Source]:
+    try:
+        return sources.load_sources(path)
+    except (OSError, ValueError) as exc:
+        raise store.StoreError(f'Invalid ERP source configuration: {exc}') from exc
+
+
 def run_rules(args: argparse.Namespace, conn) -> int:
     try:
         if args.command == 'rule-sources':
@@ -117,10 +125,10 @@ def run_rules(args: argparse.Namespace, conn) -> int:
         elif args.command == 'rule-history':
             print(json.dumps(rules.history(conn, args.version_id), ensure_ascii=False))
         elif args.command == 'review-rule':
-            rules.record_review(conn, rules.parse(args.file), sources.load_sources(args.config), args.reviewer)
+            rules.record_review(conn, rules.parse(args.file), load_config(args.config), args.reviewer)
             print('ERP rule review recorded')
         else:
-            rules.export(conn, sources.load_sources(args.config), args.out, args.data / 'erp.db')
+            rules.export(conn, load_config(args.config), args.out, args.data / 'erp.db')
             print('ERP rule feed exported')
     except ValidationError as exc:
         raise store.StoreError('Invalid ERP rule fields or official evidence') from exc

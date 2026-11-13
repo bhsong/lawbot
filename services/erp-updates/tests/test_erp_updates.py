@@ -2,12 +2,15 @@
 
 import hashlib
 import json
+from contextlib import closing
 from pathlib import Path
 
 import pytest
+from fastapi.testclient import TestClient
 
 import erp_repos as fx
-from erp_updates import cli
+from erp_updates import cli, store
+from law_calendar.server import create_app
 
 PDF = b'%PDF-1.7\nsynthetic\n%%EOF\n'
 
@@ -171,6 +174,101 @@ def test_export_replaces_feed_atomically(env, capsys):
     export(run, tmp_path)
     export(run, tmp_path)
     assert sorted(path.name for path in (tmp_path / 'public').iterdir()) == ['erp_calendar_public.json']
+
+
+def test_seventh_source_shares_an_existing_document_and_uses_the_same_review_pipeline(env, capsys):
+    root, repos, run = env
+    trees = fx.baseline()
+    trees['legalize-kr'] = {
+        path: text.replace('https://law.example.invalid', 'https://www.law.go.kr').replace(
+            'https://www.law.go.kr/법령/가상소득세법 시행령', 'https://www.law.go.kr/법령/가상소득세법시행령'
+        )
+        for path, text in trees['legalize-kr'].items()
+    }
+    fx.publish(root, {'legalize-kr': trees['legalize-kr']})
+    assert run('collect', '--repos', str(repos)) == 0
+    original = by_key(listing(run, capsys))['TAX-01']
+    approve_all(run, [original])
+    with closing(store.connect(root / 'erp-data')) as conn, conn:
+        # Exercise a record already stored with the original unqualified reference.
+        conn.execute(
+            'UPDATE items SET ref=? WHERE id=?',
+            (f'form:{fx.TAX_DECREE}#별표0002-00', original['id']),
+        )
+
+    config = root / 'sources.yaml'
+    extra = """
+  - key: {key}
+    title: {key} 가상 기준
+    category: tax
+    form: {{file: kr/가상소득세법/시행령.md, kind: 별표, number: '0002', branch: '00'}}
+"""
+    config.write_text(fx.CONFIG + ''.join(extra.format(key=f'NEW-0{i}') for i in (5, 6, 7)))
+    assert run('collect', '--repos', str(repos)) == 0
+    rows = by_key(listing(run, capsys))
+    assert len(rows) == 7
+    assert rows['TAX-01']['id'] == original['id'] and rows['TAX-01']['state'] == 'approved'
+    seventh = rows['NEW-07']
+    assert seventh['state'] == 'pending' and seventh['versions'] == 1
+    approve_all(run, [seventh])
+    assert run('collect', '--repos', str(repos)) == 0
+    assert by_key(listing(run, capsys))['NEW-07']['versions'] == 1
+
+    pdf = root / 'seventh.pdf'
+    pdf.write_bytes(PDF)
+    url = 'https://www.law.go.kr/f?flSeq=71003'
+    assert run('attach', '--file', str(pdf), '--url', url) == 1
+    assert run('attach', '--file', str(pdf), '--url', url, '--item', seventh['id']) == 0
+    items = by_key(export(run, root)['items'])
+    assert items['TAX-01']['attachments'][0]['sha256'] is None
+    assert items['NEW-07']['attachments'][0]['sha256'] == hashlib.sha256(PDF).hexdigest()
+
+    capsys.readouterr()
+    assert run('rule-sources', 'NEW-07') == 0
+    [revision] = json.loads(capsys.readouterr().out)
+    review_path = root / 'review.json'
+    basis = {
+        'sourceKey': 'NEW-07',
+        'scopeId': 'standard',
+        'scope': '가상 적용 대상',
+        'applicability': 'income_year',
+        'sourceRevisionId': revision['sourceRevisionId'],
+        'decision': 'confirmed',
+        'evidenceKind': 'promulgated_law',
+        'evidenceUrl': 'https://www.law.go.kr/법령/예시',
+    }
+    for identifier, date, predecessor in [
+        ('new-07-current', '2000-01-01', None),
+        ('new-07-next', '2999-01-01', 'new-07-current'),
+    ]:
+        review_path.write_text(
+            json.dumps(
+                basis
+                | {
+                    'ruleVersionId': identifier,
+                    'effectiveFrom': date,
+                    'appliesFrom': date,
+                    'predecessorId': predecessor,
+                    'valueText': '가상 검토 기준',
+                }
+            )
+        )
+        assert run('review-rule', '--file', str(review_path), '--reviewer', 'fixture') == 0
+    rules_file = root / 'rules.json'
+    assert run('export-rules', '--out', str(rules_file)) == 0
+    with TestClient(create_app(root / 'unused.db', rules_feed=rules_file)) as client:
+        body = client.get('/api/erp-updates/v2?asOf=2026-11-13').json()
+    rule = next(rule for rule in body['rules'] if rule['ruleId'] == 'NEW-07')
+    [scope] = rule['scopes']
+    assert scope['currentVersion']['ruleVersionId'] == 'new-07-current'
+    assert [version['ruleVersionId'] for version in scope['scheduledChanges']] == ['new-07-next']
+
+
+def test_duplicate_source_key_is_rejected_before_collection(env):
+    root, repos, run = env
+    config = root / 'sources.yaml'
+    config.write_text(fx.CONFIG + fx.CONFIG.split('sources:\n', 1)[1])
+    assert run('collect', '--repos', str(repos)) == 1
 
 
 def test_missing_source_file_is_reported_without_stopping_others(env, capsys):
