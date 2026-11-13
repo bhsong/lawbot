@@ -6,6 +6,7 @@ from datetime import datetime, timedelta, timezone
 from fastapi.testclient import TestClient
 
 from law_calendar.server import create_app
+from lawbot_common.erp_daily import replace_file, seal
 from test_calendar_api import dataset as dataset
 
 KST = timezone(timedelta(hours=9))
@@ -19,6 +20,64 @@ def snapshot():
         'lawNames': ['[예시] 가상법'],
         'agencies': {agency: {'boards': [], 'items': []} for agency in ('lawgo', 'moel', 'mofe', 'nts', 'hometax')},
     }
+
+
+def test_daily_news_ages_without_changing_saved_hash(dataset, tmp_path):
+    path = tmp_path / 'daily.json'
+    old = NOW - timedelta(days=3)
+    boards = [
+        {
+            'name': '예전 정상',
+            'status': 'ok',
+            'lastSuccessAt': old.isoformat(),
+            'staleAfter': (old + timedelta(days=2)).isoformat(),
+        },
+        {
+            'name': '수집 중지',
+            'status': 'disabled',
+            'lastSuccessAt': old.isoformat(),
+            'staleAfter': (old + timedelta(days=2)).isoformat(),
+        },
+        {
+            'name': '최근 정상',
+            'status': 'ok',
+            'lastSuccessAt': old.isoformat(),
+            'staleAfter': (NOW + timedelta(days=1)).isoformat(),
+        },
+    ]
+    entries = {
+        agency: {
+            'agency': agency,
+            'state': 'ok',
+            'officialHome': 'https://www.law.go.kr/',
+            'boards': boards,
+            'items': [],
+        }
+        for agency in ('moel', 'lawgo')
+    }
+    saved = seal(
+        {
+            'schemaVersion': 1,
+            'dayKst': old.date().isoformat(),
+            'cutoffAt': old.isoformat(),
+            'runId': 'fixture',
+            'configVersion': 0,
+            'configHash': 'a' * 64,
+            'status': 'ok',
+            'sources': [],
+            'feeds': {'news': entries},
+            'changes': [],
+        }
+    )
+    replace_file(path, saved)
+    before = path.read_bytes()
+    with TestClient(create_app(dataset, daily_feed=path)) as client:
+        for agency in entries:
+            response = client.get('/api/erp-news/latest', params={'agency': agency})
+            assert response.headers['x-erp-snapshot'] == saved['snapshotHash']
+            assert [board['status'] for board in response.json()['boards']] == ['delayed', 'disabled', 'ok']
+            assert all('staleAfter' not in board for board in response.json()['boards'])
+    assert path.read_bytes() == before
 
 
 def test_latest_news_orders_metadata_and_limits_results(dataset, tmp_path):

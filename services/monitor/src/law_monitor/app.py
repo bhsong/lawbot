@@ -217,7 +217,14 @@ class Monitor:
         repo = GitRepo(self.paths.repos / 'legalize-kr')
         repo.ensure(self.config.repos['legalize-kr'])
 
-    def collect_managed(self, run_id: str, selected: list[str], law_paths: list[str] | None) -> RunSummary:
+    def collect_managed(
+        self,
+        run_id: str,
+        selected: list[str],
+        law_paths: list[str] | None,
+        *,
+        disabled_law_paths: list[str] | None = None,
+    ) -> RunSummary:
         available = {collector.name: collector for collector in self.collectors}
         chosen = [collector for collector in self.collectors if collector.name in selected]
         skipped = {name: 'unavailable' for name in selected if name not in available}
@@ -236,6 +243,7 @@ class Monitor:
             if collector.name == 'legalize_law' and isinstance(collector, LegalizeGitCollector):
                 assert isinstance(collector.matcher, LawMatcher)
                 collector.matcher.selected_paths = None if law_paths is None else frozenset(law_paths)
+                collector.matcher.disabled_paths = frozenset(disabled_law_paths or ())
         ready = []
         for collector in chosen:
             try:

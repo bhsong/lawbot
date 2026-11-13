@@ -180,4 +180,5 @@ def collect(
         read_articles=read_articles,
         read_board=read_board if reconcile else None,
         now=now,
+        kst_days=plan is not None,
     )

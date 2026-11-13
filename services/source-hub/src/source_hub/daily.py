@@ -8,7 +8,7 @@ import subprocess
 from collections.abc import Callable
 from contextlib import closing
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import datetime
 from functools import partial
 from pathlib import Path
 from tempfile import NamedTemporaryFile
@@ -18,7 +18,7 @@ from lawbot_common.erp_daily import read_snapshot, replace_file, seal, snapshot_
 from lawbot_common.erp_news import official_url
 from lawbot_common.erp_rules import RuleSnapshot
 from source_hub import moel, mofe, news, nts
-from source_hub.collector import file_lock
+from source_hub.collector import file_lock, interval_due
 from source_hub.store import KST, Registry
 
 COLLECTORS = (
@@ -182,12 +182,7 @@ def due(source: dict, previous: dict, now: datetime) -> bool:
     stamp = previous.get('lastAttemptAt') or previous.get('lastSuccessAt')
     if not stamp:
         return True
-    previous_start = datetime.fromisoformat(stamp)
-    interval = timedelta(minutes=source['interval_minutes'])
-    # Daily and longer cadences use the scheduled day rather than minute drift across days.
-    if source['interval_minutes'] % 1440 == 0:
-        return now.date() >= previous_start.astimezone(KST).date() + interval
-    return now >= previous_start + interval
+    return interval_due(now, datetime.fromisoformat(stamp), source['interval_minutes'], kst_days=True)
 
 
 def skipped(source: dict, supported: bool) -> str | None:
@@ -222,14 +217,16 @@ def legacy_selection(rows: dict, previous: dict, state: dict, now: datetime) -> 
         and due(rows[key], previous.get(key, {}), now)
     ]
     laws = rows.get('legalize_law', {}).get('laws', [])
-    paths = [
-        f'kr/{law["law_id"]}/{part["name"]}.md' for law in laws for part in law['parts'] if part['effective_enabled']
-    ]
+    paths: dict[bool, list[str]] = {True: [], False: []}
+    for law in laws:
+        for part in law['parts']:
+            paths[part['effective_enabled']].append(f'kr/{law["law_id"]}/{part["name"]}.md')
     registered = bool(laws)
     return {
         'run_id': state['run_id'],
         'collectors': selected,
-        'law_paths': paths if registered else None,
+        'law_paths': paths[True] if registered else None,
+        'disabled_law_paths': paths[False],
         'articles_enabled': bool(
             (law_source := rows.get('legalize_law')) and law_source['adapter'] == 'legacy' and law_source['runnable']
         ),
@@ -467,18 +464,23 @@ def _run(registry: Registry, config: DailyConfig, now: Callable[[], datetime], r
             raise ValueError('KST clock precedes the published snapshot')
         working = home / day
         journal = working / 'run.json'
-        archive = working / 'snapshot.json'
+        published = working / 'published.json'
+        archive = published if published.is_file() else working / 'snapshot.json'
         if republish and prior.get('dayKst') != day:
             raise ValueError('Run the KST daily collection before republishing its snapshot')
-        if not republish and prior.get('dayKst') == day:
-            replace_file(working / 'published.json', prior)
-            return report(prior, reused=True)
         if not republish and archive.is_file():
             saved = read_snapshot(archive)
+            if prior.get('dayKst') == day and datetime.fromisoformat(prior['cutoffAt']) > datetime.fromisoformat(
+                saved['cutoffAt']
+            ):
+                saved = prior
+            replace_file(published, saved)
             if prior.get('snapshotHash') != saved['snapshotHash']:
                 replace_file(public, saved)
-            replace_file(working / 'published.json', saved)
             return report(saved, reused=True)
+        if not republish and prior.get('dayKst') == day:
+            replace_file(published, prior)
+            return report(prior, reused=True)
         state = (
             json.loads(journal.read_bytes())
             if journal.is_file() and not republish
@@ -550,6 +552,6 @@ def _run(registry: Registry, config: DailyConfig, now: Callable[[], datetime], r
         )
         replace_file(home / 'ledger' / (saved['snapshotHash'] + '.json'), ledger)
         replace_file(working / 'snapshot.json', saved)
+        replace_file(published, saved)
         replace_file(public, saved)
-        replace_file(home / day / 'published.json', saved)
         return report(saved, reused=False)

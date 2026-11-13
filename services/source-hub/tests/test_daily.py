@@ -71,10 +71,11 @@ def test_daily_reuses_one_snapshot_and_exposes_same_public_data(registry, tmp_pa
 
     def capture(config, paths, cutoff):
         calls.append(('capture', cutoff))
+        items = [] if len(calls) > 4 else [{'id': 'approved-before-withdrawal', 'title': '이전 공개 자료'}]
         return {
             'erp': {'state': 'ok', 'items': [], 'history': [], 'relatedLaws': []},
             'rules': None,
-            'news': {},
+            'news': {'moel': {'state': 'ok', 'items': items}},
         }
 
     cfg = daily.DailyConfig(
@@ -95,6 +96,7 @@ def test_daily_reuses_one_snapshot_and_exposes_same_public_data(registry, tmp_pa
     first_bytes = cfg.public.read_bytes()
     saved = read_snapshot(cfg.public)
     assert saved['snapshotHash'] == first['snapshot_hash']
+    assert saved['feeds']['news']['moel']['items']
     sources = {source['sourceId']: source for source in saved['sources']}
     assert sources['moel-rss-notice']['outcome'] == 'blocked'
     assert sources['assembly_notice']['outcome'] == 'disabled'
@@ -118,6 +120,11 @@ def test_daily_reuses_one_snapshot_and_exposes_same_public_data(registry, tmp_pa
     assert (
         daily.run(registry, cfg, now=lambda: STAMP + timedelta(hours=4))['snapshot_hash'] == refreshed['snapshot_hash']
     )
+    restored = replace(cfg, public=tmp_path / 'restored.json')
+    assert daily.run(registry, restored, now=lambda: STAMP)['snapshot_hash'] == refreshed['snapshot_hash']
+    assert restored.public.read_bytes() == cfg.public.read_bytes()
+    assert read_snapshot(restored.public)['feeds']['news']['moel']['items'] == []
+    assert len(calls) == 6
 
     # A conflicting target or damaged envelope cannot replace the existing public data.
     with pytest.raises(ValueError, match='distinct'):

@@ -179,4 +179,5 @@ def collect(
         read_articles=read_articles,
         invalid_source='invalid_board',
         now=now,
+        kst_days=plan is not None,
     )

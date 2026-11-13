@@ -257,4 +257,5 @@ def collect(
         read_board=read_board if reconcile and channel.rss and channel.board_path else None,
         invalid_source='invalid_feed' if channel.rss else 'invalid_board',
         now=now,
+        kst_days=plan is not None,
     )

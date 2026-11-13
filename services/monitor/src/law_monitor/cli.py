@@ -8,7 +8,7 @@ import json
 import logging
 import re
 import sys
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 
 from law_monitor import secrets
@@ -82,6 +82,7 @@ class DailySelection:
     collectors: list[str]
     law_paths: list[str] | None
     articles_enabled: bool
+    disabled_law_paths: list[str] = field(default_factory=list)
 
 
 def _daily_selection(path: Path) -> DailySelection:
@@ -89,6 +90,7 @@ def _daily_selection(path: Path) -> DailySelection:
     if not isinstance(data, dict):
         raise ValueError('Source Hub 실행 계획을 확인하세요')
     run_id, collectors, law_paths = (data.get(key) for key in ('run_id', 'collectors', 'law_paths'))
+    disabled = data.get('disabled_law_paths', [])
     if not isinstance(run_id, str) or not re.fullmatch(r'daily-[a-zA-Z0-9-]{1,70}', run_id):
         raise ValueError('Source Hub 실행 ID를 확인하세요')
     if (
@@ -97,15 +99,17 @@ def _daily_selection(path: Path) -> DailySelection:
         or len(set(collectors)) != len(collectors)
     ):
         raise ValueError('Source Hub 수집기 선택을 확인하세요')
-    if law_paths is not None and (
-        not isinstance(law_paths, list)
-        or not all(isinstance(path, str) and re.fullmatch(r'kr/[^/\r\n]+/[^/\r\n]+\.md', path) for path in law_paths)
-    ):
-        raise ValueError('Source Hub 법령 범위를 확인하세요')
+    for paths in (law_paths if law_paths is not None else [], disabled):
+        if not isinstance(paths, list) or not all(
+            isinstance(path, str) and re.fullmatch(r'kr/[^/\r\n]+/[^/\r\n]+\.md', path) for path in paths
+        ):
+            raise ValueError('Source Hub 법령 범위를 확인하세요')
+    if disabled and (law_paths is None or set(law_paths).intersection(disabled)):
+        raise ValueError('Source Hub 법령 선택과 비활성 범위가 겹칩니다')
     articles_enabled = data.get('articles_enabled')
     if not isinstance(articles_enabled, bool) or (not articles_enabled and 'legalize_law' in collectors):
         raise ValueError('Source Hub 조문 갱신 설정을 확인하세요')
-    return DailySelection(run_id, collectors, law_paths, articles_enabled)
+    return DailySelection(run_id, collectors, law_paths, articles_enabled, disabled)
 
 
 def _daily(monitor: Monitor, only: str | None, *, selection: DailySelection | None = None) -> int:
@@ -121,7 +125,12 @@ def _daily(monitor: Monitor, only: str | None, *, selection: DailySelection | No
         summary = (
             monitor.collect(only=only)
             if selection is None
-            else monitor.collect_managed(selection.run_id, selection.collectors, selection.law_paths)
+            else monitor.collect_managed(
+                selection.run_id,
+                selection.collectors,
+                selection.law_paths,
+                disabled_law_paths=selection.disabled_law_paths,
+            )
         )
         print(summary.line)
         code, line = max(code, 1 if summary.failed else 0), summary.line
@@ -167,6 +176,10 @@ def main(argv: list[str] | None = None) -> int:
 
 
 def _run(args, paths: Paths) -> int:
+    source_plan = getattr(args, 'source_plan', None)
+    if getattr(args, 'only', None) and source_plan:
+        raise ValueError('--only와 --source-plan은 함께 사용할 수 없습니다')
+    selection = _daily_selection(source_plan) if source_plan else None
     oc = secrets.law_oc()
     lawgo = LawGoClient(oc) if oc else None
     llm_config = load_config()
@@ -178,15 +191,16 @@ def _run(args, paths: Paths) -> int:
             raise ConfigError('LAW_ASSEMBLY_ENABLED must be 0 or 1, with keywords required when enabled')
         config = replace(config, assembly_enabled=enabled == '1')
     assembly = None
-    if config.assembly_enabled or getattr(args, 'only', None) in SOURCES:
+    if (
+        config.assembly_enabled
+        or getattr(args, 'only', None) in SOURCES
+        or (selection is not None and any(source in SOURCES for source in selection.collectors))
+    ):
         assembly = AssemblyClient(secrets.get('LAW_ASSEMBLY_KEY'))
     monitor = Monitor(paths, config, lawgo=lawgo, llm=llm, assembly=assembly)
     if args.command == 'summarize':
         return _summarize(monitor, events_dir=args.events_dir)
     if args.command == 'daily':
-        if args.only and args.source_plan:
-            raise ValueError('--only와 --source-plan은 함께 사용할 수 없습니다')
-        selection = _daily_selection(args.source_plan) if args.source_plan else None
         return _daily(monitor, args.only, selection=selection)
     if args.command == 'check':
         return _check(monitor)[1]

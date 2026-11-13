@@ -4,7 +4,7 @@ import fcntl
 import os
 from collections.abc import Callable
 from contextlib import contextmanager
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from uuid import uuid4
 from xml.etree import ElementTree
@@ -53,6 +53,13 @@ def collect_lock(registry: Registry):
     return file_lock(db.with_name(db.name + '.source-hub.lock'))
 
 
+def interval_due(started: datetime, previous: datetime, minutes: int, *, kst_days: bool) -> bool:
+    interval = timedelta(minutes=minutes)
+    if kst_days and minutes % 1440 == 0:
+        return started.astimezone(KST).date() >= previous.astimezone(KST).date() + interval
+    return started >= previous + interval
+
+
 def collect(
     registry: Registry,
     database: Path,
@@ -64,6 +71,7 @@ def collect(
     read_board: Callable[[list[str], list[Article]], tuple[list[Article] | None, dict]] | None = None,
     invalid_source: str = 'invalid_feed',
     now: datetime | None = None,
+    kst_days: bool = False,
 ) -> dict:
     source_id = source['source_id']
     path = database.resolve()
@@ -78,8 +86,11 @@ def collect(
         if previous := materials.latest_success(path, source_id):
             registry.record_run(previous)
         latest = registry.runs(source_id)
-        if latest and (started - datetime.fromisoformat(latest[0]['started_at'])).total_seconds() < (
-            source['interval_minutes'] * 60
+        if latest and not interval_due(
+            started,
+            datetime.fromisoformat(latest[0]['started_at']),
+            source['interval_minutes'],
+            kst_days=kst_days,
         ):
             return {'outcome': 'not_due'}
         outcome, error = 'ok', None
@@ -99,8 +110,11 @@ def collect(
         else:
             if read_board is not None:
                 last = materials.last_board_attempt(path, source_id)
-                board_attempted = last is None or (started - datetime.fromisoformat(last)).total_seconds() >= (
-                    source['reconcile_interval_minutes'] * 60
+                board_attempted = last is None or interval_due(
+                    started,
+                    datetime.fromisoformat(last),
+                    source['reconcile_interval_minutes'],
+                    kst_days=kst_days,
                 )
                 if board_attempted:
                     board, reconciliation = read_board(rules, articles)

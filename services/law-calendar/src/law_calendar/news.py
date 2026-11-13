@@ -86,7 +86,22 @@ def response(
         return result | {'state': 'missing'}
     except OSError, ValidationError:
         return result | {'state': 'invalid'}
-    return from_snapshot(database, snapshot, agency, limit, now=now, use_law_feed=use_law_feed)
+    return current_news(
+        from_snapshot(database, snapshot, agency, limit, now=now, use_law_feed=use_law_feed), limit, now=now
+    )
+
+
+def current_news(entry: dict, limit: int, *, now: datetime | None = None) -> dict:
+    """Derive request-time freshness without changing stored news or exposing its deadlines."""
+    now = now or datetime.now(KST)
+    boards = []
+    for source in entry.get('boards', []):
+        board = dict(source)
+        cutoff = board.pop('staleAfter', None)
+        if cutoff and board['status'] == 'ok' and datetime.fromisoformat(cutoff) < now:
+            board['status'] = 'delayed'
+        boards.append(board)
+    return entry | {'boards': boards, 'items': entry.get('items', [])[:limit]}
 
 
 def from_snapshot(
@@ -106,10 +121,9 @@ def from_snapshot(
     boards = [
         {
             'name': board.name,
-            'status': 'delayed'
-            if board.status == 'ok' and board.staleAfter and board.staleAfter < now
-            else board.status,
+            'status': board.status,
             'lastSuccessAt': board.lastSuccessAt.astimezone(KST).isoformat() if board.lastSuccessAt else None,
+            'staleAfter': board.staleAfter.astimezone(KST).isoformat() if board.staleAfter else None,
         }
         for board in entry.boards
     ]
@@ -124,8 +138,9 @@ def from_snapshot(
                 collected = datetime.fromisoformat(stamp)
                 if collected.utcoffset() is not None:
                     boards[0].update(
-                        status='delayed' if now - collected > timedelta(hours=48) else 'ok',
+                        status='ok',
                         lastSuccessAt=collected.astimezone(KST).isoformat(),
+                        staleAfter=(collected.astimezone(KST) + timedelta(hours=48)).isoformat(),
                     )
             except ValueError:
                 pass

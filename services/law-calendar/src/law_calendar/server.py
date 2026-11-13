@@ -344,7 +344,7 @@ def create_app(
         entry = snapshot.get('feeds', {}).get('news', {}).get(agency)
         if entry is None:
             return {'agency': agency, 'officialHome': news.HOME[agency], 'state': snapshot.get('state', 'missing')}
-        return entry | {'items': entry.get('items', [])[:limit]}
+        return news.current_news(entry, limit)
 
     app.include_router(admin.router(database))
     if frontend is not None:
