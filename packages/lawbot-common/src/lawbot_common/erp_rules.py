@@ -9,7 +9,8 @@ from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, StringConstrai
 from lawbot_common.erp_news import NEWS_HOSTS
 
 RULE_FEED_MAX_BYTES = 2 * 1024 * 1024
-Identifier = Annotated[str, StringConstraints(pattern=r'^[a-zA-Z0-9][a-zA-Z0-9_-]{0,79}$')]
+IDENTIFIER_PATTERN = r'^[a-zA-Z0-9][a-zA-Z0-9_-]{0,79}$'
+Identifier = Annotated[str, StringConstraints(pattern=IDENTIFIER_PATTERN)]
 Label = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=300)]
 ValueText = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=4000)]
 OfficialUrl = Annotated[str, StringConstraints(min_length=1, max_length=1500)]

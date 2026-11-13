@@ -13,6 +13,8 @@ from pathlib import Path
 
 import yaml
 
+from lawbot_common.erp_rules import IDENTIFIER_PATTERN
+
 ADMRULE_REPO = 'admrule-kr'
 LAW_REPO = 'legalize-kr'
 EXCERPT_LIMIT = 4000
@@ -48,7 +50,13 @@ class Found:
 def load_sources(path: Path) -> list[Source]:
     raw = yaml.safe_load(path.read_text(encoding='utf-8'))
     sources = [Source(**entry) for entry in raw['sources']]
+    seen = set()
     for source in sources:
+        if not isinstance(source.key, str) or not re.fullmatch(IDENTIFIER_PATTERN, source.key):
+            raise ValueError(f'invalid ERP source key: {source.key!r}')
+        if source.key in seen:
+            raise ValueError(f'duplicate ERP source key: {source.key}')
+        seen.add(source.key)
         if sum(rule is not None for rule in (source.admrule, source.form, source.article)) != 1:
             raise ValueError(f'{source.key}: exactly one of admrule, form or article is required')
     return sources
