@@ -51,3 +51,7 @@ $hub --database $collector_db collect moel-rss-notice --materials $materials_db 
 ```
 
 RSS와 목록에서 같은 `bbs_seq`는 한 게시물로 저장합니다. 첫 대조에서 확인한 목록 전용 글은 기준선에 포함합니다. 목록에서 확인한 제목과 게시일은 다음 대조까지 유지합니다. `board_only_count`는 이번 RSS 응답에서 볼 수 없었던 목록 게시물 수입니다. 게시판 읽기나 검증이 실패하면 `partial`과 상세 오류를 출력하고 RSS 자료를 저장합니다. 게시물 상세와 첨부는 요청하지 않습니다.
+
+## 재정경제부 수동 수집
+
+`mofe-rss-press`, `mofe-rss-explanation`, `mofe-rss-notice`, `mofe-rss-policy`는 `--reconcile`로 공식 게시판 최대 2쪽을 비교합니다. `mofe-rss-economy`는 RSS를 읽습니다. `mofe-laws`, `mofe-notice`, `mofe-tax-reform`은 각 공식 목록 첫 쪽을 읽습니다. 각 출처는 기본 OFF입니다. 제목·게시일·공식 링크를 내부 DB에 저장하고 날짜가 없는 항목은 빈 값으로 둡니다. [공식 RSS 안내](https://mofe.go.kr/mn/siteguide/rssService.do?menuNo=2060000) · [저작권 정책](https://mofe.go.kr/mn/siteguide/drmp.do?menuNo=2030000)

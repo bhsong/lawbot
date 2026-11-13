@@ -1,22 +1,20 @@
 """Collect metadata from the three RSS channels published by the Ministry of Employment and Labor."""
 
-import fcntl
-import os
 import re
-from contextlib import contextmanager
 from datetime import datetime
 from email.utils import parsedate_to_datetime
 from http.client import IncompleteRead
 from pathlib import Path
 from urllib.error import HTTPError, URLError
 from urllib.request import HTTPRedirectHandler, Request, build_opener
-from uuid import uuid4
 from xml.etree import ElementTree
 
-from source_hub import materials, moel_board, robots
+from source_hub import collector, moel_board, robots
+from source_hub.collector import FetchError as FetchError
+from source_hub.collector import is_blocked
 from source_hub.materials import Article
 from source_hub.materials import documents as documents
-from source_hub.store import KST, Registry, Run
+from source_hub.store import KST, Registry
 
 HOST = moel_board.HOST
 ROBOTS = HOST + '/robots.txt'
@@ -30,10 +28,6 @@ ROBOTS_LIMIT = 512_000
 FEED_LIMIT = 2_097_152
 RSS_MEDIA = {'text/xml', 'application/xml', 'application/rss+xml'}
 DC_DATE = '{http://purl.org/dc/elements/1.1/}date'
-
-
-class FetchError(Exception):
-    """A bounded fetch failure safe to persist in the run log."""
 
 
 class NoRedirect(HTTPRedirectHandler):
@@ -76,10 +70,6 @@ def checked_read(rules: list[str], path: str, media: set[str]) -> bytes:
     if error := robots.access_failure(rules, path):
         raise FetchError(error)
     return read_response(HOST + path, media, FEED_LIMIT)
-
-
-def is_blocked(error: str) -> bool:
-    return error.startswith('robots_') or error in {'http_401', 'http_403', 'http_429'}
 
 
 class RssTree(ElementTree.TreeBuilder):
@@ -159,114 +149,29 @@ def reconcile_board(
     }
 
 
-@contextmanager
-def collect_lock(registry: Registry):
-    db = registry.database.resolve()
-    lock = db.with_name(db.name + '.moel.lock')
-    lock.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-    fd = os.open(lock, os.O_WRONLY | os.O_CREAT | os.O_NOFOLLOW, 0o600)
-    try:
-        try:
-            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except BlockingIOError:
-            yield False
-        else:
-            yield True
-    finally:
-        os.close(fd)
-
-
 def collect(
     registry: Registry, database: Path, source_id: str, *, now: datetime | None = None, reconcile: bool = False
 ) -> dict:
     if source_id not in CHANNELS:
         raise ValueError('지원되는 고용노동부 RSS 수집원 ID를 선택하세요')
-    plan = registry.snapshot()
-    source = next((row for row in plan['sources'] if row['source_id'] == source_id), None)
-    if source is None or not source['effective_enabled']:
-        return {'outcome': 'disabled'}
     feed_path, article_path, board_path = CHANNELS[source_id]
-    feed_url = HOST + feed_path
-    if not source['runnable'] or (
-        source['group'],
-        source['adapter'],
-        source['mode'],
-        source['source_url'],
-        source['parser_version'],
-    ) != (
-        'erp',
-        'moel',
-        'rss',
-        feed_url,
-        '1',
-    ):
-        return {'outcome': 'unverified'}
-    path = database.resolve()
-    registry_db = registry.database.resolve()
-    if path == registry_db or (path.exists() and registry_db.exists() and path.samefile(registry_db)):
-        raise ValueError('등록부와 수집 자료 DB에는 별도 경로를 사용하세요')
-    started = now or datetime.now(KST)
-    with collect_lock(registry) as locked:
-        if not locked:
-            return {'outcome': 'busy'}
-        materials.initialize(path)
-        if previous := materials.latest_success(path, source_id):
-            registry.record_run(previous)
-        latest = registry.runs(source_id)
-        if latest and (started - datetime.fromisoformat(latest[0]['started_at'])).total_seconds() < (
-            source['interval_minutes'] * 60
-        ):
-            return {'outcome': 'not_due'}
-        outcome, error = 'ok', None
-        counts = {}
-        articles: list[Article] = []
-        board: list[Article] | None = None
-        reconciliation = {}
-        board_attempted = False
-        try:
-            rules = robots_rules()
-            articles = parse_feed(checked_read(rules, feed_path, RSS_MEDIA), article_path)
-        except FetchError as exc:
-            error = str(exc)
-            outcome = 'blocked' if is_blocked(error) else 'error'
-        except ElementTree.ParseError, ValueError:
-            error, outcome = 'invalid_feed', 'error'
-        else:
-            if reconcile:
-                last = materials.last_board_attempt(path, source_id)
-                board_attempted = last is None or (started - datetime.fromisoformat(last)).total_seconds() >= (
-                    source['reconcile_interval_minutes'] * 60
-                )
-                if board_attempted:
-                    board, reconciliation = reconcile_board(rules, board_path, article_path, articles)
-                    if board is None:
-                        outcome, error = 'partial', 'board_' + reconciliation['error']
-                else:
-                    reconciliation = {'outcome': 'not_due'}
-        run = Run(
-            run_id=uuid4().hex,
-            source_id=source_id,
-            config_version=plan['config_version'],
-            started_at=started,
-            finished_at=now or datetime.now(KST),
-            outcome=outcome,
-            new_count=0 if outcome == 'ok' else None,
-            modified_count=0 if outcome == 'ok' else None,
-            error=error,
-        )
-        if articles:
-            run, counts = materials.save(
-                path,
-                articles,
-                run,
-                source['baseline_policy'],
-                board=board,
-                board_attempted=board_attempted,
-            )
-        registry.record_run(run)
-    result = {'outcome': outcome, 'run_id': run.run_id, **counts}
-    if error:
-        result['error'] = error
-    if reconciliation:
-        result['reconciliation'] = reconciliation
-    return result
+    source, version, outcome = collector.source_plan(registry, source_id, 'moel', 'rss', HOST + feed_path)
+    if source is None:
+        return {'outcome': outcome}
+
+    def read_articles(rules: list[str]) -> list[Article]:
+        return parse_feed(checked_read(rules, feed_path, RSS_MEDIA), article_path)
+
+    def read_board(rules: list[str], articles: list[Article]) -> tuple[list[Article] | None, dict]:
+        return reconcile_board(rules, board_path, article_path, articles)
+
+    return collector.collect(
+        registry,
+        database,
+        source,
+        version,
+        read_rules=robots_rules,
+        read_articles=read_articles,
+        read_board=read_board if reconcile else None,
+        now=now,
+    )
