@@ -56,20 +56,48 @@ class HttpClient:
                 self.sleep(gap)
         self._last = self.clock()
 
-    def get(self, url: str, params: dict | None = None) -> httpx.Response:
-        return self.request('GET', url, params=params)
+    def get(
+        self, url: str, params: dict | None = None, *, validate_url: Callable[[httpx.URL], None] | None = None
+    ) -> httpx.Response:
+        return self.request('GET', url, params=params, validate_url=validate_url)
 
     def post(self, url: str, *, json: dict, headers: dict | None = None) -> httpx.Response:
         """헤더(토큰)는 오류 메시지에 넣지 않는다."""
         return self.request('POST', url, json=json, headers=headers)
 
-    def request(self, method: str, url: str, *, params=None, json=None, headers=None) -> httpx.Response:
+    def _send_checked(self, request: httpx.Request, validate_url: Callable[[httpx.URL], None]) -> httpx.Response:
+        """Check the actual URL before each send, including redirect targets."""
+        for _ in range(self.client.max_redirects + 1):
+            validate_url(request.url)
+            self._wait_turn()
+            response = self.client.send(request, follow_redirects=False)
+            if response.next_request is None:
+                return response
+            request = response.next_request
+        raise HttpError('리다이렉트 한도 초과')
+
+    def request(
+        self,
+        method: str,
+        url: str,
+        *,
+        params=None,
+        json=None,
+        headers=None,
+        validate_url: Callable[[httpx.URL], None] | None = None,
+    ) -> httpx.Response:
         shown = masked_url(url, params)
 
         def once() -> httpx.Response:
-            self._wait_turn()
             try:
-                resp = self.client.request(method, url, params=params, json=json, headers=headers)
+                if validate_url is None:
+                    self._wait_turn()
+                    resp = self.client.request(method, url, params=params, json=json, headers=headers)
+                else:
+                    request = self.client.build_request(method, url, params=params, json=json, headers=headers)
+                    resp = self._send_checked(request, validate_url)
+            except httpx.InvalidURL:
+                raise HttpError('잘못된 요청 URL') from None
             except httpx.TransportError as e:
                 raise _Retryable(f'{shown}: {type(e).__name__}') from None
             if resp.status_code >= 500:

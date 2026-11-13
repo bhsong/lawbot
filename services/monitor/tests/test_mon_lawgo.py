@@ -229,6 +229,67 @@ def test_download_must_be_pdf_or_hwp(tmp_path, legalize):
     assert 'PDF' in summary.failed['legalize_law'] and summary.events == []
 
 
+@pytest.mark.parametrize(
+    'link',
+    [
+        'https://outside.example/LSW/flDownload.do?flSeq=1',
+        'https://www.law.go.kr.outside.example/LSW/flDownload.do?flSeq=1',
+        'https://www.law.go.kr@outside.example/LSW/flDownload.do?flSeq=1',
+        'https://fixture@www.law.go.kr/LSW/flDownload.do?flSeq=1',
+        'https://www.law.go.kr:444/LSW/flDownload.do?flSeq=1',
+        'http://www.law.go.kr/LSW/flDownload.do?flSeq=1',
+        '//outside.example/LSW/flDownload.do?flSeq=1',
+    ],
+)
+def test_attachment_rejects_unapproved_origin_before_sending(link):
+    calls = []
+
+    def handler(request):
+        calls.append(request.url)
+        return httpx.Response(200, content=PDF)
+
+    client = LawGoClient(TEST_OC, HttpClient(transport=httpx.MockTransport(handler), min_interval=0))
+    with pytest.raises(LawGoError, match='공식 HTTPS'):
+        client.download(link, 'pdf')
+    assert calls == []
+
+
+@pytest.mark.parametrize('api', [False, True])
+def test_lawgo_revalidates_every_redirect_before_sending(api):
+    calls = []
+
+    def handler(request):
+        calls.append(request.url)
+        if len(calls) == 1:
+            return httpx.Response(302, headers={'Location': '/official-redirect'})
+        if len(calls) == 2:
+            return httpx.Response(307, headers={'Location': f'https://outside.example/blocked?OC={TEST_OC}'})
+        return httpx.Response(200, content=PDF)
+
+    client = LawGoClient(TEST_OC, HttpClient(transport=httpx.MockTransport(handler), min_interval=0))
+    with pytest.raises(LawGoError, match='공식 HTTPS') as error:
+        client.law_body('1') if api else client.download('/LSW/flDownload.do?flSeq=1', 'pdf')
+    assert [(url.host, url.path) for url in calls] == [
+        ('www.law.go.kr', '/DRF/lawService.do' if api else '/LSW/flDownload.do'),
+        ('www.law.go.kr', '/official-redirect'),
+    ]
+    assert TEST_OC not in str(error.value)
+
+
+def test_attachment_follows_official_https_redirect():
+    calls = []
+
+    def handler(request):
+        calls.append(request.url)
+        if len(calls) == 1:
+            return httpx.Response(302, headers={'Location': 'https://law.go.kr/LSW/flDownload.do?flSeq=2'})
+        return httpx.Response(200, content=PDF)
+
+    client = LawGoClient(TEST_OC, HttpClient(transport=httpx.MockTransport(handler), min_interval=0))
+    assert client.download('/LSW/flDownload.do?flSeq=1', 'pdf') == PDF
+    assert [url.host for url in calls] == ['www.law.go.kr', 'law.go.kr']
+
+
 def test_client_rejects_unknown_response():
     server = FakeLawGo()
     with pytest.raises(LawGoError, match='응답'):

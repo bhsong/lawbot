@@ -6,15 +6,23 @@
 한 실행 안에서 같은 MST·일련번호는 한 번만 받는다 (본문이 수 MB).
 """
 
+import httpx
+
 from law_monitor.utils.http import HttpClient, HttpError
 
 BASE = 'https://www.law.go.kr'
 SERVICE = f'{BASE}/DRF/lawService.do'
+OFFICIAL_HOSTS = frozenset(('www.law.go.kr', 'law.go.kr'))
 MAGIC = {'pdf': (b'%PDF',), 'hwp': (b'\xd0\xcf\x11\xe0', b'PK\x03\x04')}  # HWP 5(OLE)·HWPX(zip)
 
 
 class LawGoError(RuntimeError):
     pass
+
+
+def require_official_url(url: httpx.URL) -> None:
+    if url.scheme != 'https' or url.host not in OFFICIAL_HOSTS or url.port is not None or url.userinfo:
+        raise HttpError('법제처 공식 HTTPS 호스트만 요청할 수 있습니다')
 
 
 class LawGoClient:
@@ -36,7 +44,7 @@ class LawGoClient:
         if cache_key not in self._cache:
             params = {'OC': self.oc, 'target': target, key: value, 'type': 'JSON'}
             try:
-                resp = self.http.get(SERVICE, params)
+                resp = self.http.get(SERVICE, params, validate_url=require_official_url)
                 data = resp.json()
             except HttpError as e:
                 raise LawGoError(f'법제처 {target} {key}={value} 조회 실패: {e}') from None
@@ -50,13 +58,15 @@ class LawGoClient:
 
     def download(self, link: str, kind: str) -> bytes:
         """kind: 'pdf' | 'hwp'. 내용이 그 형식이 아니면(오류 HTML 등) 실패."""
-        url = link if link.startswith('http') else f'{BASE}{link}'
         try:
-            data = self.http.get(url).content
+            url = httpx.URL(BASE).join(link)
+            data = self.http.get(str(url), validate_url=require_official_url).content
+        except httpx.InvalidURL:
+            raise LawGoError('법제처 첨부 URL 형식이 잘못되었습니다') from None
         except HttpError as e:
             raise LawGoError(f'첨부 파일 받기 실패: {e}') from None
         if not data.startswith(MAGIC[kind]):
-            raise LawGoError(f'받은 파일이 {kind.upper()}가 아닙니다 ({url}, 앞부분 {data[:16]!r})')
+            raise LawGoError(f'받은 파일이 {kind.upper()}가 아닙니다')
         return data
 
 
