@@ -4,6 +4,7 @@ import sqlite3
 import subprocess
 import sys
 import time
+from contextlib import contextmanager
 from pathlib import Path
 
 import httpx
@@ -203,8 +204,8 @@ def test_run_status_preserves_last_success_after_failed_run_and_disable(registry
     assert [row['run_id'] for row in registry.runs('legalize_law')] == ['second', 'first']
 
 
-@pytest.mark.e2e_stub
-def test_private_admin_browser_saves_settings_to_the_cli_registry(registry):
+@contextmanager
+def admin_browser(registry, *serve_args):
     with socket.socket() as sock:
         sock.bind(('127.0.0.1', 0))
         port = sock.getsockname()[1]
@@ -219,6 +220,7 @@ def test_private_admin_browser_saves_settings_to_the_cli_registry(registry):
         'serve',
         '--port',
         str(port),
+        *serve_args,
     ]
     with subprocess.Popen(command, env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL) as server:
         try:
@@ -243,20 +245,9 @@ def test_private_admin_browser_saves_settings_to_the_cli_registry(registry):
                         lambda route: route.continue_() if route.request.url.startswith(url + '/') else route.abort(),
                     )
                     page.goto(url)
-                    page.get_by_role('button', name='ERP 켜짐', exact=True).click()
-                    dialog = page.get_by_role('dialog')
-                    expect(dialog.get_by_text('과거 공개 자료', exact=False)).to_be_visible()
-                    dialog.get_by_label('변경 사유').fill('브라우저 대역 설정')
-                    dialog.get_by_role('button', name='저장').click()
-                    expect(page.get_by_role('button', name='ERP 꺼짐', exact=True)).to_be_visible()
-                    page.get_by_label('기관', exact=True).select_option('hometax')
-                    expect(page.get_by_role('row').filter(has_text='정오표·변경공지')).to_be_visible()
-                    expect(page.get_by_role('row').filter(has_text='법률·시행령·시행규칙')).to_have_count(0)
-                    expect(page.get_by_text('브라우저 대역 설정', exact=False)).to_be_visible()
+                    yield page
                 finally:
                     browser.close()
-            assert registry.snapshot()['groups']['erp'] is False
-            assert registry.history()[0]['actor'] == AUTH[0]
         finally:
             server.terminate()
             try:
@@ -264,3 +255,20 @@ def test_private_admin_browser_saves_settings_to_the_cli_registry(registry):
             except subprocess.TimeoutExpired:
                 server.kill()
                 server.wait()
+
+
+@pytest.mark.e2e_stub
+def test_private_admin_browser_saves_settings_to_the_cli_registry(registry):
+    with admin_browser(registry) as page:
+        page.get_by_role('button', name='ERP 켜짐', exact=True).click()
+        dialog = page.get_by_role('dialog')
+        expect(dialog.get_by_text('과거 공개 자료', exact=False)).to_be_visible()
+        dialog.get_by_label('변경 사유').fill('브라우저 대역 설정')
+        dialog.get_by_role('button', name='저장').click()
+        expect(page.get_by_role('button', name='ERP 꺼짐', exact=True)).to_be_visible()
+        page.get_by_label('기관', exact=True).select_option('hometax')
+        expect(page.get_by_role('row').filter(has_text='정오표·변경공지')).to_be_visible()
+        expect(page.get_by_role('row').filter(has_text='법률·시행령·시행규칙')).to_have_count(0)
+        expect(page.get_by_text('브라우저 대역 설정', exact=False)).to_be_visible()
+    assert registry.snapshot()['groups']['erp'] is False
+    assert registry.history()[0]['actor'] == AUTH[0]

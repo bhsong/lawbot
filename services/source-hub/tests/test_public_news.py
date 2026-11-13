@@ -56,6 +56,19 @@ def test_scope_and_law_part_settings_control_public_law_selection(setup):
     assert not news.build(registry, database)['lawNames']
 
 
+def test_review_cli_requires_a_reason_only_for_withdrawal(setup):
+    registry, database, _, _ = setup
+    setting(registry, 'source', SOURCE, True)
+    moel.collect(registry, database, SOURCE, now=NOW)
+    command = ['--database', str(registry.database), 'review-news', SOURCE, '20261100123', '1']
+    materials_arg = ['--materials', str(database)]
+    assert cli.main([*command, 'approve', *materials_arg]) == 0
+    assert cli.main([*command, 'withdraw', *materials_arg]) == 2
+    assert len(news.build(registry, database)['agencies']['moel']['items']) == 1
+    assert cli.main([*command, 'withdraw', *materials_arg, '--reason', '철회 확인']) == 0
+    assert not news.build(registry, database)['agencies']['moel']['items']
+
+
 def test_publication_cannot_replace_either_private_db(setup):
     registry, database, _, _ = setup
     for out in (registry.database, database):

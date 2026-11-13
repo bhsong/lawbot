@@ -8,7 +8,15 @@ from pathlib import Path
 from pydantic import ValidationError
 
 from law_calendar.db import read_database
-from lawbot_common.erp_news import HOMETAX_HOME, Agency, NewsItem, NewsSnapshot, latest, official_url
+from lawbot_common.erp_news import (
+    HOMETAX_HOME,
+    SNAPSHOT_MAX_BYTES,
+    Agency,
+    NewsItem,
+    NewsSnapshot,
+    latest,
+    official_url,
+)
 
 KST = timezone(timedelta(hours=9))
 HOME = {
@@ -18,7 +26,6 @@ HOME = {
     'nts': 'https://www.nts.go.kr/',
     'hometax': HOMETAX_HOME,
 }
-LIMIT = 1_048_576
 
 
 def law_news(database: Path, names: list[str]) -> tuple[list[NewsItem], str | None]:
@@ -63,8 +70,8 @@ def response(database: Path, file: Path | None, agency: Agency, limit: int) -> d
         return result | {'state': 'missing'}
     try:
         with file.open('rb') as stream:
-            data = stream.read(LIMIT + 1)
-        if len(data) > LIMIT:
+            data = stream.read(SNAPSHOT_MAX_BYTES + 1)
+        if len(data) > SNAPSHOT_MAX_BYTES:
             return result | {'state': 'invalid'}
         snapshot = NewsSnapshot.model_validate_json(data)
     except FileNotFoundError:

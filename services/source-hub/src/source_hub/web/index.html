@@ -8,10 +8,35 @@
 <main>
   <header>
     <h1>수집 설정</h1>
-    <button id="reload" type="button">새로고침</button>
+    <div class="actions">
+      <button id="reload" type="button">새로고침</button>
+      <button id="open-reviews" type="button" aria-expanded="false" aria-controls="news-reviews">공개 검토</button>
+    </div>
   </header>
   <p>설정은 다음 통합 수집부터 적용됩니다. 현재 기존 정기 작업은 독립적으로 실행됩니다.</p>
   <p id="status" role="status" aria-live="polite"></p>
+  <section id="news-reviews" aria-labelledby="reviews-title" hidden>
+    <header>
+      <h2 id="reviews-title">기관 소식 공개 검토</h2>
+      <button id="publish-news" type="button" disabled>공개 스냅샷 갱신</button>
+    </header>
+    <p id="publication-status" role="status"></p>
+    <div class="filters">
+      <label>검토 수집원 <select id="review-source"><option value="">전체 수집원</option></select></label>
+      <label>검토 상태 <select id="review-filter">
+        <option value="pending">검토 대기</option>
+        <option value="approved">승인</option>
+        <option value="withdrawn">철회</option>
+      </select></label>
+      <button id="reload-reviews" type="button">검토 목록 새로고침</button>
+    </div>
+    <p id="review-count" role="status"></p>
+    <div id="review-items"></div>
+    <div class="actions">
+      <button id="previous-reviews" type="button" disabled>이전 검토 목록</button>
+      <button id="next-reviews" type="button" disabled>다음 검토 목록</button>
+    </div>
+  </section>
   <section aria-labelledby="switches-title">
     <h2 id="switches-title">수집 범위</h2>
     <div id="switches"></div>
@@ -47,6 +72,19 @@
   <div class="actions">
     <button id="cancel" type="button">취소</button>
     <button id="save" type="button">저장</button>
+  </div>
+</dialog>
+<dialog id="review-dialog" aria-labelledby="review-dialog-title">
+  <h2 id="review-dialog-title"></h2>
+  <p id="review-dialog-description"></p>
+  <div id="review-reason-field" hidden>
+    <label for="review-reason">철회 사유</label>
+    <textarea id="review-reason" maxlength="500" rows="3" required></textarea>
+  </div>
+  <p id="review-write-status" role="alert"></p>
+  <div class="actions">
+    <button id="cancel-review" type="button">취소</button>
+    <button id="save-review" type="button">결정 저장</button>
   </div>
 </dialog>
 </html>

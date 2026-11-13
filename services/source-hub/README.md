@@ -66,13 +66,22 @@ RSS와 목록에서 같은 `bbs_seq`는 한 게시물로 저장합니다. 첫 �
 
 ## 기관별 최신 소식 검토와 내보내기
 
+관리자 화면에서 검토하려면 자료 DB와 공개 파일을 함께 지정합니다. `news_feed`는 캘린더의 `LAWBOT_CALENDAR_NEWS_FEED`에 연결한 공개 파일 경로입니다. 두 서비스가 이 파일에 접근할 수 있게 구성합니다.
+
+```fish
+$hub --database $collector_db serve --port $collector_port --materials $materials_db --news-feed $news_feed
+```
+
+**공개 검토**에서 수집원과 검토 상태를 고르고 이전 승인판과 현재 수집판의 제목·게시일·공식 링크를 확인합니다. 공개 승인과 새 버전 승인은 확인 창에서 바로 저장할 수 있습니다. 공개 철회에는 사유를 입력합니다. 이어서 **공개 스냅샷 갱신**을 누릅니다. 화면은 내보낸 파일의 일치 여부, 마지막 갱신 시각, 포함된 기관 게시물 수를 표시합니다. 운영 중인 캘린더에서 조회되는지는 그 서비스의 ERP 드로어에서 확인합니다.
+
+### CLI에서 검토하기
+
 `documents`에서 게시물 ID인 `upstream_id`와 현재 판 번호인 `revision_count`를 확인합니다. 공식 출처·공개 이용 조건·개인정보를 검토한 판을 승인하고 공개 파일을 내보냅니다. 공개 파일 경로는 설정 DB와 자료 DB에서 분리합니다.
 
 ```fish
 $hub --database $collector_db documents moel-rss-notice --materials $materials_db
-$hub --database $collector_db review-news moel-rss-notice $post_id $revision approve \
-    --materials $materials_db --reason '공식 원문·공개 조건·개인정보 확인'
+$hub --database $collector_db review-news moel-rss-notice $post_id $revision approve --materials $materials_db
 $hub --database $collector_db export-news --materials $materials_db --out $news_feed
 ```
 
-새 판은 다시 검토합니다. 철회할 때는 `withdraw`를 기록한 뒤 같은 공개 파일에 다시 내보냅니다. 수집원 설정을 끄거나 바꿨을 때도 다시 내보내야 조회에 반영됩니다. 파일에는 제목·공식 링크·게시일과 게시판 상태를 제공합니다. 캘린더 서비스는 해당 파일을 읽습니다. [캘린더 설정](../law-calendar/README.md#기관별-최신-소식)
+새 판은 다시 검토합니다. 철회할 때는 `withdraw`와 `--reason`을 지정한 뒤 같은 공개 파일에 다시 내보냅니다. 수집원 설정을 끄거나 바꿨을 때도 다시 내보내야 조회에 반영됩니다. 파일에는 제목·공식 링크·게시일과 게시판 상태를 제공합니다. 캘린더 서비스는 해당 파일을 읽습니다. [캘린더 설정](../law-calendar/README.md#기관별-최신-소식)

@@ -33,7 +33,9 @@ async function request(path, options) {
     const body = await response.text()
     let message = body
     if (response.headers.get('content-type')?.includes('json')) message = JSON.parse(body).detail
-    throw new Error(typeof message === 'string' && message ? message : '요청에 실패했습니다.')
+    const error = new Error(typeof message === 'string' && message ? message : '요청에 실패했습니다.')
+    error.status = response.status
+    throw error
   }
   return response.json()
 }
@@ -251,3 +253,183 @@ for (const id of ['agency', 'topic', 'query']) {
   byId(id).addEventListener('input', () => { if (snapshot) renderSources() })
 }
 reload()
+
+const newsPath = '/api/collector/news'
+const reviewLabels = { pending: '검토 대기', approved: '승인', withdrawn: '철회' }
+const publicationLabels = {
+  unconfigured: '공개 스냅샷 경로를 설정하세요.',
+  missing: '아직 공개 스냅샷이 없습니다.',
+  invalid: '공개 스냅샷 파일을 확인하세요.',
+  pending: '검토 또는 수집 상태 변경이 공개 스냅샷에 반영되지 않았습니다.',
+  current: '공개 스냅샷이 현재 공개 대상과 일치합니다.',
+}
+let reviewPage = 1
+let reviewRequest = 0
+let selectedReview
+let publicationRequest = 0
+let publishing = false
+
+function renderVersion(label, version) {
+  const panel = element('div')
+  panel.append(element('h4', label))
+  if (!version) {
+    panel.append(element('p', '이전 승인판 없음'))
+    return panel
+  }
+  panel.append(element('p', version.title), element('p', '게시일 ' + (version.published_on ?? '미확인')),
+    element('small', '버전 ' + version.revision))
+  if (version.official_url) {
+    const link = element('a', '공식 원문 열기')
+    link.href = version.official_url
+    link.target = '_blank'
+    link.rel = 'noopener noreferrer'
+    const paragraph = element('p')
+    paragraph.append(link)
+    panel.append(paragraph)
+  } else {
+    panel.append(element('p', '공식 원문 링크 확인 필요'))
+  }
+  return panel
+}
+
+function renderReview(row) {
+  const item = element('article')
+  item.className = 'review-item'
+  item.append(element('h3', row.current.title), element('p', row.board + ' · ' + reviewLabels[row.status]))
+  const versions = element('div')
+  versions.className = 'review-versions'
+  versions.append(renderVersion('이전 승인판', row.previous), renderVersion('현재 수집판', row.current))
+  item.append(versions)
+  if (row.reviewed_at) item.append(element('p', [row.reviewed_at, row.actor, row.reason].filter(Boolean).join(' · ')))
+  if (row.status === 'approved') {
+    item.append(button('공개 철회', event => openReview(row, 'withdraw', event.currentTarget)))
+  } else if (row.can_approve) {
+    item.append(button(row.previous ? '새 버전 승인' : '공개 승인', event => openReview(row, 'approve', event.currentTarget)))
+  } else {
+    item.append(element('p', '공식 링크, 수집원 활성 상태와 공개 이용 조건을 확인하세요.'))
+  }
+  return item
+}
+
+async function loadReviews() {
+  const requestId = ++reviewRequest
+  const query = new URLSearchParams({ status: byId('review-filter').value, page: reviewPage })
+  if (byId('review-source').value) query.set('source_id', byId('review-source').value)
+  byId('review-count').textContent = '검토 목록을 불러오는 중입니다.'
+  byId('review-items').replaceChildren()
+  byId('previous-reviews').disabled = byId('next-reviews').disabled = true
+  try {
+    const data = await request(newsPath + '/reviews?' + query)
+    if (requestId !== reviewRequest) return
+    if (reviewPage > 1 && !data.items.length) {
+      reviewPage = Math.max(1, Math.ceil(data.total / data.page_size))
+      return loadReviews()
+    }
+    const names = Object.fromEntries(data.sources.map(source => [source.id, agencies[source.agency] + ' · ' + source.name]))
+    optionList(byId('review-source'), Object.keys(names), id => names[id])
+    byId('review-count').textContent = data.total ? '검토 자료 ' + data.total + '건 · ' + data.page + '쪽' : '해당 검토 자료가 없습니다.'
+    byId('review-items').replaceChildren(...data.items.map(renderReview))
+    byId('previous-reviews').disabled = data.page <= 1
+    byId('next-reviews').disabled = data.page * data.page_size >= data.total
+  } catch (error) {
+    if (requestId === reviewRequest) byId('review-count').textContent = error.message
+  }
+}
+
+function showPublication(data) {
+  const details = data.generated_at ? ' · 마지막 갱신 ' + data.generated_at + ' · 기관 게시물 ' + data.published + '건' : ''
+  byId('publication-status').textContent = publicationLabels[data.state] + details
+  byId('publish-news').disabled = publishing || data.state === 'unconfigured' || data.state === 'invalid'
+}
+
+async function loadPublication() {
+  if (publishing) return
+  const requestId = ++publicationRequest
+  try {
+    const data = await request(newsPath + '/publication')
+    if (requestId === publicationRequest) showPublication(data)
+  } catch (error) {
+    if (requestId === publicationRequest) {
+      byId('publication-status').textContent = error.message
+      byId('publish-news').disabled = true
+    }
+  }
+}
+
+function openReview(row, decision, trigger) {
+  selectedReview = { row, decision, trigger }
+  const withdrawing = decision === 'withdraw'
+  byId('review-dialog-title').textContent = trigger.textContent
+  byId('review-dialog-description').textContent = row.current.title + ' · 버전 ' + row.current.revision +
+    (withdrawing ? '' : ' · 공식 출처, 공개 이용 조건, 개인정보를 확인했는지 검토하세요.')
+  byId('review-reason-field').hidden = !withdrawing
+  byId('review-reason').value = ''
+  byId('review-write-status').textContent = ''
+  byId('review-dialog').showModal()
+  byId(withdrawing ? 'review-reason' : 'cancel-review').focus()
+}
+
+byId('open-reviews').addEventListener('click', () => {
+  const panel = byId('news-reviews')
+  panel.hidden = !panel.hidden
+  byId('open-reviews').setAttribute('aria-expanded', String(!panel.hidden))
+  if (!panel.hidden) { loadReviews(); loadPublication() }
+})
+byId('reload-reviews').addEventListener('click', () => { loadReviews(); loadPublication() })
+for (const id of ['review-source', 'review-filter']) {
+  byId(id).addEventListener('change', () => { reviewPage = 1; loadReviews() })
+}
+byId('previous-reviews').addEventListener('click', () => { reviewPage -= 1; loadReviews() })
+byId('next-reviews').addEventListener('click', () => { reviewPage += 1; loadReviews() })
+byId('cancel-review').addEventListener('click', () => byId('review-dialog').close())
+byId('review-dialog').addEventListener('cancel', event => {
+  if (byId('save-review').disabled) event.preventDefault()
+})
+byId('review-dialog').addEventListener('close', () => {
+  const trigger = selectedReview?.trigger
+  if (trigger?.isConnected) trigger.focus()
+  else byId('reload-reviews').focus()
+})
+byId('save-review').addEventListener('click', async () => {
+  const { row, decision } = selectedReview
+  const reason = byId('review-reason').value.trim()
+  if (decision === 'withdraw' && !reason) {
+    byId('review-write-status').textContent = '철회 사유를 입력하세요.'
+    byId('review-reason').focus()
+    return
+  }
+  const { source_id, upstream_id, review_id } = row
+  byId('save-review').disabled = byId('cancel-review').disabled = true
+  try {
+    await request(newsPath + '/reviews', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ source_id, upstream_id, review_id, revision: row.current.revision, decision, reason }),
+    })
+    byId('review-dialog').close()
+    await Promise.all([loadReviews(), loadPublication()])
+    byId('reload-reviews').focus()
+  } catch (error) {
+    byId('review-write-status').textContent = error.message
+    if (error.status === 409) await Promise.all([loadReviews(), loadPublication()])
+  } finally {
+    byId('save-review').disabled = byId('cancel-review').disabled = false
+  }
+})
+byId('publish-news').addEventListener('click', async () => {
+  publishing = true
+  publicationRequest += 1
+  byId('publish-news').disabled = true
+  try {
+    const data = await request(newsPath + '/publication', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}',
+    })
+    publishing = false
+    showPublication(data)
+    await loadPublication()
+  } catch (error) {
+    byId('publication-status').textContent = error.message
+    byId('publish-news').disabled = false
+  } finally {
+    publishing = false
+  }
+})

@@ -1,16 +1,18 @@
 """Loopback-only administration. The public calendar never mounts these routes."""
 
+import sqlite3
 from hmac import compare_digest
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, Literal
 
-from fastapi import Depends, FastAPI, HTTPException, Request, Response
+from fastapi import Depends, FastAPI, HTTPException, Query, Request, Response
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import HTMLResponse
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
+from source_hub import news
 from source_hub.config import Target
 from source_hub.store import Conflict, Registry, UnknownTarget
 
@@ -25,7 +27,30 @@ class Change(BaseModel):
     changes: dict
 
 
-def create_app(registry: Registry, username: str, password: str, *, host: str = '127.0.0.1') -> FastAPI:
+class NewsDecision(BaseModel):
+    model_config = ConfigDict(extra='forbid', strict=True)
+
+    source_id: str = Field(min_length=1, max_length=80)
+    upstream_id: str = Field(min_length=1, max_length=128)
+    revision: int = Field(ge=1)
+    review_id: int | None = Field(ge=1)
+    decision: Literal['approve', 'withdraw']
+    reason: str = Field(default='', max_length=500)
+
+
+class PublishNews(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+
+
+def create_app(
+    registry: Registry,
+    username: str,
+    password: str,
+    *,
+    host: str = '127.0.0.1',
+    materials_db: Path | None = None,
+    news_feed: Path | None = None,
+) -> FastAPI:
     if not username or not password:
         raise ValueError('관리자 사용자와 암호를 설정하세요')
     app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
@@ -86,6 +111,85 @@ def create_app(registry: Registry, username: str, password: str, *, host: str = 
     @app.get('/api/collector/sources/{target}/runs', dependencies=[Depends(actor)])
     def runs(target: str):
         return registry.runs(target)
+
+    @app.exception_handler(sqlite3.Error)
+    async def unavailable_database(_request: Request, _exc: sqlite3.Error):
+        return Response('관리자 DB를 읽거나 변경할 수 없습니다', status_code=503, media_type='text/plain')
+
+    def review_database() -> Path:
+        if materials_db is None:
+            raise HTTPException(503, '공개 검토용 자료 DB를 설정하세요')
+        return materials_db
+
+    @app.get('/api/collector/news/reviews', dependencies=[Depends(actor)])
+    def review_queue(
+        source_id: str | None = None,
+        status: Literal['pending', 'approved', 'withdrawn'] = 'pending',
+        page: int = Query(1, ge=1, le=100000),
+    ):
+        database = review_database()
+        sources = news.review_sources(registry)
+        if source_id is not None and source_id not in sources:
+            raise HTTPException(404, '검토 가능한 수집원을 선택하세요')
+        try:
+            return news.review_queue(database, sources, source_id, status, page)
+        except ValueError as exc:
+            raise HTTPException(503, '수집 자료 DB를 확인하세요') from exc
+
+    @app.post('/api/collector/news/reviews')
+    def save_review(payload: NewsDecision, user: Annotated[str, Depends(writer)]):
+        database = review_database()
+        source = news.review_sources(registry).get(payload.source_id)
+        if source is None:
+            raise HTTPException(404, '검토 가능한 수집원을 선택하세요')
+        if payload.decision == 'approve' and not news.eligible(source):
+            raise HTTPException(409, '수집원 활성 상태와 공개 이용 조건을 확인하세요')
+        try:
+            news.review(
+                database,
+                payload.source_id,
+                payload.upstream_id,
+                payload.revision,
+                payload.decision,
+                user,
+                payload.reason,
+                require_current=True,
+                expected_review_id=payload.review_id,
+                agency=source['agency'],
+            )
+        except Conflict as exc:
+            raise HTTPException(409, str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(422, str(exc)) from exc
+        return {'decision': payload.decision, 'revision': payload.revision}
+
+    @app.get('/api/collector/news/publication', dependencies=[Depends(actor)])
+    def publication():
+        if materials_db is None or news_feed is None:
+            return {'state': 'unconfigured', 'generated_at': None, 'published': 0}
+        try:
+            return news.publication(registry, materials_db, news_feed)
+        except ValueError as exc:
+            raise HTTPException(422, '공개 대상의 자료와 공식 링크를 확인하세요') from exc
+
+    @app.post('/api/collector/news/publication', dependencies=[Depends(writer)])
+    def publish(_payload: PublishNews):
+        database = review_database()
+        if news_feed is None:
+            raise HTTPException(503, '공개 스냅샷 경로를 설정하세요')
+        try:
+            snapshot = news.export(registry, database, news_feed)
+        except Conflict as exc:
+            raise HTTPException(409, str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(422, '공개 스냅샷 경로와 자료를 확인하세요') from exc
+        except OSError as exc:
+            raise HTTPException(503, '공개 스냅샷 파일을 쓸 수 없습니다') from exc
+        return {
+            'state': 'current',
+            'generated_at': snapshot['generatedAt'],
+            'published': sum(len(agency['items']) for agency in snapshot['agencies'].values()),
+        }
 
     def change(kind: Target, target: str, payload: Change, user: str, *, create: bool = False):
         try:

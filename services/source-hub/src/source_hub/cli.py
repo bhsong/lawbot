@@ -39,7 +39,7 @@ def parser() -> argparse.ArgumentParser:
     review.add_argument('revision', type=int)
     review.add_argument('decision', choices=('approve', 'withdraw'))
     review.add_argument('--materials', type=Path, required=True)
-    review.add_argument('--reason', required=True)
+    review.add_argument('--reason', default='', help='철회할 때 필수')
     export = commands.add_parser('export-news')
     export.add_argument('--materials', type=Path, required=True)
     export.add_argument('--out', type=Path, required=True)
@@ -59,6 +59,8 @@ def parser() -> argparse.ArgumentParser:
         edit.add_argument('--reason', required=True)
     serve = commands.add_parser('serve')
     serve.add_argument('--port', type=int, required=True)
+    serve.add_argument('--materials', type=Path)
+    serve.add_argument('--news-feed', type=Path)
     return root
 
 
@@ -70,7 +72,8 @@ def main(argv: list[str] | None = None) -> int:
         if args.command == 'serve':
             user = os.environ.get('SOURCE_HUB_ADMIN_USER', '')
             password = os.environ.get('SOURCE_HUB_ADMIN_PASSWORD', '')
-            uvicorn.run(create_app(registry, user, password), host='127.0.0.1', port=args.port, access_log=False)
+            app = create_app(registry, user, password, materials_db=args.materials, news_feed=args.news_feed)
+            uvicorn.run(app, host='127.0.0.1', port=args.port, access_log=False)
             return 0
         if args.command in ('set', 'add'):
             create = args.command == 'add'

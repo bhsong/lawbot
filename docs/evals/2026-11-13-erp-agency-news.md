@@ -1,6 +1,6 @@
 # ERP 기관별 최신 소식 검증
 
-2026-11-13 KST. 기준 `bbbde46`. [작업 계획](../plans/erp-agency-news.md)
+2026-11-13 KST. 기준 `bbbde46`. [작업 계획](../archives/erp-agency-news.md)
 
 | 항목 | 실행 결과 |
 | --- | --- |
