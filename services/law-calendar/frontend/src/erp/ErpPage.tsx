@@ -52,19 +52,25 @@ function ItemCard({ item, reference = false }: { item: ErpItem; reference?: bool
 }
 
 function RuleSections({ rules, items, available }: { rules: ErpRule[]; items: ErpItem[]; available: boolean }) {
-  const keys = new Set(rules.map((rule) => rule.sourceKey))
-  const current = rules.filter((rule) => rule.scopes.some((scope) => scope.currentVersion))
-  const upcoming = rules.filter((rule) =>
+  const documentKeys = new Set(items.map((item) => item.sourceKey))
+  const cards = rules.filter((rule) =>
+    rule.scopes.length > 0 || rule.proposalLinks.length > 0 || !documentKeys.has(rule.sourceKey))
+  const keys = new Set(cards.map((rule) => rule.sourceKey))
+  const current = cards.filter((rule) => rule.scopes.some((scope) => scope.currentVersion))
+  const upcoming = cards.filter((rule) =>
     !current.includes(rule) && rule.scopes.some((scope) => scope.scheduledChanges.length > 0))
-  const unverified = rules.filter((rule) => !current.includes(rule) && !upcoming.includes(rule))
+  const unverified = cards.filter((rule) => !current.includes(rule) && !upcoming.includes(rule))
   const references = items.filter((item) => !keys.has(item.sourceKey))
+  const showEmpty = available && (cards.length > 0 || references.length === 0)
   const sections = [
-    { id: 'erp-current', title: '현재 적용 중', rules: current, empty: available ? '확인된 현행 기준이 없습니다.' : '' },
-    { id: 'erp-upcoming', title: '적용 예정', rules: upcoming, empty: available ? '별도 예정 카드가 없습니다.' : '' },
+    { id: 'erp-current', title: '현재 적용 중', rules: current, empty: showEmpty ? '확인된 현행 기준이 없습니다.' : '' },
+    { id: 'erp-upcoming', title: '적용 예정', rules: upcoming, empty: showEmpty ? '별도 예정 카드가 없습니다.' : '' },
     { id: 'erp-unverified', title: '현행 기준 확인 필요', rules: unverified, empty: '' },
   ]
-  return <>{sections.map((section) => {
-    const showReferences = section.id === 'erp-unverified' && references.length > 0
+  return <>{available && references.length > 0 &&
+    <ItemSection id="erp-approved" title="기존 승인 자료" items={references} empty="" />}
+    {sections.map((section) => {
+    const showReferences = !available && section.id === 'erp-unverified' && references.length > 0
     if (!section.rules.length && !section.empty && !showReferences) return null
     return <section key={section.id} className="erp-section" aria-labelledby={section.id}>
       <h2 id={section.id}>{section.title}</h2>

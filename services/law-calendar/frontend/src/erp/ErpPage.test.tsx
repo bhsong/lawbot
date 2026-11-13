@@ -170,10 +170,30 @@ test('shows current, upcoming, additional stages, and proposals within a single 
   expect(later.closest('details')).not.toHaveAttribute('open')
   await userEvent.click(later)
   expect(content.getByText('검증된 추가 변경')).toBeVisible()
-  expect(await screen.findByRole('heading', { name: '가상 산재 기준' })).toBeVisible()
-  expect(screen.queryByRole('article', { name: '[예시] 2027년도 가상 요율' })).not.toBeInTheDocument()
+  const legacy = await screen.findByRole('region', { name: '기존 승인 자료' })
+  expect(within(legacy).getByRole('article', { name: '[예시] 2027년도 가상 요율' })).toBeVisible()
+  expect(screen.queryByRole('article', { name: '가상 산재 기준' })).not.toBeInTheDocument()
   const references = content.getByText('기존 자료와 첨부 2건')
   expect(references.closest('details')).not.toHaveAttribute('open')
+})
+
+test('empty v2 rule entries keep existing approved cards, excerpts and attachments visible', async () => {
+  const empty: ErpRules = {
+    ...rules,
+    rules: (feed.items ?? []).map((item) => ({
+      ruleId: item.sourceKey, sourceKey: item.sourceKey, title: item.sourceTitle, scopes: [], proposalLinks: [],
+    })),
+  }
+  render(<ErpPage loader={loader} ruleLoader={async () => empty} lawLoader={lawLoader} today="2026-11-12" />)
+  const legacy = await screen.findByRole('region', { name: '기존 승인 자료' })
+  const content = within(legacy)
+  expect(content.getAllByRole('article')).toHaveLength(3)
+  const pension = within(content.getByRole('article', { name: base.title }))
+  expect(pension.getByText(/상한액 : 900천원/)).toBeVisible()
+  expect(pension.getByText('2026-07-01')).toBeVisible()
+  expect(content.getByRole('link', { name: /가상 간이세액표 PDF/ })).toBeVisible()
+  expect(screen.queryByRole('region', { name: '현행 기준 확인 필요' })).not.toBeInTheDocument()
+  expect(screen.queryByRole('heading', { name: '현재 유효' })).not.toBeInTheDocument()
 })
 
 test('a configured rule feed failure keeps documents as references and preserves the existing history', async () => {
