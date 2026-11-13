@@ -4,6 +4,24 @@ from typing import Literal
 
 from pydantic import BaseModel
 
+from lawbot_common.erp_news import Agency, NewsItem
+
+
+class PublicNewsBoard(BaseModel):
+    name: str
+    status: Literal['ok', 'disabled', 'unverified', 'pending', 'delayed', 'blocked', 'error', 'partial']
+    lastSuccessAt: str | None
+
+
+class ErpNews(BaseModel):
+    agency: Agency
+    state: Literal['ok', 'missing', 'invalid', 'link_only', 'unavailable']
+    generatedAt: str | None = None
+    officialHome: str
+    navigation: str | None = None
+    boards: list[PublicNewsBoard] = []
+    items: list[NewsItem] = []
+
 
 class PublicAssembly(BaseModel):
     agency: str | None

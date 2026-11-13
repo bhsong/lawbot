@@ -67,6 +67,16 @@ export interface ErpItem {
   reviewedAt: string
 }
 
+export interface ErpNews {
+  agency: "lawgo" | "moel" | "mofe" | "nts" | "hometax"
+  state: "ok" | "missing" | "invalid" | "link_only" | "unavailable"
+  generatedAt?: string | null
+  officialHome: string
+  navigation?: string | null
+  boards?: (PublicNewsBoard)[]
+  items?: (NewsItem)[]
+}
+
 export interface ErpUpdates {
   state: "ok" | "missing" | "invalid"
   generatedAt?: string | null
@@ -98,6 +108,15 @@ export interface HoldPage {
   total: number
   page: number
   page_size: number
+}
+
+export interface NewsItem {
+  id: string
+  title: string
+  board: string
+  publishedOn: string | null
+  officialUrl: string
+  effectiveOn?: string | null
 }
 
 export interface PublicAssembly {
@@ -160,6 +179,12 @@ export interface PublicDetail {
   assembly?: PublicAssembly | null
   diff: (string)[] | null
   noticeContent?: PublicNoticeContent | null
+}
+
+export interface PublicNewsBoard {
+  name: string
+  status: "ok" | "disabled" | "unverified" | "pending" | "delayed" | "blocked" | "error" | "partial"
+  lastSuccessAt: string | null
 }
 
 export interface PublicNoticeContent {

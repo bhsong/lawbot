@@ -8,6 +8,7 @@ import type { CalendarLoader, CalendarSnapshot } from '../law-calendar/types'
 import { ACTION_LABELS, kstMinute, loadErp } from './data'
 import type { ErpLoader } from './data'
 import './erp.css'
+import AgencyNews from './AgencyNews'
 
 const KINDS: CalendarChange['kind'][] = ['notice', 'effective', 'bill']
 const NOTICES = {
@@ -137,6 +138,7 @@ export default function ErpPage({ loader = loadErp, lawLoader = loadCalendar, to
       <a href="https://www.hometax.go.kr/" target="_blank" rel="noopener noreferrer">홈택스 공식 홈</a>
       {' · '}<span>전체메뉴 → 기타 → 고객센터 → 자료실</span>
     </p>
+    <AgencyNews />
     {state === 'loading' && <p className="lc-empty" role="status">ERP 자료를 불러오는 중입니다.</p>}
     {state === 'error' && <div className="lc-warning" role="alert"><p>ERP 자료를 불러오지 못했습니다.</p>
       <button type="button" onClick={() => setAttempt((value) => value + 1)}>다시 시도</button></div>}
