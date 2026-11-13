@@ -1,4 +1,4 @@
-"""List, validate and change collection settings without invoking a collector."""
+"""Manage collection settings and run a reviewed source on demand."""
 
 import argparse
 import getpass
@@ -12,6 +12,7 @@ import uvicorn
 import yaml
 from pydantic import ValidationError
 
+from source_hub import moel
 from source_hub.config import CONFIG_PATH, load
 from source_hub.server import create_app
 from source_hub.store import Registry
@@ -27,6 +28,10 @@ def parser() -> argparse.ArgumentParser:
     for command in ('validate', 'list', 'dry-run', 'audit'):
         commands.add_parser(command)
     commands.add_parser('runs').add_argument('source_id')
+    for command in ('collect', 'documents'):
+        rss = commands.add_parser(command)
+        rss.add_argument('source_id', choices=moel.CHANNELS)
+        rss.add_argument('--materials', type=Path, required=True)
     for command in ('set', 'add'):
         edit = commands.add_parser(command)
         if command == 'set':
@@ -42,6 +47,7 @@ def parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     args = parser().parse_args(argv)
+    status = 0
     try:
         registry = Registry(load(args.config), args.database)
         if args.command == 'serve':
@@ -69,6 +75,12 @@ def main(argv: list[str] | None = None) -> int:
             result = registry.history()
         elif args.command == 'runs':
             result = registry.runs(args.source_id)
+        elif args.command == 'collect':
+            result = moel.collect(registry, args.materials, args.source_id)
+            if result['outcome'] in {'blocked', 'error', 'unverified', 'busy'}:
+                status = 2
+        elif args.command == 'documents':
+            result = moel.documents(args.materials, args.source_id)
         else:
             snapshot = registry.snapshot()
             result = (
@@ -83,7 +95,7 @@ def main(argv: list[str] | None = None) -> int:
     except (ValueError, OSError, sqlite3.Error) as exc:
         print(f'source-hub: {exc}', file=sys.stderr)
         return 2
-    return 0
+    return status
 
 
 if __name__ == '__main__':

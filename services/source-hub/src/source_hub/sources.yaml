@@ -8,10 +8,10 @@ sources:
   - {source_id: existing-erp, group: erp, agency: lawgo, board_name: 기존 ERP 6종, official_homepage: 'https://www.law.go.kr/', source_url: 'https://www.law.go.kr/', adapter: local, mode: local, enabled: true, verification: ready, category_tags: [급여, 세무, 보험]}
   - {source_id: lawgo-history, group: erp, agency: lawgo, board_name: 법령 공포·개정 이력, official_homepage: 'https://open.law.go.kr/', source_url: 'https://open.law.go.kr/LSO/openApi/guideResult.do', adapter: lawgo, mode: api, category_tags: [법령, 공포]}
 
-  - &moel {source_id: moel-rss-notice, group: erp, agency: moel, board_name: 공지사항 RSS, official_homepage: 'https://www.moel.go.kr/', source_url: 'https://www.moel.go.kr/rss/notice.do', adapter: moel, mode: rss, category_tags: [공지]}
+  - &moel {source_id: moel-rss-notice, group: erp, agency: moel, board_name: 공지사항 RSS, official_homepage: 'https://www.moel.go.kr/', source_url: 'https://www.moel.go.kr/rss/notice.do', adapter: moel, mode: rss, verification: ready, license_state: links_only, category_tags: [공지]}
   - {<<: *moel, source_id: moel-rss-policy, board_name: 정책자료 RSS, source_url: 'https://www.moel.go.kr/rss/policy.do', category_tags: [정책]}
-  - {<<: *moel, source_id: moel-rss-lawinfo, board_name: 법령정보 RSS, source_url: 'https://www.moel.go.kr/rss/lawinfo.do', category_tags: [법령]}
-  - &moel_board {<<: *moel, source_id: moel-rules, board_name: 고시·훈령·예규, source_url: null, mode: html, category_tags: [고시, 행정규칙]}
+  - {<<: *moel, source_id: moel-rss-lawinfo, board_name: 입법·행정예고 RSS, source_url: 'https://www.moel.go.kr/rss/lawinfo.do', category_tags: [법령]}
+  - &moel_board {<<: *moel, source_id: moel-rules, board_name: 고시·훈령·예규, source_url: null, mode: html, verification: not_tested, license_state: unverified, category_tags: [고시, 행정규칙]}
   - {<<: *moel_board, source_id: moel-interpretations, board_name: 행정해석·질의회시, category_tags: [행정해석]}
   - {<<: *moel_board, source_id: moel-policy, board_name: 정책자료, category_tags: [정책]}
   - {<<: *moel_board, source_id: moel-publications, board_name: 주요 발간물·업무편람, category_tags: [발간물]}

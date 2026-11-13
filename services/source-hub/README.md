@@ -1,6 +1,6 @@
 # 수집 설정 관리
 
-법령·ERP 수집원 등록과 변경 이력을 관리합니다. 초기 YAML 위에 별도 SQLite 설정을 적용합니다. 검증과 dry-run은 저장소나 외부 사이트를 호출하지 않습니다. 설정이 연결되는 통합 수집기는 후속 단계에서 제공하며, 현재 `law-monitor daily`와 챗봇 조문 자동 갱신은 기존 작업으로 실행됩니다.
+법령·ERP 수집원 등록과 변경 이력을 관리합니다. 초기 YAML 위에 별도 SQLite 설정을 적용합니다. 검증과 dry-run은 저장소나 외부 사이트를 호출하지 않습니다. 고용노동부 공식 RSS는 아래 수동 명령으로 수집합니다. `law-monitor daily`와 챗봇 조문 자동 갱신은 기존 작업으로 실행됩니다.
 
 ## 개발 실행
 
@@ -24,4 +24,20 @@ $hub --database $collector_db audit
 $hub --database $collector_db serve --port $collector_port
 ```
 
-관리자 인증은 이 서비스 전용입니다. 다른 서비스의 SQLite는 설정 DB로 열 수 없습니다. 소스 검증·스케줄 연동 이후의 실제 수집 이력, 수동 수집·재시도, 일일 알림은 [통합 수집기 계획](../../docs/plans/source-hub-erp-v1.1.md)을 따릅니다.
+관리자 인증은 이 서비스 전용입니다. 다른 서비스의 SQLite는 설정 DB로 열 수 없습니다. 관리자 화면의 수동 수집·재시도, 스케줄 연동과 일일 알림은 [통합 수집기 계획](../../docs/plans/source-hub-erp-v1.1.md)을 따릅니다.
+
+## 고용노동부 RSS 수동 수집
+
+`moel-rss-notice`, `moel-rss-policy`, `moel-rss-lawinfo` 세 채널을 지원합니다. 기본 상태는 OFF입니다. 실행마다 `robots.txt`를 확인하고, 등록된 공식 피드만 요청합니다. 제목·게시일·공식 링크를 내부 DB에 저장합니다. [공식 RSS 안내](https://www.moel.go.kr/site/rss/rssList.do) · [저작권 정책](https://www.moel.go.kr/site/copyright/copyrightList.do)
+
+새 개발용 설정 DB의 예시입니다. 기존 DB에서는 `list`로 조회한 현재 `config_version`을 사용합니다.
+
+```fish
+set materials_db "$PWD/services/source-hub/data/materials.db"
+$hub --database $collector_db set source moel-rss-notice '{"enabled": true}' --version 0 --reason '공식 RSS 수동 검증'
+$hub --database $collector_db collect moel-rss-notice --materials $materials_db
+$hub --database $collector_db documents moel-rss-notice --materials $materials_db
+$hub --database $collector_db runs moel-rss-notice
+```
+
+첫 성공 응답의 `baseline_count`는 시작 시 이미 있던 게시물입니다. 후속 실행에서는 신규와 수정 건수를 표시합니다. 소스·기관·그룹 중 하나라도 OFF이면 `disabled`, 수집 간격이 지나지 않았으면 `not_due`이며 두 경우 모두 외부 요청은 0건입니다. 접근 제한은 `blocked`, 피드 구조 오류는 `error`로 남습니다. 수집 이력과 문서는 OFF 이후에도 조회할 수 있습니다.
