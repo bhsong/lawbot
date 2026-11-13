@@ -136,7 +136,19 @@ def test_erp_reads_daily_snapshot_through_public_routes(dataset, tmp_path, calen
             'changes': [],
             'feeds': {
                 'erp': {'state': 'ok', **{k: v for k, v in FEED.items() if k != 'schemaVersion'}},
-                'rules': {'schemaVersion': 2, 'generatedAt': stamp, 'rules': []},
+                'rules': {
+                    'schemaVersion': 2,
+                    'generatedAt': stamp,
+                    'rules': [
+                        {
+                            'ruleId': ITEM['sourceKey'],
+                            'sourceKey': ITEM['sourceKey'],
+                            'title': '가상 미등록 적용 기준',
+                            'scopes': [],
+                            'proposalLinks': [],
+                        }
+                    ],
+                },
                 'news': {
                     'moel': {
                         'agency': 'moel',
@@ -155,8 +167,11 @@ def test_erp_reads_daily_snapshot_through_public_routes(dataset, tmp_path, calen
             responses = {}
             page.on('response', lambda response: responses.update({response.url.split('?')[0]: response}))
             page.goto(url + '/#erp')
-            expect(page.get_by_role('heading', name='현행 기준 확인 필요')).to_be_visible()
-            expect(page.get_by_role('heading', name=ITEM['title'])).to_be_visible()
+            approved = page.get_by_role('region', name='기존 승인 자료')
+            expect(approved.get_by_role('heading', name=ITEM['title'])).to_be_visible()
+            expect(approved.get_by_role('link', name='국가법령정보센터 원문 ↗')).to_be_visible()
+            expect(approved.get_by_text(ITEM['excerpt'])).to_be_visible()
+            expect(page.get_by_role('heading', name='현행 기준 확인 필요')).to_have_count(0)
             with page.expect_response(lambda response: '/api/erp-news/latest?agency=moel' in response.url):
                 page.get_by_role('button', name='고용노동부', exact=True).click()
             expect(page.get_by_role('heading', name='고용노동부')).to_be_visible()
