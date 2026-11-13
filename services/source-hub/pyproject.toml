@@ -5,6 +5,7 @@ description = "Private Lawbot collector source registry and administration"
 requires-python = ">=3.14"
 dependencies = [
     "fastapi==0.143.3",
+    "httpx>=0.28,<1",
     "lawbot-common",
     "pydantic>=2.14.1",
     "pyyaml>=6.0.3",

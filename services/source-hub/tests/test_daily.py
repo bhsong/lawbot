@@ -188,6 +188,31 @@ def test_changes_follow_public_revisions_beyond_latest_ten(registry):
     assert daily.change_records(plan, {'moel-rss-notice': updated}, feeds, '2026-11-15', ledger)[0] == []
 
 
+def test_attachment_replacement_and_new_presentation_fields_preserve_previous_ledger(registry):
+    approved = {
+        'id': 'form',
+        'title': '가상 서식',
+        'sourceUrl': 'https://www.law.go.kr/example',
+        'contentSha256': 'unchanged',
+        'attachments': [{'title': '서식 PDF', 'pdfUrl': 'https://www.law.go.kr/file', 'sha256': 'old'}],
+        'excerpt': '공개 근거',
+    }
+    feeds = {'erp': {'items': [approved]}, 'rules': None, 'news': {}}
+    plan = registry.snapshot()
+    baseline = {
+        'kind': 'erp',
+        'title': approved['title'],
+        'url': approved['sourceUrl'],
+        'content': approved['contentSha256'],
+        'attachments': approved['attachments'],
+    }
+    changes, ledger = daily.change_records(plan, {}, feeds, '2026-11-13', {'erp:form': daily.snapshot_hash(baseline)})
+    assert changes == []
+    approved['attachments'] = [approved['attachments'][0] | {'sha256': 'new'}]
+    changes, _ = daily.change_records(plan, {}, feeds, '2026-11-14', ledger)
+    assert len(changes) == 1 and changes[0]['attachmentChanged'] and changes[0]['excerpt'] == '공개 근거'
+
+
 def test_offline_capture_bridge_runs_the_independent_exporters(registry, tmp_path, monkeypatch):
     cfg = daily.DailyConfig(
         tmp_path,

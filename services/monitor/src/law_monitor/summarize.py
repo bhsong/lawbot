@@ -5,6 +5,7 @@
 - 모델이 실패하면 거기서 멈추고, 요약하지 못한 이벤트는 processed_at을 비워 둔다 (다음 실행에서 다시)
 """
 
+import hashlib
 import html
 import json
 import logging
@@ -80,6 +81,12 @@ class SummaryResult:
     calls: int
     failed: str | None
     pending: int
+
+
+@dataclass(frozen=True)
+class SummaryCapture:
+    revisions: dict[str, str]
+    entries: list[dict] = field(default_factory=list)
 
 
 def group(events: list[dict]) -> tuple[list[Group], list[dict]]:
@@ -223,6 +230,7 @@ def write_summary(
     checks: list | None = None,
     unavailable: tuple[str, ...] = (),
     overwrite: bool = True,
+    capture: SummaryCapture | None = None,
 ) -> tuple[SummaryResult, list[str]]:
     """요약 md를 쓰고 (결과, 요약을 끝낸 event_id 목록)을 돌려준다."""
     assembly = [e for e in events if e.get('source') in SOURCES and e.get('change_type') != 'collector_failing']
@@ -252,6 +260,16 @@ def write_summary(
             reply.finish_reason,
         )
         rendered.append((_section(g), _render(g, reply.text, paths, truncated=reply.finish_reason == 'length')))
+        if capture is not None and reply.finish_reason == 'stop':
+            capture.entries.append(
+                {
+                    'text': reply.text,
+                    'events': [
+                        {'eventId': event['event_id'], 'revision': capture.revisions[event['event_id']]}
+                        for event in g.events
+                    ],
+                }
+            )
         done += [e['event_id'] for e in g.events]
 
     if unavailable:
@@ -326,17 +344,22 @@ def check_lines(results: list) -> list[str]:
     return ['## 점검', '', *(f'- {r.name} — {r.status}: `{r.line}`' for r in results), '']
 
 
-def load_events(home: Path, items: list[tuple[str, str | None]]) -> tuple[list[dict], dict[str, str], tuple[str, ...]]:
+def load_events(
+    home: Path, items: list[tuple[str, str | None]], capture: SummaryCapture | None = None
+) -> tuple[list[dict], dict[str, str], tuple[str, ...]]:
     events, paths, unavailable = [], {}, []
     for event_id, rel in items:
         if rel:
             try:
-                event = json.loads((home / rel).read_text(encoding='utf-8'))
+                raw = (home / rel).read_bytes()
+                event = json.loads(raw)
             except OSError, ValueError:
                 event = None
             if isinstance(event, dict) and event.get('event_id') == event_id:
                 events.append(event)
                 paths[event_id] = rel
+                if capture is not None:
+                    capture.revisions[event_id] = hashlib.sha256(raw).hexdigest()
                 continue
         log.warning('이벤트 파일을 읽을 수 없습니다: %s', event_id)
         unavailable.append(event_id)

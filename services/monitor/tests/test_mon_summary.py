@@ -1,5 +1,6 @@
 """2단계: 대기 이벤트 → 모델 서버(가짜) 요약 → data/summaries/YYYY-MM-DD.md (계획 docs/archives/monitor-summary.md)."""
 
+import hashlib
 import json
 
 import httpx
@@ -115,6 +116,24 @@ def test_summary_files_at_the_same_time_are_preserved(tmp_path):
     reports = [mon.summarize(run_line=f'실행 {i}').path for i in range(3)]
     assert len(set(reports)) == 3
     assert all(f'실행 {i}' in path.read_text(encoding='utf-8') for i, path in enumerate(reports))
+
+
+def test_managed_summary_reuses_model_reply_and_records_all_prompt_events(tmp_path, legalize):
+    llm = FakeLLM()
+    mon = monitor_with_events(tmp_path, legalize, llm.client())
+    sidecar = tmp_path / 'managed.json'
+    expected = {
+        eid: hashlib.sha256((mon.paths.home / rel).read_bytes()).hexdigest() for eid, rel in mon.state.pending_events()
+    }
+    result = mon.summarize(managed_summary=(sidecar, 'daily-morning'))
+    structured = json.loads(sidecar.read_bytes())
+    assert result.calls == len(llm.bodies) == 1
+    assert structured['runId'] == 'daily-morning'
+    assert len(structured['entries']) == 1
+    entry = structured['entries'][0]
+    assert {e['eventId']: e['revision'] for e in entry['events']} == expected
+    assert entry['text'] in result.path.read_text(encoding='utf-8')
+    assert 'data/events/' not in sidecar.read_text()
 
 
 @pytest.mark.parametrize('missing_all', [False, True])
