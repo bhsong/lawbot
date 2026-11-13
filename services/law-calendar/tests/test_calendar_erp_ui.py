@@ -107,6 +107,9 @@ def test_missing_feed_leaves_the_law_calendar_working(dataset, tmp_path, calenda
         try:
             page.goto(url + '/#erp')
             expect(page.get_by_text('ERP 자료가 아직 준비되지 않았습니다.')).to_be_visible()
+            hometax = page.get_by_role('link', name='홈택스 공식 홈')
+            expect(hometax).to_have_attribute('href', 'https://www.hometax.go.kr/')
+            expect(page.get_by_text('전체메뉴 → 기타 → 고객센터 → 자료실')).to_be_visible()
             page.get_by_role('tab', name='법령 캘린더').click()
             expect(page.get_by_role('heading', level=1, name='법령 변경 캘린더')).to_be_visible()
             expect(page.get_by_role('grid')).to_be_visible()

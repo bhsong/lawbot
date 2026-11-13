@@ -12,13 +12,17 @@ import uvicorn
 import yaml
 from pydantic import ValidationError
 
-from source_hub import materials, moel, mofe
+from source_hub import materials, moel, mofe, nts
 from source_hub.config import CONFIG_PATH, load
 from source_hub.server import create_app
 from source_hub.store import Registry
 
 TARGETS = ('group', 'agency', 'source', 'law', 'law-part')
-COLLECTORS = dict.fromkeys(moel.CHANNELS, moel.collect) | dict.fromkeys(mofe.CHANNELS, mofe.collect)
+COLLECTORS = (
+    dict.fromkeys(moel.CHANNELS, moel.collect)
+    | dict.fromkeys(mofe.CHANNELS, mofe.collect)
+    | dict.fromkeys(nts.CHANNELS, nts.collect)
+)
 
 
 def parser() -> argparse.ArgumentParser:

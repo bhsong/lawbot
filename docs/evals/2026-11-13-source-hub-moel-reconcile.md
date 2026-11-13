@@ -1,6 +1,6 @@
 # 고용노동부 공식 게시판 대조 검증
 
-2026-11-13 KST. 기준 `788def5`. [작업 계획](../plans/source-hub-moel-reconcile.md)
+2026-11-13 KST. 기준 `788def5`. [작업 계획](../archives/source-hub-moel-reconcile.md)
 
 ## 실측
 

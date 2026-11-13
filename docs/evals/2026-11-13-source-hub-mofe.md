@@ -1,6 +1,6 @@
 # 재정경제부 공식 수집 검증
 
-2026-11-13 KST. PR #132. [작업 계획](../plans/source-hub-mofe.md)
+2026-11-13 KST. PR #132. [작업 계획](../archives/source-hub-mofe.md)
 
 재정경제부는 RSS 안내에서 보도·참고, 설명·반박, 공지, 정책게시판, 최근경제동향 채널을 직접 제공한다. 확인한 공개 API 안내와 공공데이터 목록에서 이 게시물을 계속 제공하는 동일 범위의 API를 찾지 못했다. 해당 기관의 저작권 정책은 공공누리 유형별 조건과 출처 표시를 요구하고 미표시 저작물 이용 시 사전 협의를 안내한다. 이번 수집은 제목·게시일·공식 링크의 내부 기록에 한정했다. 본문·첨부·작성자·원본 응답을 저장하거나 공개하지 않았다. [공식 RSS](https://mofe.go.kr/mn/siteguide/rssService.do?menuNo=2060000) · [저작권 정책](https://mofe.go.kr/mn/siteguide/drmp.do?menuNo=2030000) · [robots.txt](https://mofe.go.kr/robots.txt)
 
