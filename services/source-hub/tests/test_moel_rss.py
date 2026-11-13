@@ -1,6 +1,7 @@
 import json
 import sqlite3
 from datetime import UTC, datetime, timedelta
+from http.client import IncompleteRead
 from pathlib import Path
 
 import pytest
@@ -93,7 +94,17 @@ def test_collect_and_disable_at_each_level(setup):
     assert [row['config_version'] for row in registry.runs(SOURCE)] == [7, 7, 1]
 
 
-@pytest.mark.parametrize('robots', [b'User-agent: *\nDisallow: /rss/*', b'<html>error</html>', b''])
+@pytest.mark.parametrize(
+    'robots',
+    [
+        b'User-agent: *\nDisallow: /rss/*',
+        b'User-agent: *\nDisallow: /rss/notice.do$',
+        b'User-agent: *\nDisallow: /rss/%6eotice.do$',
+        b'User-agent: LawbotSourceHub\nDisallow: /rss/*\nUser-agent: *\nAllow: /',
+        b'<html>error</html>',
+        b'',
+    ],
+)
 def test_robots_denial_or_unverified_document_stops_before_feed(setup, robots):
     registry, database, calls, bodies = setup
     setting(registry, 'source', SOURCE, True)
@@ -180,3 +191,52 @@ def test_redirect_handler_declines_official_and_unrelated_targets():
     redirect = moel.NoRedirect()
     for target in (HOST + '/different', 'https://external.example/resource'):
         assert redirect.redirect_request(moel.Request(FEED), None, 302, 'Found', {'location': target}, target) is None
+
+
+def test_allow_uses_most_specific_rule(setup):
+    registry, database, calls, bodies = setup
+    setting(registry, 'source', SOURCE, True)
+    bodies[ROBOTS] = b'User-agent: *\nDisallow: /rss/*\nAllow: /rss/notice.do$'
+    assert moel.collect(registry, database, SOURCE, now=NOW)['outcome'] == 'ok'
+    assert calls == [ROBOTS, FEED]
+
+
+@pytest.mark.parametrize('chunked', [True, False])
+def test_incomplete_http_read_is_recorded(tmp_path, monkeypatch, chunked):
+    from email.message import Message
+
+    registry = Registry(load(), tmp_path / 'registry.db')
+    database = tmp_path / 'materials.db'
+    setting(registry, 'source', SOURCE, True)
+
+    class Response:
+        status = 200
+
+        def __init__(self, url):
+            self.url = url
+            self.headers = Message()
+            self.headers['Content-Type'] = 'text/plain' if url == ROBOTS else 'text/xml'
+            if url == FEED and not chunked:
+                self.headers['Content-Length'] = '700'
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return None
+
+        def read(self, limit):
+            if self.url == ROBOTS:
+                return b'User-agent: *\nDisallow: /portal/'
+            if chunked:
+                raise IncompleteRead(b'<rss>')
+            return feed(item('잘린 응답'))
+
+    class Opener:
+        def open(self, request, timeout):
+            return Response(request.full_url)
+
+    monkeypatch.setattr(moel, 'build_opener', lambda *_: Opener())
+    assert moel.collect(registry, database, SOURCE, now=NOW)['outcome'] == 'error'
+    assert registry.runs(SOURCE)[0]['error'] == 'incomplete_response'
+    assert moel.documents(database, SOURCE) == []

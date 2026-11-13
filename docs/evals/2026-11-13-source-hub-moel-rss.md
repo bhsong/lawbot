@@ -16,8 +16,9 @@
 
 ## 대역 검증
 
-- `pytest -q services/source-hub/tests/test_moel_rss.py`에서 13건을 통과했다. 출처·기관·그룹 OFF 요청 0건, 간격 전 재실행 요청 0건, OFF 뒤 재수집, 신규 1건·수정 1건, 동일 응답 재수집 0건, 금지·확인 실패 시 피드 미요청, 공식 목록 밖 경로 차단, 리디렉션 거부, XML 구조 이상과 DB 분리, 수집 기록 쓰기 실패 뒤 재조회 없는 복구를 확인했다.
-- `pytest -q --tb=short` 기본 전체 결과는 `1904 passed, 13 deselected in 151.09s`다. 단위, 모델 대역 계약, 통합, Chromium 대역 E2E를 포함한다.
+- `pytest -q services/source-hub/tests/test_moel_rss.py`에서 19건을 통과했다. 출처·기관·그룹 OFF 요청 0건, 간격 전 재실행 요청 0건, OFF 뒤 재수집, 신규 1건·수정 1건, 동일 응답 재수집 0건, 금지·확인 실패 시 피드 미요청, 공식 목록 밖 경로 차단, 리디렉션 거부, XML 구조 이상과 DB 분리, 수집 기록 쓰기 실패 뒤 재조회 없는 복구를 확인했다.
+- PR 리뷰 뒤 `robots.txt`의 `*`·`$`, 퍼센트 인코딩, 사용자 에이전트 그룹과 가장 구체적인 경로 규칙을 검사하도록 수정했다. 끊긴 전송과 `Content-Length` 불일치가 실패 이력에 남는지 확인했다. 최종 코드로 공식 RSS 세 채널을 다시 확인해 각각 10건을 저장했다. [RFC 9309 경로 판정](https://www.rfc-editor.org/rfc/rfc9309.html#section-2.2.2)
+- `pytest -q --tb=short` 기본 전체 결과는 `1910 passed, 13 deselected in 149.59s`다. 단위, 모델 대역 계약, 통합, Chromium 대역 E2E를 포함한다.
 - Ruff, 포맷 검사, Pyright, compileall, 캘린더 스키마와 잠금 파일 검사를 통과했다. 챗봇 55건과 캘린더 26건의 Vitest, 양쪽 typecheck와 빌드를 통과했다.
 - 운영 스케줄, 조문 갱신, 모델 추론, 실제 발송은 실행하지 않았다. 게시판 대조·다른 기관·공개 API는 후속 범위다.
 

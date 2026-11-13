@@ -6,22 +6,22 @@ import re
 from contextlib import contextmanager
 from datetime import datetime
 from email.utils import parsedate_to_datetime
+from http.client import IncompleteRead
 from pathlib import Path
 from urllib.error import HTTPError, URLError
 from urllib.parse import parse_qsl, urlsplit
 from urllib.request import HTTPRedirectHandler, Request, build_opener
-from urllib.robotparser import RobotFileParser
 from uuid import uuid4
 from xml.etree import ElementTree
 
-from source_hub import materials
+from source_hub import materials, robots
 from source_hub.materials import Article
 from source_hub.materials import documents as documents
 from source_hub.store import KST, Registry, Run
 
 HOST = 'https://www.moel.go.kr'
 ROBOTS = HOST + '/robots.txt'
-USER_AGENT = 'LawbotSourceHub/1.0'
+USER_AGENT = robots.PRODUCT + '/1.0'
 CHANNELS = {
     'moel-rss-notice': ('/rss/notice.do', '/news/notice/noticeView.do'),
     'moel-rss-policy': ('/rss/policy.do', '/policy/policydata/view.do'),
@@ -52,9 +52,15 @@ def read_response(url: str, media: set[str], limit: int) -> bytes:
             data = response.read(limit + 1)
             if len(data) > limit:
                 raise FetchError('response_too_large')
+            declared = response.headers.get('Content-Length')
+            if declared is not None and not response.headers.get('Transfer-Encoding'):
+                if not re.fullmatch(r'[0-9]{1,12}', declared) or int(declared) != len(data):
+                    raise FetchError('incomplete_response')
     except HTTPError as exc:
         exc.close()
         raise FetchError(f'http_{exc.code}') from exc
+    except IncompleteRead as exc:
+        raise FetchError('incomplete_response') from exc
     except (URLError, OSError) as exc:
         raise FetchError('network_error') from exc
     return data
@@ -65,15 +71,7 @@ def access_failure(feed_url: str) -> str | None:
         lines = read_response(ROBOTS, {'text/plain'}, ROBOTS_LIMIT).decode('utf-8-sig').splitlines()
     except FetchError, UnicodeError:
         return 'robots_unavailable'
-    if not any(re.match(r'^\s*user-agent\s*:\s*[^\s#]+', line, flags=re.I) for line in lines):
-        return 'robots_invalid'
-    rules = RobotFileParser()
-    rules.parse(lines)
-    if not rules.can_fetch(USER_AGENT, feed_url):
-        return 'robots_denied'
-    if rules.crawl_delay(USER_AGENT) or rules.request_rate(USER_AGENT):
-        return 'robots_rate_review'
-    return None
+    return robots.access_failure(lines, urlsplit(feed_url).path)
 
 
 class RssTree(ElementTree.TreeBuilder):
