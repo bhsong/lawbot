@@ -1,0 +1,22 @@
+[project]
+name = "source-hub"
+version = "0.1.0"
+description = "Private Lawbot collector source registry and administration"
+requires-python = ">=3.14"
+dependencies = [
+    "fastapi==0.143.3",
+    "lawbot-common",
+    "pydantic>=2.14.1",
+    "pyyaml>=6.0.3",
+    "uvicorn==0.54.0",
+]
+
+[project.scripts]
+source-hub = "source_hub.cli:main"
+
+[tool.uv.sources]
+lawbot-common = { path = "../../packages/lawbot-common", editable = true }
+
+[build-system]
+requires = ["uv_build>=0.12.19,<0.13.0"]
+build-backend = "uv_build"

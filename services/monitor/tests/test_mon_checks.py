@@ -6,6 +6,7 @@ monitor는 점검 명령을 import하지 않고 하위 프로세스로 부른다
 
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -39,6 +40,49 @@ def test_repo_targets_yaml_has_article_check():
     from law_monitor.config import load
 
     assert [c.name for c in load().checks] == ['법령 캘린더 import', '챗봇 조문 데이터']
+
+
+def test_daily_preserves_article_regeneration_input_and_order(tmp_path, monkeypatch):
+    from law_monitor.config import load
+
+    paths = Paths(tmp_path)
+    calls = []
+    repo = paths.repos / 'legalize-kr'
+    head = repo / 'HEAD'
+    repo.mkdir(parents=True)
+
+    def collect(*, only):
+        assert only is None
+        head.write_text('updated')
+        calls.append('collect')
+        return SimpleNamespace(failed={'assembly_notice': 'unavailable'}, line='partial')
+
+    def run(command, **_):
+        assert head.read_text() == 'updated'
+        calls.append(command)
+        return SimpleNamespace(returncode=0, stdout='ok', stderr='')
+
+    def summarize(monitor, *, run_line, checks):
+        assert run_line == 'partial'
+        assert [check.code for check in checks] == [0, 0]
+        calls.append('summary')
+        return 0
+
+    monitor = SimpleNamespace(collect=collect, check=lambda: checks.run(load().checks, paths))
+    monkeypatch.setattr(checks.subprocess, 'run', run)
+    monkeypatch.setattr(cli, '_summarize', summarize)
+
+    assert cli._daily(monitor, None) == 1
+    assert calls[0] == 'collect' and calls[-1] == 'summary'
+    assert calls[1][-3:] == ['law_calendar.sync', '--monitor-home', str(paths.home)]
+    assert calls[2] == [
+        str(Path(sys.executable).parent / 'lawbot-articles-update'),
+        '--repo',
+        str(repo),
+        '--report-dir',
+        str(paths.data / 'articles'),
+        '--restart',
+    ]
 
 
 def test_calendar_check_uses_independent_project_and_launchd_uv(monkeypatch, tmp_path):

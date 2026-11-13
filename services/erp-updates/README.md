@@ -1,6 +1,6 @@
 # ERP 자료 피드 생성기
 
-monitor가 받아 둔 법령 저장소 사본(`admrule-kr`, `legalize-kr`)에서 ERP 업무에 쓰는 고시·별표·서식·조문을 골라 검토합니다. 승인한 것만 공개 피드(`erp_calendar_public.json`)로 내보냅니다. 법령 캘린더의 ERP 자료 탭이 이 피드를 읽습니다. [계획](../../docs/plans/erp-calendar.md)
+monitor가 받아 둔 법령 저장소 사본(`admrule-kr`, `legalize-kr`)에서 ERP 업무에 쓰는 고시·별표·서식·조문을 골라 검토합니다. 승인한 것만 공개 피드(`erp_calendar_public.json`)로 내보냅니다. 법령 캘린더의 ERP 자료 탭이 이 피드를 읽습니다. [기존 ERP 탭 계획](../../docs/archives/erp-calendar.md)
 
 - 네트워크에 접속하지 않습니다. 저장소 사본은 `git --git-dir … cat-file`로 읽기만 합니다.
   - 처음 읽은 HEAD 커밋에 고정해서 읽습니다. 수집 중에 monitor가 저장소를 갱신해도 한 번의 수집 결과에 서로 다른 커밋이 섞이지 않습니다.
