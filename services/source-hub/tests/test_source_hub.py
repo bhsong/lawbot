@@ -260,8 +260,11 @@ def admin_browser(registry, *serve_args):
 @pytest.mark.e2e_stub
 def test_private_admin_browser_saves_settings_to_the_cli_registry(registry):
     with admin_browser(registry) as page:
-        page.get_by_role('button', name='ERP 켜짐', exact=True).click()
+        page.get_by_role('button', name='법령 켜짐', exact=True).click()
         dialog = page.get_by_role('dialog')
+        expect(dialog.get_by_text('공용 법령 Git 갱신과 챗봇 조문 점검도 중지합니다.', exact=False)).to_be_visible()
+        dialog.get_by_role('button', name='취소').click()
+        page.get_by_role('button', name='ERP 켜짐', exact=True).click()
         expect(dialog.get_by_text('과거 공개 자료', exact=False)).to_be_visible()
         dialog.get_by_label('변경 사유').fill('브라우저 대역 설정')
         dialog.get_by_role('button', name='저장').click()

@@ -96,10 +96,17 @@ function renderSources() {
   }
 }
 
+function articlePauseNotice(kind, id) {
+  const affectsArticles = (kind === 'group' && id === 'law') ||
+    (kind === 'agency' && id === 'lawgo') || (kind === 'source' && id === 'legalize_law')
+  return affectsArticles ? ' 공용 법령 Git 갱신과 챗봇 조문 점검도 중지합니다.' : ''
+}
+
 function toggle(kind, id, name, enabled) {
   const path = `/api/collector/settings/${kind}/${encodeURIComponent(id)}`
   return button(name + (enabled ? ' 켜짐' : ' 꺼짐'), () => {
     openEditor(name, path, () => ({ enabled: !enabled }), enabled)
+    if (enabled) byId('effect').textContent += articlePauseNotice(kind, id)
   }, enabled)
 }
 
@@ -211,7 +218,8 @@ function editSource(source) {
   enabled.input.addEventListener('change', () => {
     byId('effect').textContent = enabled.input.checked
       ? '다음 통합 실행부터 설정이 적용됩니다. 미검증 소스는 점검이 필요합니다.'
-      : '다음 통합 실행부터 새 수집을 중지합니다. 과거 자료는 보존하고 기본 일일 알림에서 제외합니다.'
+      : '다음 통합 실행부터 새 수집을 중지합니다. 과거 자료는 보존하고 기본 일일 알림에서 제외합니다.' +
+        articlePauseNotice('source', source?.source_id)
   })
 }
 

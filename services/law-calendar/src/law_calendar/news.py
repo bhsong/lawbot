@@ -28,7 +28,7 @@ HOME = {
 }
 
 
-def law_news(database: Path, names: list[str]) -> tuple[list[NewsItem], str | None]:
+def law_news(database: Path, names: list[str], as_of: date | None = None) -> tuple[list[NewsItem], str | None]:
     with read_database(database) as conn:
         conn.execute('BEGIN')
         stamp = conn.execute('SELECT collected_at FROM collection_status WHERE id=1').fetchone()
@@ -45,7 +45,7 @@ def law_news(database: Path, names: list[str]) -> tuple[list[NewsItem], str | No
                  AND l.name IN (SELECT value FROM json_each(?))
                  AND EXISTS (SELECT 1 FROM public_changes WHERE event_id=e.id)
                ORDER BY e.promulgated_on DESC, e.id DESC""",
-            (datetime.now(KST).date().isoformat(), json.dumps(names)),
+            ((as_of or datetime.now(KST).date()).isoformat(), json.dumps(names)),
         ).fetchall()
     items = [
         NewsItem(
@@ -62,7 +62,15 @@ def law_news(database: Path, names: list[str]) -> tuple[list[NewsItem], str | No
     return items, stamp[0] if stamp else None
 
 
-def response(database: Path, file: Path | None, agency: Agency, limit: int) -> dict:
+def response(
+    database: Path,
+    file: Path | None,
+    agency: Agency,
+    limit: int,
+    *,
+    now: datetime | None = None,
+    use_law_feed: bool = True,
+) -> dict:
     result = {'agency': agency, 'officialHome': HOME[agency]}
     if agency == 'hometax':
         return result | {'state': 'link_only', 'navigation': '전체메뉴 → 기타 → 고객센터 → 자료실'}
@@ -78,22 +86,51 @@ def response(database: Path, file: Path | None, agency: Agency, limit: int) -> d
         return result | {'state': 'missing'}
     except OSError, ValidationError:
         return result | {'state': 'invalid'}
+    return current_news(
+        from_snapshot(database, snapshot, agency, limit, now=now, use_law_feed=use_law_feed), limit, now=now
+    )
+
+
+def current_news(entry: dict, limit: int, *, now: datetime | None = None) -> dict:
+    """Derive request-time freshness without changing stored news or exposing its deadlines."""
+    now = now or datetime.now(KST)
+    boards = []
+    for source in entry.get('boards', []):
+        board = dict(source)
+        cutoff = board.pop('staleAfter', None)
+        if cutoff and board['status'] == 'ok' and datetime.fromisoformat(cutoff) < now:
+            board['status'] = 'delayed'
+        boards.append(board)
+    return entry | {'boards': boards, 'items': entry.get('items', [])[:limit]}
+
+
+def from_snapshot(
+    database: Path,
+    snapshot: NewsSnapshot,
+    agency: Agency,
+    limit: int,
+    *,
+    now: datetime | None = None,
+    use_law_feed: bool = True,
+) -> dict:
+    result = {'agency': agency, 'officialHome': HOME[agency]}
+    if agency == 'hometax':
+        return result | {'state': 'link_only', 'navigation': '전체메뉴 → 기타 → 고객센터 → 자료실'}
     entry = snapshot.agencies[agency]
-    now = datetime.now(KST)
+    now = now or datetime.now(KST)
     boards = [
         {
             'name': board.name,
-            'status': 'delayed'
-            if board.status == 'ok' and board.staleAfter and board.staleAfter < now
-            else board.status,
+            'status': board.status,
             'lastSuccessAt': board.lastSuccessAt.astimezone(KST).isoformat() if board.lastSuccessAt else None,
+            'staleAfter': board.staleAfter.astimezone(KST).isoformat() if board.staleAfter else None,
         }
         for board in entry.boards
     ]
     items = entry.items
-    if agency == 'lawgo' and snapshot.lawNames:
+    if agency == 'lawgo' and snapshot.lawNames and use_law_feed:
         try:
-            items, stamp = law_news(database, snapshot.lawNames)
+            items, stamp = law_news(database, snapshot.lawNames, now.astimezone(KST).date())
         except sqlite3.Error, ValueError:
             return result | {'state': 'unavailable'}
         if boards and stamp:
@@ -101,8 +138,9 @@ def response(database: Path, file: Path | None, agency: Agency, limit: int) -> d
                 collected = datetime.fromisoformat(stamp)
                 if collected.utcoffset() is not None:
                     boards[0].update(
-                        status='delayed' if now - collected > timedelta(hours=48) else 'ok',
+                        status='ok',
                         lastSuccessAt=collected.astimezone(KST).isoformat(),
+                        staleAfter=(collected.astimezone(KST) + timedelta(hours=48)).isoformat(),
                     )
             except ValueError:
                 pass

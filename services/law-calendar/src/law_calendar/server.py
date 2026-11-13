@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Literal
 
 import uvicorn
-from fastapi import FastAPI, HTTPException, Query, Request
+from fastapi import FastAPI, HTTPException, Query, Request, Response
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import ValidationError
@@ -32,8 +32,9 @@ from law_calendar.models import (
     PublicDetail,
 )
 from lawbot_common import envfile
+from lawbot_common.erp_daily import read_snapshot
 from lawbot_common.erp_news import Agency
-from lawbot_common.erp_rules import ErpRules
+from lawbot_common.erp_rules import ErpRules, RuleSnapshot
 from lawbot_common.logs import logger
 
 KST = timezone(timedelta(hours=9))
@@ -130,6 +131,7 @@ def create_app(
     *,
     news_feed: Path | None = None,
     rules_feed: Path | None = None,
+    daily_feed: Path | None = None,
 ) -> FastAPI:
     app = FastAPI(title='Law Calendar', version='0.2.0')
 
@@ -284,19 +286,65 @@ def create_app(
                 ]
         return {'items': items, 'total': total, 'page': page, 'page_size': page_size}
 
+    def daily_snapshot(response: Response) -> dict | None:
+        if daily_feed is None:
+            return None
+        try:
+            snapshot = read_snapshot(daily_feed)
+        except FileNotFoundError:
+            return {'state': 'missing'}
+        except OSError, ValueError:
+            return {'state': 'invalid'}
+        response.headers['X-ERP-Snapshot'] = snapshot['snapshotHash']
+        return snapshot
+
     @app.get('/api/erp-updates', response_model=ErpUpdates)
-    def erp():
-        return erp_updates(erp_feed)
+    def erp(response: Response):
+        snapshot = daily_snapshot(response)
+        if snapshot is None:
+            return erp_updates(erp_feed)
+        return snapshot.get('feeds', {}).get('erp', {'state': snapshot.get('state', 'invalid')})
+
+    @app.get('/api/erp-updates/status')
+    def erp_status(response: Response):
+        snapshot = daily_snapshot(response)
+        if snapshot is None:
+            return {'state': 'unconfigured'}
+        return {
+            key: value
+            for key, value in snapshot.items()
+            if key
+            in (
+                'state',
+                'status',
+                'dayKst',
+                'cutoffAt',
+                'snapshotHash',
+                'sources',
+            )
+        }
 
     @app.get('/api/erp-updates/v2', response_model=ErpRules)
-    def erp_rule_versions(asOf: str | None = None, targetOn: str | None = None):
+    def erp_rule_versions(response: Response, asOf: str | None = None, targetOn: str | None = None):
         as_of = Date.fromisoformat(civil_date(asOf)) if asOf is not None else erp_rules.today_kst()
         target = Date.fromisoformat(civil_date(targetOn)) if targetOn is not None else as_of
-        return erp_rules.read(rules_feed, as_of, target)
+        snapshot = daily_snapshot(response)
+        if snapshot is None:
+            return erp_rules.read(rules_feed, as_of, target)
+        rules = snapshot.get('feeds', {}).get('rules')
+        if rules:
+            return erp_rules.from_snapshot(RuleSnapshot.model_validate(rules), as_of, target)
+        return ErpRules(state=snapshot.get('state', 'missing'), asOfDate=as_of)
 
     @app.get('/api/erp-news/latest', response_model=ErpNews)
-    def latest_news(agency: Agency, limit: int = Query(10, ge=1, le=10)):
-        return news.response(database, news_feed, agency, limit)
+    def latest_news(response: Response, agency: Agency, limit: int = Query(10, ge=1, le=10)):
+        snapshot = daily_snapshot(response)
+        if snapshot is None or agency == 'hometax':
+            return news.response(database, news_feed, agency, limit)
+        entry = snapshot.get('feeds', {}).get('news', {}).get(agency)
+        if entry is None:
+            return {'agency': agency, 'officialHome': news.HOME[agency], 'state': snapshot.get('state', 'missing')}
+        return news.current_news(entry, limit)
 
     app.include_router(admin.router(database))
     if frontend is not None:
@@ -314,12 +362,18 @@ def main():
     parser.add_argument('--erp-feed', type=Path, default=os.environ.get('LAWBOT_CALENDAR_ERP_FEED'))
     parser.add_argument('--news-feed', type=Path, default=os.environ.get('LAWBOT_CALENDAR_NEWS_FEED'))
     parser.add_argument('--erp-rules-feed', type=Path, default=os.environ.get('LAWBOT_CALENDAR_ERP_RULES_FEED'))
+    parser.add_argument('--erp-daily-feed', type=Path, default=os.environ.get('LAWBOT_CALENDAR_ERP_DAILY_FEED'))
     args = parser.parse_args()
     if args.database is None or not 1 <= args.port <= 65535:
         parser.error('An explicit database and valid port are required')
     uvicorn.run(
         create_app(
-            args.database, args.frontend, args.erp_feed, news_feed=args.news_feed, rules_feed=args.erp_rules_feed
+            args.database,
+            args.frontend,
+            args.erp_feed,
+            news_feed=args.news_feed,
+            rules_feed=args.erp_rules_feed,
+            daily_feed=args.erp_daily_feed,
         ),
         host='127.0.0.1',
         port=args.port,

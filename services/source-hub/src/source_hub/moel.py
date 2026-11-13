@@ -150,12 +150,18 @@ def reconcile_board(
 
 
 def collect(
-    registry: Registry, database: Path, source_id: str, *, now: datetime | None = None, reconcile: bool = False
+    registry: Registry,
+    database: Path,
+    source_id: str,
+    *,
+    now: datetime | None = None,
+    reconcile: bool = False,
+    plan: dict | None = None,
 ) -> dict:
     if source_id not in CHANNELS:
         raise ValueError('지원되는 고용노동부 RSS 수집원 ID를 선택하세요')
     feed_path, article_path, board_path = CHANNELS[source_id]
-    source, version, outcome = collector.source_plan(registry, source_id, 'moel', 'rss', HOST + feed_path)
+    source, version, outcome = collector.source_plan(registry, source_id, 'moel', 'rss', HOST + feed_path, plan=plan)
     if source is None:
         return {'outcome': outcome}
 
@@ -174,4 +180,5 @@ def collect(
         read_articles=read_articles,
         read_board=read_board if reconcile else None,
         now=now,
+        kst_days=plan is not None,
     )

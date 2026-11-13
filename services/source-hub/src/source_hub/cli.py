@@ -12,17 +12,13 @@ import uvicorn
 import yaml
 from pydantic import ValidationError
 
-from source_hub import materials, moel, mofe, news, nts
+from source_hub import daily, materials, news
 from source_hub.config import CONFIG_PATH, load
 from source_hub.server import create_app
 from source_hub.store import Registry
 
 TARGETS = ('group', 'agency', 'source', 'law', 'law-part')
-COLLECTORS = (
-    dict.fromkeys(moel.CHANNELS, moel.collect)
-    | dict.fromkeys(mofe.CHANNELS, mofe.collect)
-    | dict.fromkeys(nts.CHANNELS, nts.collect)
-)
+COLLECTORS = daily.COLLECTORS
 
 
 def parser() -> argparse.ArgumentParser:
@@ -43,6 +39,15 @@ def parser() -> argparse.ArgumentParser:
     export = commands.add_parser('export-news')
     export.add_argument('--materials', type=Path, required=True)
     export.add_argument('--out', type=Path, required=True)
+    run_day = commands.add_parser('daily', help='run one KST collection day and publish its ERP snapshot')
+    for name in ('root', 'monitor-home', 'erp-data', 'calendar-db', 'materials', 'out'):
+        run_day.add_argument('--' + name, type=Path, required=True)
+    run_day.add_argument('--uv', default='uv')
+    run_day.add_argument('--erp-config', type=Path)
+    run_day.add_argument('--monitor-config', type=Path)
+    run_day.add_argument(
+        '--republish', action='store_true', help='refresh today’s approved publication without collecting'
+    )
     for command in ('collect', 'documents'):
         rss = commands.add_parser(command)
         rss.add_argument('source_id', choices=COLLECTORS)
@@ -115,6 +120,23 @@ def main(argv: list[str] | None = None) -> int:
         elif args.command == 'export-news':
             snapshot = news.export(registry, args.materials, args.out)
             result = {'published': sum(len(agency['items']) for agency in snapshot['agencies'].values())}
+        elif args.command == 'daily':
+            result = daily.run(
+                registry,
+                daily.DailyConfig(
+                    root=args.root.resolve(),
+                    monitor_home=args.monitor_home.resolve(),
+                    erp_data=args.erp_data.resolve(),
+                    calendar_db=args.calendar_db.resolve(),
+                    materials_db=args.materials.resolve(),
+                    public=args.out.absolute(),
+                    uv=args.uv,
+                    erp_config=args.erp_config.resolve() if args.erp_config else None,
+                    monitor_config=args.monitor_config.resolve() if args.monitor_config else None,
+                ),
+                republish=args.republish,
+            )
+            status = 0 if result['status'] == 'ok' else 2
         else:
             snapshot = registry.snapshot()
             result = (

@@ -59,6 +59,17 @@ def setting(registry, kind, target, enabled):
     )
 
 
+def test_daily_plan_runs_on_the_next_kst_day_even_before_24_hours(setup):
+    registry, database, calls, _ = setup
+    setting(registry, 'source', SOURCE, True)
+    prior = NOW.replace(hour=21, minute=40)
+    assert moel.collect(registry, database, SOURCE, now=prior)['outcome'] == 'ok'
+    next_day_earlier = prior + timedelta(hours=23, minutes=51)
+    assert moel.collect(registry, database, SOURCE, now=next_day_earlier)['outcome'] == 'not_due'
+    assert moel.collect(registry, database, SOURCE, now=next_day_earlier, plan=registry.snapshot())['outcome'] == 'ok'
+    assert calls == [ROBOTS, FEED, ROBOTS, FEED]
+
+
 def test_collect_and_disable_at_each_level(setup):
     registry, database, calls, bodies = setup
     assert moel.collect(registry, database, SOURCE, now=NOW)['outcome'] == 'disabled'

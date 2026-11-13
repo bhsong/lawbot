@@ -31,6 +31,10 @@ class Check:
     name: str
     command: tuple[str, ...]
 
+    @property
+    def uses_article_repo(self) -> bool:
+        return Path(self.command[0]).name in {'lawbot-articles-check', 'lawbot-articles-update'}
+
 
 @dataclass(frozen=True)
 class Result:

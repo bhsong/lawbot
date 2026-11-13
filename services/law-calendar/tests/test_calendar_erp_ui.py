@@ -7,6 +7,7 @@ import pytest
 from playwright.sync_api import expect
 
 import calendar_ui_support as support
+from lawbot_common.erp_daily import replace_file, seal
 from test_calendar_api import dataset as dataset
 from test_calendar_erp import FEED, ITEM
 from test_calendar_news import snapshot
@@ -114,6 +115,53 @@ def test_missing_feed_leaves_the_law_calendar_working(dataset, tmp_path, calenda
             page.get_by_role('tab', name='법령 캘린더').click()
             expect(page.get_by_role('heading', level=1, name='법령 변경 캘린더')).to_be_visible()
             expect(page.get_by_role('grid')).to_be_visible()
+        finally:
+            support.keep_on_failure(request, log, page)
+
+
+def test_erp_reads_daily_snapshot_through_public_routes(dataset, tmp_path, calendar_page, request):
+    page = calendar_page
+    path = tmp_path / 'daily.json'
+    stamp = '2026-11-13T06:30:00+09:00'
+    saved = seal(
+        {
+            'schemaVersion': 1,
+            'dayKst': '2026-11-13',
+            'cutoffAt': stamp,
+            'runId': 'daily-fixture',
+            'configVersion': 0,
+            'configHash': 'a' * 64,
+            'status': 'ok',
+            'sources': [],
+            'changes': [],
+            'feeds': {
+                'erp': {'state': 'ok', **{k: v for k, v in FEED.items() if k != 'schemaVersion'}},
+                'rules': {'schemaVersion': 2, 'generatedAt': stamp, 'rules': []},
+                'news': {
+                    'moel': {
+                        'agency': 'moel',
+                        'officialHome': 'https://www.moel.go.kr/',
+                        'state': 'ok',
+                        'boards': [],
+                        'items': [],
+                    }
+                },
+            },
+        }
+    )
+    replace_file(path, saved)
+    with support.serve(tmp_path, development=False, database=dataset, daily_feed=path) as (url, log):
+        try:
+            responses = {}
+            page.on('response', lambda response: responses.update({response.url.split('?')[0]: response}))
+            page.goto(url + '/#erp')
+            expect(page.get_by_role('heading', name='현행 기준 확인 필요')).to_be_visible()
+            expect(page.get_by_role('heading', name=ITEM['title'])).to_be_visible()
+            with page.expect_response(lambda response: '/api/erp-news/latest?agency=moel' in response.url):
+                page.get_by_role('button', name='고용노동부', exact=True).click()
+            expect(page.get_by_role('heading', name='고용노동부')).to_be_visible()
+            for route in ('erp-updates', 'erp-updates/v2', 'erp-news/latest'):
+                assert responses[f'{url}/api/{route}'].header_value('x-erp-snapshot') == saved['snapshotHash']
         finally:
             support.keep_on_failure(request, log, page)
 

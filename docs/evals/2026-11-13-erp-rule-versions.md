@@ -1,6 +1,6 @@
 # ERP 적용 기준 버전과 API 검증
 
-2026-11-13 KST. 기준 `12a1347`. [작업 계획](../plans/erp-rule-versions.md)
+2026-11-13 KST. 기준 `12a1347`. [작업 계획](../archives/erp-rule-versions.md)
 
 | 항목 | 결과 |
 | --- | --- |

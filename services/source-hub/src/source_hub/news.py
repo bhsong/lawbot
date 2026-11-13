@@ -85,10 +85,12 @@ def review(
 
 
 def review_sources(registry: Registry) -> dict[str, dict]:
+    return review_sources_from_plan(registry.snapshot())
+
+
+def review_sources_from_plan(plan: dict) -> dict[str, dict]:
     return {
-        row['source_id']: row
-        for row in registry.snapshot()['sources']
-        if row['agency'] in REVIEW_AGENCIES and row['group'] == 'erp'
+        row['source_id']: row for row in plan['sources'] if row['agency'] in REVIEW_AGENCIES and row['group'] == 'erp'
     }
 
 
@@ -230,7 +232,7 @@ def approved(database: Path) -> dict[str, list[tuple[str, dict]]]:
         if not conn.execute("SELECT 1 FROM sqlite_schema WHERE name='news_reviews'").fetchone():
             return {}
         rows = conn.execute(
-            """SELECT r.source_id,r.upstream_id,r.metadata FROM revisions r
+            """SELECT r.source_id,r.upstream_id,r.metadata,r.revision,r.event_type FROM revisions r
                WHERE r.revision = (SELECT MAX(revision) FROM revisions
                   WHERE source_id=r.source_id AND upstream_id=r.upstream_id)
                AND (SELECT decision FROM news_reviews
@@ -238,14 +240,21 @@ def approved(database: Path) -> dict[str, list[tuple[str, dict]]]:
                   ORDER BY id DESC LIMIT 1)='approve'"""
         ).fetchall()
     result: dict[str, list[tuple[str, dict]]] = {}
-    for source, upstream, metadata in rows:
-        result.setdefault(source, []).append((upstream, json.loads(metadata)))
+    for source, upstream, metadata, revision, event in rows:
+        result.setdefault(source, []).append((upstream, json.loads(metadata) | {'revision': revision, 'event': event}))
     return result
 
 
-def build(registry: Registry, database: Path) -> dict:
-    sources = registry.snapshot()['sources']
-    records = approved(database)
+def build(
+    registry: Registry,
+    database: Path,
+    *,
+    plan: dict | None = None,
+    records: dict[str, list[tuple[str, dict]]] | None = None,
+    now: datetime | None = None,
+) -> dict:
+    sources = (registry.snapshot() if plan is None else plan)['sources']
+    records = approved(database) if records is None else records
     agencies = {agency: {'boards': [], 'items': []} for agency in AGENCIES}
     laws: list[str] = []
     for source in sources:
@@ -287,7 +296,7 @@ def build(registry: Registry, database: Path) -> dict:
     for entry in agencies.values():
         entry['items'] = latest(entry['items'])
     return NewsSnapshot.model_validate(
-        {'schemaVersion': 1, 'generatedAt': datetime.now(KST), 'agencies': agencies, 'lawNames': laws}
+        {'schemaVersion': 1, 'generatedAt': now or datetime.now(KST), 'agencies': agencies, 'lawNames': laws}
     ).model_dump(mode='json')
 
 

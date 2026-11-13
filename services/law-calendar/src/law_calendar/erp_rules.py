@@ -74,6 +74,10 @@ def read(path: Path | None, as_of: date, target: date) -> ErpRules:
         return ErpRules(state='missing', asOfDate=as_of)
     except OSError, ValidationError:
         return ErpRules(state='invalid', asOfDate=as_of)
+    return from_snapshot(snapshot, as_of, target)
+
+
+def from_snapshot(snapshot: RuleSnapshot, as_of: date, target: date) -> ErpRules:
     return ErpRules.model_validate(
         {
             'state': 'ok',

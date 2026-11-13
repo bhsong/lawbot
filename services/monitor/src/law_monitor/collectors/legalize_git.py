@@ -7,6 +7,7 @@
 """
 
 import difflib
+import json
 import logging
 from dataclasses import asdict, dataclass, field
 
@@ -35,6 +36,8 @@ class LawMatcher:
 
     def __init__(self, config: Config):
         self.config = config
+        self.selected_paths: frozenset[str] | None = None
+        self.disabled_paths: frozenset[str] = frozenset()
 
     def pathspecs(self) -> list[str] | None:
         return [f'kr/{law.name}/' for law in self.config.laws] or None
@@ -46,6 +49,7 @@ class LawMatcher:
             and parts[0] == 'kr'
             and parts[2].endswith('.md')
             and self.config.law_category(parts[1]) is not None
+            and (self.selected_paths is None or path in self.selected_paths)
         )
 
     def categories(self, v: Version) -> list[int]:
@@ -108,6 +112,7 @@ class AdmruleMatcher:
 
 class LegalizeGitCollector:
     needs_lawgo = True  # collect·replay는 법제처 보강이 필요 (bootstrap은 아님)
+    paused_law_marker = 'daily-paused-law-cursors'
 
     def __init__(self, name: str, repo_key: str, matcher: LawMatcher | AdmruleMatcher, enricher=None):
         self.name, self.repo_key, self.matcher = name, repo_key, matcher
@@ -127,10 +132,27 @@ class LegalizeGitCollector:
         if ctx.mode == 'bootstrap':
             return self._baseline(ctx, repo, head)
         cursor = ctx.state.cursor(self.repo_key)
-        if cursor == head:
+        scope_marker = 'daily-law-paths'
+        scope = None
+        previous = None
+        paused: dict[str, str] = {}
+        recovered: dict[str, str] = {}
+        if isinstance(self.matcher, LawMatcher):
+            scope = '\n'.join(sorted(self.matcher.selected_paths)) if self.matcher.selected_paths is not None else '*'
+            previous = ctx.state.baseline(scope_marker)
+            paused = json.loads(ctx.state.baseline(self.paused_law_marker) or '{}')
+            if cursor:
+                for path in self.matcher.disabled_paths:
+                    paused.setdefault(path, cursor)
+            recovered = {path: since for path, since in paused.items() if self.matcher.prefilter(path)}
+        rescan = scope is not None and scope != previous and (scope != '*' or previous is not None)
+        if cursor == head and not rescan and not paused:
             return CollectResult(cursors={self.repo_key: head})
         build = _Builder(self, ctx, repo, ctx.state.items(self.name))
-        if cursor and repo.is_ancestor(cursor, head):
+        on_history = bool(cursor and (cursor == head or repo.is_ancestor(cursor, head)))
+        if cursor and recovered:
+            build.backfill(recovered, cursor if on_history else head)
+        if cursor and on_history:
             for sha in repo.rev_list(cursor, head, self.matcher.pathspecs()):
                 build.commit(sha)
         else:
@@ -140,8 +162,17 @@ class LegalizeGitCollector:
                 (cursor or '')[:12],
             )
             build.compare_with_head(head)
+        if rescan and on_history:
+            build.compare_with_head(head)
         result = build.result()
         result.cursors = {self.repo_key: head}
+        if rescan and scope is not None:
+            result.baselines[scope_marker] = scope
+        if paused:
+            result.baselines[self.paused_law_marker] = json.dumps(
+                {path: since for path, since in paused.items() if path not in recovered},
+                ensure_ascii=False,
+            )
         return result
 
     def replay(self, ctx: RunContext, since: str, until: str) -> tuple[CollectResult, str, str]:
@@ -165,7 +196,12 @@ class LegalizeGitCollector:
             build.save(v)
         items = [ItemState(self.name, key, v.blob, v.blob, v.path) for key, v in found.items()]
         log.info('%s: 기준점 %s, 대상 파일 %d개', self.repo_key, head[:12], len(items))
-        return CollectResult(cursors={self.repo_key: head}, items=items, replace_sources=[self.name])
+        return CollectResult(
+            cursors={self.repo_key: head},
+            items=items,
+            replace_sources=[self.name],
+            baselines={self.paused_law_marker: '{}'} if isinstance(self.matcher, LawMatcher) else {},
+        )
 
 
 @dataclass
@@ -208,19 +244,43 @@ class _Builder:
         meta, body = frontmatter.split(text)
         return Version(item.file_path, item.version_key, meta, body, text)
 
-    def scan(self, rev: str) -> dict[str, Version]:
+    def scan(self, rev: str, paths: set[str] | None = None) -> dict[str, Version]:
         out = {}
         for path, blob in self.repo.ls_tree(rev):
-            if self.m.prefilter(path) and (v := self.version(path, blob)) and self.m.categories(v):
+            if (
+                (paths is None or path in paths)
+                and self.m.prefilter(path)
+                and (v := self.version(path, blob))
+                and self.m.categories(v)
+            ):
                 out[self.m.item_id(v)] = v
         return out
 
-    def commit(self, sha: str) -> None:
+    def backfill(self, recovered: dict[str, str], until: str) -> None:
+        """Replay paused paths from their saved cursor before processing the shared range."""
+        by_commit: dict[str, list[str]] = {}
+        for path, since in recovered.items():
+            by_commit.setdefault(since, []).append(path)
+        for since, paths in by_commit.items():
+            if since == until:
+                continue
+            if not self.repo.is_ancestor(since, until):
+                log.warning('%s: 비활성 범위 커밋을 찾을 수 없음. 현재 내용으로 비교합니다', self.collector.repo_key)
+                self.compare_with_head(until, set(paths))
+                continue
+            for sha in self.repo.rev_list(since, until, paths):
+                self.commit(sha, paths=paths)
+
+    def commit(self, sha: str, *, paths: list[str] | None = None) -> None:
         groups: dict[str, list[Version | None]] = {}
-        for ch in self.repo.changes(sha, self.m.pathspecs()):
+        for ch in self.repo.changes(sha, paths if paths is not None else self.m.pathspecs()):
             if not any(self.m.prefilter(p) for p in (ch.old_path, ch.new_path) if p):
                 continue
-            old, new = self.version(ch.old_path, ch.old_blob), self.version(ch.new_path, ch.new_blob)
+            old_path, new_path = ch.old_path, ch.new_path
+            if isinstance(self.m, LawMatcher) and self.m.selected_paths is not None:
+                old_path = old_path if old_path and self.m.prefilter(old_path) else None
+                new_path = new_path if new_path and self.m.prefilter(new_path) else None
+            old, new = self.version(old_path, ch.old_blob), self.version(new_path, ch.new_blob)
             old = old if old and self.m.categories(old) else None
             new = new if new and self.m.categories(new) else None  # 대상에서 빠지면 제거로 본다
             if old is None and new is None:
@@ -235,13 +295,17 @@ class _Builder:
             for key, (old, new) in groups.items():
                 self.emit(key, old, new, info)
 
-    def compare_with_head(self, head: str) -> None:
-        found = self.scan(head)
+    def compare_with_head(self, head: str, paths: set[str] | None = None) -> None:
+        found = self.scan(head, paths)
         for key, new in found.items():
             item = self.current.get(key)
             if item is None or item.version_key != new.blob:
                 self.emit(key, None, new, None)
-        missing = [key for key, item in self.current.items() if key not in found and self.m.prefilter(item.file_path)]
+        missing = [
+            key
+            for key, item in self.current.items()
+            if key not in found and self.m.prefilter(item.file_path) and (paths is None or item.file_path in paths)
+        ]
         for key in missing:
             self.emit(key, None, None, None)
 
