@@ -22,8 +22,8 @@ def is_blocked(error: str) -> bool:
     return error.startswith('robots_') or error in {'http_401', 'http_403', 'http_429'}
 
 
-def source_plan(registry: Registry, source_id: str, adapter: str, mode: str, url: str):
-    plan = registry.snapshot()
+def source_plan(registry: Registry, source_id: str, adapter: str, mode: str, url: str, *, plan: dict | None = None):
+    plan = registry.snapshot() if plan is None else plan
     source = next((row for row in plan['sources'] if row['source_id'] == source_id), None)
     if source is None or not source['effective_enabled']:
         return None, plan['config_version'], 'disabled'
@@ -34,9 +34,7 @@ def source_plan(registry: Registry, source_id: str, adapter: str, mode: str, url
 
 
 @contextmanager
-def collect_lock(registry: Registry):
-    db = registry.database.resolve()
-    lock = db.with_name(db.name + '.source-hub.lock')
+def file_lock(lock: Path):
     lock.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
     fd = os.open(lock, os.O_WRONLY | os.O_CREAT | os.O_NOFOLLOW, 0o600)
     try:
@@ -48,6 +46,11 @@ def collect_lock(registry: Registry):
             yield True
     finally:
         os.close(fd)
+
+
+def collect_lock(registry: Registry):
+    db = registry.database.resolve()
+    return file_lock(db.with_name(db.name + '.source-hub.lock'))
 
 
 def collect(
@@ -126,7 +129,13 @@ def collect(
                 board_attempted=board_attempted,
             )
         registry.record_run(run)
-    result = {'outcome': outcome, 'run_id': run.run_id, **counts}
+    result = {
+        'outcome': outcome,
+        'run_id': run.run_id,
+        'new_count': run.new_count,
+        'modified_count': run.modified_count,
+        **counts,
+    }
     if error:
         result['error'] = error
     if reconciliation:

@@ -16,10 +16,11 @@ from law_monitor import checks as checks_mod
 from law_monitor.assembly import SOURCES, AssemblyClient
 from law_monitor.collectors.assembly import AssemblyCollector
 from law_monitor.collectors.base import Collector, CollectResult, RunContext
-from law_monitor.collectors.legalize_git import LegalizeGitCollector, default_collectors
+from law_monitor.collectors.legalize_git import LawMatcher, LegalizeGitCollector, default_collectors
 from law_monitor.config import Config
 from law_monitor.enrich import LawGoEnricher
 from law_monitor.events import EventStore, make_event_id
+from law_monitor.gitrepo import GitError, GitRepo
 from law_monitor.lawgo import LawGoClient
 from law_monitor.llm import ChatClient
 from law_monitor.paths import Paths
@@ -208,15 +209,67 @@ class Monitor:
                 )
         return result
 
-    def _run(self, chosen: list[Collector], mode: str) -> RunSummary:
+    def refresh_article_repo(self) -> None:
+        """Refresh the shared input without changing the law-event cursor or filter."""
+        repo = GitRepo(self.paths.repos / 'legalize-kr')
+        repo.ensure(self.config.repos['legalize-kr'])
+
+    def collect_managed(self, run_id: str, selected: list[str], law_paths: list[str] | None) -> RunSummary:
+        available = {collector.name: collector for collector in self.collectors}
+        chosen = [collector for collector in self.collectors if collector.name in selected]
+        skipped = {name: 'unavailable' for name in selected if name not in available}
+        prior = self.state.conn.execute(
+            "SELECT status,summary_json FROM runs WHERE run_id=? AND mode='normal'", (run_id,)
+        ).fetchone()
+        if prior and prior['status'] != 'running':
+            details = json.loads(prior['summary_json'])
+            failed = {
+                name: item.get('error', 'unavailable')
+                for name, item in details['collectors'].items()
+                if item['status'] != 'ok'
+            }
+            return RunSummary(run_id, 'normal', failed=failed, line=f'collectors resumed={run_id}')
+        for collector in chosen:
+            if collector.name == 'legalize_law' and isinstance(collector, LegalizeGitCollector):
+                assert isinstance(collector.matcher, LawMatcher)
+                collector.matcher.selected_paths = None if law_paths is None else frozenset(law_paths)
+        ready = []
+        for collector in chosen:
+            try:
+                self._require_lawgo([collector])
+                if not getattr(collector, 'isolated_baseline', False) and not collector.has_baseline(self.state):
+                    raise BootstrapRequired('수집 기준점이 없습니다')
+            except (MissingSecret, BootstrapRequired) as exc:
+                skipped[collector.name] = str(exc)
+            else:
+                ready.append(collector)
+        if 'legalize_law' in selected and not any(c.name == 'legalize_law' for c in ready):
+            try:
+                self.refresh_article_repo()
+            except GitError, OSError:
+                log.error('조문 입력 저장소 갱신 실패')
+        return self._run(ready, 'normal', managed_id=run_id, skipped=skipped, resumed=prior is not None)
+
+    def _run(
+        self,
+        chosen: list[Collector],
+        mode: str,
+        *,
+        managed_id: str | None = None,
+        skipped: dict[str, str] | None = None,
+        resumed: bool = False,
+    ) -> RunSummary:
         started = self.now()
-        run_id = f'{started.strftime("%Y%m%dT%H%M%S")}-{uuid.uuid4().hex[:6]}'
-        summary = RunSummary(run_id, mode)
+        run_id = managed_id or f'{started.strftime("%Y%m%dT%H%M%S")}-{uuid.uuid4().hex[:6]}'
+        summary = RunSummary(run_id, mode, failed=dict(skipped or {}))
         with _file_log(self.paths, started):
-            self.state.start_run(run_id, mode, started.isoformat(timespec='seconds'))
+            if not resumed:
+                self.state.start_run(run_id, mode, started.isoformat(timespec='seconds'))
             ctx = RunContext(self.config, self.state, self.paths, mode, run_id, self.now)
             results: dict[str, CollectResult] = {}
-            per: dict[str, dict] = {}
+            per: dict[str, dict] = {
+                name: {'status': 'failed', 'error': error} for name, error in summary.failed.items()
+            }
             for c in chosen:
                 try:
                     results[c.name] = c.collect(ctx)
@@ -247,7 +300,7 @@ class Monitor:
             summary.events = list(events.values())
             failed = f'({",".join(summary.failed)})' if summary.failed else ''
             summary.line = (
-                f'collectors={len(chosen)} ok={len(summary.ok)} failed={len(summary.failed)}{failed} '
+                f'collectors={len(per)} ok={len(summary.ok)} failed={len(summary.failed)}{failed} '
                 f'events={len(summary.events)}'
             )
             status = 'ok' if not summary.failed else ('partial' if summary.ok else 'failed')
@@ -265,7 +318,10 @@ class Monitor:
                     run_id,
                     finished,
                     status,
-                    json.dumps({'collectors': per, 'events': len(events)}, ensure_ascii=False),
+                    json.dumps(
+                        {'collectors': per, 'events': len(events)} | ({'managed': True} if managed_id else {}),
+                        ensure_ascii=False,
+                    ),
                 ),
             )
             log.info('%s %s', mode, summary.line)

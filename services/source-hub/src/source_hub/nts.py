@@ -145,10 +145,16 @@ def parse_guide(data: bytes, source_id: str) -> list[Article]:
 
 
 def collect(
-    registry: Registry, database: Path, source_id: str, *, now: datetime | None = None, reconcile: bool = False
+    registry: Registry,
+    database: Path,
+    source_id: str,
+    *,
+    now: datetime | None = None,
+    reconcile: bool = False,
+    plan: dict | None = None,
 ) -> dict:
     path = CHANNELS[source_id]
-    source, version, outcome = collector.source_plan(registry, source_id, 'nts', 'html', HOST + path)
+    source, version, outcome = collector.source_plan(registry, source_id, 'nts', 'html', HOST + path, plan=plan)
     if source is None:
         return {'outcome': outcome}
 

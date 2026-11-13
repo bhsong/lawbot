@@ -152,14 +152,16 @@ def synchronize(database: Path, monitor_home: Path) -> dict[str, int]:
     run, collectors, rows = registrations(monitor_home)
     assembly = [source for source in ASSEMBLY_TYPES if source in collectors]
     result = {'imported': 0, 'unchanged': 0, 'failed': 0, 'skipped': 0}
-    try:
-        snapshot = source_snapshot(database, monitor_home, LAW_SOURCE, run, collectors, rows[LAW_SOURCE], scope)
-        result = _synchronize_laws(database, monitor_home, snapshot)
-    except (OSError, ValueError, sqlite3.Error) as exc:
-        if not assembly:
-            raise
-        result['failed'] = 1
-        print(f'calendar sync {LAW_SOURCE} failed: {type(exc).__name__}', file=sys.stderr)
+    managed = run is not None and json.loads(run['summary_json'] or '{}').get('managed') is True
+    if not managed or LAW_SOURCE in collectors:
+        try:
+            snapshot = source_snapshot(database, monitor_home, LAW_SOURCE, run, collectors, rows[LAW_SOURCE], scope)
+            result = _synchronize_laws(database, monitor_home, snapshot)
+        except (OSError, ValueError, sqlite3.Error) as exc:
+            if not assembly:
+                raise
+            result['failed'] = 1
+            print(f'calendar sync {LAW_SOURCE} failed: {type(exc).__name__}', file=sys.stderr)
 
     for source in assembly:
         try:

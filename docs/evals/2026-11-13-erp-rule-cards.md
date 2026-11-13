@@ -1,6 +1,6 @@
 # ERP 현행·예정 카드 검증
 
-2026-11-13 KST. 버전 판정과 API PR #136의 `996f1d3` 기준. [작업 계획](../plans/erp-rule-versions.md)
+2026-11-13 KST. 버전 판정과 API PR #136의 `996f1d3` 기준. [작업 계획](../archives/erp-rule-versions.md)
 
 | 항목 | 결과 |
 | --- | --- |

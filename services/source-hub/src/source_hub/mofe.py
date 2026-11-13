@@ -182,11 +182,19 @@ def parse_board(data: bytes, channel: Channel) -> BoardParser:
 
 
 def collect(
-    registry: Registry, database: Path, source_id: str, *, now: datetime | None = None, reconcile: bool = False
+    registry: Registry,
+    database: Path,
+    source_id: str,
+    *,
+    now: datetime | None = None,
+    reconcile: bool = False,
+    plan: dict | None = None,
 ) -> dict:
     channel = CHANNELS[source_id]
     mode = 'rss' if channel.rss else 'html'
-    source, version, outcome = collector.source_plan(registry, source_id, 'mofe', mode, HOST + channel.source_path)
+    source, version, outcome = collector.source_plan(
+        registry, source_id, 'mofe', mode, HOST + channel.source_path, plan=plan
+    )
     if source is None:
         return {'outcome': outcome}
 

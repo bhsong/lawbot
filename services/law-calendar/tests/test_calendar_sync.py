@@ -60,6 +60,26 @@ def test_sync_imports_registered_law_events_even_if_model_summary_already_proces
         assert client.get('/api/law-events?month=2026-11&type=notice').json()['total'] == 0
 
 
+def test_managed_run_skips_intentionally_disabled_law_import(scheduled):
+    (database, home, _, _), state = scheduled
+    assert synchronize(database, home)['imported'] == 1
+    with sqlite3.connect(state) as conn:
+        conn.execute(
+            'INSERT INTO runs VALUES (?,?,?,?,?,?)',
+            (
+                'managed',
+                'normal',
+                '2026-11-06T06:30:00+09:00',
+                '2026-11-06T06:31:00+09:00',
+                'ok',
+                json.dumps({'managed': True, 'collectors': {}, 'events': 0}),
+            ),
+        )
+    assert synchronize(database, home) == {'imported': 0, 'unchanged': 0, 'failed': 0, 'skipped': 0}
+    with TestClient(create_app(database)) as client:
+        assert client.get('/api/law-calendar/status').json()['collectedAt'] == FINISHED
+
+
 @pytest.mark.parametrize('source', ['legalize_law', 'assembly_bill', 'assembly_notice'])
 def test_sync_counts_missing_json_of_an_imported_event_as_unchanged(scheduled, monkeypatch, source):
     from test_calendar_assembly import register

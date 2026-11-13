@@ -35,6 +35,7 @@ class LawMatcher:
 
     def __init__(self, config: Config):
         self.config = config
+        self.selected_paths: frozenset[str] | None = None
 
     def pathspecs(self) -> list[str] | None:
         return [f'kr/{law.name}/' for law in self.config.laws] or None
@@ -46,6 +47,7 @@ class LawMatcher:
             and parts[0] == 'kr'
             and parts[2].endswith('.md')
             and self.config.law_category(parts[1]) is not None
+            and (self.selected_paths is None or path in self.selected_paths)
         )
 
     def categories(self, v: Version) -> list[int]:
@@ -127,10 +129,18 @@ class LegalizeGitCollector:
         if ctx.mode == 'bootstrap':
             return self._baseline(ctx, repo, head)
         cursor = ctx.state.cursor(self.repo_key)
-        if cursor == head:
+        scope_marker = 'daily-law-paths'
+        scope = None
+        previous = None
+        if isinstance(self.matcher, LawMatcher):
+            scope = '\n'.join(sorted(self.matcher.selected_paths)) if self.matcher.selected_paths is not None else '*'
+            previous = ctx.state.baseline(scope_marker)
+        rescan = scope is not None and scope != previous and (scope != '*' or previous is not None)
+        if cursor == head and not rescan:
             return CollectResult(cursors={self.repo_key: head})
         build = _Builder(self, ctx, repo, ctx.state.items(self.name))
-        if cursor and repo.is_ancestor(cursor, head):
+        on_history = bool(cursor and repo.is_ancestor(cursor, head))
+        if cursor and on_history:
             for sha in repo.rev_list(cursor, head, self.matcher.pathspecs()):
                 build.commit(sha)
         else:
@@ -140,8 +150,12 @@ class LegalizeGitCollector:
                 (cursor or '')[:12],
             )
             build.compare_with_head(head)
+        if rescan and on_history:
+            build.compare_with_head(head)
         result = build.result()
         result.cursors = {self.repo_key: head}
+        if rescan and scope is not None:
+            result.baselines[scope_marker] = scope
         return result
 
     def replay(self, ctx: RunContext, since: str, until: str) -> tuple[CollectResult, str, str]:

@@ -85,3 +85,18 @@ $hub --database $collector_db export-news --materials $materials_db --out $news_
 ```
 
 새 판은 다시 검토합니다. 철회할 때는 `withdraw`와 `--reason`을 지정한 뒤 같은 공개 파일에 다시 내보냅니다. 수집원 설정을 끄거나 바꿨을 때도 다시 내보내야 조회에 반영됩니다. 파일에는 제목·공식 링크·게시일과 게시판 상태를 제공합니다. 캘린더 서비스는 해당 파일을 읽습니다. [캘린더 설정](../law-calendar/README.md#기관별-최신-소식)
+
+## 통합 일일 실행
+
+`daily`는 하루에 한 번 등록부 설정을 확정하고, 기존 법령 수집·점검, ERP 원문 수집, 활성 기관 소스와 공개 파일을 처리합니다. 기존 스케줄이 실행 중인 운영 환경에서는 전환 전까지 기존 등록을 사용합니다. 명령은 준비된 uv 환경을 사용합니다.
+
+```fish
+$hub --database $collector_db daily --root $PWD --monitor-home $monitor_home \
+    --erp-data $erp_data --calendar-db $calendar_db --materials $materials_db --out $daily_feed
+```
+
+- 설정 버전, 실행 ID, 날짜 및 승인된 공개 자료는 하나의 스냅샷에 기록합니다. 정상 0건, 비활성, 미검증, 주기 미도래, 실패를 구분합니다. 비활성 기관은 자동 수집을 건너뜁니다. 조문 재생성에 쓰는 공용 법령 Git 갱신과 기존 monitor 점검은 독립적으로 유지합니다.
+- 같은 날 다시 실행하면 공개 스냅샷을 재사용합니다. 파일 발행이 실패하면 기존 공개 파일을 보존하며, 재실행 시 완료된 수집 단계를 재사용합니다. 수집 상태가 일부 실패하거나 잠금이 사용 중이면 종료 코드 2를 반환합니다.
+- 당일 승인·철회·정정 사항은 같은 명령에 `--republish`를 추가해 반영합니다. 재발행은 수집 없이 새 해시를 발행합니다. 일일 실행 기록은 설정 DB 옆 `<파일명>.daily/`에 저장됩니다.
+- 캘린더에는 같은 `daily_feed`를 지정합니다. 기존 단독 파일의 관리자 갱신은 이 통합 공개 파일과 별개입니다. [캘린더 설정](../law-calendar/README.md#erp-일일-스냅샷)
+- 운영 전환용 [launchd 템플릿](deploy/com.lawbot.monitor.plist.example)은 기존과 같은 작업 라벨과 KST 시스템의 06:30을 사용합니다. 운영 승인 뒤 기존 작업을 해제하고 대상 경로와 서비스별 uv 환경을 확인한 뒤 교체합니다.
