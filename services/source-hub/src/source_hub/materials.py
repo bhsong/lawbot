@@ -88,6 +88,7 @@ def save(
     *,
     board: list[Article] | None = None,
     board_attempted: bool = False,
+    manual_notice: bool = False,
 ) -> tuple[Run, dict[str, int]]:
     source_id = run.source_id
     now = run.model_dump()['finished_at']
@@ -132,7 +133,7 @@ def save(
                 continue
             if previous:
                 count, event = 'modified_count', 'post_modified'
-            elif first or (first_board and article.upstream_id not in rss):
+            elif (first and not manual_notice) or (first_board and article.upstream_id not in rss):
                 count = 'baseline_count'
                 event = 'baseline_review' if baseline_policy == 'review_backfill' else 'baseline'
             else:
@@ -176,6 +177,7 @@ def documents(path: Path, source_id: str) -> list[dict]:
             'first_seen_at': first,
             'last_confirmed_at': last,
             'content_level': 'metadata_only',
+            **({'link_kind': 'official_search'} if source_id.startswith('hometax-') else {}),
         }
         for metadata, revision, event, first, last in rows
     ]

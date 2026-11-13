@@ -17,7 +17,7 @@ HOSTS = {
     'nts': {'www.nts.go.kr'},
     'hometax': {'www.hometax.go.kr', 'www.nts.go.kr'},
 }
-QUERY_FIELDS = {'bbsId', 'boardId', 'menuNo', 'mi', 'target'}
+QUERY_FIELDS = {'bbsId', 'boardId', 'cntntsId', 'menuNo', 'mi', 'target'}
 MODES = {
     'legacy': {'legacy'},
     'local': {'local'},
