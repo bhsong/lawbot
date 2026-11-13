@@ -1,13 +1,14 @@
 import hashlib
-import json
 import sqlite3
 from contextlib import closing
 from datetime import datetime
 
 from law_calendar.db import migrate
 from law_calendar.erp_capture import approved_law_changes
+from source_hub.digest import render
 
 STAMP = '2026-11-13T07:00:00+09:00'
+START = datetime.fromisoformat('2026-11-13T06:00:00+09:00')
 CUTOFF = datetime.fromisoformat('2026-11-13T08:00:00+09:00')
 
 
@@ -15,17 +16,6 @@ def test_capture_binds_public_law_rows_to_the_imported_monitor_revision(tmp_path
     database = tmp_path / 'calendar.db'
     migrate(database)
     raw = '{"event_id":"upstream"}'
-    sidecar = tmp_path / 'morning.json'
-    sidecar.write_text(
-        json.dumps(
-            {
-                'runId': 'daily-run',
-                'entries': [
-                    {'events': [{'eventId': 'upstream', 'revision': 'before-correction'}], 'text': 'never exported'},
-                ],
-            }
-        )
-    )
     with closing(sqlite3.connect(database)) as conn:
         with conn:
             conn.execute("INSERT INTO laws VALUES ('law','가상 법률')")
@@ -43,13 +33,22 @@ def test_capture_binds_public_law_rows_to_the_imported_monitor_revision(tmp_path
                 (STAMP,),
             )
             conn.execute("INSERT INTO change_versions VALUES ('change','snapshot',NULL,NULL)")
-        assert approved_law_changes(database, sidecar, 'daily-other', CUTOFF, ['가상 법률']) == []
-        assert approved_law_changes(database, sidecar, 'daily-run', CUTOFF, []) == []
-        records = approved_law_changes(database, sidecar, 'daily-run', CUTOFF, ['가상 법률'])
+        assert approved_law_changes(database, START, CUTOFF, []) == []
+        assert approved_law_changes(database, datetime.fromisoformat(STAMP), CUTOFF, ['가상 법률']) == []
+        records = approved_law_changes(database, START, CUTOFF, ['가상 법률'])
         assert len(records) == 1
         assert records[0]['revision'] == hashlib.sha256(raw.encode()).hexdigest()
         assert records[0]['expected'] == 2 and records[0]['publicSummaries'] == ['승인 문구']
-        assert '비공개 문구' not in str(records) and 'never exported' not in str(records)
+        assert '비공개 문구' not in str(records)
+        mail = render(
+            {'dayKst': '2026-11-13', 'status': 'ok', 'sources': [], 'changes': records, 'feeds': {'erp': {}}},
+            'https://calendar.example/#erp',
+            limit=20,
+        )
+        assert '승인 문구' in mail.text and records[0]['url'] in mail.text
+        with conn:
+            conn.execute("UPDATE source_snapshots SET imported_at='2026-11-12T07:00:00+09:00'")
+        assert approved_law_changes(database, START, CUTOFF, ['가상 법률']) == records
         with conn:
             conn.execute("UPDATE change_events SET review_state='withdrawn' WHERE id='event'")
-        assert approved_law_changes(database, sidecar, 'daily-run', CUTOFF, ['가상 법률']) == []
+        assert approved_law_changes(database, START, CUTOFF, ['가상 법률']) == []

@@ -71,6 +71,7 @@ def test_daily_reuses_one_snapshot_and_exposes_same_public_data(registry, tmp_pa
 
     def capture(config, paths, cutoff):
         calls.append(('capture', cutoff))
+        assert paths.law_since == STAMP.replace(hour=0, minute=0)
         items = [] if len(calls) > 4 else [{'id': 'approved-before-withdrawal', 'title': '이전 공개 자료'}]
         return {
             'erp': {'state': 'ok', 'items': [], 'history': [], 'relatedLaws': []},
@@ -133,6 +134,31 @@ def test_daily_reuses_one_snapshot_and_exposes_same_public_data(registry, tmp_pa
     cfg.public.write_text(json.dumps(modified))
     with TestClient(create_app(cfg.calendar_db, daily_feed=cfg.public)) as client:
         assert client.get('/api/erp-updates').json()['state'] == 'invalid'
+
+
+def test_law_change_window_reuses_previous_public_cutoff_on_next_day_and_republish(registry, tmp_path, monkeypatch):
+    cutoffs = []
+    cfg = daily.DailyConfig(
+        tmp_path,
+        tmp_path / 'monitor',
+        tmp_path / 'erp',
+        tmp_path / 'calendar.db',
+        tmp_path / 'materials.db',
+        tmp_path / 'daily.json',
+    )
+    monkeypatch.setattr(daily, 'run_legacy', lambda *_: {})
+    monkeypatch.setattr(daily, 'run_erp', lambda *_, **__: {'outcome': 'ok'})
+
+    def capture(config, paths, cutoff):
+        cutoffs.append(paths.law_since)
+        return {'erp': {'state': 'ok'}, 'rules': None, 'news': {}}
+
+    monkeypatch.setattr(daily, 'capture', capture)
+    tomorrow = STAMP + timedelta(days=1)
+    daily.run(registry, cfg, now=lambda: STAMP)
+    daily.run(registry, cfg, now=lambda: tomorrow)
+    daily.run(registry, cfg, now=lambda: tomorrow + timedelta(hours=2), republish=True)
+    assert cutoffs == [STAMP.replace(hour=0, minute=0), STAMP, STAMP]
 
 
 def test_collection_resumes_after_failed_capture_without_repeating_completed_stages(registry, tmp_path, monkeypatch):

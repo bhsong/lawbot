@@ -50,7 +50,7 @@ class FeedPaths:
     news: Path
     output: Path
     include_laws: bool = True
-    run_id: str | None = None
+    law_since: datetime | None = None
 
 
 def morning_path(monitor_home: Path, run_id: str) -> Path:
@@ -177,11 +177,7 @@ def capture(config: DailyConfig, paths: FeedPaths, cutoff: datetime) -> dict:
         '--cutoff',
         cutoff.isoformat(),
         *([] if paths.include_laws else ['--without-law-news']),
-        *(
-            ['--morning-summary', str(morning_path(config.monitor_home, paths.run_id)), '--run-id', paths.run_id]
-            if paths.run_id
-            else []
-        ),
+        *(['--law-since', paths.law_since.isoformat()] if paths.law_since is not None else []),
     )
     if result.returncode:
         raise ValueError('ERP public snapshot capture failed')
@@ -541,13 +537,22 @@ def _run(registry: Registry, config: DailyConfig, now: Callable[[], datetime], r
         public.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
         plan = state['plan']
         previous = {entry['sourceId']: entry for entry in prior.get('sources', [])}
+        reference = prior
+        if republish:
+            before = sorted(path for path in home.glob('????-??-??/published.json') if path.parent.name < day)
+            reference = read_snapshot(before[-1]) if before else {}
+        since = (
+            datetime.fromisoformat(reference['cutoffAt'])
+            if reference
+            else started.replace(hour=0, minute=0, second=0, microsecond=0)
+        )
         paths = FeedPaths(
             working / 'erp.json',
             working / 'rules.json',
             working / 'news.json',
             working / 'capture.json',
             include_laws=any(row['source_id'] == 'legalize_law' and row['runnable'] for row in plan['sources']),
-            run_id=state['run_id'],
+            law_since=since,
         )
         statuses = collect_sources(registry, config, state, journal, previous, datetime.fromisoformat(state['started']))
         cutoff = now().astimezone(KST)
@@ -566,10 +571,6 @@ def _run(registry: Registry, config: DailyConfig, now: Callable[[], datetime], r
                 and prior.get('configHash') == plan['seed_sha256']
             ):
                 feeds['news']['lawgo']['items'] = old_law_news['items']
-        reference = prior
-        if republish:
-            before = sorted(path for path in home.glob('????-??-??/published.json') if path.parent.name < day)
-            reference = read_snapshot(before[-1]) if before else {}
         ledger_file = home / 'ledger' / (reference.get('snapshotHash', '') + '.json')
         previous_ledger = json.loads(ledger_file.read_bytes()) if ledger_file.is_file() else {}
         changes, ledger = change_records(plan, records, feeds, day, previous_ledger)
