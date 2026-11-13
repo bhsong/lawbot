@@ -176,7 +176,7 @@ def test_daily_sync_and_manual_refresh_keep_pdf_link_without_fetching_attachment
             'summary': '안 제10조를 신설함.',
             'pdfUrl': PDF_URL,
         }
-        assert client.get('/api/law-events?month=2026-11&type=bill').json()['total'] == 0
+        assert client.get('/api/law-events?month=2026-11&type=bill').json()['total'] == 1
         assert client.get(f'{url}/notice-comparison/5').status_code == 404
     assert synchronize(path, home)['notice_auto_published'] == 0 and len(calls) == 1
     monkeypatch.setattr(sys, 'argv', ['manage', '--database', str(path), 'notice-content', '--refresh'])

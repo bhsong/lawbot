@@ -14,6 +14,7 @@ from law_calendar.db import read_database, write_database
 from law_calendar.import_failures import ImportInputError, record_import_failure
 from law_calendar.ingest import utc_now
 from law_calendar.validation import StaleSnapshotError, civil_date, timestamp
+from lawbot_common.assembly import UNKNOWN_BILL_STATUS, bill_status
 
 ASSEMBLY_TYPES = {
     'assembly_bill': ('assembly_bill_new', 'assembly_bill_changed'),
@@ -36,6 +37,7 @@ BILL_ROLES = {
 }
 REVIEW_STATES = {'approve': 'approved', 'reject': 'rejected', 'withdraw': 'withdrawn'}
 AUTO_NOTICE_REVIEWER = 'notice-auto'
+AUTO_BILL_REVIEWER = 'bill-auto'
 
 
 class AssemblyTarget(BaseModel):
@@ -170,7 +172,7 @@ def _store_assembly_snapshot(conn: sqlite3.Connection, source: str, event: Assem
     ).fetchone()
     if not latest or revision > latest['revision']:
         review_state = 'pending'
-        if latest and source == 'assembly_notice' and latest['review_state'] in ('rejected', 'withdrawn'):
+        if latest and latest['review_state'] in ('rejected', 'withdrawn'):
             review_state = latest['review_state']
         if latest and latest['review_state'] == 'approved':
             conn.execute(
@@ -183,6 +185,42 @@ def _store_assembly_snapshot(conn: sqlite3.Connection, source: str, event: Assem
             (entry_id, source, target.item_id, event.event_id, review_state),
         )
     return True
+
+
+def _publish_verified_bills(conn: sqlite3.Connection) -> None:
+    """Review current and previously imported pending bills using their stored API evidence."""
+    pending = conn.execute(
+        'SELECT e.id,e.snapshot_id,s.event_json FROM assembly_entries e '
+        'JOIN assembly_snapshots s ON s.id=e.snapshot_id AND s.source=e.source AND s.upstream_id=e.upstream_id '
+        "WHERE e.source='assembly_bill' AND e.review_state='pending' "
+        'AND EXISTS (SELECT 1 FROM assembly_dates d WHERE d.snapshot_id=s.id)'
+    ).fetchall()
+    for row in pending:
+        try:
+            event = AssemblyEvent.model_validate_json(row['event_json'])
+            event.validate_evidence()
+        except ValueError:
+            continue
+        ctx = event.context
+        status = bill_status(event.dates, ctx.status_fields)
+        proposed = event.dates.get('bill_proposed')
+        decided = event.dates.get('bill_decided')
+        if (
+            event.source == 'assembly_bill'
+            and event.event_id == row['snapshot_id']
+            and {'PASS_GUBUN', 'PROC_RESULT_CD'} <= ctx.status_fields.keys()
+            and ctx.status == status != UNKNOWN_BILL_STATUS
+            and (proposed or decided)
+            and not (proposed and decided and proposed > decided)
+        ):
+            record_assembly_review(
+                conn,
+                row['id'],
+                row['snapshot_id'],
+                'approve',
+                reviewer=AUTO_BILL_REVIEWER,
+                note='국회 공식 의안 API의 식별자·상태·공식 일정과 링크 확인',
+            )
 
 
 def import_assembly(
@@ -206,6 +244,8 @@ def import_assembly(
                 event_id = event.event_id
                 imported += _store_assembly_snapshot(conn, source, event)
             event_id = None
+            if source == 'assembly_bill':
+                _publish_verified_bills(conn)
             previous = conn.execute(
                 'SELECT collected_at FROM assembly_collection_status WHERE source=?', (source,)
             ).fetchone()

@@ -64,7 +64,8 @@ def register(
         },
         'context': {
             'source_url': link,
-            'status': '진행 중',
+            'status': '진행 중' if notice else '계류의안',
+            'status_fields': {} if notice else {'PASS_GUBUN': '계류의안', 'PROC_RESULT_CD': ''},
             'schema_version': 1,
             'endpoint': code,
             'date_sources': {key: 'pal.assembly.go.kr' if key == 'notice_start' else code for key in dates},
@@ -181,14 +182,89 @@ def test_approved_notice_dates_correction_and_failed_source(scheduled, unavailab
 
 def test_bill_dates_are_separate_from_notices(scheduled):
     (database, home, _, _), state = scheduled
-    event_id = register(home, state, source='assembly_bill', date='2026-11-05')
+    register(home, state, source='assembly_bill', date='2026-11-05')
     synchronize(database, home)
-    review_assembly(database, event_id, 'approve', reviewer='tester', note='제안일 검토')
     with TestClient(create_app(database)) as client:
         assert client.get('/api/law-events?date=2026-11-05&type=notice').json()['total'] == 0
         [item] = client.get('/api/law-events?date=2026-11-05&type=bill').json()['items']
         assert item['assembly']['dateRole'] == 'bill_proposed'
         assert client.get('/api/law-calendar?month=2026-11').json()['days'][0]['bill_count'] == 1
+
+
+def test_successful_bill_sync_revalidates_stored_pending_bill_once(scheduled):
+    (database, home, _, _), state = scheduled
+    bill = register(home, state, source='assembly_bill', date='2026-11-05')
+    event = json.loads((home / f'{bill}.json').read_text())
+    with sqlite3.connect(database) as conn:
+        conn.execute(
+            'INSERT INTO assembly_snapshots VALUES (?,?,?,?,?,?,?,?,?,?,?)',
+            (
+                bill,
+                'assembly_bill',
+                'PRC_BILL',
+                1,
+                '근로기준법 개정안',
+                None,
+                '2200012',
+                event['context']['status'],
+                event['context']['source_url'],
+                NOW,
+                json.dumps(event),
+            ),
+        )
+        conn.execute('INSERT INTO assembly_dates VALUES (?,?,?)', (bill, 'bill_proposed', '2026-11-05'))
+        conn.execute(
+            'INSERT INTO assembly_entries VALUES (?,?,?,?,?,NULL)',
+            ('old-entry', 'assembly_bill', 'PRC_BILL', bill, 'pending'),
+        )
+    assert synchronize(database, home)['assembly_bill_unchanged'] == 1
+    assert synchronize(database, home)['assembly_bill_unchanged'] == 1
+    with TestClient(create_app(database)) as client:
+        assert client.get('/api/law-events?month=2026-11&type=bill').json()['total'] == 1
+    with sqlite3.connect(database) as conn:
+        assert conn.execute('SELECT decision,reviewer FROM assembly_review_audit').fetchall() == [
+            ('approve', 'bill-auto')
+        ]
+
+
+@pytest.mark.parametrize('decision', ['reject', 'withdraw'])
+def test_bill_change_preserves_manual_restriction(scheduled, decision):
+    (database, home, _, _), state = scheduled
+    bill = register(home, state, source='assembly_bill', date='2026-11-05')
+    synchronize(database, home)
+    review_assembly(database, bill, decision, reviewer='tester', note='수동 결정')
+    revised = register(home, state, source='assembly_bill', revision=2, date='2026-11-05')
+    synchronize(database, home)
+    with TestClient(create_app(database)) as client:
+        assert client.get('/api/law-events?month=2026-11&type=bill').json()['total'] == 0
+    with sqlite3.connect(database) as conn:
+        assert conn.execute('SELECT snapshot_id,review_state FROM assembly_entries').fetchone() == (
+            revised,
+            {'reject': 'rejected', 'withdraw': 'withdrawn'}[decision],
+        )
+
+
+@pytest.mark.parametrize('missing', ['status', 'status_fields', 'date_order'])
+def test_bill_with_unconfirmed_evidence_is_not_auto_published(scheduled, missing):
+    (database, home, _, _), state = scheduled
+    bill = register(home, state, source='assembly_bill', date='2026-11-05')
+    path = home / f'{bill}.json'
+    event = json.loads(path.read_text())
+    if missing == 'status':
+        event['context']['status'] = '다른 상태'
+    elif missing == 'status_fields':
+        event['context'].pop('status_fields')
+    else:
+        event['dates']['bill_decided'] = '2026-11-04'
+        event['context']['date_sources']['bill_decided'] = 'TVBPMBILL11'
+        event['context']['status_fields']['PROC_RESULT_CD'] = '철회'
+        event['context']['status'] = '철회'
+    path.write_text(json.dumps(event))
+    assert synchronize(database, home)['assembly_bill_imported'] == 1
+    with TestClient(create_app(database)) as client:
+        assert client.get('/api/law-events?month=2026-11&type=bill').json()['total'] == 0
+    with sqlite3.connect(database) as conn:
+        assert conn.execute('SELECT review_state FROM assembly_entries').fetchone() == ('pending',)
 
 
 def test_same_day_notice_counts_once_and_undated_bill_is_not_publishable(scheduled, unavailable_notice_source):
