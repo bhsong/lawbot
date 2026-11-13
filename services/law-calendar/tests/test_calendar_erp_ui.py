@@ -118,6 +118,80 @@ def test_missing_feed_leaves_the_law_calendar_working(dataset, tmp_path, calenda
             support.keep_on_failure(request, log, page)
 
 
+def test_verified_rule_card_keeps_current_and_future_together(dataset, feed, tmp_path, calendar_page, request):
+    page = calendar_page
+    rules = tmp_path / 'rules.json'
+    mark = {'at': '2000-01-01T00:00:00+09:00', 'decision': 'confirmed'}
+
+    def edition(name, start, text):
+        return {
+            'version': {
+                'ruleVersionId': name,
+                'sourceRevisionId': 1,
+                'effectiveFrom': start,
+                'appliesFrom': start,
+                'evidenceKind': 'final_notice',
+                'evidenceUrl': 'https://www.law.go.kr/행정규칙/' + name,
+                'valueText': text,
+            },
+            'reviews': [mark],
+        }
+
+    rules.write_text(
+        json.dumps(
+            {
+                'schemaVersion': 2,
+                'generatedAt': mark['at'],
+                'rules': [
+                    {
+                        'ruleId': 'INS-01',
+                        'sourceKey': 'INS-01',
+                        'title': '가상 보험 기준',
+                        'scopes': [
+                            {
+                                'scopeId': 'standard',
+                                'scope': '일반 가입자',
+                                'applicability': 'insurance_month',
+                                'editions': [
+                                    edition('current', '2000-01-01', '가상 현행 기준'),
+                                    edition('next', '2999-01-01', '가상 예정 기준'),
+                                    edition('later', '2999-07-01', '가상 추가 변경'),
+                                ],
+                            }
+                        ],
+                        'proposalLinks': [
+                            {
+                                'ruleVersionId': 'draft',
+                                'evidenceUrl': 'https://pal.assembly.go.kr/napal/lgsltpa/예시',
+                            }
+                        ],
+                    }
+                ],
+            }
+        )
+    )
+    with support.serve(tmp_path, development=False, database=dataset, erp_feed=feed, rules_feed=rules) as (url, log):
+        try:
+            page.set_viewport_size({'width': 390, 'height': 844})
+            page.goto(url + '/#erp')
+            card = page.get_by_role('article', name='가상 보험 기준')
+            expect(card).to_have_count(1)
+            expect(card.get_by_text('가상 현행 기준', exact=True)).to_be_visible()
+            expect(card.get_by_text('가상 예정 기준', exact=True)).to_be_visible()
+            expect(card.get_by_role('link', name='현행 공식 원문', exact=False)).to_have_attribute('target', '_blank')
+            expect(card.get_by_role('heading', name='검토 중')).to_be_visible()
+            expect(card.get_by_text('가상 추가 변경')).to_be_hidden()
+            card.get_by_text('이후 변경 1건').press('Enter')
+            expect(card.get_by_text('가상 추가 변경')).to_be_visible()
+            card.get_by_text('기존 자료와 첨부 1건').click()
+            expect(card.get_by_role('link', name='별지 PDF', exact=False)).to_be_visible()
+            assert page.evaluate('document.documentElement.scrollWidth') <= 390
+            page.get_by_role('tab', name='법령 캘린더').click()
+            expect(page.get_by_role('heading', level=1, name='법령 변경 캘린더')).to_be_visible()
+        finally:
+            support.keep_on_failure(request, log, page)
+
+
 def test_agency_news_overlays_erp_and_supports_mouse_keyboard_and_touch(dataset, tmp_path, calendar_pages, request):
     page = calendar_pages(viewport={'width': 1280, 'height': 850})
     news_feed = tmp_path / 'agency-news.json'

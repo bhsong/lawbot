@@ -1,14 +1,15 @@
 import { useEffect, useRef, useState } from 'react'
 import { EventList, Modal, todayKst } from '@lawbot/ui'
 import type { CalendarChange } from '@lawbot/ui'
-import type { ErpItem, ErpUpdates } from '../law-calendar/api-types'
+import type { ErpItem, ErpRule, ErpRules, ErpUpdates } from '../law-calendar/api-types'
 import { ChangeDialog } from '../law-calendar/ChangeDialog'
 import { loadCalendar, loadChange } from '../law-calendar/data'
 import type { CalendarLoader, CalendarSnapshot } from '../law-calendar/types'
-import { ACTION_LABELS, kstMinute, loadErp } from './data'
-import type { ErpLoader } from './data'
+import { ACTION_LABELS, kstMinute, loadErp, loadErpRules } from './data'
+import type { ErpLoader, ErpRuleLoader } from './data'
 import './erp.css'
 import AgencyNews from './AgencyNews'
+import RuleCard from './RuleCard'
 
 const KINDS: CalendarChange['kind'][] = ['notice', 'effective', 'bill']
 const NOTICES = {
@@ -22,8 +23,10 @@ function shiftMonth(month: string, delta: number): string {
   return date.toISOString().slice(0, 7)
 }
 
-function ItemCard({ item }: { item: ErpItem }) {
+function ItemCard({ item, reference = false }: { item: ErpItem; reference?: boolean }) {
   const titleId = `erp-item-${item.id}`
+  const Container = reference ? 'div' : 'article'
+  const Title = reference ? 'h4' : 'h3'
   const dates: [string, string][] = [
     ...(item.effectiveFrom ? [['시행일', item.effectiveFrom] as [string, string]] : []),
     ...(item.asOf ? [['현행 법령본 기준일', item.asOf] as [string, string]] : []),
@@ -31,11 +34,11 @@ function ItemCard({ item }: { item: ErpItem }) {
     ...(item.agency ? [['소관', item.agency] as [string, string]] : []),
     ...(item.lawName ? [['근거', [item.lawName, item.article].filter(Boolean).join(' ')] as [string, string]] : []),
   ]
-  return <article className="erp-card" aria-labelledby={titleId}>
+  return <Container className={reference ? 'erp-rule-reference' : 'erp-card'} aria-labelledby={titleId}>
     <p className="erp-tag">{item.sourceKey} · {item.sourceTitle}</p>
-    <h3 id={titleId}>{item.title}</h3>
+    <Title id={titleId}>{item.title}</Title>
     <dl className="erp-dates">{dates.map(([label, value]) => <div key={label}><dt>{label}</dt><dd>{value}</dd></div>)}</dl>
-    {item.excerpt && <p className="erp-excerpt">{item.excerpt}</p>}
+    {item.excerpt && !reference && <p className="erp-excerpt">{item.excerpt}</p>}
     <ul className="erp-links">
       {item.sourceUrl && <li><a href={item.sourceUrl} target="_blank" rel="noopener noreferrer">국가법령정보센터 원문 ↗</a></li>}
       {item.attachments.map((file) => <li key={file.pdfUrl}>
@@ -45,7 +48,39 @@ function ItemCard({ item }: { item: ErpItem }) {
           : '원본 파일 미등록'}</span>
       </li>)}
     </ul>
-  </article>
+  </Container>
+}
+
+function RuleSections({ rules, items, available }: { rules: ErpRule[]; items: ErpItem[]; available: boolean }) {
+  const keys = new Set(rules.map((rule) => rule.sourceKey))
+  const current = rules.filter((rule) => rule.scopes.some((scope) => scope.currentVersion))
+  const upcoming = rules.filter((rule) =>
+    !current.includes(rule) && rule.scopes.some((scope) => scope.scheduledChanges.length > 0))
+  const unverified = rules.filter((rule) => !current.includes(rule) && !upcoming.includes(rule))
+  const references = items.filter((item) => !keys.has(item.sourceKey))
+  const sections = [
+    { id: 'erp-current', title: '현재 적용 중', rules: current, empty: available ? '확인된 현행 기준이 없습니다.' : '' },
+    { id: 'erp-upcoming', title: '적용 예정', rules: upcoming, empty: available ? '별도 예정 카드가 없습니다.' : '' },
+    { id: 'erp-unverified', title: '현행 기준 확인 필요', rules: unverified, empty: '' },
+  ]
+  return <>{sections.map((section) => {
+    const showReferences = section.id === 'erp-unverified' && references.length > 0
+    if (!section.rules.length && !section.empty && !showReferences) return null
+    return <section key={section.id} className="erp-section" aria-labelledby={section.id}>
+      <h2 id={section.id}>{section.title}</h2>
+      {!section.rules.length && section.empty && <p className="lc-empty">{section.empty}</p>}
+      {section.rules.map((rule) => {
+        const documents = items.filter((item) => item.sourceKey === rule.sourceKey)
+        return <RuleCard key={rule.ruleId} rule={rule}>
+          {documents.length > 0 && <details className="erp-rule-details">
+            <summary>기존 자료와 첨부 {documents.length}건</summary>
+            {documents.map((item) => <ItemCard key={item.id} item={item} reference />)}
+          </details>}
+        </RuleCard>
+      })}
+      {showReferences && references.map((item) => <ItemCard key={item.id} item={item} reference />)}
+    </section>
+  })}</>
 }
 
 function ItemSection({ id, title, items, empty }: { id: string; title: string; items: ErpItem[]; empty: string }) {
@@ -71,10 +106,11 @@ function HistoryDialog({ feed, onClose }: { feed: ErpUpdates; onClose: () => voi
   </Modal>
 }
 
-export default function ErpPage({ loader = loadErp, lawLoader = loadCalendar, today = todayKst() }: {
-  loader?: ErpLoader; lawLoader?: CalendarLoader; today?: string
+export default function ErpPage({ loader = loadErp, ruleLoader = loadErpRules, lawLoader = loadCalendar, today = todayKst() }: {
+  loader?: ErpLoader; ruleLoader?: ErpRuleLoader; lawLoader?: CalendarLoader; today?: string
 }) {
   const [feed, setFeed] = useState<ErpUpdates | null>(null)
+  const [ruleFeed, setRuleFeed] = useState<ErpRules | null>(null)
   const [state, setState] = useState<'loading' | 'ready' | 'error'>('loading')
   const [attempt, setAttempt] = useState(0)
   const [month, setMonth] = useState(today.slice(0, 7))
@@ -95,6 +131,17 @@ export default function ErpPage({ loader = loadErp, lawLoader = loadCalendar, to
     }, () => { if (!controller.signal.aborted) setState('error') })
     return () => controller.abort()
   }, [loader, attempt])
+
+  useEffect(() => {
+    const controller = new AbortController()
+    setRuleFeed(null)
+    ruleLoader(today, controller.signal).then((data) => {
+      if (!controller.signal.aborted) setRuleFeed(data)
+    }, () => {
+      if (!controller.signal.aborted) setRuleFeed({ state: 'invalid', asOfDate: today })
+    })
+    return () => controller.abort()
+  }, [ruleLoader, today, attempt])
 
   const related = feed?.relatedLaws ?? []
   const hasRelated = related.length > 0
@@ -124,13 +171,14 @@ export default function ErpPage({ loader = loadErp, lawLoader = loadCalendar, to
   const items = feed?.state === 'ok' ? feed.items ?? [] : []
   const current = items.filter((item) => !item.effectiveFrom || item.effectiveFrom <= today)
   const upcoming = items.filter((item) => item.effectiveFrom && item.effectiveFrom > today)
+  const showRules = ruleFeed && ruleFeed.state !== 'unconfigured'
   const lawChanges = (laws?.changes ?? []).filter((change) => related.includes(change.lawName))
   const byKind = (kind: CalendarChange['kind']) => lawChanges.filter((change) => change.kind === kind)
 
   return <main className="lc-page">
     <header className="lc-header">
       <div><p className="lc-eyebrow">LAWBOT / ERP REFERENCE</p><h1>ERP 자료</h1>
-        <p className="lc-subtitle">급여·원천징수·4대보험 업무에 쓰는 고시·별표·서식·조문의 현행 원문입니다.</p></div>
+        <p className="lc-subtitle">급여·원천징수·4대보험 업무에 쓰는 고시·별표·서식·조문과 적용 기준입니다.</p></div>
       {feed?.state === 'ok' && <button type="button" className="lc-more" onClick={() => setHistoryOpen(true)}>수집 이력</button>}
     </header>
     <aside className="lc-disclaimer" aria-label="ERP 자료 이용 안내">이 페이지는 공식 원문을 검토해 옮긴 참고 자료입니다. 요율·세액·서식을 업무에 적용하기 전 국가법령정보센터 원문과 적용 기간을 다시 확인하세요.</aside>
@@ -139,14 +187,26 @@ export default function ErpPage({ loader = loadErp, lawLoader = loadCalendar, to
       {' · '}<span>전체메뉴 → 기타 → 고객센터 → 자료실</span>
     </p>
     <AgencyNews />
-    {state === 'loading' && <p className="lc-empty" role="status">ERP 자료를 불러오는 중입니다.</p>}
+    {(state === 'loading' || !ruleFeed) && <p className="lc-empty" role="status">ERP 자료를 불러오는 중입니다.</p>}
     {state === 'error' && <div className="lc-warning" role="alert"><p>ERP 자료를 불러오지 못했습니다.</p>
       <button type="button" onClick={() => setAttempt((value) => value + 1)}>다시 시도</button></div>}
     {state === 'ready' && feed && feed.state !== 'ok' && <p className="lc-warning" role="status">{NOTICES[feed.state]}</p>}
+    {showRules && <>
+      {ruleFeed.state === 'ok'
+        ? <p className="lc-data-status"><span>기준일 {ruleFeed.asOfDate} KST</span>
+          {ruleFeed.generatedAt && <span>적용 기준 갱신 {kstMinute(ruleFeed.generatedAt)} KST</span>}</p>
+        : <div className="lc-warning" role="status"><p>{ruleFeed.state === 'missing'
+          ? 'ERP 적용 기준이 아직 준비되지 않았습니다.' : 'ERP 적용 기준을 확인하지 못했습니다.'}</p>
+          {state !== 'error' && <button type="button" onClick={() => setAttempt((value) => value + 1)}>다시 시도</button>}</div>}
+      <RuleSections rules={ruleFeed.state === 'ok' ? ruleFeed.rules ?? [] : []} items={items}
+        available={ruleFeed.state === 'ok'} />
+    </>}
     {state === 'ready' && feed?.state === 'ok' && <>
-      <p className="lc-data-status"><span>자료 생성: {feed.generatedAt ? kstMinute(feed.generatedAt) : '확인되지 않음'}</span><span>날짜 기준: 한국 표준시(KST)</span></p>
-      <ItemSection id="erp-current" title="현재 적용 중" items={current} empty="현재 적용 중인 공개 자료가 없습니다." />
-      <ItemSection id="erp-upcoming" title="적용 예정" items={upcoming} empty="적용 예정인 공개 자료가 없습니다." />
+      {ruleFeed?.state === 'unconfigured' && <>
+        <p className="lc-data-status"><span>자료 생성: {feed.generatedAt ? kstMinute(feed.generatedAt) : '확인되지 않음'}</span><span>날짜 기준: 한국 표준시(KST)</span></p>
+        <ItemSection id="erp-current" title="현재 적용 중" items={current} empty="현재 적용 중인 공개 자료가 없습니다." />
+        <ItemSection id="erp-upcoming" title="적용 예정" items={upcoming} empty="적용 예정인 공개 자료가 없습니다." />
+      </>}
       {hasRelated && <section className="erp-section" aria-labelledby="erp-related-title">
         <div className="lc-selected"><h2 id="erp-related-title">관련 법령 일정 · {month.replace('-', '년 ')}월</h2>
           <div className="erp-month">
