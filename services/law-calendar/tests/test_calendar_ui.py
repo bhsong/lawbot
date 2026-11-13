@@ -4,20 +4,16 @@ import datetime
 import json
 import subprocess
 import sys
-from io import BytesIO
 
 import pytest
-from PIL import Image
 from playwright.sync_api import expect
 
 import calendar_ui_support as support
 from law_calendar.assembly_ingest import import_assembly, review_assembly
-from law_calendar.notice_comparison import ComparisonLimitError
-from law_calendar.notice_content import refresh_notice_content
 from law_calendar.sync import synchronize
 from test_calendar_api import dataset as dataset
 from test_calendar_assembly import register
-from test_calendar_notice_content import detail_html
+from test_calendar_notice_content import PDF_URL, detail_html
 from test_calendar_sync import scheduled as scheduled
 from test_calendar_workflow import approval, import_one
 from test_calendar_workflow import workflow as workflow
@@ -169,20 +165,16 @@ def test_assembly_notice_and_bill_dates_remain_separate(scheduled, tmp_path, cal
     (database, home, _, _), state = scheduled
     register(home, state)
     bill = register(home, state, source='assembly_bill', date='2026-11-05')
-    with BytesIO() as buffer:
-        Image.new('RGB', (600, 800), 'white').save(buffer, format='PNG')
-        png = buffer.getvalue()
     html = detail_html('2200012', '2026-11-04~2026-11-05', '정식 적용 범위를 확대하는 안입니다.')
-    monkeypatch.setattr(
-        'law_calendar.notice_content.fetch_official', lambda _url, *, pdf=False: b'%PDF-test' if pdf else html.encode()
-    )
-    monkeypatch.setattr('law_calendar.notice_content.comparison_images', lambda _: [(5, png)])
+    monkeypatch.setattr('law_calendar.notice_content.fetch_official', lambda _url: html.encode())
     assert synchronize(database, home)['notice_auto_published'] == 1
     review_assembly(database, bill, 'approve', reviewer='tester', note='공식 날짜 확인')
     page = calendar_page
     page.set_viewport_size({'width': width, 'height': 900})
     page.clock.install(time=datetime.datetime(2026, 11, 5, tzinfo=datetime.UTC))
     with support.serve(tmp_path, development=False, database=database) as (url, _):
+        pdf_requests = []
+        page.on('request', lambda request: pdf_requests.append(request.url) if request.url == PDF_URL else None)
         page.goto(url)
         notice_panel = page.get_by_role('region', name='입법예고 1건')
         expect(notice_panel.get_by_text('예고 종료일', exact=False)).to_be_visible()
@@ -193,29 +185,16 @@ def test_assembly_notice_and_bill_dates_remain_separate(scheduled, tmp_path, cal
         expect(dialog.get_by_text('소관위원회', exact=True)).to_be_visible()
         expect(dialog.get_by_role('heading', name='주요 변경 내용')).to_be_visible()
         expect(dialog.get_by_text('정식 적용 범위를 확대하는 안입니다.')).to_be_visible()
-        image = dialog.get_by_role('img', name='공식 신·구조문대비표 원문 5쪽', include_hidden=True)
-        expect(image).not_to_be_visible()
-        dialog.get_by_text('공식 신·구조문대비표', exact=True).click()
-        expect(image).to_be_visible()
-        page.wait_for_function("document.querySelector('.lc-notice-pages img')?.naturalWidth === 600")
+        expect(dialog.get_by_role('img')).to_have_count(0)
+        expect(dialog.get_by_role('link', name='법률안 PDF 원문 (새 창)')).to_have_attribute('href', PDF_URL)
         assert dialog.evaluate('(element) => element.scrollWidth <= element.clientWidth')
         expect(dialog.get_by_role('link', name='공식 원문 확인', exact=False)).to_have_attribute(
             'href', 'https://pal.assembly.go.kr/napal/lgsltpa/lgsltpaOngoing/view.do?lgsltPaId=PRC_NOTICE'
         )
+        assert pdf_requests == []
         page.keyboard.press('Escape')
         expect(notice_panel.get_by_role('button')).to_be_focused()
 
-        def oversized(_payload):
-            raise ComparisonLimitError('page_limit')
-
-        monkeypatch.setattr('law_calendar.notice_content.comparison_images', oversized)
-        assert refresh_notice_content(database, refresh=True)['pdfLimits']
-        notice_panel.get_by_role('button').click()
-        expect(dialog.get_by_text('개정안은 공식 PDF에서 확인해 주세요.', exact=False)).to_be_visible()
-        expect(dialog.get_by_role('link', name='법률안 PDF 원문 (새 창)')).to_be_visible()
-        dialog.get_by_text('이전에 저장한 신·구조문대비표', exact=True).click()
-        expect(image).to_be_visible()
-        page.keyboard.press('Escape')
         page.get_by_role('button', pressed=True).focus()
         page.keyboard.press('ArrowLeft')
         expect(notice_panel.get_by_text('예고 시작일', exact=False)).to_be_visible()

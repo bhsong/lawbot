@@ -9,7 +9,7 @@ from concurrent.futures import ThreadPoolExecutor
 import pytest
 from fastapi.testclient import TestClient
 
-from law_calendar.db import migrate
+from law_calendar.db import CURRENT_VERSION, migrate
 from law_calendar.ingest import import_files
 from law_calendar.review import inspect_event, review
 from law_calendar.server import create_app
@@ -276,7 +276,7 @@ def test_v1_upgrade_backs_up_preserves_public_data_and_refuses_unknown(tmp_path)
     with sqlite3.connect(backup) as conn:
         assert conn.execute('PRAGMA user_version').fetchone()[0] == 1
     with sqlite3.connect(db) as conn:
-        assert conn.execute('PRAGMA user_version').fetchone()[0] == 7
+        assert conn.execute('PRAGMA user_version').fetchone()[0] == CURRENT_VERSION
         assert conn.execute('SELECT name FROM laws').fetchone()[0] == 'existing'
         conn.execute('PRAGMA user_version=99')
     with pytest.raises(ValueError):

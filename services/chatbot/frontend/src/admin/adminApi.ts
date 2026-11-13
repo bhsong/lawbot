@@ -45,10 +45,6 @@ export function adminGet<T>(path: string, signal?: AbortSignal) {
   return request<T>(path, { signal, cache: 'no-store' })
 }
 
-export function calendarPath(path: string) {
-  return `/api/admin/calendar/${path}`
-}
-
 export function useAdminRead<T>(load: (signal: AbortSignal) => Promise<T>, onUnauthorized: () => void) {
   const [state, setState] = useState<{ data?: T; error?: unknown }>({})
   const [revision, setRevision] = useState(0)

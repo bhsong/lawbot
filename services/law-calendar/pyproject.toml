@@ -5,8 +5,6 @@ requires-python = ">=3.14"
 dependencies = [
     "fastapi==0.143.3",
     "lawbot-common",
-    "pillow>=13.0.0",
-    "pypdfium2>=5.14.0",
     "uvicorn==0.54.0",
 ]
 

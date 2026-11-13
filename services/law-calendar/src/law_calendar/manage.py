@@ -70,7 +70,7 @@ def main():
             result = refresh_notice_content(
                 args.database, limit=args.limit, refresh=args.refresh, after_snapshot=args.after_snapshot
             )
-            failed = bool(result['failed'] or result['pdfErrors'] or result['pdfLimits'])
+            failed = bool(result['failed'])
         else:
             review(args.database, json.loads(args.manifest.read_text(encoding='utf-8')), reviewer=args.reviewer)
             result = {'decision': 'recorded'}

@@ -151,7 +151,7 @@ def test_source_reclassification_moves_between_calendar_and_holds(workflow):
 
 
 def test_v2_upgrade_keeps_a_backup_and_existing_rows(tmp_path):
-    from law_calendar.db import SCHEMA, SCHEMA_V2, migrate
+    from law_calendar.db import CURRENT_VERSION, SCHEMA, SCHEMA_V2, migrate
 
     db = tmp_path / 'v2.db'
     with sqlite3.connect(db) as conn:
@@ -162,7 +162,7 @@ def test_v2_upgrade_keeps_a_backup_and_existing_rows(tmp_path):
         assert conn.execute('PRAGMA user_version').fetchone()[0] == 2
     with sqlite3.connect(db) as conn:
         assert conn.execute('SELECT name FROM laws').fetchone()[0] == 'existing'
-        assert conn.execute('PRAGMA user_version').fetchone()[0] == 7
+        assert conn.execute('PRAGMA user_version').fetchone()[0] == CURRENT_VERSION
 
 
 from test_calendar_api import dataset as dataset

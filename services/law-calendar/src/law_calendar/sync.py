@@ -206,7 +206,6 @@ def main() -> int:
             result.get(key)
             for key in (
                 'notice_pending',
-                'notice_pdf_pending',
                 'notice_content_errors',
                 'notice_migration_required',
             )

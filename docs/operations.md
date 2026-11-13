@@ -32,6 +32,14 @@ uv sync
 
 승인된 운영 반영 시 위 절차에 따라 DB 사본을 먼저 마이그레이션합니다. `PRAGMA quick_check`, `PRAGMA foreign_key_check`, 기존 예고 일정과 검토 이력, `assembly_notice_content`의 본문과 `assembly_notice_pages`의 이미지 수를 확인합니다. v6에서 올리면 `.pre-v7.backup`이 생성됩니다. 국회 수집을 활성화한 환경에서는 다음 06:30 캘린더 sync가 일치한 예고를 자동 공개합니다. 점검 결과에 남은 검토 대기, PDF 재시도, PDF 처리 한도 초과 건수를 확인합니다. [샘플 검토 방법](../services/law-calendar/README.md#국회-이벤트-공개-검토)
 
+## 국회 입법예고 대비표 이미지 정리용 캘린더 DB v8
+
+운영 반영 승인 후 등록된 캘린더 DB와 쓰기 작업을 확인합니다. 먼저 SQLite 사본에서 `uv run --project services/law-calendar --locked python -m law_calendar.db "$CALENDAR_DB"`를 실행합니다. v7에서 올리면 권한이 제한된 `.pre-v8.backup`이 생성됩니다. 이 백업에는 이전 이미지가 포함되므로 접근과 보존 기간을 정합니다.
+
+마이그레이션은 `secure_delete`를 켜고 대비표 이미지 테이블과 PDF 처리 상태를 한 트랜잭션에서 제거합니다. 운영 DB에 쓰기가 없는 배포 창에서 적용한 뒤, 다른 연결이 이전 WAL을 읽고 있지 않은 상태에서 `PRAGMA wal_checkpoint(TRUNCATE)`가 성공하는지 확인합니다. 스키마 버전, 이미지 테이블 부재, `quick_check`, `foreign_key_check`와 기존 일정·본문·공식 PDF 링크·승인 이력을 대조합니다. 양쪽 화면을 빌드한 뒤 공개 캘린더와 웹앱 관리자에서 상세 링크와 이전 이미지 경로의 404를 확인합니다.
+
+복구에는 제한된 위치의 이전 DB 백업을 사용합니다. 복구 전에 자동 다운로드와 이미지 공개가 재개되는지 확인하고, 백업을 포함한 이미지 보존 종료 시점과 삭제 대상을 별도로 기록합니다.
+
 ## 모델 준비
 
 학습된 모델은 용량이 커서 저장소에 포함하지 않습니다. `.env.example`은 **v5** 조문과 v5b 임베딩, 기존 리랭커와 Pro 27B를 선택합니다. 조문·매니페스트와 프롬프트는 저장소에 있으며 모델 파일은 아래 경로에 둡니다. 모델 경로가 다르면 `LAWBOT_SERVE_*`로 지정합니다.

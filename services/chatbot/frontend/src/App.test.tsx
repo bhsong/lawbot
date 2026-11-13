@@ -398,13 +398,14 @@ afterEach(() => {
   Reflect.deleteProperty(HTMLDialogElement.prototype, 'close')
 })
 
-test('calendar events, details, comparison images and holds use the admin proxy', async () => {
+test('calendar events, notice details and holds use the admin proxy', async () => {
   stubDialog()
   const date = new Intl.DateTimeFormat('sv-SE', { timeZone: 'Asia/Seoul' }).format(new Date())
+  const pdfUrl = 'https://likms.assembly.go.kr/filegate/servlet/FileGate?bookId=fixture&type=1'
   const change = {
     id: 'cal-id', kind: 'notice', date, lawName: '합성 법령', article: '제1조', summary: '예고 요약',
     status: '공개', comparable: false, before: null, after: null,
-    noticeContent: { summary: '주요 내용', pdfUrl: null, comparisonPages: [2] },
+    noticeContent: { summary: '주요 내용', pdfUrl },
   }
   const s = server({
     role: 'admin', adminRoutes: (url) => {
@@ -423,9 +424,9 @@ test('calendar events, details, comparison images and holds use the admin proxy'
   expect(await calendar.findByText(/합성 수집 시각/)).toBeVisible()
   await userEvent.click(await calendar.findByRole('button', { name: /합성 법령 제1조/ }))
   const comparison = within(await screen.findByRole('dialog', { name: '합성 법령 제1조' }))
-  await userEvent.click(comparison.getByText('공식 신·구조문대비표'))
-  expect(comparison.getByRole('img', { name: '공식 신·구조문대비표 원문 2쪽' }))
-    .toHaveAttribute('src', '/api/admin/calendar/law-changes/cal-id/notice-comparison/2')
+  expect(comparison.getByText('주요 내용')).toBeVisible()
+  expect(comparison.getByRole('link', { name: '법률안 PDF 원문 (새 창)' })).toHaveAttribute('href', pdfUrl)
+  expect(comparison.queryByRole('img')).not.toBeInTheDocument()
   await userEvent.click(comparison.getByRole('button', { name: '변경 상세 닫기' }))
   await userEvent.click(calendar.getByRole('button', { name: '보류 목록' }))
   const holds = within(await screen.findByRole('dialog', { name: '보류 목록' }))
