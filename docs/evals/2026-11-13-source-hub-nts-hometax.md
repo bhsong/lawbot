@@ -17,8 +17,9 @@
 
 임시 DB에 총 53건을 저장했다. ON 요청은 출처별 정책과 공식 페이지 각 1건이다. 게시물 상세·본문·첨부 요청은 0건이었다. 세무서식·세무일정·지급명세서 제출 안내는 공식 주소를 등록하고 자동 수집을 비활성으로 뒀다. [연말정산 종합 안내](https://www.nts.go.kr/nts/cm/cntnts/cntntsView.do?mi=2304&cntntsId=238938)
 
-홈택스 자료실의 자동 수집 허가와 문서화된 공개 게시물 조회 경로를 확인하지 못해 네 수집원을 수동 확인 상태로 뒀다. 국세청이 직접 게시한 개발자 설명회·프로그램 자료는 국세청 출처로 기록한다. 실제 홈택스 게시물은 운영자가 확인한 경우에만 `record-notice`로 내부에 기록할 수 있다. 동일 ID로 다시 등록하면 신규 0건이며 홈택스 HTTP 요청은 0건이다. [홈택스](https://www.hometax.go.kr/) · [홈택스 이용에 관한 규정](https://www.law.go.kr/admRulLsInfoP.do?admRulId=34730&efYd=0&joNo=004400)
+홈택스 수집원은 비활성 상태다. ERP 탭에는 홈택스 공식 홈과 **전체메뉴 → 기타 → 고객센터 → 자료실** 경로를 표시한다. 국세청이 직접 게시한 개발자 설명회·프로그램 자료는 국세청 출처로 기록한다. [홈택스](https://www.hometax.go.kr/) · [자료실 경로 안내](https://www.nts.go.kr/nts/na/ntt/selectNttInfo.do?mi=2201&nttSn=1350699)
 
-- `pytest -q services/source-hub/tests/test_nts.py` 3건 통과. 국세청 날짜·공식 링크·OFF·재수집, TAX-02 안내 주소, 홈택스 수동 등록의 중복 방지와 공식 검색 링크를 확인했다.
-- 기본 pytest는 `1920 passed, 13 deselected in 150.00s`였다. 단위·계약·통합·브라우저 대역 E2E를 포함한다. Ruff, Pyright, compileall, 캘린더 스키마, Source Hub 잠금 검사를 통과했다. 프런트엔드는 상위 PR에서 typecheck·Vitest 81건·빌드를 통과했고 이 브랜치의 변경 파일에 포함되지 않는다.
+- `pytest -q services/source-hub/tests/test_nts.py` 3건 통과. 국세청 날짜·공식 링크·OFF·재수집, TAX-02 안내 주소, 홈택스 등록부 비활성과 수집 CLI 미연결을 확인했다.
+- ERP 피드 누락·오류 상태에서 홈택스 링크와 메뉴 경로가 표시되는지 Vitest로 확인했다. 누락 상태는 Chromium 대역에서도 확인했다.
+- 기본 pytest는 `1920 passed, 13 deselected in 175.48s`였다. 단위·계약·통합·브라우저 대역 E2E를 포함한다. Ruff, Pyright, compileall, 캘린더 스키마, Source Hub 잠금 검사와 두 프런트엔드 typecheck·Vitest 81건·빌드를 통과했다.
 - 운영·실발송·실제 모델 E2E·모델 스모크·품질 평가는 실행 안 함.

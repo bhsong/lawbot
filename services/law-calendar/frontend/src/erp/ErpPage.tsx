@@ -133,6 +133,10 @@ export default function ErpPage({ loader = loadErp, lawLoader = loadCalendar, to
       {feed?.state === 'ok' && <button type="button" className="lc-more" onClick={() => setHistoryOpen(true)}>수집 이력</button>}
     </header>
     <aside className="lc-disclaimer" aria-label="ERP 자료 이용 안내">이 페이지는 공식 원문을 검토해 옮긴 참고 자료입니다. 요율·세액·서식을 업무에 적용하기 전 국가법령정보센터 원문과 적용 기간을 다시 확인하세요.</aside>
+    <p className="lc-subtitle">
+      <a href="https://www.hometax.go.kr/" target="_blank" rel="noopener noreferrer">홈택스 공식 홈</a>
+      {' · '}<span>전체메뉴 → 기타 → 고객센터 → 자료실</span>
+    </p>
     {state === 'loading' && <p className="lc-empty" role="status">ERP 자료를 불러오는 중입니다.</p>}
     {state === 'error' && <div className="lc-warning" role="alert"><p>ERP 자료를 불러오지 못했습니다.</p>
       <button type="button" onClick={() => setAttempt((value) => value + 1)}>다시 시도</button></div>}

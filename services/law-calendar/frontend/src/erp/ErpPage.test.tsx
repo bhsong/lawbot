@@ -101,6 +101,10 @@ test.each([
 ] as const)('%s feed shows a notice and no items', async (state, message) => {
   render(<ErpPage loader={async () => ({ state })} lawLoader={lawLoader} today="2026-11-12" />)
   expect(await screen.findByText(message)).toBeInTheDocument()
+  const hometax = screen.getByRole('link', { name: '홈택스 공식 홈' })
+  expect(hometax).toHaveAttribute('href', 'https://www.hometax.go.kr/')
+  expect(hometax).toHaveAttribute('rel', 'noopener noreferrer')
+  expect(screen.getByText('전체메뉴 → 기타 → 고객센터 → 자료실')).toBeInTheDocument()
   expect(screen.queryByRole('region', { name: '현재 적용 중' })).not.toBeInTheDocument()
 })
 

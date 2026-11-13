@@ -1,7 +1,6 @@
-import json
 from datetime import timedelta
 
-from source_hub import cli, hometax, materials, nts
+from source_hub import cli, materials, nts
 from source_hub.config import load
 from source_hub.store import Registry
 from test_moel_rss import NOW, setting
@@ -40,38 +39,9 @@ def test_booklet_metadata_uses_public_guide_link():
     assert 'private-token' not in repr(doc)
 
 
-def test_hometax_operator_notice_is_idempotent_and_stays_manual(tmp_path, monkeypatch, capsys):
+def test_hometax_is_listed_without_a_collection_route(tmp_path):
     registry = Registry(load(), tmp_path / 'registry.db')
-    database = tmp_path / 'materials.db'
-    source = 'hometax-media'
-
-    def unexpected(*args, **kwargs):
-        raise AssertionError('Manual observation must not fetch a URL')
-
-    monkeypatch.setattr('urllib.request.OpenerDirector.open', unexpected)
-    args = [
-        '--database',
-        str(registry.database),
-        'record-notice',
-        source,
-        '--materials',
-        str(database),
-        '--notice-id',
-        'test-123',
-        '--title',
-        '전산매체 제출요령 공지',
-    ]
-    assert cli.main(args) == 0
-    assert json.loads(capsys.readouterr().out)['new_count'] == 1
-    assert cli.main(args) == 0
-    assert json.loads(capsys.readouterr().out)['new_count'] == 0
-    [doc] = materials.documents(database, source)
-    assert (doc['event_type'], doc['link_kind'], doc['canonical_url'], doc['published_on']) == (
-        'new_post',
-        'official_search',
-        hometax.OFFICIAL_HOME,
-        None,
-    )
-    settings = next(row for row in registry.snapshot()['sources'] if row['source_id'] == source)
-    assert settings['verification'] == 'manual_review' and not settings['effective_enabled']
-    assert registry.runs(source) == []
+    sources = [row for row in registry.snapshot()['sources'] if row['agency'] == 'hometax']
+    assert sources
+    assert all(row['verification'] == 'manual_review' and not row['runnable'] for row in sources)
+    assert all(row['source_id'] not in cli.COLLECTORS for row in sources)

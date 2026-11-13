@@ -60,12 +60,6 @@ RSS와 목록에서 같은 `bbs_seq`는 한 게시물로 저장합니다. 첫 �
 
 `nts-notice`, `nts-rules`, `nts-tax-references`, `nts-withholding`, `nts-tools`는 공식 목록 첫 쪽을 읽습니다. `nts-tax-02`, `nts-tax-amendments`, `nts-developer-notices`는 연말정산 종합 안내에서 해당 자료 제목과 안내 페이지 링크를 기록합니다. 게시일이 제공되지 않으면 비워 둡니다. 모든 출처는 기본 OFF이고, 저장 범위는 내부 메타데이터입니다. [국세청 저작권 정책](https://www.nts.go.kr/nts/cm/cntnts/cntntsView.do?mi=6791&cntntsId=8169) · [연말정산 종합 안내](https://www.nts.go.kr/nts/cm/cntnts/cntntsView.do?mi=2304&cntntsId=238938)
 
-## 홈택스 게시물 확인 기록
+## 홈택스 자료실
 
-홈택스 직접 수집원은 `manual_review`이며 자동 수집은 OFF입니다. 운영자가 홈택스에서 새 글을 직접 확인한 경우 아래 명령으로 제목과 게시 사실을 기록할 수 있습니다. 게시일이 확인되면 `--published-on YYYY-MM-DD`를 추가합니다. 같은 글을 다시 확인할 때는 같은 식별자를 사용합니다. `documents`의 `official_search` 링크는 홈택스 공식 홈으로 이동하며, 해당 제목으로 찾아볼 수 있습니다. 이 명령은 외부 요청을 하지 않습니다.
-
-```fish
-$hub --database $collector_db record-notice hometax-media --materials $materials_db \
-    --notice-id <확인한-글-식별자> --title '<확인한 제목>'
-$hub --database $collector_db documents hometax-media --materials $materials_db
-```
+홈택스 자료는 ERP 탭의 [홈택스 공식 홈](https://www.hometax.go.kr/)에서 **전체메뉴 → 기타 → 고객센터 → 자료실**로 이동해 확인합니다. 홈택스 수집원은 등록부에서 비활성 상태입니다. [국세청 공식 안내](https://www.nts.go.kr/nts/na/ntt/selectNttInfo.do?mi=2201&nttSn=1350699)

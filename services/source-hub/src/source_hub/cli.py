@@ -12,7 +12,7 @@ import uvicorn
 import yaml
 from pydantic import ValidationError
 
-from source_hub import hometax, materials, moel, mofe, nts
+from source_hub import materials, moel, mofe, nts
 from source_hub.config import CONFIG_PATH, load
 from source_hub.server import create_app
 from source_hub.store import Registry
@@ -35,18 +35,10 @@ def parser() -> argparse.ArgumentParser:
     commands.add_parser('runs').add_argument('source_id')
     for command in ('collect', 'documents'):
         rss = commands.add_parser(command)
-        rss.add_argument(
-            'source_id', choices=COLLECTORS if command == 'collect' else (*COLLECTORS, *hometax.SOURCE_IDS)
-        )
+        rss.add_argument('source_id', choices=COLLECTORS)
         rss.add_argument('--materials', type=Path, required=True)
         if command == 'collect':
             rss.add_argument('--reconcile', action='store_true')
-    record = commands.add_parser('record-notice', help='운영자가 직접 확인한 홈택스 게시 사실을 기록')
-    record.add_argument('source_id', choices=hometax.SOURCE_IDS)
-    record.add_argument('--materials', type=Path, required=True)
-    record.add_argument('--notice-id', required=True)
-    record.add_argument('--title', required=True)
-    record.add_argument('--published-on')
     for command in ('set', 'add'):
         edit = commands.add_parser(command)
         if command == 'set':
@@ -96,12 +88,6 @@ def main(argv: list[str] | None = None) -> int:
                 status = 2
         elif args.command == 'documents':
             result = materials.documents(args.materials, args.source_id)
-        elif args.command == 'record-notice':
-            result = hometax.record_notice(
-                registry, args.materials, args.source_id, args.notice_id, args.title, args.published_on
-            )
-            if result['outcome'] == 'busy':
-                status = 2
         else:
             snapshot = registry.snapshot()
             result = (

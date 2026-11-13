@@ -50,14 +50,6 @@ def collect_lock(registry: Registry):
         os.close(fd)
 
 
-def materials_path(registry: Registry, database: Path) -> Path:
-    path = database.resolve()
-    registry_db = registry.database.resolve()
-    if path == registry_db or (path.exists() and registry_db.exists() and path.samefile(registry_db)):
-        raise ValueError('등록부와 수집 자료 DB에는 별도 경로를 사용하세요')
-    return path
-
-
 def collect(
     registry: Registry,
     database: Path,
@@ -71,7 +63,10 @@ def collect(
     now: datetime | None = None,
 ) -> dict:
     source_id = source['source_id']
-    path = materials_path(registry, database)
+    path = database.resolve()
+    registry_db = registry.database.resolve()
+    if path == registry_db or (path.exists() and registry_db.exists() and path.samefile(registry_db)):
+        raise ValueError('등록부와 수집 자료 DB에는 별도 경로를 사용하세요')
     started = now or datetime.now(KST)
     with collect_lock(registry) as locked:
         if not locked:
