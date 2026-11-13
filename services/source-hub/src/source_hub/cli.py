@@ -12,7 +12,7 @@ import uvicorn
 import yaml
 from pydantic import ValidationError
 
-from source_hub import materials, moel, mofe, nts
+from source_hub import materials, moel, mofe, news, nts
 from source_hub.config import CONFIG_PATH, load
 from source_hub.server import create_app
 from source_hub.store import Registry
@@ -33,6 +33,16 @@ def parser() -> argparse.ArgumentParser:
     for command in ('validate', 'list', 'dry-run', 'audit'):
         commands.add_parser(command)
     commands.add_parser('runs').add_argument('source_id')
+    review = commands.add_parser('review-news')
+    review.add_argument('source_id', choices=COLLECTORS)
+    review.add_argument('upstream_id')
+    review.add_argument('revision', type=int)
+    review.add_argument('decision', choices=('approve', 'withdraw'))
+    review.add_argument('--materials', type=Path, required=True)
+    review.add_argument('--reason', required=True)
+    export = commands.add_parser('export-news')
+    export.add_argument('--materials', type=Path, required=True)
+    export.add_argument('--out', type=Path, required=True)
     for command in ('collect', 'documents'):
         rss = commands.add_parser(command)
         rss.add_argument('source_id', choices=COLLECTORS)
@@ -88,6 +98,20 @@ def main(argv: list[str] | None = None) -> int:
                 status = 2
         elif args.command == 'documents':
             result = materials.documents(args.materials, args.source_id)
+        elif args.command == 'review-news':
+            news.review(
+                args.materials,
+                args.source_id,
+                args.upstream_id,
+                args.revision,
+                args.decision,
+                getpass.getuser(),
+                args.reason,
+            )
+            result = {'decision': args.decision, 'revision': args.revision}
+        elif args.command == 'export-news':
+            snapshot = news.export(registry, args.materials, args.out)
+            result = {'published': sum(len(agency['items']) for agency in snapshot['agencies'].values())}
         else:
             snapshot = registry.snapshot()
             result = (

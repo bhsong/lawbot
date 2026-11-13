@@ -63,3 +63,16 @@ RSS와 목록에서 같은 `bbs_seq`는 한 게시물로 저장합니다. 첫 �
 ## 홈택스 자료실
 
 홈택스 자료는 ERP 탭의 [홈택스 공식 홈](https://www.hometax.go.kr/)에서 **전체메뉴 → 기타 → 고객센터 → 자료실**로 이동해 확인합니다. 홈택스 수집원은 등록부에서 비활성 상태입니다. [국세청 공식 안내](https://www.nts.go.kr/nts/na/ntt/selectNttInfo.do?mi=2201&nttSn=1350699)
+
+## 기관별 최신 소식 검토와 내보내기
+
+`documents`에서 게시물 ID인 `upstream_id`와 현재 판 번호인 `revision_count`를 확인합니다. 공식 출처·공개 이용 조건·개인정보를 검토한 판을 승인하고 공개 파일을 내보냅니다. 공개 파일 경로는 설정 DB와 자료 DB에서 분리합니다.
+
+```fish
+$hub --database $collector_db documents moel-rss-notice --materials $materials_db
+$hub --database $collector_db review-news moel-rss-notice $post_id $revision approve \
+    --materials $materials_db --reason '공식 원문·공개 조건·개인정보 확인'
+$hub --database $collector_db export-news --materials $materials_db --out $news_feed
+```
+
+새 판은 다시 검토합니다. 철회할 때는 `withdraw`를 기록한 뒤 같은 공개 파일에 다시 내보냅니다. 수집원 설정을 끄거나 바꿨을 때도 다시 내보내야 조회에 반영됩니다. 파일에는 제목·공식 링크·게시일과 게시판 상태를 제공합니다. 캘린더 서비스는 해당 파일을 읽습니다. [캘린더 설정](../law-calendar/README.md#기관별-최신-소식)

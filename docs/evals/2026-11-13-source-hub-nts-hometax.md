@@ -1,6 +1,6 @@
 # 국세청·홈택스 공식 자료 연동 검증
 
-2026-11-13 KST. PR #132의 공통 실행기를 기준으로 검증했다. [작업 계획](../plans/source-hub-nts-hometax.md)
+2026-11-13 KST. PR #132의 공통 실행기를 기준으로 검증했다. [작업 계획](../archives/source-hub-nts-hometax.md)
 
 국세청 공식 메뉴, 오픈 API 안내, `robots.txt`, 저작권 정책을 확인했다. 확인 범위에서 아래 게시판을 제공하는 API 명세를 찾지 못했다. 국세청은 공공누리 유형과 출처 표시를 확인하고 미표시 저작물은 사전에 협의하도록 안내한다. 수집 범위는 내부 제목·게시일·공식 링크다. 자료실 목록에서 게시일을 제공하지 않은 항목은 비워 뒀다. 연말정산 종합 안내에서는 자료명과 안내 페이지 링크만 기록했다. [국세청 공식 메뉴](https://www.nts.go.kr/nts/main.do) · [오픈 API 안내](https://www.nts.go.kr/nts/pdoc/openApi/list.do?mi=6409) · [저작권 정책](https://www.nts.go.kr/nts/cm/cntnts/cntntsView.do?mi=6791&cntntsId=8169) · [robots.txt](https://www.nts.go.kr/robots.txt)
 

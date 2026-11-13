@@ -70,6 +70,12 @@ uv run --project services/law-calendar law-calendar --database services/law-cale
   - **관련 법령 일정**: `relatedLaws`에 있는 법령만 골라 `/api/law-events` 결과를 월별로 보여 준다
   - **수집 이력** 버튼: 어떤 항목을, 언제, 어느 원천(저장소 커밋이나 등록한 PDF의 SHA-256)에서 가져와 승인했는지 표로 보여 준다
 
+## 기관별 최신 소식
+
+ERP 탭의 기관 버튼에서 검토된 소식 최대 10건과 게시판별 마지막 수집 상태를 볼 수 있습니다. 홈택스는 공식 홈과 자료실 이동 경로를 표시합니다. 국가법령정보센터는 공개 소식 파일에 포함된 추적 법령 범위의 승인 공포 기록을 읽습니다. 모든 조문의 승인 시행일이 같을 때 시행일도 표시합니다.
+
+Source Hub가 내보낸 공개 파일을 `LAWBOT_CALENDAR_NEWS_FEED` 또는 `law-calendar --news-feed`로 지정합니다. 캘린더에 비공개 수집 DB를 연결할 필요가 없습니다. 파일이 준비되지 않으면 드로어에 대기 상태를 표시합니다. `GET /api/erp-news/latest?agency=moel&limit=10`으로 확인할 수 있습니다. [검토 및 내보내기](../source-hub/README.md#기관별-최신-소식-검토와-내보내기)
+
 ## 저장된 모니터링 결과와 공개 검토
 
 기존 monitor의 `legalize_law` 이벤트 JSON과 원문 사본을 오프라인으로 가져온다. DB 초기화 명령은 새 DB와 기존 v1~v6 DB를 v7로 준비한다. v6에서 올릴 때는 SQLite backup으로 `.pre-v7.backup` 사본을 만든다. 이전 버전의 백업 규칙도 유지한다. v4~v6에서 기존 일정 조회와 검토를 지원한다. 최신 수집 코드의 예고 자동 공개와 첨부 처리 상태 저장은 v7이 필요하다. [v7 반영 절차](../../docs/operations.md#국회-입법예고-자동-공개용-캘린더-db-v7)

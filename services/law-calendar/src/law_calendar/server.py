@@ -18,11 +18,21 @@ from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import ValidationError
 
-from law_calendar import admin
+from law_calendar import admin, news
 from law_calendar.automation import REASONS
 from law_calendar.db import NOTICE_CONTENT_VERSION, read_database
-from law_calendar.models import CalendarMonth, CalendarStatus, ChangePage, ErpFeed, ErpUpdates, HoldPage, PublicDetail
+from law_calendar.models import (
+    CalendarMonth,
+    CalendarStatus,
+    ChangePage,
+    ErpFeed,
+    ErpNews,
+    ErpUpdates,
+    HoldPage,
+    PublicDetail,
+)
 from lawbot_common import envfile
+from lawbot_common.erp_news import Agency
 from lawbot_common.logs import logger
 
 KST = timezone(timedelta(hours=9))
@@ -112,7 +122,9 @@ def erp_updates(feed: Path | None) -> dict:
     return {'state': 'ok', **parsed.model_dump(exclude={'schemaVersion'})}
 
 
-def create_app(database: Path, frontend: Path | None = None, erp_feed: Path | None = None) -> FastAPI:
+def create_app(
+    database: Path, frontend: Path | None = None, erp_feed: Path | None = None, *, news_feed: Path | None = None
+) -> FastAPI:
     app = FastAPI(title='Law Calendar', version='0.2.0')
 
     @app.middleware('http')
@@ -270,6 +282,10 @@ def create_app(database: Path, frontend: Path | None = None, erp_feed: Path | No
     def erp():
         return erp_updates(erp_feed)
 
+    @app.get('/api/erp-news/latest', response_model=ErpNews)
+    def latest_news(agency: Agency, limit: int = Query(10, ge=1, le=10)):
+        return news.response(database, news_feed, agency, limit)
+
     app.include_router(admin.router(database))
     if frontend is not None:
         app.mount('/', StaticFiles(directory=frontend, html=True), name='calendar')
@@ -284,10 +300,15 @@ def main():
     parser.add_argument('--port', type=int, required=True)
     parser.add_argument('--frontend', type=Path)
     parser.add_argument('--erp-feed', type=Path, default=os.environ.get('LAWBOT_CALENDAR_ERP_FEED'))
+    parser.add_argument('--news-feed', type=Path, default=os.environ.get('LAWBOT_CALENDAR_NEWS_FEED'))
     args = parser.parse_args()
     if args.database is None or not 1 <= args.port <= 65535:
         parser.error('An explicit database and valid port are required')
-    uvicorn.run(create_app(args.database, args.frontend, args.erp_feed), host='127.0.0.1', port=args.port)
+    uvicorn.run(
+        create_app(args.database, args.frontend, args.erp_feed, news_feed=args.news_feed),
+        host='127.0.0.1',
+        port=args.port,
+    )
 
 
 if __name__ == '__main__':

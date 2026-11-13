@@ -9,6 +9,7 @@ from playwright.sync_api import expect
 import calendar_ui_support as support
 from test_calendar_api import dataset as dataset
 from test_calendar_erp import FEED, ITEM
+from test_calendar_news import snapshot
 
 pytest_plugins = ['calendar_test_fixtures']
 pytestmark = [pytest.mark.e2e_stub, pytest.mark.usefixtures('calendar_network')]
@@ -113,5 +114,69 @@ def test_missing_feed_leaves_the_law_calendar_working(dataset, tmp_path, calenda
             page.get_by_role('tab', name='법령 캘린더').click()
             expect(page.get_by_role('heading', level=1, name='법령 변경 캘린더')).to_be_visible()
             expect(page.get_by_role('grid')).to_be_visible()
+        finally:
+            support.keep_on_failure(request, log, page)
+
+
+def test_agency_news_overlays_erp_and_supports_mouse_keyboard_and_touch(dataset, tmp_path, calendar_pages, request):
+    page = calendar_pages(viewport={'width': 1280, 'height': 850})
+    news_feed = tmp_path / 'agency-news.json'
+    news = snapshot()
+    news['agencies']['moel'] = {
+        'boards': [{'name': '공지', 'status': 'partial', 'lastSuccessAt': None}],
+        'items': [
+            {
+                'id': 'news-1',
+                'title': '검토된 공지',
+                'board': '공지',
+                'publishedOn': None,
+                'officialUrl': 'https://www.moel.go.kr/news/notice/noticeView.do?bbs_seq=123',
+            }
+        ],
+    }
+    news_feed.write_text(json.dumps(news))
+    with support.serve(tmp_path, development=False, database=dataset, news_feed=news_feed) as (url, log):
+        try:
+            page.goto(url + '/#erp')
+            requests = []
+            page.on('request', lambda http_request: requests.append(http_request.url))
+            width = page.get_by_role('main').bounding_box()['width']
+            button = page.get_by_role('button', name='고용노동부', exact=True)
+            button.hover()
+            panel = page.get_by_role('dialog', name='고용노동부 최신 소식')
+            link = panel.get_by_role('link', name='검토된 공지 원문 열기')
+            expect(link).to_have_attribute('href', news['agencies']['moel']['items'][0]['officialUrl'])
+            expect(panel.get_by_text('게시일 미확인', exact=False)).to_be_visible()
+            expect(panel.get_by_text('공지 · 일부 수집 실패')).to_be_visible()
+            link.hover()
+            expect(panel).to_be_visible()
+            assert page.get_by_role('main').bounding_box()['width'] == width
+            assert requests and all(path.startswith(url + '/') for path in requests)
+
+            page.get_by_role('heading', level=1, name='ERP 자료').click()
+            expect(panel).to_have_count(0)
+            page.get_by_role('link', name='홈택스 공식 홈').focus()
+            page.keyboard.press('Tab')
+            page.keyboard.press('Tab')
+            expect(button).to_be_focused()
+            expect(panel).to_be_visible()
+            page.keyboard.press('Enter')
+            expect(panel.get_by_role('button', name='닫기')).to_be_focused()
+            page.keyboard.press('Escape')
+            expect(panel).to_have_count(0)
+            expect(button).to_be_focused()
+
+            touch = calendar_pages(viewport={'width': 390, 'height': 844}, has_touch=True, reduced_motion='reduce')
+            touch.goto(url + '/#erp')
+            touch.get_by_role('button', name='홈택스', exact=True).tap()
+            home = touch.get_by_role('dialog', name='홈택스 최신 소식')
+            expect(home.get_by_text('전체메뉴 → 기타 → 고객센터 → 자료실')).to_be_visible()
+            expect(home.get_by_role('link', name='홈택스 누리집 열기')).to_have_attribute(
+                'href', 'https://www.hometax.go.kr/'
+            )
+            assert touch.evaluate('document.documentElement.scrollWidth') <= 390
+            assert home.evaluate('(element) => getComputedStyle(element).transitionDuration') == '0s'
+            home.get_by_role('button', name='닫기').tap()
+            expect(home).to_have_count(0)
         finally:
             support.keep_on_failure(request, log, page)

@@ -34,10 +34,23 @@ def calendar_browser():
 
 
 @pytest.fixture
-def calendar_page(calendar_browser):
-    context = calendar_browser.new_context(locale='ko-KR')
-    context.route(
-        '**/*', lambda route: route.continue_() if route.request.url.startswith('http://127.0.0.1:') else route.abort()
-    )
-    yield context.new_page()
-    context.close()
+def calendar_pages(calendar_browser):
+    contexts = []
+
+    def open_page(**options):
+        context = calendar_browser.new_context(locale='ko-KR', **options)
+        contexts.append(context)
+        context.route(
+            '**/*',
+            lambda route: route.continue_() if route.request.url.startswith('http://127.0.0.1:') else route.abort(),
+        )
+        return context.new_page()
+
+    yield open_page
+    for context in contexts:
+        context.close()
+
+
+@pytest.fixture
+def calendar_page(calendar_pages):
+    return calendar_pages()
