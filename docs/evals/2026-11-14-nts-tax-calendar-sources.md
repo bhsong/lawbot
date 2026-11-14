@@ -1,6 +1,6 @@
 # 국세청 세무일정과 신규 공식 수집원 검증
 
-2026-11-14 KST. [계획](../plans/nts-tax-calendar-sources.md) · [공식 경로와 이용 조건 검증](https://www.nts.go.kr/nts/cm/cntnts/cntntsView.do?mi=6791&cntntsId=8169)
+2026-11-14 KST. [계획](../archives/nts-tax-calendar-sources.md) · [공식 경로와 이용 조건 검증](https://www.nts.go.kr/nts/cm/cntnts/cntntsView.do?mi=6791&cntntsId=8169)
 
 ## 공식 경로 실측
 

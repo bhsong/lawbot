@@ -38,6 +38,7 @@ class Timing(TypedDict, total=False):
     gen_tokens: int | None
     peak_gb: float | None
     finish: str | None
+    answer_verdict: str
     refused: bool
     n_cited: int
     _stage: str  # 오류가 난 단계 판정용 (내부)

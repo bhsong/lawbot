@@ -201,6 +201,21 @@ def test_question_streams_answer(stack, ui):
     assert any(FAKE_ANSWER not in t and t.strip() for t in seen)  # 끝나기 전 중간 상태가 화면에 보였음
 
 
+def test_unverified_draft_is_replaced_at_completion(stack, ui):
+    stack.ensure('stream')
+    before = len(e2e.request_log(stack.request_log))
+    e2e.ask(ui, '합성 근거 오류 사례')
+    answer = e2e.answer(ui)
+    expect(answer.get_by_text('답변 초안', exact=True)).to_be_visible()
+    e2e.wait_done(ui)
+    expect(answer.get_by_role('status')).to_contain_text('근거')
+    expect(answer).not_to_contain_text(FAKE_ANSWER)
+    expect(answer.get_by_role('button', name='답변 복사')).to_have_count(0)
+    expect(answer.get_by_role('button', name='좋아요')).to_have_count(0)
+    expect(e2e.sources(ui).get_by_text('✅ 답변에서 인용한 조문')).to_have_count(0)
+    assert new_log_rows(stack, before)[0]['answer_verdict'] == 'invalid_citation'
+
+
 def test_sources_and_stats_shown(stack, ui):
     e2e.ask(ui, QUESTION)
     e2e.wait_done(ui)
@@ -277,6 +292,8 @@ def test_leaving_a_running_answer_cancels_generation(stack, ui, action):
     ui.get_by_role('button', name=action).click()
     if action == '중지':
         e2e.answer(ui).get_by_text('답변을 중지했습니다').wait_for()
+        expect(e2e.answer(ui).get_by_text('답변 초안', exact=True)).to_be_visible()
+        expect(e2e.answer(ui).get_by_role('button', name='답변 복사')).to_have_count(0)
     else:
         expect(ui.get_by_role('button', name='로그인')).to_be_visible()
         assert ui.request.get(f'{stack.url}/api/me', timeout=e2e.ANSWER_TIMEOUT).status == 401

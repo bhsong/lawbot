@@ -22,11 +22,19 @@ export function applyEvent(turn: Turn, event: string, data: unknown): Turn {
     case 'calculation_check':
       return { ...turn, calculationCheck: d.status as CalculationCheck }
     case 'answer':
-      return { ...turn, text: d.text as string, status: undefined }
+      return { ...turn, text: d.text as string, draft: d.draft === true, status: undefined }
     case 'stats':
       return { ...turn, stats: d.text as string }
     case 'done':
-      return { ...turn, text: d.text as string, status: undefined, done: true, turnId: (d.turn_id as string) ?? null }
+      return {
+        ...turn,
+        text: d.text as string,
+        notice: d.notice as string | undefined,
+        draft: false,
+        status: undefined,
+        done: true,
+        turnId: (d.turn_id as string) ?? null,
+      }
     case 'error':
       return { ...turn, status: undefined, done: true, error: d.message as string }
     default:

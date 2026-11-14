@@ -35,7 +35,7 @@ export function TurnView({ turn, selected, reasons, onSelect, onRetry, retryDisa
           {turn.question}
         </div>
       </div>
-      {turn.calculation && <CalculationCard calculation={turn.calculation} check={turn.calculationCheck} />}
+      {turn.calculation && <CalculationCard calculation={turn.calculation} check={turn.notice ? undefined : turn.calculationCheck} />}
       <div className="bot" data-testid="answer" onClick={onSelect}>
         {turn.status && (
           <p className="status" role="status">
@@ -45,9 +45,11 @@ export function TurnView({ turn, selected, reasons, onSelect, onRetry, retryDisa
         )}
         {turn.text && (
           <div className="answer">
+            {turn.draft && <p className="note">답변 초안</p>}
             <AnswerMarkdown text={turn.text} />
           </div>
         )}
+        {turn.notice && <p className="note" role="status">{turn.notice}</p>}
         {turn.stopped && <p className="note">답변을 중지했습니다.</p>}
         {turn.error && (
           <p className="error" role="alert">
@@ -61,7 +63,7 @@ export function TurnView({ turn, selected, reasons, onSelect, onRetry, retryDisa
         )}
         {turn.done && (
           <div className="actions" onClick={(e) => e.stopPropagation()}>
-            {turn.text && !turn.error && <CopyButton text={turn.text} />}
+            {turn.text && !turn.draft && !turn.error && <CopyButton text={turn.text} />}
             {reasons && turn.turnId && <FeedbackButtons value={turn.feedback ?? null} reasons={reasons} onChange={onFeedback} />}
             <button type="button" className="icon" aria-label="다시 묻기" title="다시 묻기" onClick={onRetry} disabled={retryDisabled}>
               <Retry />

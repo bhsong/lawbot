@@ -253,9 +253,11 @@ def test_reranker_failure_is_not_hidden(env, tmp_path, capsys):
 
 def test_chat_shows_rerank_info(env, tmp_path):
     a = v4_app(env, tmp_path, enabled=True)
+    cite = '\n\n【근거 조문】\n근로기준법 제10조'
+    env.setattr(FakeLLM, 'chunks', [*FakeLLM.chunks, cite])
     r = run(a, '해고 예고?', 'fast', 'full')
     text, src, stats = r.text, r.src, r.stats
-    assert text == '【결론】예고해야 합니다.'  # 스트리밍 답변 그대로
+    assert text == '【결론】예고해야 합니다.' + cite
     assert src.index('제10조') < src.index('제9조') < src.index('제8조')
     assert '근로기준법 제10조 제목10 · 유사도 0.900 · 리랭커 1.000 (임베딩 10위)' in src
     assert '리랭킹' in stats and stats.index('검색') < stats.index('리랭킹')

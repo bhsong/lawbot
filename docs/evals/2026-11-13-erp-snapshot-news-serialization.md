@@ -1,6 +1,6 @@
 # 승인 소식이 있는 ERP 공개 스냅샷 검증
 
-2026-11-13 KST. 기준 `0e8de61`. [수정 계획](../plans/erp-snapshot-news-serialization.md)
+2026-11-13 KST. 기준 `0e8de61`. [수정 계획](../archives/erp-snapshot-news-serialization.md)
 
 | 확인 | 결과 |
 | --- | --- |

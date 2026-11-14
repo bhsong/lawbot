@@ -349,7 +349,9 @@ def test_app_loads_models_via_service(web, env):
     assert len(web.launched) == 1
 
 
-def test_chat_streams_answer_with_sources(web):
+def test_chat_streams_answer_with_sources(web, env):
+    cite = '\n\n【근거 조문】\n근로기준법 제26조'
+    env.setattr(FakeLLM, 'chunks', [*FakeLLM.chunks, cite])
     lawbot = service.load_app()
     r = run(lawbot, '수습 기간에도 해고 예고?', 'fast', 'full')
     # 먼저 처리 중 문구, 조문, 그다음 토큰마다 누적 답변, 끝나면 측정값(완료 시간·tok/s)과 같은 답변
@@ -358,10 +360,11 @@ def test_chat_streams_answer_with_sources(web):
         '【결론】',
         '【결론】예고해야',
         '【결론】예고해야 합니다.',
+        '【결론】예고해야 합니다.' + cite,
     ]
-    assert r.done['text'] == '【결론】예고해야 합니다.'
+    assert r.done['text'] == '【결론】예고해야 합니다.' + cite
     first, final = [d for e, d in r.events if e == 'sources']
-    assert first == final  # 인용이 없으면 끝나도 세 개 모두 펼침
+    assert first['groups'][0]['label'] is None and final['groups'][0]['label'] == '✅ 답변에서 인용한 조문'
     assert '근로기준법 제26조 해고의 예고 · 유사도 0.912' in r.src
     assert '30일 전에 예고' in r.src
     assert r.src.count('제26조 해고의 예고') == 1  # 조문 본문 첫 줄(제목 줄)은 중복 표시 안 함

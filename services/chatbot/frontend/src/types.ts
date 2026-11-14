@@ -41,6 +41,8 @@ export type Turn = {
   model: string
   format: string
   status?: string
+  notice?: string
+  draft?: boolean
   text: string
   sources?: Sources
   calculation?: Calculation
