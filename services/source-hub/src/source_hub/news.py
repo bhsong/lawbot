@@ -1,11 +1,12 @@
-"""Review exact revisions and export only the fields the public news drawer needs."""
+"""Decide which current revisions can supply public institution news."""
 
 import hashlib
 import json
 import os
+import re
 import sqlite3
 from contextlib import closing
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from tempfile import NamedTemporaryFile
 from typing import cast
@@ -24,6 +25,75 @@ REVIEW_SCHEMA = """CREATE TABLE IF NOT EXISTS news_reviews (
 REVIEW_INDEX = 'CREATE INDEX IF NOT EXISTS news_review_revision ON news_reviews(source_id,upstream_id,revision,id)'
 REVIEW_AGENCIES = ('moel', 'mofe', 'nts')
 
+PERSONAL_METADATA = re.compile(
+    r'[^\s@]+@[^\s@]+\.[^\s@]+|(?<!\d)\d{6}[- ]?[1-8]\d{6}(?!\d)|(?<!\d)01[016789][ .-]?\d{3,4}[ .-]?\d{4}(?!\d)'
+)
+
+
+def safe_metadata(agency: Agency, metadata: str) -> bool:
+    row = json.loads(metadata)
+    title, url, published = row['title'], row['canonical_url'], row['published_on']
+    if (
+        not title.strip()
+        or len(title) > 500
+        or not 1 <= len(url) <= 1500
+        or not official_url(url, agency)
+        or PERSONAL_METADATA.search(title)
+    ):
+        return False
+    if published is not None:
+        try:
+            return date.fromisoformat(published).isoformat() == published
+        except ValueError:
+            return False
+    return True
+
+
+def current_revisions(conn: sqlite3.Connection, sources: dict[str, dict], has_reviews: bool) -> str:
+    auto = {key: source for key, source in sources.items() if source.get('review_policy') == 'auto_metadata'}
+
+    def can_publish(source_id: str, metadata: str) -> bool:
+        source = auto.get(source_id)
+        return bool(source and eligible(source) and safe_metadata(source['agency'], metadata))
+
+    conn.create_function('automatic_policy', 1, auto.__contains__, deterministic=True)
+    conn.create_function('can_publish_metadata', 2, can_publish, deterministic=True)
+    join = (
+        """
+        LEFT JOIN news_reviews n ON n.id=(
+            SELECT id FROM news_reviews
+            WHERE source_id=r.source_id AND upstream_id=r.upstream_id AND
+                (revision=r.revision OR (automatic_policy(r.source_id) AND revision<r.revision))
+            ORDER BY revision DESC,id DESC LIMIT 1)
+        """
+        if has_reviews
+        else 'LEFT JOIN (SELECT NULL AS id, NULL AS revision, NULL AS decision, NULL AS actor, '
+        'NULL AS reason, NULL AS reviewed_at) n ON FALSE'
+    )
+    return f"""
+        WITH states AS (
+            SELECT r.*,
+                CASE WHEN n.revision=r.revision OR n.decision='withdraw' THEN n.id END AS review_id,
+                CASE WHEN n.revision=r.revision OR n.decision='withdraw' THEN n.actor END AS actor,
+                CASE WHEN n.revision=r.revision OR n.decision='withdraw' THEN n.reason END AS reason,
+                CASE WHEN n.revision=r.revision OR n.decision='withdraw' THEN n.reviewed_at END AS reviewed_at,
+                CASE
+                    WHEN n.decision='withdraw' THEN 'withdrawn'
+                    WHEN n.decision='approve' AND n.revision=r.revision THEN 'manual'
+                    WHEN r.event_type!='baseline_review' AND can_publish_metadata(r.source_id,r.metadata)
+                        THEN 'automatic'
+                    ELSE 'pending'
+                END AS publication
+            FROM revisions r {join}
+            WHERE r.source_id IN (SELECT value FROM json_each(?))
+              AND r.revision=(SELECT MAX(revision) FROM revisions
+                  WHERE source_id=r.source_id AND upstream_id=r.upstream_id)
+        )
+        SELECT *,
+            CASE WHEN publication IN ('manual','automatic') THEN 'approved' ELSE publication END AS status
+        FROM states
+    """
+
 
 def review(
     database: Path,
@@ -36,7 +106,7 @@ def review(
     *,
     require_current: bool = False,
     expected_review_id: int | None = None,
-    agency: Agency | None = None,
+    source: dict | None = None,
 ) -> None:
     reason = reason.strip()
     if decision not in {'approve', 'withdraw'} or not actor.strip():
@@ -56,26 +126,22 @@ def review(
         if record is None:
             raise ValueError('존재하는 자료 리비전을 지정하세요')
         if (
-            agency is not None
+            source is not None
             and decision == 'approve'
-            and not official_url(json.loads(record[0])['canonical_url'], agency)
+            and not official_url(json.loads(record[0])['canonical_url'], source['agency'])
         ):
             raise ValueError('공식 원문 링크를 확인하세요')
         conn.execute(REVIEW_SCHEMA)
         conn.execute(REVIEW_INDEX)
         if require_current:
-            latest_revision = conn.execute(
-                'SELECT MAX(revision) FROM revisions WHERE source_id=? AND upstream_id=?',
-                (source_id, upstream_id),
-            ).fetchone()[0]
-            prior = conn.execute(
-                'SELECT id,decision FROM news_reviews WHERE source_id=? AND upstream_id=? AND revision=? '
-                'ORDER BY id DESC LIMIT 1',
-                (source_id, upstream_id, revision),
+            query = current_revisions(conn, {source_id: source} if source else {}, True)
+            current = conn.execute(
+                f'SELECT revision, review_id, status FROM ({query}) WHERE upstream_id=?',
+                (json.dumps([source_id]), upstream_id),
             ).fetchone()
-            if revision != latest_revision or (prior[0] if prior else None) != expected_review_id:
+            if current is None or current[:2] != (revision, expected_review_id):
                 raise Conflict('자료가 변경되었습니다. 목록을 다시 불러오세요')
-            is_approved = bool(prior and prior[1] == 'approve')
+            is_approved = current[2] == 'approved'
             if is_approved == (decision == 'approve'):
                 raise Conflict('이미 같은 공개 결정이 기록되어 있습니다')
         conn.execute(
@@ -132,32 +198,7 @@ def review_queue(
         conn.execute('BEGIN')
         materials.check_database(conn)
         has_reviews = conn.execute("SELECT 1 FROM sqlite_schema WHERE name='news_reviews'").fetchone()
-        join = (
-            """
-            LEFT JOIN news_reviews n ON n.id = (
-                SELECT MAX(id) FROM news_reviews
-                WHERE source_id=r.source_id AND upstream_id=r.upstream_id AND revision=r.revision)
-        """
-            if has_reviews
-            else ''
-        )
-        decision = (
-            "CASE n.decision WHEN 'approve' THEN 'approved' WHEN 'withdraw' THEN 'withdrawn' ELSE 'pending' END"
-            if has_reviews
-            else "'pending'"
-        )
-        audit = (
-            'n.id AS review_id, n.actor, n.reason, n.reviewed_at'
-            if has_reviews
-            else ('NULL AS review_id, NULL AS actor, NULL AS reason, NULL AS reviewed_at')
-        )
-        query = f"""
-            SELECT r.source_id, r.upstream_id, r.revision, r.metadata, r.observed_at, {audit}, {decision} AS status
-            FROM revisions r {join}
-            WHERE r.source_id IN (SELECT value FROM json_each(?))
-              AND r.revision=(SELECT MAX(revision) FROM revisions
-                  WHERE source_id=r.source_id AND upstream_id=r.upstream_id)
-        """
+        query = current_revisions(conn, sources, bool(has_reviews))
         params = (json.dumps(selected), status)
         result['total'] = conn.execute(f'SELECT COUNT(*) FROM ({query}) WHERE status=?', params).fetchone()[0]
         rows = conn.execute(
@@ -185,6 +226,7 @@ def review_queue(
                     'upstream_id': row['upstream_id'],
                     'board': source['board_name'],
                     'status': row['status'],
+                    'automatic': row['publication'] == 'automatic',
                     'review_id': row['review_id'],
                     'actor': row['actor'],
                     'reason': row['reason'],
@@ -223,21 +265,17 @@ def publication(registry: Registry, database: Path, out: Path) -> dict:
     }
 
 
-def approved(database: Path) -> dict[str, list[tuple[str, dict]]]:
+def approved(database: Path, sources: dict[str, dict]) -> dict[str, list[tuple[str, dict]]]:
     if not database.exists():
         return {}
     with closing(sqlite3.connect(database.resolve().as_uri() + '?mode=ro', uri=True, timeout=5)) as conn:
         conn.execute('BEGIN')
         materials.check_database(conn)
-        if not conn.execute("SELECT 1 FROM sqlite_schema WHERE name='news_reviews'").fetchone():
-            return {}
+        has_reviews = conn.execute("SELECT 1 FROM sqlite_schema WHERE name='news_reviews'").fetchone()
+        query = current_revisions(conn, sources, bool(has_reviews))
         rows = conn.execute(
-            """SELECT r.source_id,r.upstream_id,r.metadata,r.revision,r.event_type FROM revisions r
-               WHERE r.revision = (SELECT MAX(revision) FROM revisions
-                  WHERE source_id=r.source_id AND upstream_id=r.upstream_id)
-               AND (SELECT decision FROM news_reviews
-                  WHERE source_id=r.source_id AND upstream_id=r.upstream_id AND revision=r.revision
-                  ORDER BY id DESC LIMIT 1)='approve'"""
+            f"SELECT source_id,upstream_id,metadata,revision,event_type FROM ({query}) WHERE status='approved'",
+            (json.dumps(list(sources)),),
         ).fetchall()
     result: dict[str, list[tuple[str, dict]]] = {}
     for source, upstream, metadata, revision, event in rows:
@@ -253,8 +291,9 @@ def build(
     records: dict[str, list[tuple[str, dict]]] | None = None,
     now: datetime | None = None,
 ) -> dict:
-    sources = (registry.snapshot() if plan is None else plan)['sources']
-    records = approved(database) if records is None else records
+    plan = registry.snapshot() if plan is None else plan
+    sources = plan['sources']
+    records = approved(database, review_sources_from_plan(plan)) if records is None else records
     agencies = {agency: {'boards': [], 'items': []} for agency in AGENCIES}
     laws: list[str] = []
     for source in sources:

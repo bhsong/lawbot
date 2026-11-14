@@ -564,7 +564,7 @@ def _run(registry: Registry, config: DailyConfig, now: Callable[[], datetime], r
         )
         statuses = collect_sources(registry, config, state, journal, previous, datetime.fromisoformat(state['started']))
         cutoff = now().astimezone(KST)
-        records = news.approved(config.materials_db)
+        records = news.approved(config.materials_db, news.review_sources_from_plan(plan))
         replace_file(
             paths.news,
             news.build(registry, config.materials_db, plan=news_plan(plan, statuses), records=records, now=cutoff),

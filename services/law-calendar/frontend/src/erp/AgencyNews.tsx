@@ -44,7 +44,7 @@ function NewsContent({ agency }: { agency: Agency }) {
 
   const items = result.items ?? []
   return <>
-    {result.state === 'ok' && <p className="lc-caption">검토를 마친 소식 최대 10건 · 등록된 수집 범위 기준</p>}
+    {result.state === 'ok' && <p className="lc-caption">공개 소식 최대 10건 · 등록된 수집 범위 기준</p>}
     {result.generatedAt && <p className="lc-caption">스냅샷 {kstMinute(result.generatedAt)} KST</p>}
     {result.state === 'ok' && items.length === 0 && <p role="status">공개된 소식이 없습니다.</p>}
     {items.length > 0 && <ul className="erp-news-items">

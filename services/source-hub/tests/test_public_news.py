@@ -3,14 +3,16 @@ from datetime import timedelta
 
 import pytest
 
-from source_hub import cli, materials, moel, news
+from source_hub import cli, daily, materials, moel, news
 from test_moel_rss import FEED, NOW, SOURCE, feed, item, setting
 from test_moel_rss import setup as setup
 
 
 def test_only_approved_latest_versions_are_exported(setup, tmp_path):
     registry, database, _, bodies = setup
-    setting(registry, 'source', SOURCE, True)
+    registry.patch(
+        'source', SOURCE, {'enabled': True, 'review_policy': 'manual'}, actor='test', reason='test', version=0
+    )
     moel.collect(registry, database, SOURCE, now=NOW)
     assert news.build(registry, database)['agencies']['moel']['items'] == []
     with pytest.raises(ValueError, match='리비전'):
@@ -79,3 +81,38 @@ def test_publication_cannot_replace_either_private_db(setup):
             == 2
         )
         assert not out.exists()
+
+
+def test_official_metadata_appears_automatically_without_baseline_alerts(setup):
+    registry, database, calls, bodies = setup
+    setting(registry, 'source', SOURCE, True)
+    bodies[FEED] = feed(item('기준 공지'), item('문의 someone@example.test', '20261100124'))
+    moel.collect(registry, database, SOURCE, now=NOW)
+    plan = registry.snapshot()
+    [public] = news.build(registry, database)['agencies']['moel']['items']
+    assert public['title'] == '기준 공지' and public['publishedOn'] == '2026-11-13'
+    assert 'Source text' not in json.dumps(public)
+    records = news.approved(database, news.review_sources_from_plan(plan))
+    feeds = {'erp': {'items': []}, 'rules': None}
+    changes, ledger = daily.change_records(plan, records, feeds, '2026-11-13', {})
+    assert changes == [] and len(ledger) == 1
+    assert len(calls) == 2
+
+    bodies[FEED] = feed(item('정정 공지'), item('새 공지', '20261100125'))
+    moel.collect(registry, database, SOURCE, now=NOW + timedelta(days=1))
+    records = news.approved(database, news.review_sources_from_plan(plan))
+    changes, _ = daily.change_records(plan, records, feeds, '2026-11-14', ledger)
+    assert {(entry['title'], entry['change']) for entry in changes} == {('정정 공지', 'modified'), ('새 공지', 'new')}
+
+    setting(registry, 'agency', 'moel', False)
+    assert news.build(registry, database)['agencies']['moel']['items'] == []
+    assert len(calls) == 4
+
+
+def test_only_verified_news_sources_opt_in_by_default(setup):
+    registry, _, _, _ = setup
+    sources = news.review_sources(registry)
+    for source in ['moel-rss-notice', 'moel-press', 'mofe-rss-press', 'mofe-laws', 'nts-notice']:
+        assert sources[source]['review_policy'] == 'auto_metadata'
+    for source in ['moel-policy', 'mofe-rss', 'nts-calendar', 'nts-forms']:
+        assert sources[source]['review_policy'] == 'manual'
