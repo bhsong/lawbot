@@ -26,7 +26,7 @@ QA_FILES = {
     'refusal_hard': ('refusal_hard_cases.csv',),
     'labor_eval': ('labor_eval_keywords.csv',),
 }
-QA_COUNTS = dict(zip(QA_FILES, (7618, 13680, 4096, 30, 102, 20, 86, 650)))
+QA_COUNTS = dict(zip(QA_FILES, (7618, 13680, 4096, 32, 102, 20, 86, 650)))
 SPLIT_COUNTS = {
     'v4': ((4433, 1110, 2075), (4987, 556, 2075)),
     'v5': ((8208, 2052, 3420), (9234, 1026, 3420)),

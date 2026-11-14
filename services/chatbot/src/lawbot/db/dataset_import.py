@@ -53,7 +53,7 @@ DATASETS = {
         'decree_exp/qa_decree_v4.csv', (*QA_COLUMNS, 'rid'), 4096, 'decree_exp/split_decree_v4.csv'
     ),
     'reasoning_v5': DatasetSpec(
-        'v5/qa_reasoning_val.csv', ('id', 'error_type', 'question', 'answer', 'cited_articles', 'article_ids'), 30
+        'v5/qa_reasoning_val.csv', ('id', 'error_type', 'question', 'answer', 'cited_articles', 'article_ids'), 32
     ),
     'oos': DatasetSpec(
         'oos_eval.csv', ('id', 'category', 'source', 'question', 'near_lsa', 'near_lsa_v2', 'refer_lsa', 'note'), 102

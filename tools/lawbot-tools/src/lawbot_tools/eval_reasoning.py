@@ -156,7 +156,7 @@ def main():
     parser.add_argument('--output', type=Path, required=True, help='결과를 쓸 새 디렉터리 (부모 디렉터리 필요)')
     args = parser.parse_args()
     rows = load_questions()
-    if [row['id'] for row in rows] != [f'ERR{i:03}' for i in range(1, 31)]:
+    if [row['id'] for row in rows] != [*(f'ERR{i:03}' for i in range(1, 31)), 'CARD01', 'CARD02']:
         raise SystemExit('고정 검증셋 문항 ID와 순서를 확인하세요.')
 
     envfile.load()
@@ -194,7 +194,7 @@ def main():
             stage = '실행 전 구성 확인'
             before = snapshot(cfg, client, preflight=True)
             (args.output / 'before.json').write_text(json.dumps(before, indent=2), encoding='utf-8')
-            print('실행 전 확인 통과 · 30문항 · 동시 1', flush=True)
+            print(f'실행 전 확인 통과 · {len(rows)}문항 · 동시 1', flush=True)
             try:
                 stage = '웹앱 초기화'
                 REQUEST_ID.set('reasoning-val-index')
