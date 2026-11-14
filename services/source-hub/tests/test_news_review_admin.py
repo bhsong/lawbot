@@ -24,7 +24,9 @@ POST = {
 
 def test_admin_review_comparison_conflict_and_publication(setup, tmp_path):
     registry, database, _, bodies = setup
-    setting(registry, 'source', SOURCE, True)
+    registry.patch(
+        'source', SOURCE, {'enabled': True, 'review_policy': 'manual'}, actor='test', reason='test', version=0
+    )
     moel.collect(registry, database, SOURCE, now=NOW)
     out = tmp_path / 'public.json'
     with TestClient(create_app(registry, *AUTH, host='testserver', materials_db=database, news_feed=out)) as client:
@@ -87,7 +89,9 @@ def test_admin_cannot_publish_to_an_invalid_existing_file(setup, tmp_path):
 @pytest.mark.e2e_stub
 def test_admin_browser_reviews_correction_and_refreshes_public_snapshot(setup, tmp_path):
     registry, database, _, bodies = setup
-    setting(registry, 'source', SOURCE, True)
+    registry.patch(
+        'source', SOURCE, {'enabled': True, 'review_policy': 'manual'}, actor='test', reason='test', version=0
+    )
     moel.collect(registry, database, SOURCE, now=NOW)
     out = tmp_path / 'public.json'
     with admin_browser(registry, '--materials', str(database), '--news-feed', str(out)) as page:
@@ -130,3 +134,31 @@ def test_admin_browser_reviews_correction_and_refreshes_public_snapshot(setup, t
         publish.click()
         expect(panel.get_by_text('기관 게시물 0건', exact=False)).to_be_visible()
         assert json.loads(out.read_text())['agencies']['moel']['items'] == []
+
+
+def test_auto_published_news_can_be_withdrawn_across_revisions(setup, tmp_path):
+    registry, database, _, bodies = setup
+    setting(registry, 'source', SOURCE, True)
+    moel.collect(registry, database, SOURCE, now=NOW)
+    out = tmp_path / 'public.json'
+    with TestClient(create_app(registry, *AUTH, host='testserver', materials_db=database, news_feed=out)) as client:
+        headers = {'Origin': ORIGIN}
+        [auto] = client.get(BASE + '/reviews?status=approved', auth=AUTH).json()['items']
+        assert auto['review_id'] is None
+        assert auto['status'] == 'approved' and auto['automatic']
+        withdrawal = POST | {'decision': 'withdraw', 'reason': '공개 철회 확인'}
+        assert client.post(BASE + '/reviews', auth=AUTH, headers=headers, json=withdrawal).status_code == 200
+        assert not news.build(registry, database)['agencies']['moel']['items']
+
+        bodies[FEED] = feed(item('정정 공지'))
+        moel.collect(registry, database, SOURCE, now=NOW + timedelta(days=1))
+        assert not news.build(registry, database)['agencies']['moel']['items']
+        [row] = client.get(BASE + '/reviews?status=withdrawn', auth=AUTH).json()['items']
+        assert row['current']['title'] == '정정 공지' and row['reason'] == '공개 철회 확인'
+
+        approval = POST | {'revision': 2, 'review_id': row['review_id']}
+        assert client.post(BASE + '/reviews', auth=AUTH, headers=headers, json=approval).status_code == 200
+        assert news.build(registry, database)['agencies']['moel']['items'][0]['title'] == '정정 공지'
+        bodies[FEED] = feed(item('추가 정정'))
+        moel.collect(registry, database, SOURCE, now=NOW + timedelta(days=2))
+        assert news.build(registry, database)['agencies']['moel']['items'][0]['title'] == '추가 정정'

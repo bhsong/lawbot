@@ -303,7 +303,7 @@ function renderVersion(label, version) {
 function renderReview(row) {
   const item = element('article')
   item.className = 'review-item'
-  item.append(element('h3', row.current.title), element('p', row.board + ' · ' + reviewLabels[row.status]))
+  item.append(element('h3', row.current.title), element('p', row.board + ' · ' + (row.automatic ? '자동 공개' : reviewLabels[row.status])))
   const versions = element('div')
   versions.className = 'review-versions'
   versions.append(renderVersion('이전 승인판', row.previous), renderVersion('현재 수집판', row.current))
