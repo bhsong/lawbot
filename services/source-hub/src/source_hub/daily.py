@@ -17,12 +17,12 @@ from uuid import uuid4
 from lawbot_common.erp_daily import read_snapshot, replace_file, seal, snapshot_hash
 from lawbot_common.erp_news import official_url
 from lawbot_common.erp_rules import RuleSnapshot
-from source_hub import moel, mofe, news, nts
+from source_hub import materials, moel, mofe, news, nts
 from source_hub.collector import file_lock, interval_due
 from source_hub.store import KST, Registry
 
 COLLECTORS = (
-    dict.fromkeys(moel.CHANNELS, moel.collect)
+    dict.fromkeys((*moel.CHANNELS, *moel.BOARDS), moel.collect)
     | dict.fromkeys(mofe.CHANNELS, mofe.collect)
     | dict.fromkeys(nts.CHANNELS, nts.collect)
 )
@@ -305,11 +305,19 @@ def collect_sources(
         supported = key in COLLECTORS or key in LEGACY or key == 'existing-erp'
         if outcome := skipped(row, supported):
             source_result = {'outcome': outcome}
-        elif state.get('publish_only') and key in previous:
-            statuses.append(previous[key])
-            continue
         elif state.get('publish_only'):
-            source_result = {'outcome': 'not_due'}
+            prior = previous.get(key, {})
+            latest = registry.runs(key) if key in COLLECTORS else []
+            if latest and (
+                not prior.get('lastAttemptAt')
+                or datetime.fromisoformat(latest[0]['started_at']) > datetime.fromisoformat(prior['lastAttemptAt'])
+            ):
+                source_result = latest[0]
+            elif prior and prior['outcome'] not in ('disabled', 'unverified'):
+                statuses.append(prior)
+                continue
+            else:
+                source_result = {'outcome': 'not_due'}
         elif key in LEGACY:
             source_result = legacy.get(key, {'outcome': 'not_due', 'run_id': previous.get(key, {}).get('runId')})
         elif key == 'existing-erp':
@@ -562,6 +570,18 @@ def _run(registry: Registry, config: DailyConfig, now: Callable[[], datetime], r
             news.build(registry, config.materials_db, plan=news_plan(plan, statuses), records=records, now=cutoff),
         )
         feeds = capture(config, paths, cutoff)
+        if any(row['source_id'] == 'nts-calendar' and row['runnable'] for row in plan['sources']):
+            if schedule := materials.tax_schedule(config.materials_db):
+                feeds['taxSchedule'] = {
+                    'confirmedAt': schedule['confirmedAt'],
+                    'items': [
+                        {
+                            key: row[key]
+                            for key in ('upstream_id', 'title', 'canonical_url', 'deadline_on', 'target_period')
+                        }
+                        for row in schedule['items']
+                    ],
+                }
         if any(value['state'] == 'unavailable' for value in feeds['news'].values()):
             old_law_news = prior.get('feeds', {}).get('news', {}).get('lawgo', {})
             if (

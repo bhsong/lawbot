@@ -5,12 +5,14 @@ import re
 from datetime import date, datetime
 from html.parser import HTMLParser
 from pathlib import Path
+from time import sleep
 
-from source_hub import collector, robots
+from lawbot_common.tax_schedule import NTS_SCHEDULE_PATH, year_path
+from source_hub import collector, robots, tax_schedule
 from source_hub.collector import FetchError
 from source_hub.materials import Article
 from source_hub.moel import read_response
-from source_hub.store import Registry
+from source_hub.store import KST, Registry
 
 HOST = 'https://www.nts.go.kr'
 LIST = '/nts/na/ntt/selectNttList.do'
@@ -31,6 +33,8 @@ GUIDE_TOPICS = {
 CHANNELS = {
     **{key: f'{LIST}?bbsId={board}&mi={menu}' for key, (menu, board) in BOARDS.items()},
     **dict.fromkeys(GUIDE_TOPICS, GUIDE),
+    'nts-calendar': NTS_SCHEDULE_PATH,
+    'nts-payment-reports': tax_schedule.PAYMENT_PATH,
 }
 
 
@@ -164,10 +168,23 @@ def collect(
         except (FetchError, UnicodeError) as exc:
             raise FetchError('robots_unavailable') from exc
 
-    def read_articles(rules: list[str]) -> list[Article]:
-        if error := robots.access_failure(rules, path):
+    def get(rules: list[str], target: str) -> bytes:
+        if error := robots.access_failure(rules, target):
             raise FetchError(error)
-        data = read_response(HOST + path, {'text/html'}, 2_097_152)
+        return read_response(HOST + target, {'text/html'}, 2_097_152)
+
+    def read_articles(rules: list[str]) -> list[Article]:
+        if source_id == 'nts-calendar':
+            year = (now or datetime.now(KST)).astimezone(KST).year
+            current = tax_schedule.parse_year(get(rules, year_path(year)), year)
+            if not current:
+                raise ValueError('Missing current NTS schedule')
+            sleep(1)
+            following = tax_schedule.parse_year(get(rules, year_path(year + 1)), year + 1)
+            return current + following
+        data = get(rules, path)
+        if source_id == 'nts-payment-reports':
+            return tax_schedule.payment_guide(data)
         return parse_board(data, BOARDS[source_id][0]) if source_id in BOARDS else parse_guide(data, source_id)
 
     return collector.collect(

@@ -1,5 +1,10 @@
 import type { CalendarChange, CalendarDay } from '@lawbot/ui'
 
+export interface TaxSchedule {
+  items: { id: string; title: string; date: string; targetPeriod: string | null; sourceUrl: string }[]
+  confirmedAt: string | null
+}
+
 export interface CalendarSnapshot {
   counts?: CalendarDay[]
   changes: CalendarChange[]

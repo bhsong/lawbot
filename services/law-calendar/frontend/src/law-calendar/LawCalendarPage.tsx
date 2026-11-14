@@ -2,9 +2,9 @@ import { useEffect, useRef, useState } from 'react'
 import { dateLabel, EventList, MonthCalendar, todayKst } from '@lawbot/ui'
 import type { CalendarChange } from '@lawbot/ui'
 import { ChangeDialog } from './ChangeDialog'
-import { loadCalendar, loadChange } from './data'
+import { loadCalendar, loadChange, loadTaxSchedule } from './data'
 import { HoldDialog } from './HoldDialog'
-import type { CalendarLoader, CalendarSnapshot } from './types'
+import type { CalendarLoader, CalendarSnapshot, TaxSchedule } from './types'
 import '@lawbot/ui/calendar.css'
 import './calendar.css'
 
@@ -22,12 +22,23 @@ export default function LawCalendarPage({ loader = loadCalendar, initialDate }: 
   const detailRequest = useRef<AbortController | null>(null)
   const [detailPending, setDetailPending] = useState(false)
   const [detailError, setDetailError] = useState(false)
+  const [tax, setTax] = useState<{ month: string; data: TaxSchedule | null } | null>(null)
   useEffect(() => () => detailRequest.current?.abort(), [])
   const month = selected.slice(0, 7)
 
   useEffect(() => {
     document.title = '법령 변경 캘린더 · Lawbot'
   }, [])
+
+  useEffect(() => {
+    if (loader !== loadCalendar || (import.meta.env.DEV && new URLSearchParams(window.location.search).get('source') !== 'api')) return
+    const controller = new AbortController()
+    loadTaxSchedule(month, controller.signal).then(
+      data => { if (!controller.signal.aborted) setTax({ month, data }) },
+      () => { if (!controller.signal.aborted) setTax({ month, data: null }) },
+    )
+    return () => controller.abort()
+  }, [loader, month, attempt])
 
   useEffect(() => {
     const controller = new AbortController()
@@ -53,6 +64,10 @@ export default function LawCalendarPage({ loader = loadCalendar, initialDate }: 
   const noticeCount = new Set(notices.map(change => change.eventId ?? change.id)).size
   const effective = changes.filter((change) => change.date === selected && change.kind === 'effective')
   const bills = changes.filter((change) => change.date === selected && change.kind === 'bill')
+  const taxData = tax?.month === month ? tax.data : null
+  const taxCounts = new Map<string, number>()
+  for (const item of taxData?.items ?? []) taxCounts.set(item.date, (taxCounts.get(item.date) ?? 0) + 1)
+  const taxItems = taxData?.items.filter(item => item.date === selected) ?? []
   function select(day: string) {
     detailRequest.current?.abort()
     setDetailPending(false); setDetailError(false); setOpened(null); setSelected(day)
@@ -97,7 +112,9 @@ export default function LawCalendarPage({ loader = loadCalendar, initialDate }: 
       <span>날짜 기준: 한국 표준시(KST)</span>
     </section>
     {(snapshot?.delayed || scenario === 'delayed') && <p className="lc-warning" role="status">데이터 갱신이 지연되고 있습니다. 마지막 확인 시각과 공식 원문을 확인하세요.</p>}
-    <MonthCalendar selected={selected} changes={changes} totals={snapshot?.counts} onSelect={select} />
+    {tax?.month === month && !taxData && <p className="lc-warning" role="status">국세청 세무일정을 불러오지 못했습니다.</p>}
+    {taxData?.confirmedAt && <p className="lc-caption">국세청 세무일정 확인 {taxData.confirmedAt}</p>}
+    <MonthCalendar selected={selected} changes={changes} totals={snapshot?.counts} onSelect={select} taxCounts={taxData?.confirmedAt ? taxCounts : undefined} />
     <section className="lc-results" aria-labelledby="lc-selected-date" aria-busy={state === 'loading'}>
       <div className="lc-selected"><h2 id="lc-selected-date">{dateLabel(selected)}</h2>
         {state === 'ready' && <p aria-live="polite">입법예고 {noticeCount}건 · 시행 조문 {effective.length}건
@@ -109,6 +126,13 @@ export default function LawCalendarPage({ loader = loadCalendar, initialDate }: 
         <EventList key={`effective-${selected}`} kind="effective" changes={effective} onOpen={openChange} />
         {bills.length > 0 && <EventList key={`bill-${selected}`} kind="bill" changes={bills} onOpen={openChange} />}
       </div>}
+      {taxItems.length > 0 && <section className="lc-list lc-tax-list" aria-label={`세무일정 ${taxItems.length}건`}>
+        <div className="lc-list-head"><h3 className="lc-tax">세무일정 {taxItems.length}건</h3></div>
+        <ul>{taxItems.map(item => <li key={item.id}>
+          <strong>{item.title}</strong><p>기한 {dateLabel(item.date)}{item.targetPeriod && ` · 대상 ${item.targetPeriod}`}</p>
+          <a href={item.sourceUrl} target="_blank" rel="noopener noreferrer">국세청 원문 ↗</a>
+        </li>)}</ul>
+      </section>}
     </section>
     {detailPending && <p role="status">상세 정보를 불러오는 중입니다.</p>}
     {detailError && <p className="lc-warning" role="alert">상세 정보를 확인하지 못했습니다. 항목을 다시 선택하세요.</p>}

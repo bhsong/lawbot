@@ -24,6 +24,20 @@ CHANNELS = {
     'moel-rss-policy': ('/rss/policy.do', '/policy/policydata/view.do', '/policy/policydata/list.do'),
     'moel-rss-lawinfo': ('/rss/lawinfo.do', '/info/lawinfo/lawmaking/view.do', '/info/lawinfo/lawmaking/list.do'),
 }
+BOARDS = {
+    'moel-rules': ('/info/lawinfo/instruction/list.do', '/info/lawinfo/instruction/view.do', 'bbs_seq'),
+    'moel-interpretations': (
+        '/info/publicdata/qnrinfo/qnrInfoList.do',
+        '/info/publicdata/qnrinfo/qnrInfoView.do',
+        'qnr_uid',
+    ),
+    'moel-publications': (
+        '/info/publicdata/majorpublish/majorPublishList.do',
+        '/info/publicdata/majorpublish/majorPublishView.do',
+        'bbs_seq',
+    ),
+    'moel-press': ('/news/enews/report/enewsList.do', '/news/enews/report/enewsView.do', 'news_seq'),
+}
 ROBOTS_LIMIT = 512_000
 FEED_LIMIT = 2_097_152
 RSS_MEDIA = {'text/xml', 'application/xml', 'application/rss+xml'}
@@ -158,6 +172,27 @@ def collect(
     reconcile: bool = False,
     plan: dict | None = None,
 ) -> dict:
+    if source_id in BOARDS:
+        path, detail, key = BOARDS[source_id]
+        source, version, outcome = collector.source_plan(registry, source_id, 'moel', 'html', HOST + path, plan=plan)
+        if source is None:
+            return {'outcome': outcome}
+
+        def read_list(rules: list[str]) -> list[Article]:
+            parsed = moel_board.parse_board(checked_read(rules, path, {'text/html'}), HOST + path, detail, key)
+            return list(parsed.articles.values())
+
+        return collector.collect(
+            registry,
+            database,
+            source,
+            version,
+            read_rules=robots_rules,
+            read_articles=read_list,
+            invalid_source='invalid_board',
+            now=now,
+            kst_days=plan is not None,
+        )
     if source_id not in CHANNELS:
         raise ValueError('지원되는 고용노동부 RSS 수집원 ID를 선택하세요')
     feed_path, article_path, board_path = CHANNELS[source_id]

@@ -161,6 +161,42 @@ def test_law_change_window_reuses_previous_public_cutoff_on_next_day_and_republi
     assert cutoffs == [STAMP.replace(hour=0, minute=0), STAMP, STAMP]
 
 
+def test_republish_shows_a_newly_enabled_sources_manual_collection(registry, tmp_path, monkeypatch):
+    from source_hub.store import Run
+
+    cfg = daily.DailyConfig(
+        tmp_path,
+        tmp_path / 'monitor',
+        tmp_path / 'erp',
+        tmp_path / 'calendar.db',
+        tmp_path / 'materials.db',
+        tmp_path / 'daily.json',
+    )
+    monkeypatch.setattr(daily, 'run_legacy', lambda *_: {})
+    monkeypatch.setattr(daily, 'run_erp', lambda *_, **__: {'outcome': 'ok'})
+    monkeypatch.setattr(daily, 'capture', lambda *_: {'erp': {'state': 'ok'}, 'rules': None, 'news': {}})
+    daily.run(registry, cfg, now=lambda: STAMP)
+    source = 'nts-calendar'
+    version = registry.patch('source', source, {'enabled': True}, actor='fixture', reason='verified', version=0)
+    observed = STAMP + timedelta(hours=1)
+    registry.record_run(
+        Run(
+            run_id='manual',
+            source_id=source,
+            config_version=version,
+            started_at=observed,
+            finished_at=observed,
+            outcome='ok',
+            new_count=0,
+            modified_count=0,
+        )
+    )
+    daily.run(registry, cfg, now=lambda: observed + timedelta(minutes=1), republish=True)
+    statuses = {row['sourceId']: row for row in read_snapshot(cfg.public)['sources']}
+    assert statuses[source]['outcome'] == 'ok'
+    assert statuses[source]['runId'] == 'manual'
+
+
 def test_collection_resumes_after_failed_capture_without_repeating_completed_stages(registry, tmp_path, monkeypatch):
     calls = []
     cfg = daily.DailyConfig(

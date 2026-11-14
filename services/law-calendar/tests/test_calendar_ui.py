@@ -11,6 +11,8 @@ from playwright.sync_api import expect
 import calendar_ui_support as support
 from law_calendar.assembly_ingest import import_assembly
 from law_calendar.sync import synchronize
+from lawbot_common.erp_daily import replace_file, seal
+from lawbot_common.tax_schedule import NTS_HOST, year_path
 from test_calendar_api import dataset as dataset
 from test_calendar_assembly import register
 from test_calendar_notice_content import PDF_URL, detail_html
@@ -45,6 +47,56 @@ def demo(development, calendar_page, request):
     support.keep_on_failure(request, log, calendar_page)
 
 
+@pytest.mark.parametrize('width', [390, 1280])
+def test_tax_schedule_is_visible_and_keyboard_accessible(dataset, tmp_path, calendar_page, width):
+    feed = tmp_path / 'tax-snapshot.json'
+    official = NTS_HOST + year_path(2026)
+    stamp = '2026-11-14T06:30:00+09:00'
+    replace_file(
+        feed,
+        seal(
+            {
+                'schemaVersion': 1,
+                'dayKst': '2026-11-14',
+                'cutoffAt': stamp,
+                'runId': 'daily-fixture',
+                'configVersion': 0,
+                'configHash': '0' * 64,
+                'status': 'ok',
+                'sources': [],
+                'changes': [],
+                'feeds': {
+                    'taxSchedule': {
+                        'confirmedAt': stamp,
+                        'items': [
+                            {
+                                'upstream_id': 'a' * 32,
+                                'title': '일용근로소득지급명세서 제출',
+                                'deadline_on': '2026-11-30',
+                                'target_period': '2026년 10월 지급분',
+                                'canonical_url': official,
+                            }
+                        ],
+                    }
+                },
+            }
+        ),
+    )
+    page = calendar_page
+    page.set_viewport_size({'width': width, 'height': 900})
+    page.clock.install(time=datetime.datetime(2026, 11, 29, tzinfo=datetime.UTC))
+    with support.serve(tmp_path, development=False, database=dataset, daily_feed=feed) as (url, _):
+        page.goto(url)
+        day = page.get_by_role('button', name='2026년 11월 30일, 입법예고 0건, 시행 0건, 세무일정 1건')
+        expect(day.get_by_text('세무 1')).to_be_visible()
+        page.get_by_role('button', pressed=True).focus()
+        page.keyboard.press('ArrowRight')
+        expect(day).to_be_focused()
+        panel = page.get_by_role('region', name='세무일정 1건')
+        expect(panel.get_by_text('2026년 10월 지급분', exact=False)).to_be_visible()
+        expect(panel.get_by_role('link', name='국세청 원문', exact=False)).to_have_attribute('href', official)
+
+
 def test_standalone_production_needs_no_login_or_backend(production, calendar_page, request):
     page = calendar_page
     url, log = production
@@ -60,13 +112,14 @@ def test_standalone_production_needs_no_login_or_backend(production, calendar_pa
             )
         ),
     )
+    page.route('**/api/tax-schedule?*', lambda route: route.fulfill(json={'items': [], 'confirmedAt': None}))
     calls = []
     page.on('request', lambda req: calls.append(req.url) if '/api/' in req.url else None)
     try:
         response = page.goto(url + '/?demo=true')
         expect(page.get_by_role('heading', name='법령 변경 캘린더', exact=True)).to_be_visible()
         expect(page.get_by_text('이 달에 공개 승인된', exact=False)).to_be_visible()
-        assert len(calls) == 3 and all('/api/law-' in url for url in calls)
+        assert len(calls) == 4 and all('/api/law-' in url or '/api/tax-schedule?' in url for url in calls)
         assert response is not None and response.status == 200
         assert 'set-cookie' not in response.headers
         assert page.context.cookies() == []

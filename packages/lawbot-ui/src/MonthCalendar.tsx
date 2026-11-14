@@ -3,8 +3,9 @@ import type { KeyboardEvent } from 'react'
 import { dateLabel, monthDays, shiftDay, shiftMonth, todayKst, weekday } from './dates'
 import type { CalendarChange, CalendarDay } from './types'
 
-export function MonthCalendar({ selected, changes, onSelect, totals }: {
+export function MonthCalendar({ selected, changes, onSelect, totals, taxCounts }: {
   selected: string; changes: CalendarChange[]; onSelect: (date: string) => void; totals?: CalendarDay[]
+  taxCounts?: ReadonlyMap<string, number>
 }) {
   const month = selected.slice(0, 7)
   const days = monthDays(month)
@@ -56,24 +57,27 @@ export function MonthCalendar({ selected, changes, onSelect, totals }: {
       </div>
     </div>
     <p className="lc-legend"><span className="lc-notice">● 입법예고 · 시작/종료/게시</span>
-      <span className="lc-effective">● 시행 · 조문 시행일</span><span className="lc-bill">● 법률안 · 발의/의결</span></p>
+      <span className="lc-effective">● 시행 · 조문 시행일</span><span className="lc-bill">● 법률안 · 발의/의결</span>
+      {taxCounts && <span className="lc-tax">● 세무일정 · 신고/제출/납부</span>}</p>
     <table ref={grid} role="grid" aria-labelledby="lc-month-title" aria-describedby="lc-key-help">
       <thead><tr>{['일', '월', '화', '수', '목', '금', '토'].map((label) => <th key={label} scope="col">{label}</th>)}</tr></thead>
       <tbody>{Array.from({ length: days.length / 7 }, (_, week) => <tr key={week}>
         {days.slice(week * 7, week * 7 + 7).map((day) => {
-          const count = counts.get(day)
+          const count = counts.get(day) ?? { notice: 0, effective: 0, bill: 0 }
+          const taxCount = taxCounts?.get(day) ?? 0
           return <td key={day} aria-selected={day === selected}>
             <button type="button" data-outside={!day.startsWith(month)} tabIndex={day === selected ? 0 : -1}
               aria-label={`${dateLabel(day)}, 입법예고 ${count?.notice ?? 0}건, 시행 ${count?.effective ?? 0}건`
-                + (count?.bill ? `, 법률안 ${count.bill}건` : '')}
+                + (count.bill ? `, 법률안 ${count.bill}건` : '') + (taxCount ? `, 세무일정 ${taxCount}건` : '')}
               aria-pressed={day === selected} aria-current={day === today ? 'date' : undefined}
               onClick={() => onSelect(day)} onKeyDown={(event) => navigate(event, day)}>
               <span className="lc-day-number">{Number(day.slice(-2))}</span>
               {day === today && <span className="lc-today">오늘</span>}
-              {count && <span className="lc-day-counts">
+              {(counts.has(day) || taxCount > 0) && <span className="lc-day-counts">
                 {count.notice > 0 && <span className="lc-notice"><span className="lc-count-label">예고 </span>{count.notice}</span>}
                 {count.effective > 0 && <span className="lc-effective"><span className="lc-count-label">시행 </span>{count.effective}</span>}
                 {count.bill > 0 && <span className="lc-bill"><span className="lc-count-label">의안 </span>{count.bill}</span>}
+                {taxCount > 0 && <span className="lc-tax">세무 {taxCount}</span>}
               </span>}
             </button>
           </td>

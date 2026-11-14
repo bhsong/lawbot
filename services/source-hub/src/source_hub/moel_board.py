@@ -10,7 +10,7 @@ from source_hub.materials import Article
 HOST = 'https://www.moel.go.kr'
 
 
-def post_link(link: str, article_path: str) -> tuple[str, str]:
+def post_link(link: str, article_path: str, key: str = 'bbs_seq') -> tuple[str, str]:
     url = urlsplit(link)
     query = parse_qsl(url.query, keep_blank_values=True, strict_parsing=True, max_num_fields=2)
     if (
@@ -22,19 +22,20 @@ def post_link(link: str, article_path: str) -> tuple[str, str]:
         or url.path != article_path
         or url.fragment
         or len(query) != 1
-        or query[0][0] != 'bbs_seq'
+        or query[0][0] != key
         or not re.fullmatch(r'[0-9]{1,32}', query[0][1])
     ):
         raise ValueError('Entry does not link to the reviewed official board')
     upstream_id = query[0][1]
-    return upstream_id, f'{HOST}{article_path}?bbs_seq={upstream_id}'
+    return upstream_id, f'{HOST}{article_path}?{key}={upstream_id}'
 
 
 class BoardParser(HTMLParser):
-    def __init__(self, url: str, article_path: str):
+    def __init__(self, url: str, article_path: str, key: str = 'bbs_seq'):
         super().__init__()
         self.url = url
         self.article_path = article_path
+        self.key = key
         self.table_count = 0
         self.in_table = self.in_body = self.in_row = self.in_title = False
         self.cell = ''
@@ -83,7 +84,7 @@ class BoardParser(HTMLParser):
                 or not re.fullmatch(r'\d{4}\.\d{2}\.\d{2}', posted)
             ):
                 raise ValueError('Incomplete board row')
-            upstream, link = post_link(urljoin(self.url, self.link), self.article_path)
+            upstream, link = post_link(urljoin(self.url, self.link), self.article_path, self.key)
             article = Article(upstream, title, link, date.fromisoformat(posted.replace('.', '-')).isoformat(), None)
             if self.articles.setdefault(upstream, article) != article:
                 raise ValueError('Conflicting board rows')
@@ -95,12 +96,12 @@ class BoardParser(HTMLParser):
     def handle_data(self, data):
         if self.in_title:
             self.title.append(data)
-        elif self.in_row and self.cell == '등록일':
+        elif self.in_row and self.cell in ('등록일', '게시일'):
             self.posted.append(data)
 
 
-def parse_board(data: bytes, url: str, article_path: str) -> BoardParser:
-    parser = BoardParser(url, article_path)
+def parse_board(data: bytes, url: str, article_path: str, key: str = 'bbs_seq') -> BoardParser:
+    parser = BoardParser(url, article_path, key)
     parser.feed(data.decode('utf-8-sig'))
     parser.close()
     if parser.table_count != 1 or parser.in_table or parser.in_row or not 1 <= len(parser.articles) <= 30:
