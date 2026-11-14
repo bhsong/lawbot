@@ -107,4 +107,4 @@
 ## 남겨 둘 자료
 
 - 사용자 CSV 두 개(2026-11-11). 레포에 넣지 않는다. 대조에 다시 쓰려면 사용자에게 받는다.
-- 이전 계획: [v5 세금 범위](../archives/v5-tax-scope.md), [소득세법 전체 조문](../archives/v5-income-tax-full.md)
+- 이전 계획: [v5 세금 범위](v5-tax-scope.md), [소득세법 전체 조문](v5-income-tax-full.md)

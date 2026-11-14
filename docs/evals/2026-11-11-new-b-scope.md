@@ -1,6 +1,6 @@
 # 신규 B 전체 조문 범위 오프라인 검증 (2026-11-11)
 
-개발 기준은 `0eac5af`다. 두 v5 매니페스트에 있던 Legalize KR 커밋 `bcb7aea7782e81c21fbeb08382c442f7c2041690`과 기준일 2026-11-03을 사용했다. [신규 B 계획](../plans/tax-full-scope-remaining-laws.md)
+개발 기준은 `0eac5af`다. 두 v5 매니페스트에 있던 Legalize KR 커밋 `bcb7aea7782e81c21fbeb08382c442f7c2041690`과 기준일 2026-11-03을 사용했다. [신규 B 계획](../archives/tax-full-scope-remaining-laws.md)
 
 ## 생성 및 범위 보존
 
