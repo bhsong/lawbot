@@ -83,7 +83,7 @@ def eval_sets():
     v5 = DATA / 'v5'
     out += _split_questions('v5', v5 / 'qa_tax_v5.csv', v5 / 'split_tax_v5.csv')
     reasoning = pd.read_csv(v5 / 'qa_reasoning_val.csv', **E)
-    out += [('reasoning_v5', i, q) for i, q in zip(reasoning['id'], reasoning['question'])]
+    out += [('reasoning_v5_2', i, q) for i, q in zip(reasoning['id'], reasoning['question'])]
     return out
 
 

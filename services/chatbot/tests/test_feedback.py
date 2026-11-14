@@ -440,10 +440,10 @@ def test_review_excludes_val_and_decree_sets():
 
 def test_review_eval_sets_include_v5_and_reasoning():
     evals = feedback_review.eval_sets()
-    assert {source: sum(s == source for s, _, _ in evals) for source in ('v5_test', 'v5_val', 'reasoning_v5')} == {
+    assert {source: sum(s == source for s, _, _ in evals) for source in ('v5_test', 'v5_val', 'reasoning_v5_2')} == {
         'v5_test': 3420,
         'v5_val': 2907,  # 855 sllm-only validation questions
-        'reasoning_v5': 30,
+        'reasoning_v5_2': 32,
     }
 
 

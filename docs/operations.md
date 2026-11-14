@@ -420,7 +420,7 @@ uv run python -m lawbot.auth hash
 
 ### 관리자 API 준비
 
-관리자 계정을 설정하면 시작할 때 `LAWBOT_DB`의 QA 이관 상태를 확인합니다. `migrate_csv_to_sqlite qa --set <세트>`로 `v4`, `v5`, `decree_v4`, `reasoning_v5`, `oos`, `scope`, `refusal_hard`, `labor_eval`을 각각 이관하고 `verify`로 확인합니다. 빠진 세트가 있으면 웹앱이 시작을 거부합니다.
+관리자 계정을 설정하면 시작할 때 `LAWBOT_DB`의 QA 이관 상태를 확인합니다. `migrate_csv_to_sqlite qa --set <세트>`로 `v4`, `v5`, `decree_v4`, `reasoning_v5_2`, `oos`, `scope`, `refusal_hard`, `labor_eval`을 각각 이관하고 `verify`로 확인합니다. 빠진 세트가 있으면 웹앱이 시작을 거부합니다.
 
 | 작업 | `/api/admin` 기준 경로 | 확인할 응답 |
 | --- | --- | --- |
@@ -550,7 +550,7 @@ uv run lawbot-db init --db "$migration_db"
 uv run python -m lawbot_tools.migrate_csv_to_sqlite corpus --db "$migration_db" --dir data/v5 --profile v5 --release-id v5 --dry-run
 uv run python -m lawbot_tools.migrate_csv_to_sqlite corpus --db "$migration_db" --dir data/v5 --profile v5 --release-id v5
 uv run python -m lawbot_tools.migrate_csv_to_sqlite corpus --db "$migration_db" --dir data/v4 --profile v4 --release-id v4
-for dataset in v4 v5 decree_v4 reasoning_v5 oos scope refusal_hard labor_eval; do
+for dataset in v4 v5 decree_v4 reasoning_v5_2 oos scope refusal_hard labor_eval; do
   uv run python -m lawbot_tools.migrate_csv_to_sqlite qa --db "$migration_db" --set "$dataset" || break
 done
 uv run python -m lawbot_tools.migrate_csv_to_sqlite verify --db "$migration_db" --report "$migration_dir/verify.md"

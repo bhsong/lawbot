@@ -20,13 +20,13 @@ QA_FILES = {
     'v4': ('v4/qa_full_v4.csv', 'v4/split_v4.csv', 'v4/answer_key_v4.csv'),
     'v5': ('v5/qa_tax_v5.csv', 'v5/split_tax_v5.csv', 'v5/answer_key_tax_v5.csv'),
     'decree_v4': ('decree_exp/qa_decree_v4.csv', 'decree_exp/split_decree_v4.csv'),
-    'reasoning_v5': ('v5/qa_reasoning_val.csv',),
+    'reasoning_v5_2': ('v5/qa_reasoning_val.csv',),
     'oos': ('oos_eval.csv',),
     'scope': ('scope_controls.csv',),
     'refusal_hard': ('refusal_hard_cases.csv',),
     'labor_eval': ('labor_eval_keywords.csv',),
 }
-QA_COUNTS = dict(zip(QA_FILES, (7618, 13680, 4096, 30, 102, 20, 86, 650)))
+QA_COUNTS = dict(zip(QA_FILES, (7618, 13680, 4096, 32, 102, 20, 86, 650)))
 SPLIT_COUNTS = {
     'v4': ((4433, 1110, 2075), (4987, 556, 2075)),
     'v5': ((8208, 2052, 3420), (9234, 1026, 3420)),
@@ -309,7 +309,7 @@ def test_cli_dry_run_validates_inputs_without_creating_database(tmp_path):
             '--db',
             str(db),
             '--set',
-            'reasoning_v5',
+            'reasoning_v5_2',
             '--dry-run',
         ],
         capture_output=True,
@@ -317,7 +317,7 @@ def test_cli_dry_run_validates_inputs_without_creating_database(tmp_path):
         timeout=10,
     )
     assert result.returncode == 0, result.stderr
-    assert '30' in result.stdout and not db.exists()
+    assert '32' in result.stdout and not db.exists()
 
 
 def test_verify_all_imports_and_detects_changed_source(db_path, tmp_path, capsys):
@@ -375,3 +375,18 @@ def test_verify_distinguishes_a_changed_corpus_source_from_corrupt_db(db_path, t
         conn.execute("UPDATE corpus_releases SET law_manifest=law_manifest || ' ' WHERE release_id='local'")
     assert run(db_path, 'verify') == 2
     assert 'FAIL corpus local' in capsys.readouterr().out
+
+
+def test_new_reasoning_set_imports_next_to_frozen_legacy_set(db_path, capsys):
+    with connect(db_path, write=True) as conn, transaction(conn):
+        conn.execute("INSERT INTO split_sets VALUES ('reasoning_v5',1,'{}')")
+        conn.execute(
+            'INSERT INTO qa_items (qa_uid,dataset,source_id,question,question_norm,row,origin,status,created_at) '
+            "VALUES ('reasoning_v5:ERR001','reasoning_v5','ERR001','이전 문항','이전문항','{}','test','active','now')"
+        )
+    assert run(db_path, 'qa', '--set', 'reasoning_v5_2') == 0
+    with connect(db_path) as conn:
+        ids = [row[0] for row in conn.execute("SELECT source_id FROM qa_items WHERE dataset='reasoning_v5_2'")]
+    assert len(ids) == 32 and {'CARD01', 'CARD02'} <= set(ids)
+    assert run(db_path, 'verify', '--report', db_path.parent / 'verify.md') == 0
+    assert 'reasoning_v5 ' not in (db_path.parent / 'verify.md').read_text()
