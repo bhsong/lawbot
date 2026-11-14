@@ -14,8 +14,8 @@ from lawbot_tools.eval_v4 import load_test
 
 def test_reasoning_is_a_separate_fixed_validation_set():
     rows = ev.load_questions()
-    assert [row['id'] for row in rows] == [f'ERR{i:03}' for i in range(1, 31)]
-    assert sorted(Counter(row['error_type'] for row in rows).values()) == [7, 7, 8, 8]
+    assert [row['id'] for row in rows] == [*(f'ERR{i:03}' for i in range(1, 31)), 'CARD01', 'CARD02']
+    assert sorted(Counter(row['error_type'] for row in rows).values()) == [2, 7, 7, 8, 8]
     assert all(all(row.values()) for row in rows)
     assert {row['id'] for row in rows}.isdisjoint(load_test('val', 'v5')['id'])
     assert {row['id'] for row in rows}.isdisjoint(load_test('test', 'v5')['id'])

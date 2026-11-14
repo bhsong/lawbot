@@ -6,7 +6,7 @@ from lawbot.db.connection import connect, transaction
 from lawbot.feedback_store import append
 from lawbot.qa_rules import norm
 
-SETS = ('v4', 'v5', 'decree_v4', 'reasoning_v5', 'oos', 'scope', 'refusal_hard', 'labor_eval')
+SETS = ('v4', 'v5', 'decree_v4', 'reasoning_v5_2', 'oos', 'scope', 'refusal_hard', 'labor_eval')
 TEST_QUESTION = '보호용문항철도차량점검일지'
 VAL_QUESTION = '검증용문항항공정비기록원본'
 EVAL_QUESTION = '평가전용문항고래관찰허가'
