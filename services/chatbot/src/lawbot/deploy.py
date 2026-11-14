@@ -100,7 +100,7 @@ def _profile(name, env):
         name,
         'Lawbot',
         combined if decree_enabled(env) else law,
-        _model('LAWBOT_EMB_MODEL', 'lawbot-emb-v5b' if v5 else 'lawbot-emb-v4', env),
+        _model('LAWBOT_EMB_MODEL', 'lawbot-emb-v6' if v5 else 'lawbot-emb-v4', env),
         _positive_int('LAWBOT_MAX_SEQ', 4352 if v5 else MAX_SEQ, env),
         _path('LAWBOT_V5_SYSTEM', paths.V5_SYSTEM, env) if v5 else _path('LAWBOT_V4_SYSTEM', paths.V4_SYSTEM, env),
         (pro,) if v5 else (fast, pro),

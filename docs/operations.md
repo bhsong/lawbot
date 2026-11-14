@@ -54,8 +54,10 @@ data/v5/
 ├── manifest_law_articles_v5_decree.json
 ├── system_v5_concise.txt               # Pro 기본 간결형
 └── system_v5.txt                       # Pro 전체 4항목
+models/v6/
+└── emb_v6_fp16/                        # v6 Qwen3-Embedding-0.6B (v5b에서 이어 학습), sentence-transformers fp16
 models/v5/
-└── emb_v5b_fp16/                       # v5b Qwen3-Embedding-0.6B, sentence-transformers fp16
+└── emb_v5b_fp16/                       # v5b (v6.0.0부터 모델 서버에 올리지 않음, 되돌리기용)
 models/v4/
 ├── reranker_4b_mlx_4bit/               # Qwen3-Reranker-4B, MLX 4비트
 └── qwen_27b_mlx_4bit/                  # Qwen3.8-27B, MLX 4비트
@@ -142,7 +144,7 @@ v5 Pro는 간결형에 `data/v5/system_v5_concise.txt`를 쓰고, 화면에서 "
 | `LAWBOT_MODEL_SERVER_WAIT` | 아니요 | 시작할 때 모델 서버 준비를 기다리는 최대 초 (기본 `300`) |
 | `LAWBOT_MODEL_READ_TIMEOUT` | 아니요 | 질문 처리 중(질문 임베딩·리랭크·생성) 응답 조각 사이 최대 대기 초 (기본 `300`). 넘으면 "모델 서버 응답이 없습니다", 요청 로그 `model_server_timeout`. 시작할 때 조문 인덱스 인코딩에는 걸지 않음 |
 | `LAWBOT_PROFILE` | 아니요 | `v4` (생략 시 기본값) 또는 `v5` (노동·소득세법 전체와 세금·4대보험 선택 범위, Pro 전용) |
-| `LAWBOT_EMB_MODEL` | 아니요 | 검색 임베딩 모델 id (v4 기본 `lawbot-emb-v4`, v5 기본 `lawbot-emb-v5b`) |
+| `LAWBOT_EMB_MODEL` | 아니요 | 검색 임베딩 모델 id (v4 기본 `lawbot-emb-v4`, v5 기본 `lawbot-emb-v6`. v6.0.0 전에는 `lawbot-emb-v5b`) |
 | `LAWBOT_FAST_MODEL` / `LAWBOT_PRO_MODEL` | 아니요 | 답변 모델 id (기본 `lawbot-fast-v4` / `qwen3.8-27b-4bit`). 외부 API면 그쪽 모델 이름 |
 | `LAWBOT_MODELS` | 아니요 | 쓸 답변 모델 key를 쉼표로 (`pro`, `fast`, `fast,pro`). 첫 번째가 기본 선택. 비우면 프로필이 지원하는 모델 모두 |
 | `LAWBOT_ENV_FILE` | 아니요 | 읽을 설정 파일 (기본 레포 최상위 `.env`, 없으면 안 읽음). 빈 값이면 읽지 않음. 셸에서만 지정 |
