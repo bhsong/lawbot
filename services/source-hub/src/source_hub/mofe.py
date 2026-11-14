@@ -25,6 +25,10 @@ LIST_QUERY = '/com/bbs/ComtnbbsList.do'
 NEWS = '/nw/nes/nesdta.do'
 NEWS_DETAIL = '/nw/nes/detailNesDtaView.do'
 GENERAL_DETAIL = '/com/bbs/detailComtnbbsView.do'
+PUBLICATION_PATH = (
+    '/pl/policydta/pblictn/ComtBalbbsList.do?bbsId=MOSFBBS_000000000004&menuNo=5020300&policyCategory=PUB05'
+)
+PUBLICATION_DETAIL = '/pl/policydta/pblictn/detailPblictnbbsView.do'
 
 
 @dataclass(frozen=True)
@@ -35,6 +39,7 @@ class Channel:
     listing: str | None
     rss: bool = True
     notice_period: bool = False
+    publication: bool = False
 
     @property
     def board_id(self) -> str:
@@ -42,6 +47,8 @@ class Channel:
 
     @property
     def board_path(self) -> str | None:
+        if self.publication:
+            return PUBLICATION_PATH
         return f'{self.listing}?bbsId={self.board_id}&menuNo={self.menu}' if self.listing else None
 
     @property
@@ -71,6 +78,7 @@ CHANNELS = {
     'mofe-tax-reform': Channel(
         55, 7050300, '/lw/lap/detailTbPrvntcView.do', '/lw/lap/TbPrvntcList.do', rss=False, notice_period=True
     ),
+    'mofe-publications': Channel(4, 5020300, PUBLICATION_DETAIL, None, rss=False, publication=True),
 }
 
 
@@ -181,6 +189,35 @@ def parse_board(data: bytes, channel: Channel) -> BoardParser:
     return parser
 
 
+class PublicationParser(HTMLParser):
+    def __init__(self, channel: Channel):
+        super().__init__()
+        self.channel = channel
+        self.link: str | None = None
+        self.text: list[str] = []
+        self.articles: dict[str, Article] = {}
+
+    def handle_starttag(self, tag, attrs):
+        if tag == 'a':
+            self.link = dict(attrs).get('href') or ''
+            self.text = []
+
+    def handle_data(self, data):
+        if self.link is not None:
+            self.text.append(data)
+
+    def handle_endtag(self, tag):
+        if tag != 'a' or self.link is None:
+            return
+        title = ' '.join(''.join(self.text).split())
+        if re.fullmatch(r'20\d{2}\s*간추린\s*개정세법', title):
+            match = POST_LINK.fullmatch(self.link)
+            if match and match[4] in {None, self.channel.board_id}:
+                post = match[2]
+                self.articles[post] = Article(post, title, self.channel.link(post), None, None)
+        self.link = None
+
+
 def collect(
     registry: Registry,
     database: Path,
@@ -212,6 +249,13 @@ def collect(
     def read_articles(rules: list[str]) -> list[Article]:
         if channel.rss:
             return parse_feed(get(rules, channel.source_path, RSS_MEDIA), channel)
+        if channel.publication:
+            parser = PublicationParser(channel)
+            parser.feed(get(rules, channel.source_path, {'text/html'}).decode('utf-8-sig'))
+            parser.close()
+            if not 1 <= len(parser.articles) <= 30:
+                raise ValueError('Missing NTS publication titles')
+            return list(parser.articles.values())
         return list(parse_board(get(rules, channel.source_path, {'text/html'}), channel).articles.values())
 
     def read_board(rules: list[str], feed: list[Article]) -> tuple[list[Article] | None, dict]:

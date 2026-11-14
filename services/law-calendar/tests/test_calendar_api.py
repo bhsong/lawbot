@@ -7,6 +7,8 @@ from fastapi.testclient import TestClient
 
 from law_calendar.db import migrate, read_database
 from law_calendar.server import create_app
+from lawbot_common.erp_daily import replace_file, seal
+from lawbot_common.tax_schedule import NTS_HOST, year_path
 
 
 @pytest.fixture
@@ -65,6 +67,51 @@ def test_counts_lists_and_detail_agree_with_article_effective_dates(dataset):
         assert detail['before'] == '원문\n이전' and detail['after'] == '원문\n이후'
         assert '- 이전' in detail['diff'] and detail['reviewState'] == 'approved'
         assert client.post('/api/law-events', json={}).status_code == 405
+
+
+def test_tax_schedule_filters_month_without_changing_law_event_counts(dataset, tmp_path):
+    feed = tmp_path / 'daily.json'
+    before = TestClient(create_app(dataset)).get('/api/law-calendar?month=2026-11').json()
+    published = {
+        'schemaVersion': 1,
+        'dayKst': '2026-11-14',
+        'cutoffAt': '2026-11-14T06:30:00+09:00',
+        'runId': 'daily-fixture',
+        'configVersion': 0,
+        'configHash': '0' * 64,
+        'status': 'ok',
+        'sources': [],
+        'changes': [],
+        'feeds': {},
+    }
+    item = {
+        'upstream_id': 'a' * 32,
+        'title': '일용근로소득 지급명세서',
+        'deadline_on': '2026-11-30',
+        'target_period': '2026년 10월 지급분',
+        'canonical_url': NTS_HOST + year_path(2026),
+    }
+    with TestClient(create_app(dataset, daily_feed=feed)) as client:
+        replace_file(feed, seal(published))
+        assert client.get('/api/tax-schedule?month=2026-11').json() == {'items': [], 'confirmedAt': None}
+        published['feeds']['taxSchedule'] = {'confirmedAt': published['cutoffAt'], 'items': [item]}
+        replace_file(feed, seal(published))
+        assert client.get('/api/tax-schedule?month=2026-12').json()['items'] == []
+        response = client.get('/api/tax-schedule?month=2026-11')
+        assert response.headers['Cache-Control'] == 'no-store'
+        assert response.json()['items'] == [
+            {
+                'id': 'a' * 32,
+                'title': '일용근로소득 지급명세서',
+                'date': '2026-11-30',
+                'targetPeriod': '2026년 10월 지급분',
+                'sourceUrl': NTS_HOST + year_path(2026),
+            }
+        ]
+        assert client.get('/api/law-calendar?month=2026-11').json() == before
+        item['canonical_url'] = 'https://outside.example/'
+        replace_file(feed, seal(published))
+        assert client.get('/api/tax-schedule?month=2026-11').status_code == 503
 
 
 @pytest.mark.parametrize(

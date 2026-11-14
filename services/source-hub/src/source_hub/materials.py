@@ -41,6 +41,9 @@ class Article:
     canonical_url: str
     published_on: str | None
     guid: str | None
+    deadline_on: str | None = None
+    target_period: str | None = None
+    evidence_hash: str | None = None
 
 
 def check_database(conn: sqlite3.Connection, *, initialize: bool = False) -> None:
@@ -120,7 +123,10 @@ def save(
                     article = replace(article, guid=earlier.guid)
             if article.upstream_id in listed and (rss_article := rss.get(article.upstream_id)) and rss_article.guid:
                 article = replace(article, guid=rss_article.guid)
-            metadata = json.dumps(asdict(article), ensure_ascii=False)
+            metadata = json.dumps(
+                {k: v for k, v in asdict(article).items() if v is not None or k in ('guid', 'published_on')},
+                ensure_ascii=False,
+            )
             conn.execute(
                 'INSERT INTO documents VALUES (?,?,?,?) ON CONFLICT(source_id,upstream_id) '
                 'DO UPDATE SET last_confirmed_at=excluded.last_confirmed_at',
@@ -149,11 +155,30 @@ def save(
                 (source_id, now, now if board is not None else None),
             )
         result = run.model_copy(update={key: counts[key] for key in ('new_count', 'modified_count')})
+        if source_id == 'nts-calendar':
+            conn.execute(
+                'CREATE TABLE IF NOT EXISTS tax_schedule_snapshot (id INTEGER PRIMARY KEY, payload TEXT NOT NULL)'
+            )
+            conn.execute(
+                'INSERT INTO tax_schedule_snapshot VALUES (1,?) ON CONFLICT(id) DO UPDATE SET payload=excluded.payload',
+                (json.dumps({'confirmedAt': now, 'items': [asdict(row) for row in articles]}, ensure_ascii=False),),
+            )
         conn.execute(
             'INSERT INTO latest_success VALUES (?,?) ON CONFLICT(source_id) DO UPDATE SET result=excluded.result',
             (source_id, result.model_dump_json()),
         )
     return result, counts
+
+
+def tax_schedule(path: Path) -> dict | None:
+    if not path.is_file():
+        return None
+    with closing(sqlite3.connect(path.resolve().as_uri() + '?mode=ro', uri=True)) as conn:
+        check_database(conn)
+        if not conn.execute("SELECT 1 FROM sqlite_schema WHERE name='tax_schedule_snapshot'").fetchone():
+            return None
+        row = conn.execute('SELECT payload FROM tax_schedule_snapshot WHERE id=1').fetchone()
+        return json.loads(row[0]) if row else None
 
 
 def documents(path: Path, source_id: str) -> list[dict]:

@@ -58,6 +58,8 @@ uv run --project services/law-calendar law-calendar --database services/law-cale
 
 조회 경로는 `/api/law-calendar?month=YYYY-MM`, `/api/law-events?date=YYYY-MM-DD`, `/api/law-changes/{id}`, `/api/law-calendar/status`다. API의 OpenAPI 계약은 `/openapi.json`에서 확인할 수 있다.
 
+국세청 세무일정이 통합 스냅샷에 있으면 날짜에 빨간색 `세무 N` 배지를 표시한다. 날짜를 선택하면 공식 표에서 확인한 원천세·지급명세서·연말정산 기한과 대상 기간, 국세청 원문 링크를 볼 수 있다. `GET /api/tax-schedule?month=YYYY-MM`은 해당 월의 일정과 마지막 확인 시각을 반환한다. 법령 변경 일정 집계는 기존 API에서 유지된다.
+
 ## ERP 자료 탭
 
 화면 위의 탭에서 `법령 캘린더`와 `ERP 자료`를 고른다. `/#erp`로 접속하면 ERP 자료 탭이 바로 열린다. ERP 코드는 `frontend/src/erp/`에만 있고, 법령 달력 그리드와 챗봇 관리 화면에는 ERP가 나오지 않는다.

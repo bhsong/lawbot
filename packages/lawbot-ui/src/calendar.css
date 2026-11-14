@@ -25,6 +25,7 @@
 .lc-page .lc-notice { color: var(--lc-blue); }
 .lc-page .lc-bill { color: #315e45; }
 .lc-page .lc-effective { color: var(--lc-orange); }
+.lc-page .lc-tax { color: #a11929; }
 .lc-month table { width: 100%; table-layout: fixed; border-collapse: collapse; }
 .lc-month th { font-size: 12px; color: var(--muted); font-weight: 500; padding: 8px; }
 .lc-month td { padding: 2px; vertical-align: top; }
@@ -37,6 +38,7 @@
 .lc-day-counts .lc-notice { background: var(--lc-blue-bg); }
 .lc-day-counts .lc-effective { background: var(--lc-orange-bg); }
 .lc-day-counts .lc-bill { background: #e3f2e8; }
+.lc-day-counts .lc-tax { background: #ffeaed; }
 .lc-day-counts > span { padding: 1px 5px; border-radius: 4px; }
 .lc-caption { font-size: 12px; color: var(--muted); }
 .lc-key-help { margin-bottom: 0; }

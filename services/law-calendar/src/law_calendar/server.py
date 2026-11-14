@@ -36,6 +36,7 @@ from lawbot_common.erp_daily import read_snapshot
 from lawbot_common.erp_news import Agency
 from lawbot_common.erp_rules import ErpRules, RuleSnapshot
 from lawbot_common.logs import logger
+from lawbot_common.tax_schedule import TaxSchedule
 
 KST = timezone(timedelta(hours=9))
 SECRETS = ('LAWBOT_CALENDAR_ADMIN_TOKEN',)
@@ -297,6 +298,33 @@ def create_app(
             return {'state': 'invalid'}
         response.headers['X-ERP-Snapshot'] = snapshot['snapshotHash']
         return snapshot
+
+    @app.get('/api/tax-schedule')
+    def tax_schedule(month: str, response: Response):
+        start, end = month_bounds(month)
+        snapshot = daily_snapshot(response) or {}
+        schedule = snapshot.get('feeds', {}).get('taxSchedule')
+        if not schedule:
+            return {'items': [], 'confirmedAt': None}
+        try:
+            verified = TaxSchedule.model_validate(schedule)
+        except ValidationError as exc:
+            raise HTTPException(503, 'Tax schedule unavailable') from exc
+        items = [
+            {
+                'id': row.upstream_id,
+                'title': row.title,
+                'date': row.deadline_on.isoformat(),
+                'targetPeriod': row.target_period,
+                'sourceUrl': row.canonical_url,
+            }
+            for row in verified.items
+            if start <= row.deadline_on.isoformat() <= end
+        ]
+        return {
+            'items': sorted(items, key=lambda row: (row['date'], row['title'], row['id'])),
+            'confirmedAt': verified.confirmedAt.isoformat(),
+        }
 
     @app.get('/api/erp-updates', response_model=ErpUpdates)
     def erp(response: Response):

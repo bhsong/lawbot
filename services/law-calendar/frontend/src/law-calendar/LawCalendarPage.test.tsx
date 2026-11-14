@@ -75,6 +75,7 @@ test('production reads only public calendar APIs without credentials', async () 
   vi.stubEnv('DEV', false)
   const fetch = vi.fn(async (url: string) => new Response(JSON.stringify(
     url.includes('status') ? { collectedAt: null, verifiedAt: null, delayed: true }
+      : url.includes('tax-schedule') ? { items: [], confirmedAt: null }
       : url.includes('law-events') ? { items: [], total: 0, page: 1 } : { days: [] },
   )))
   vi.stubGlobal('fetch', fetch)
@@ -82,9 +83,35 @@ test('production reads only public calendar APIs without credentials', async () 
     render(<LawCalendarPage initialDate="2026-11-05" />)
     expect(await screen.findByText(/이 달에 공개 승인된/)).toBeInTheDocument()
     await waitFor(() => expect(screen.queryByText(/불러오는 중/)).not.toBeInTheDocument())
-    expect(fetch).toHaveBeenCalledTimes(3)
-    expect(fetch.mock.calls.every(([url]) => url.startsWith('/api/law-'))).toBe(true)
+    expect(fetch).toHaveBeenCalledTimes(4)
+    expect(fetch.mock.calls.every(([url]) => url.startsWith('/api/law-') || url.startsWith('/api/tax-schedule?'))).toBe(true)
     expect(screen.queryByText('예시 변경 요약')).not.toBeInTheDocument()
+  } finally {
+    vi.unstubAllEnvs()
+    vi.unstubAllGlobals()
+  }
+})
+
+test('tax badge announces the deadline count and opens the official schedule for the selected day', async () => {
+  vi.stubEnv('DEV', false)
+  const source = 'https://www.nts.go.kr/nts/ad/taxSchdul/selectList.do?mi=135747&taxMonth=&taxYear=2026'
+  const fetch = vi.fn(async (url: string) => new Response(JSON.stringify(
+    url.includes('tax-schedule') ? {
+      confirmedAt: '2026-11-14T06:30:00+09:00', items: [{
+        id: 'deadline', title: '일용근로소득 지급명세서', date: '2026-11-30',
+        targetPeriod: '2026년 10월 지급분', sourceUrl: source,
+      }],
+    } : url.includes('law-events') ? { items: [], total: 0, page: 1 } : { days: [] },
+  )))
+  vi.stubGlobal('fetch', fetch)
+  try {
+    render(<LawCalendarPage initialDate="2026-11-05" />)
+    const day = await screen.findByRole('button', { name: /11월 30일.*세무일정 1건/ })
+    expect(within(day).getByText('세무 1')).toHaveClass('lc-tax')
+    await userEvent.click(day)
+    const deadlines = screen.getByRole('region', { name: '세무일정 1건' })
+    expect(within(deadlines).getByText(/대상 2026년 10월 지급분/)).toBeInTheDocument()
+    expect(within(deadlines).getByRole('link', { name: /국세청 원문/ })).toHaveAttribute('href', source)
   } finally {
     vi.unstubAllEnvs()
     vi.unstubAllGlobals()

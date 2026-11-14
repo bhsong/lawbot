@@ -11,11 +11,11 @@ sources:
   - &moel {source_id: moel-rss-notice, group: erp, agency: moel, board_name: 공지사항 RSS, official_homepage: 'https://www.moel.go.kr/', source_url: 'https://www.moel.go.kr/rss/notice.do', adapter: moel, mode: rss, verification: ready, license_state: links_only, category_tags: [공지]}
   - {<<: *moel, source_id: moel-rss-policy, board_name: 정책자료 RSS, source_url: 'https://www.moel.go.kr/rss/policy.do', category_tags: [정책]}
   - {<<: *moel, source_id: moel-rss-lawinfo, board_name: 입법·행정예고 RSS, source_url: 'https://www.moel.go.kr/rss/lawinfo.do', category_tags: [법령]}
-  - &moel_board {<<: *moel, source_id: moel-rules, board_name: 고시·훈령·예규, source_url: null, mode: html, verification: not_tested, license_state: unverified, category_tags: [고시, 행정규칙]}
-  - {<<: *moel_board, source_id: moel-interpretations, board_name: 행정해석·질의회시, category_tags: [행정해석]}
-  - {<<: *moel_board, source_id: moel-policy, board_name: 정책자료, category_tags: [정책]}
-  - {<<: *moel_board, source_id: moel-publications, board_name: 주요 발간물·업무편람, category_tags: [발간물]}
-  - {<<: *moel_board, source_id: moel-press, board_name: 보도자료, category_tags: [보도자료]}
+  - &moel_board {<<: *moel, source_id: moel-rules, board_name: 고시·훈령·예규, source_url: 'https://www.moel.go.kr/info/lawinfo/instruction/list.do', mode: html, category_tags: [고시, 행정규칙]}
+  - {<<: *moel_board, source_id: moel-interpretations, board_name: 행정해석·질의회시, source_url: 'https://www.moel.go.kr/info/publicdata/qnrinfo/qnrInfoList.do', category_tags: [행정해석]}
+  - {<<: *moel_board, source_id: moel-policy, board_name: 정책자료, source_url: null, verification: not_tested, license_state: unverified, category_tags: [정책]}
+  - {<<: *moel_board, source_id: moel-publications, board_name: 주요 발간물·업무편람, source_url: 'https://www.moel.go.kr/info/publicdata/majorpublish/majorPublishList.do', category_tags: [발간물]}
+  - {<<: *moel_board, source_id: moel-press, board_name: 보도자료, source_url: 'https://www.moel.go.kr/news/enews/report/enewsList.do', category_tags: [보도자료]}
 
   - &mofe {source_id: mofe-rss, group: erp, agency: mofe, board_name: 공식 RSS 채널, official_homepage: 'https://mofe.go.kr/mn/siteguide/rssService.do?menuNo=2060000', adapter: mofe, mode: rss, category_tags: [공지, 보도자료]}
   - &mofe_feed {<<: *mofe, source_id: mofe-rss-press, board_name: 보도·참고자료 RSS, source_url: 'https://mofe.go.kr/com/detailRssTagService.do?bbsId=MOSFBBS_000000000028', verification: ready, license_state: links_only, category_tags: [보도자료, 세무]}
@@ -28,16 +28,16 @@ sources:
   - {<<: *mofe, mode: html, source_id: mofe-press, board_name: 보도·설명자료, verification: manual_review, category_tags: [보도자료]}
   - {<<: *mofe_board, source_id: mofe-laws, board_name: 법령자료실, source_url: 'https://mofe.go.kr/com/bbs/ComtnbbsList.do?bbsId=MOSFBBS_000000000059&menuNo=7080200', category_tags: [법령]}
   - {<<: *mofe_board, source_id: mofe-notice, board_name: 고시·공고·지침, source_url: 'https://mofe.go.kr/lw/denm/TbDenmList.do?bbsId=MOSFBBS_000000000120&menuNo=7090200', category_tags: [고시, 공지]}
-  - {<<: *mofe, mode: html, source_id: mofe-publications, board_name: 세법해석·발간자료, source_url: 'https://mofe.go.kr/pl/policydta/pblictn.do?menuNo=5020300', verification: manual_review, category_tags: [세무, 발간물]}
+  - {<<: *mofe_board, source_id: mofe-publications, board_name: 간추린 개정세법, source_url: 'https://mofe.go.kr/pl/policydta/pblictn/ComtBalbbsList.do?bbsId=MOSFBBS_000000000004&menuNo=5020300&policyCategory=PUB05', category_tags: [세무, 발간물]}
 
   - &nts {source_id: nts-notice, group: erp, agency: nts, board_name: 공지사항, official_homepage: 'https://www.nts.go.kr/', adapter: nts, mode: html, source_url: 'https://www.nts.go.kr/nts/na/ntt/selectNttList.do?bbsId=1011&mi=2207', verification: ready, license_state: links_only, category_tags: [공지]}
   - {<<: *nts, source_id: nts-rules, board_name: 국세청 고시, source_url: 'https://www.nts.go.kr/nts/na/ntt/selectNttList.do?bbsId=1120&mi=2205', category_tags: [고시]}
   - &nts_review {<<: *nts, source_id: nts-forms, board_name: 세무서식, source_url: 'https://www.nts.go.kr/nts/ad/nf/nltFormatApiList.do?mi=40178', verification: manual_review, license_state: unverified, category_tags: [세무, 서식]}
-  - {<<: *nts_review, source_id: nts-calendar, board_name: 세무일정, source_url: 'https://www.nts.go.kr/nts/ad/taxSchdul/selectList.do?mi=135747', category_tags: [세무, 일정]}
+  - {<<: *nts, source_id: nts-calendar, board_name: 세무일정, source_url: 'https://www.nts.go.kr/nts/ad/taxSchdul/selectList.do?mi=135747', category_tags: [세무, 일정]}
   - &nts_guide {<<: *nts, source_id: nts-tax-02, board_name: 연말정산 안내·안내책자 TAX-02, source_url: 'https://www.nts.go.kr/nts/cm/cntnts/cntntsView.do?mi=2304&cntntsId=238938', category_tags: [연말정산, 발간물]}
   - {<<: *nts, source_id: nts-tax-references, board_name: 연말정산 참고자료실, source_url: 'https://www.nts.go.kr/nts/na/ntt/selectNttList.do?bbsId=30014&mi=2306', category_tags: [연말정산]}
   - {<<: *nts, source_id: nts-withholding, board_name: 원천세 참고자료실, source_url: 'https://www.nts.go.kr/nts/na/ntt/selectNttList.do?bbsId=30013&mi=2425', category_tags: [원천세]}
-  - {<<: *nts_review, source_id: nts-payment-reports, board_name: 지급명세서 제출 안내, source_url: 'https://www.nts.go.kr/nts/cm/cntnts/cntntsView.do?mi=12242&cntntsId=8631', category_tags: [지급명세서]}
+  - {<<: *nts, source_id: nts-payment-reports, board_name: 지급명세서 제출 안내, source_url: 'https://www.nts.go.kr/nts/cm/cntnts/cntntsView.do?mi=12242&cntntsId=8631', category_tags: [지급명세서]}
   - {<<: *nts_guide, source_id: nts-tax-amendments, board_name: 개정세법 요약, category_tags: [세무, 법령]}
   - {<<: *nts_guide, source_id: nts-developer-notices, board_name: 연말정산 프로그램 개발자 설명회, category_tags: [지급명세서, 전자신고]}
   - {<<: *nts, source_id: nts-tools, board_name: 업무용 프로그램·자료실, source_url: 'https://www.nts.go.kr/nts/na/ntt/selectNttList.do?bbsId=1099&mi=2544', category_tags: [전자신고]}

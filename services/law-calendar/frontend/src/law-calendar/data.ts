@@ -1,5 +1,5 @@
 import type { CalendarChange } from '@lawbot/ui'
-import type { CalendarLoader, HoldKind } from './types'
+import type { CalendarLoader, HoldKind, TaxSchedule } from './types'
 import type { CalendarMonth, CalendarStatus, ChangePage, HoldPage, PublicDetail } from './api-types'
 
 async function read<T>(path: string, signal: AbortSignal): Promise<T> {
@@ -10,6 +10,10 @@ async function read<T>(path: string, signal: AbortSignal): Promise<T> {
 
 export function loadChange(id: string, signal: AbortSignal): Promise<CalendarChange> {
   return read<PublicDetail>(`/api/law-changes/${encodeURIComponent(id)}`, signal)
+}
+
+export function loadTaxSchedule(month: string, signal: AbortSignal): Promise<TaxSchedule> {
+  return read<TaxSchedule>(`/api/tax-schedule?month=${encodeURIComponent(month)}`, signal)
 }
 
 export async function loadHolds(page: number, signal: AbortSignal, kind: HoldKind, demo = false): Promise<HoldPage> {

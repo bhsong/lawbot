@@ -17,12 +17,12 @@ from uuid import uuid4
 from lawbot_common.erp_daily import read_snapshot, replace_file, seal, snapshot_hash
 from lawbot_common.erp_news import official_url
 from lawbot_common.erp_rules import RuleSnapshot
-from source_hub import moel, mofe, news, nts
+from source_hub import materials, moel, mofe, news, nts
 from source_hub.collector import file_lock, interval_due
 from source_hub.store import KST, Registry
 
 COLLECTORS = (
-    dict.fromkeys(moel.CHANNELS, moel.collect)
+    dict.fromkeys((*moel.CHANNELS, *moel.BOARDS), moel.collect)
     | dict.fromkeys(mofe.CHANNELS, mofe.collect)
     | dict.fromkeys(nts.CHANNELS, nts.collect)
 )
@@ -562,6 +562,18 @@ def _run(registry: Registry, config: DailyConfig, now: Callable[[], datetime], r
             news.build(registry, config.materials_db, plan=news_plan(plan, statuses), records=records, now=cutoff),
         )
         feeds = capture(config, paths, cutoff)
+        if any(row['source_id'] == 'nts-calendar' and row['runnable'] for row in plan['sources']):
+            if schedule := materials.tax_schedule(config.materials_db):
+                feeds['taxSchedule'] = {
+                    'confirmedAt': schedule['confirmedAt'],
+                    'items': [
+                        {
+                            key: row[key]
+                            for key in ('upstream_id', 'title', 'canonical_url', 'deadline_on', 'target_period')
+                        }
+                        for row in schedule['items']
+                    ],
+                }
         if any(value['state'] == 'unavailable' for value in feeds['news'].values()):
             old_law_news = prior.get('feeds', {}).get('news', {}).get('lawgo', {})
             if (

@@ -52,13 +52,19 @@ $hub --database $collector_db collect moel-rss-notice --materials $materials_db 
 
 RSS와 목록에서 같은 `bbs_seq`는 한 게시물로 저장합니다. 첫 대조에서 확인한 목록 전용 글은 기준선에 포함합니다. 목록에서 확인한 제목과 게시일은 다음 대조까지 유지합니다. `board_only_count`는 이번 RSS 응답에서 볼 수 없었던 목록 게시물 수입니다. 게시판 읽기나 검증이 실패하면 `partial`과 상세 오류를 출력하고 RSS 자료를 저장합니다. 게시물 상세와 첨부는 요청하지 않습니다.
 
+`moel-rules`, `moel-interpretations`, `moel-publications`, `moel-press`는 공식 목록의 첫 페이지에서 제목·게시일·공식 링크를 수집합니다.
+
 ## 재정경제부 수동 수집
 
 `mofe-rss-press`, `mofe-rss-explanation`, `mofe-rss-notice`, `mofe-rss-policy`는 `--reconcile`로 공식 게시판 최대 2쪽을 비교합니다. `mofe-rss-economy`는 RSS를 읽습니다. `mofe-laws`, `mofe-notice`, `mofe-tax-reform`은 각 공식 목록 첫 쪽을 읽습니다. 각 출처는 기본 OFF입니다. 제목·게시일·공식 링크를 내부 DB에 저장하고 날짜가 없는 항목은 빈 값으로 둡니다. [공식 RSS 안내](https://mofe.go.kr/mn/siteguide/rssService.do?menuNo=2060000) · [저작권 정책](https://mofe.go.kr/mn/siteguide/drmp.do?menuNo=2030000)
 
+`mofe-publications`는 간추린 개정세법 목록의 연도판 제목과 공식 상세 링크를 수집합니다.
+
 ## 국세청 수동 수집
 
 `nts-notice`, `nts-rules`, `nts-tax-references`, `nts-withholding`, `nts-tools`는 공식 목록 첫 쪽을 읽습니다. `nts-tax-02`, `nts-tax-amendments`, `nts-developer-notices`는 연말정산 종합 안내에서 해당 자료 제목과 안내 페이지 링크를 기록합니다. 게시일이 제공되지 않으면 비워 둡니다. 모든 출처는 기본 OFF이고, 저장 범위는 내부 메타데이터입니다. [국세청 저작권 정책](https://www.nts.go.kr/nts/cm/cntnts/cntntsView.do?mi=6791&cntntsId=8169) · [연말정산 종합 안내](https://www.nts.go.kr/nts/cm/cntnts/cntntsView.do?mi=2304&cntntsId=238938)
+
+`nts-calendar`는 올해와 다음 해 공식 세무일정 표의 원천세·지급명세서·연말정산 기한을 통합 스냅샷에 제공합니다. 확인에 실패하면 마지막 정상 일정과 확인 시각을 사용합니다. `nts-payment-reports`는 지급명세서 제출 안내 링크와 관련 표의 변경 감지용 해시를 기록합니다.
 
 ## 홈택스 자료실
 
