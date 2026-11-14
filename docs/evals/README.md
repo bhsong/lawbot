@@ -216,7 +216,7 @@ v1 평가 결과는 `results/metrics.csv`에 한 행씩 모았습니다(`v1_4bit
   - 답변은 거절, 안내(`refer_lsa`에 적힌, 다른 법에 맡기는 조문만 인용), 억지적용(그 밖의 근로기준법 조문으로 답함), 미인용(거절 문구도 인용도 없음)으로 판정합니다. `near_lsa`는 README 수치의 기준이고, `near_lsa_v2`는 누락을 보완한 표시입니다.
 - **범위 안 대조군**: 다른 노동법 질문과 닮았지만 근로기준법으로 답해야 하는 테스트 문항 20개입니다(`data/scope_controls.csv`, `twin_oos`에 짝 문항). 범위 밖 거절을 늘리는 개선이 이 문항들까지 거절하게 만들지 않는지 확인합니다.
 - **근거 없는 주장 사례**: `refusal_v1_4bit.csv`에서 거절하지 않은 86건을 억지적용 77, 지어냄 4, 근거밖_정답 2, 결론타당 3으로 분류했습니다(`data/refusal_hard_cases.csv`). 억지적용·지어냄 81건은 같은 참고 조문으로 다시 평가했습니다(`results/refusal_hard_v1_4bit.csv`).
-- **법률 추론 회귀 검증(val)**: [별도 고정 32문항](../../data/v5/qa_reasoning_val.csv)은 법률 추론 30문항과 카드 공제 기간을 묻는 두 표현을 포함합니다. 기존 val·test 집계에는 포함하지 않습니다. 승인 후 개발 환경에서 `uv run python -m lawbot_tools.eval_reasoning --output <새_임시_디렉터리>`로 v5 기본 구성을 실행합니다. 기준 근거 제공·인용과 판단 유보를 집계합니다. 카드 두 문항은 근로제공기간 기준이 제공되면 공제 여부를, 빠지면 판단 유보를 채점합니다.
+- **법률 추론 회귀 검증(val)**: [별도 고정 30문항](../../data/v5/qa_reasoning_val.csv)은 Lawbot의 계산 규칙, 예외 적용, 개념 구분, 인과관계 오류를 점검합니다. 기존 val·test 집계에는 포함하지 않습니다. 승인 후 개발 환경에서 `uv run python -m lawbot_tools.eval_reasoning --output <새_임시_디렉터리>`로 v5 기본 구성을 실행합니다. 기준 조문 전체가 답변에 제공되거나 인용된 건수와 거절 건수는 전체·오류 유형별로 집계합니다. 결론과 조건·예외가 기준 답변에 부합하는지는 문항별로 별도 판정합니다.
 - **평가 데이터 사용 제한**: `data/labor_eval_keywords.csv`, `data/oos_eval.csv`, `data/scope_controls.csv`, `data/refusal_hard_cases.csv`와 `data/v4/split_v4.csv`·`data/decree_exp/split_decree_v4.csv`·`data/v5/split_tax_v5.csv`의 test 문항은 평가 전용입니다. 모델 학습이나 설정 선택에 쓰지 마세요.
 - **`results/` 안내**: 채점 전 모델 원본 출력과 문항별 점수이며, 점수가 낮은 답변은 법적으로 틀린 내용을 포함합니다.
 
