@@ -403,7 +403,7 @@ def test_env_example_is_complete_without_secrets(env):
     p = deploy.get_profile()
     assert p.name == 'v5' and [m.key for m in p.models] == ['pro']
     assert p.models[0].model == 'qwen3.8-27b-4bit' and p.models[0].system_file == paths.V5_SYSTEM_CONCISE
-    assert p.emb_model == 'lawbot-emb-v5b' and p.max_seq == 4352
+    assert p.emb_model == 'lawbot-emb-v6' and p.max_seq == 4352
     law, combined = deploy.article_paths(p.name)
     assert law.name == 'articles_v5.csv' and p.articles == combined == paths.DATA / 'v5/law_articles_v5_decree.csv'
     assert p.system_file == paths.V5_SYSTEM
@@ -432,7 +432,7 @@ def test_env_dev_example_is_valid(env):
     for k, v in values.items():
         env.setenv(k, v)
     p = deploy.get_profile()
-    assert (p.name, p.emb_model, p.max_seq) == ('v5', 'lawbot-emb-v5b', 4352)
+    assert (p.name, p.emb_model, p.max_seq) == ('v5', 'lawbot-emb-v6', 4352)
     assert deploy.reranker(p) == deploy.RerankerConfig('qwen3-reranker-4b', 10)
     assert deploy.decree(p) == deploy.DecreeConfig(0.9, 2, ('pro',), max_seq=5120)
     assert [m.model for m in p.models] == ['qwen3.8-27b-4bit']
@@ -631,13 +631,13 @@ def test_data_notice(env):
     assert web.config_data(a, None)['notice'] == view.data_notice(a)  # 화면 맨 위 줄
 
 
-def test_v5_profile_uses_v5b_and_v5_systems(env):
+def test_v5_profile_uses_v6_and_v5_systems(env):
     env.setenv('LAWBOT_PROFILE', 'v5')
     env.setenv('LAWBOT_RERANKER_ENABLED', '1')
     env.setenv('LAWBOT_DECREE_ENABLED', '1')
     p = deploy.get_profile()
     assert p.articles.name == 'law_articles_v5_decree.csv'
-    assert p.emb_model == 'lawbot-emb-v5b'
+    assert p.emb_model == 'lawbot-emb-v6'
     assert p.max_seq == 4352 and deploy.decree(p).max_seq == 5120
     assert [(m.key, m.model, m.fmt) for m in p.models] == [('pro', 'qwen3.8-27b-4bit', 'concise')]
     concise_system = service.system_text(p, p.models[0])
