@@ -92,6 +92,9 @@ def test_tax_schedule_filters_month_without_changing_law_event_counts(dataset, t
         'canonical_url': NTS_HOST + year_path(2026),
     }
     with TestClient(create_app(dataset, daily_feed=feed)) as client:
+        assert client.get('/api/tax-schedule?month=2026-11').status_code == 503
+        feed.write_text('not a snapshot', encoding='utf-8')
+        assert client.get('/api/tax-schedule?month=2026-11').status_code == 503
         replace_file(feed, seal(published))
         assert client.get('/api/tax-schedule?month=2026-11').json() == {'items': [], 'confirmedAt': None}
         published['feeds']['taxSchedule'] = {'confirmedAt': published['cutoffAt'], 'items': [item]}

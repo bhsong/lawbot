@@ -303,6 +303,8 @@ def create_app(
     def tax_schedule(month: str, response: Response):
         start, end = month_bounds(month)
         snapshot = daily_snapshot(response) or {}
+        if snapshot.get('state') in {'missing', 'invalid'}:
+            raise HTTPException(503, 'Tax schedule unavailable')
         schedule = snapshot.get('feeds', {}).get('taxSchedule')
         if not schedule:
             return {'items': [], 'confirmedAt': None}

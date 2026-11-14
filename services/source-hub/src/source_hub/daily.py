@@ -305,11 +305,19 @@ def collect_sources(
         supported = key in COLLECTORS or key in LEGACY or key == 'existing-erp'
         if outcome := skipped(row, supported):
             source_result = {'outcome': outcome}
-        elif state.get('publish_only') and key in previous:
-            statuses.append(previous[key])
-            continue
         elif state.get('publish_only'):
-            source_result = {'outcome': 'not_due'}
+            prior = previous.get(key, {})
+            latest = registry.runs(key) if key in COLLECTORS else []
+            if latest and (
+                not prior.get('lastAttemptAt')
+                or datetime.fromisoformat(latest[0]['started_at']) > datetime.fromisoformat(prior['lastAttemptAt'])
+            ):
+                source_result = latest[0]
+            elif prior and prior['outcome'] not in ('disabled', 'unverified'):
+                statuses.append(prior)
+                continue
+            else:
+                source_result = {'outcome': 'not_due'}
         elif key in LEGACY:
             source_result = legacy.get(key, {'outcome': 'not_due', 'run_id': previous.get(key, {}).get('runId')})
         elif key == 'existing-erp':
