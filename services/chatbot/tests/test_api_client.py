@@ -361,7 +361,8 @@ class Chat:
 
     def stream(self, messages, **kw):
         self.calls.append((messages, kw))
-        text = '【결론】\n예고해야 합니다.\n\n【근거 조문】\n제26조(해고의 예고)'
+        first_hit = messages[1]['content'].splitlines()[1].removeprefix('[1] ')
+        text = f'【결론】\n예고해야 합니다.\n\n【근거 조문】\n{first_hit}'
         for i, c in enumerate((text[:8], text[8:])):
             yield types.SimpleNamespace(
                 text=c,
@@ -425,7 +426,7 @@ def test_end_to_end_through_real_server_app(env, real_server, tmp_path):
     steps = list(service.ask(a, '수습 기간에도 해고 예고를 해야 하나요?', 'fast'))
     assert steps[0][0] == 'load' and steps[-1][0] == 'done'
     _, hits, raw, st = steps[-1]
-    assert raw == '【결론】\n예고해야 합니다.\n\n【근거 조문】\n제26조(해고의 예고)'
+    assert raw == f'【결론】\n예고해야 합니다.\n\n【근거 조문】\n{hits[0]["doc"].splitlines()[0]}'
     assert (st['prompt_tokens'], st['gen_tokens'], st['tps'], st['peak_gb'], st['finish']) == (
         50,
         2,
@@ -449,6 +450,7 @@ def test_end_to_end_through_real_server_app(env, real_server, tmp_path):
     ('answer', 'check'),
     [
         ('【결론】 세액공제액은 225,000원입니다.', 'mismatch'),
+        ('【결론】 계산표를 확인해 주세요.', 'missing'),
         ('【결론】 실손보험금 100만 원 차감 후 의료비 200만 원 기준 세액공제액은 75,000원입니다.', 'match'),
     ],
 )
@@ -468,7 +470,8 @@ def test_calculation_router_through_real_server_app(env, real_server, tmp_path, 
         elif '계산 입력 분류기' in messages[0]['content']:
             text = '1=x\n2=gross_pay\n3=medical_expenses\n4=insurance_reimbursement'
         else:
-            text = answer
+            first_hit = messages[1]['content'].splitlines()[1].removeprefix('[1] ').split('(', 1)[0]
+            text = answer + f'\n\n【근거 조문】\n{first_hit}'
         yield types.SimpleNamespace(text=text, finish_reason='stop')
 
     env.setattr(Chat, 'stream', stream)
@@ -484,7 +487,13 @@ def test_calculation_router_through_real_server_app(env, real_server, tmp_path, 
     capsys.readouterr()
     events = list(web.chat_events(app, question, 'pro', 'concise'))
     event_names = [event for event, _ in events]
-    assert event_names.index('calculation') < event_names.index('answer') < event_names.index('calculation_check')
+    assert event_names.index('calculation') < event_names.index('calculation_check') < event_names.index('done')
+    assert 'answer' not in event_names
+    done = dict(events)['done']
+    if check == 'match':
+        assert '75,000원' in done['text'] and 'notice' not in done
+    else:
+        assert done['text'] == '' and '계산' in done['notice']
     assert dict(events)['calculation']['results'][0]['value'] == 75_000
     assert dict(events)['calculation_check'] == {'status': check}
     record = json.loads(path.read_text(encoding='utf-8'))
@@ -493,6 +502,7 @@ def test_calculation_router_through_real_server_app(env, real_server, tmp_path, 
     assert record['calculation_status'] == 'calculated'
     assert record['router_reason'] == 'selected' and record['router_ms'] >= 0
     assert record['calculation_check'] == check
+    assert record['answer_verdict'] == ('shown' if check == 'match' else f'calculation_{check}')
     assert record['call_counts'] == {'router': 1, 'embedding': 1, 'search': 1, 'rerank': 1, 'llm': 1}
     assert not any(value in path.read_text(encoding='utf-8') for value in ('5천만', '75,000', '75000', question))
     chat = real_server.chat[app.models.specs['pro'].model]

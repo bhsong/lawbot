@@ -446,6 +446,8 @@ def request_record(app, st, fmt, status, error):
     rec |= {f'{k}_ms': None if st.get(k) is None else round(st[k] * 1000) for k in MS_FIELDS}
     rec |= {k: st.get(k) for k in ('prompt_tokens', 'gen_tokens', 'peak_gb', 'finish')}
     rec |= {k: st.get(k) for k in ('refused', 'n_cited', *CITE_FIELDS)}
+    if 'answer_verdict' in st:
+        rec['answer_verdict'] = st['answer_verdict']
     rec |= st.get('cache_metrics', {})
     rec |= st.get('calculation_metrics', {})
     if 'call_counts' in st:

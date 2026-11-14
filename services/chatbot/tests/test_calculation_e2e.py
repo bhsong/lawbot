@@ -120,12 +120,12 @@ def test_calculation_and_guidance_cards(calculation_stack, ui, width):
     ui.set_viewport_size({'width': width, 'height': 844})
     events = ask_with_events(ui, calculation_stack, MEDICAL)
     relevant = ['calculation', 'answer', 'calculation_check', 'done']
-    assert [event for event in events if event in relevant] == relevant, events
+    assert [event for event in events if event in relevant] == ['calculation', 'calculation_check', 'done'], events
     result = ui.get_by_role('region', name='계산 결과')
     expect(result.get_by_text('225,000원', exact=True).first).to_be_visible()
     expect(result.get_by_text(re.compile(r'미입력\(0\) \d+건'))).to_be_visible()
-    expect(result.get_by_role('alert')).to_contain_text('계산 표를 기준으로')
-    expect(e2e.answer(ui)).to_contain_text('의료비 세액공제액은 1원입니다.')
+    expect(e2e.answer(ui).get_by_role('status')).to_contain_text('계산 카드를 확인해 주세요')
+    expect(e2e.answer(ui)).not_to_contain_text('의료비 세액공제액은 1원입니다.')
     result.get_by_text('입력과 계산 단계', exact=True).click()
     inputs = result.get_by_role('table', name='계산 입력')
     expect(inputs.get_by_role('row', name='실손의료보험금 0원 미입력(0)')).to_be_visible()
@@ -148,7 +148,7 @@ def test_calculation_and_guidance_cards(calculation_stack, ui, width):
             expect(guidance.get_by_text('소득세법 제59조의4', exact=True)).to_be_visible()
 
     events = ask_with_events(ui, calculation_stack, MIDYEAR)
-    assert [event for event in events if event in relevant] == relevant, events
+    assert [event for event in events if event in relevant] == ['calculation', 'calculation_check', 'done'], events
     midyear = ui.get_by_role('region', name='계산 결과').last
     expect(midyear.get_by_text('146,750원', exact=True).first).to_be_visible()
     midyear.get_by_text('입력과 계산 단계', exact=True).click()
@@ -179,7 +179,7 @@ def test_labor_calculation_cards(calculation_stack, ui, width):
     ui.set_viewport_size({'width': width, 'height': 844})
     relevant = ['calculation', 'answer', 'calculation_check', 'done']
     events = ask_with_events(ui, calculation_stack, SEVERANCE)
-    assert [event for event in events if event in relevant] == relevant, events
+    assert [event for event in events if event in relevant] == ['calculation', 'calculation_check', 'done'], events
     severance = ui.get_by_role('region', name='계산 결과').last
     summaries = severance.locator('dl > div')
     average = summaries.filter(has_text='평균임금 기준 퇴직금 추정')
@@ -205,7 +205,7 @@ def test_labor_calculation_cards(calculation_stack, ui, width):
     assert steps.evaluate('table => table.scrollWidth <= table.clientWidth + 1')
 
     events = ask_with_events(ui, calculation_stack, ANNUAL)
-    assert [event for event in events if event in relevant] == relevant, events
+    assert [event for event in events if event in relevant] == ['calculation', 'calculation_check', 'done'], events
     annual = ui.get_by_role('region', name='계산 결과').last
     expect(annual.get_by_text('연차유급휴가 일수', exact=True).first).to_be_visible()
     expect(annual.get_by_text('15일', exact=True).first).to_be_visible()

@@ -126,9 +126,11 @@ def test_answer_arrives_in_pieces(server):
         got = list(stream_events(c))
     events = [e for _, e, _ in got]
     assert events[-1] == 'done' and '예고해야 합니다' in got[-1][2]['text']
+    assert all(d['draft'] is True for _, e, d in got if e == 'answer')
     first_answer = next(t for t, e, _ in got if e == 'answer')
     assert got[-1][0] - first_answer > DELAY  # 끝나기 전에 첫 조각이 도착함 (모아서 한 번에 보내지 않음)
-    assert log_rows(server)[-1]['status'] == 'ok'
+    row = log_rows(server)[-1]
+    assert row['status'] == 'ok' and row['answer_verdict'] == 'shown'
 
 
 def test_second_question_waits_for_first(server):

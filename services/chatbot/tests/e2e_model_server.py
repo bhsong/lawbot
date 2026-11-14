@@ -29,6 +29,8 @@ FIRST = re.compile(r'^\[1\] (.+?)\(', re.M)  # build_prompt의 첫 조문 '[1] �
 def answer_chunks(prompt):
     m = FIRST.search(prompt)
     cite = m.group(1) if m else '근로기준법 제26조'
+    if '합성 근거 오류 사례' in prompt:
+        cite = '근로기준법 제99999조'
     return ['【결론】', '가짜 모델 ', '답변입니다.', '\n【근거 조문】\n', cite]
 
 
@@ -111,9 +113,7 @@ def calculation_chunks(prompt, system, kw):
     if '표의 결과 항목과 숫자·단위를 결론에 그대로 쓰고' in prompt:
         return ['【결론】', '연차유급휴가 일수는 15일입니다.', '\n【근거 조문】\n근로기준법 제60조']
     if '직접 계산하지 말고' in prompt:
-        if '근속 2년하고 11개월' in prompt or '입사일은 2024년 2월 30일' in prompt:
-            cite = '\n【근거 조문】\n근로기준법 제60조'
-        return ['【결론】', '계산에 필요한 자료와 근거 조문을 확인해 주세요.', cite]
+        return ['【결론】', '계산에 필요한 자료와 근거 조문을 확인해 주세요.', *answer_chunks(prompt)[-2:]]
     return answer_chunks(prompt)
 
 
