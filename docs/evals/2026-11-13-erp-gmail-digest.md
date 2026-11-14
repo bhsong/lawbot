@@ -1,6 +1,6 @@
 # ERP Gmail 알림 검증
 
-2026-11-13 KST. 기준 `bd6b110`. [구현 계획](../plans/erp-gmail-digest.md)
+2026-11-13 KST. 기준 `bd6b110`. [구현 계획](../archives/erp-gmail-digest.md)
 
 | 항목 | 결과 |
 | --- | --- |

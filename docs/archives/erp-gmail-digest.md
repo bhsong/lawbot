@@ -1,6 +1,6 @@
 # 아침 Qwen 요약을 재사용하는 ERP 일일 이메일
 
-2026-11-13 KST. 기준 `main` `bd6b110`, 작업 브랜치 `feat/erp-gmail-digest`. [통합 구현 계획](source-hub-erp-v1.1.md)
+2026-11-13 KST. 기준 `main` `bd6b110`, 작업 브랜치 `feat/erp-gmail-digest`. [통합 구현 계획](../plans/source-hub-erp-v1.1.md)
 
 ## 기존 흐름과 목표
 

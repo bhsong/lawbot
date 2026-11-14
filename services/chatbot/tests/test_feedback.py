@@ -143,7 +143,14 @@ def test_turn_provenance_matches_loaded_csv_and_system(env, tmp_path):
     system_path.write_text('initial system')
     env.setenv('LAWBOT_V4_ARTICLES', str(csv_path))
     env.setenv('LAWBOT_PRO_SYSTEM', str(system_path))
-    env.setattr(service, 'LLM', FakeLLM)
+
+    class ProvenanceLLM(FakeLLM):
+        def stream(self, question, hits, system=None):
+            from lawbot.llm import response
+
+            yield response(f'【결론】예고해야 합니다.\n【근거 조문】\n{hits[0]["law"]} {hits[0]["article_id"]}')
+
+    env.setattr(service, 'LLM', ProvenanceLLM)
     a = service.load_app()
     a.models.get('pro')
     csv_path.write_bytes(csv + b'\n')

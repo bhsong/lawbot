@@ -213,19 +213,40 @@ def cached_events(app, question, model_key, fmt, remember, decision, request_id,
         log_request(app, st, fmt, status)
 
 
+def answer_verdict(raw, st: Timing, used, unknown, refused, *, calculated):
+    """Decide whether to show the generated text using the request's existing checks."""
+    if st.get('finish') == 'length':
+        return 'truncated'
+    if (check := st.get('calculation_metrics', {}).get('calculation_check')) in ('mismatch', 'missing'):
+        return f'calculation_{check}'
+    if not raw.strip():
+        return 'empty'
+    if refused:
+        return 'refused'
+    if calculated:
+        # The prompt also includes the calculator's separately verified references.
+        return 'shown'
+    if unknown:
+        return 'invalid_citation'
+    if not used:
+        return 'missing_citation'
+    return 'shown'
+
+
 def chat_events(app, question, model_key, fmt, remember=None, *, started=None):
     """질문 하나 → (이벤트, 데이터)를 차례로. remember(턴 기록) → turn_id (피드백이 꺼져 있으면 None)
     이벤트: status → sources(모두 펼침) → answer·stats… → sources(인용/검색만 구분) → stats → done, 실패하면 error
     생성 단계에서 화면 글이 그대로면(간결형의 근거·설명 토큰) TICK을 낸다: 받는 쪽이 토큰마다 연결 끊김을 확인하게"""
     started = time.perf_counter() if started is None else started
     cache = getattr(app, 'exact_cache', None)
-    metadata, ask_options = {}, {}
+    metadata = {}
     outcomes: list[tuple[Timing, str, str | None]] = []
     sent_done = False
 
     def report(st, status, error):
         outcomes.append((st, status, error))
 
+    ask_options = {}
     if is_calculation_question(question):
         request_id = secrets.token_hex(6)
         metadata = {'request_id': request_id, 'response_source': 'rag'}
@@ -239,7 +260,6 @@ def chat_events(app, question, model_key, fmt, remember=None, *, started=None):
                 'exact_lookup_ms': None,
             }
             | metadata,
-            'report': report,
             'calculation_candidate': True,
         }
     elif cache is not None:
@@ -249,10 +269,11 @@ def chat_events(app, question, model_key, fmt, remember=None, *, started=None):
             yield from cached_events(app, question, model_key, fmt, remember, decision, request_id, started)
             return
         metadata = {'request_id': request_id, 'response_source': 'rag'}
-        ask_options = {'request_id': request_id, 'cache_metrics': decision.metrics() | metadata, 'report': report}
+        ask_options = {'request_id': request_id, 'cache_metrics': decision.metrics() | metadata}
     spec = app.models.specs[model_key]
     yield 'status', {'text': view.searching_stats(app, model_key)}
     sent_sources, last = False, {}
+    calculated = False
     first_ms = None
 
     def changed(event, data):
@@ -262,9 +283,11 @@ def chat_events(app, question, model_key, fmt, remember=None, *, started=None):
         return [(event, data)]
 
     try:
-        for stage, hits, raw, st in ask(app, question, model_key, fmt=fmt, **ask_options):
+        for stage, hits, raw, st in ask(app, question, model_key, fmt=fmt, report=report, **ask_options):
             if stage == 'calculation':
-                yield 'calculation', st['_calculation']
+                calculation = st['_calculation']
+                calculated = calculation['status'] == 'calculated'
+                yield 'calculation', calculation
                 continue
             if not sent_sources:
                 sent_sources = True
@@ -274,29 +297,38 @@ def chat_events(app, question, model_key, fmt, remember=None, *, started=None):
                 yield from changed('stats', {'text': view.fmt_stats(spec.label, stage, st)})
                 continue
             if stage != 'done':
-                text = render(raw, hits, fmt, done=False)
+                text = '' if calculated else render(raw, hits, fmt, done=False)
                 if first_ms is None and text.strip():
                     first_ms = round((time.perf_counter() - started) * 1000, 3)
-                out = changed('answer', {'text': text}) if text.strip() else changed('status', {'text': view.WRITING})
+                out = (
+                    changed('answer', {'text': text, 'draft': True})
+                    if text.strip()
+                    else changed('status', {'text': view.WRITING})
+                )
                 out += changed('stats', {'text': view.fmt_stats(spec.label, stage, st)})
                 yield from out or [(TICK, None)]
                 continue
-            text = render(raw, hits, fmt, done=True) if raw.strip() else view.EMPTY
-            used, _, no = answer_citations(raw, hits)
-            yield 'sources', sources_data(hits, used, no)
+            used, unknown, refused = answer_citations(raw, hits)
+            verdict = st['answer_verdict'] = answer_verdict(raw, st, used, unknown, refused, calculated=calculated)
+            notice = view.ANSWER_NOTICES.get(verdict)
+            text = '' if notice else (view.EMPTY if verdict == 'empty' else render(raw, hits, fmt, done=True))
+            yield 'sources', sources_data(hits) if notice else sources_data(hits, used, refused)
             yield from changed('stats', {'text': view.fmt_stats(spec.label, stage, st)})
             tid = None
-            if remember is not None:
+            if remember is not None and notice is None:
                 try:
                     tid = remember(feedback.turn_record(app, question, hits, raw, text, model_key, fmt, st) | metadata)
                 except Exception as e:  # 피드백 기록 실패는 답변을 막지 않는다
                     log.warning(f'경고: 피드백용 턴 기록 실패 ({type(e).__name__})')
-            if first_ms is None:
+            if first_ms is None and text:
                 first_ms = round((time.perf_counter() - started) * 1000, 3)
             check = st.get('calculation_metrics', {}).get('calculation_check')
             if check and check != 'not_run':
                 yield 'calculation_check', {'status': check}
-            yield 'done', {'text': text, 'finish': st.get('finish'), 'turn_id': tid} | metadata
+            final = {'text': text, 'finish': st.get('finish'), 'turn_id': tid} | metadata
+            if notice:
+                final['notice'] = notice
+            yield 'done', final
             sent_done = True
     except AskError as err:  # 유형(kind)은 요청 로그의 error_type과 같음. 원래 예외는 __cause__
         msg = view.error_message(err.kind, err.__cause__, spec)

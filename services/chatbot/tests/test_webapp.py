@@ -220,7 +220,9 @@ def test_empty_and_truncated_answer(env):
     a = make_app(env, llm=Odd)
     assert run(a, '질문', 'fast', 'concise').text == view.EMPTY
     Odd.text, Odd.finish = '【결론】길게', 'length'
-    assert '⚠ 최대 길이에서 잘림' in run(a, '질문', 'fast', 'full').stats
+    truncated = run(a, '질문', 'fast', 'full')
+    assert '⚠ 최대 길이에서 잘림' in truncated.stats
+    assert truncated.text == '' and '길이' in truncated.done['notice']
 
 
 # ---- 간결형 ----
@@ -584,31 +586,25 @@ def test_sources_split_cited_and_retrieved(v4_files):
     assert rest['items'][0]['body'] == '부당해고등의 구제신청 본문 <개정 2021.1.5>'  # 펼치면 본문
 
 
-def test_sources_for_refusal_and_uncited(v4_files):
+def test_sources_for_refusal(v4_files):
     a = v4_chat(v4_files, '【결론】\n제공된 조문에서 근거를 찾을 수 없습니다.\n\n【근거 조문】\n근로기준법 제26조')
     r = run(a, '제주도 여행 코스?', 'pro', 'concise')
     assert r.text == '제공된 조문에서 근거를 찾을 수 없습니다.'  # 거절: 결론만
     assert groups({'groups': r.sources}) == [
         ('검색됐지만 답변에 쓰지 않은 조문', False, ['제26조', '제27조', '제28조'])
     ]
-    a = v4_chat(v4_files, '【결론】\n예고해야 합니다.')
-    r = run(a, '해고?', 'pro', 'concise')
-    assert groups({'groups': r.sources}) == [(None, True, ['제26조', '제27조', '제28조'])]  # 인용이 없으면 모두 펼침
 
 
-def test_full_format_warns_outside_citation(v4_files):
-    raw = '【결론】\n예고해야 합니다.\n\n【근거 조문】\n근로기준법 제26조, 근로기준법 제109조\n\n【설명】\n- 설명'
-    r = run(v4_chat(v4_files, raw), '해고?', 'pro', 'full')
-    assert r.text == raw + '\n\n⚠ 검색된 조문에서 확인되지 않은 인용: 제109조'  # 원문은 그대로, 아래에 경고
-    assert r.sources[0]['label'] == view.CITED_LABEL
-    assert render_full(raw.replace(', 근로기준법 제109조', '')) == raw.replace(', 근로기준법 제109조', '')
-    assert render_full(raw, done=False) == raw  # 생성 중에는 경고하지 않음
-
-
-def render_full(raw, done=True):
-    from lawbot.answer_format import render
-
-    return render(raw, H3, 'full', done)
+@pytest.mark.parametrize('fmt', ['full', 'concise'])
+@pytest.mark.parametrize('cites', ['', '근로기준법 제26조, 근로기준법 제109조', '최저임금법 제26조'])
+def test_unconfirmed_answer_is_withheld(v4_files, fmt, cites):
+    raw = f'【결론】\n예고해야 합니다.\n\n【근거 조문】\n{cites}'
+    remembered = []
+    r = run(v4_chat(v4_files, raw), '해고?', 'pro', fmt, remember=remembered.append)
+    assert any('예고해야' in d['text'] for e, d in r.events if e == 'answer')
+    assert r.text == '' and '근거' in r.done['notice'] and r.done['turn_id'] is None
+    assert groups({'groups': r.sources}) == [(None, True, ['제26조', '제27조', '제28조'])]
+    assert remembered == []
 
 
 def test_status_steps(env):
