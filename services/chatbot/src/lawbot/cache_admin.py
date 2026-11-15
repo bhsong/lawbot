@@ -6,18 +6,21 @@ import hashlib
 import json
 import os
 import pwd
-from dataclasses import asdict, replace
+from dataclasses import asdict, dataclass, replace
 from datetime import UTC, datetime
 from pathlib import Path
 
-from lawbot import envfile, settings
-from lawbot.cache_seed import load_bundle, load_protection, prepare, require_db_protection
+from lawbot import deploy, envfile, settings
+from lawbot.cache_seed import Protection, load_bundle, load_protection, prepare, require_db_protection
+from lawbot.cache_seed_db_store import read_source
+from lawbot.cache_seed_store import import_seed
 from lawbot.cache_store import Store, init, migrate, translate_sqlite_errors
 from lawbot.corpus_store import active_release, active_token
 from lawbot.db.backup import backup
-from lawbot.db.connection import db_path
-from lawbot.exact_cache import PROFILE, digest
+from lawbot.db.connection import db_path, repo_path
+from lawbot.exact_cache import PROFILE, Snapshot, digest
 from lawbot.feedback import check_private
+from lawbot.paths import ROOT
 from lawbot.service import cache_snapshot
 
 
@@ -28,37 +31,86 @@ def reviewed_time(value):
     return when.astimezone(UTC).isoformat(timespec='microseconds')
 
 
+def development_path(path: str | Path) -> Path:
+    """Resolve a ZIP command path without permitting production worktrees or files."""
+    resolved = repo_path(str(path)).resolve()
+    production = ROOT.with_name('lawbot-prod').resolve()
+    if ROOT.resolve() == production or resolved.is_relative_to(production):
+        raise ValueError('이 도구는 개발용 사본에서만 실행할 수 있습니다.')
+    return resolved
+
+
+def same_file(first: Path, second: Path) -> bool:
+    return first == second or (first.exists() and second.exists() and first.samefile(second))
+
+
+@dataclass(frozen=True)
+class CorpusContext:
+    db: Path
+    snapshot: Snapshot
+    event: int
+    protection: Protection
+    protected_csv: tuple[Path, ...] = ()
+
+    def check(self):
+        if active_token(self.db, PROFILE) != (self.snapshot.release_id, self.event):
+            raise ValueError('검사 중 활성 코퍼스가 변경되었습니다.')
+
+    def check_import(self):
+        if load_protection(self.db, list(self.protected_csv)).fingerprint != self.protection.fingerprint:
+            raise ValueError('적재 중 보호 분할이 변경되었습니다.')
+        self.check()
+
+    def identity(self):
+        return {
+            'namespace_id': self.snapshot.namespace.id,
+            'release_id': self.snapshot.release_id,
+            'activation_event': self.event,
+            'protection_hash': self.protection.fingerprint,
+        }
+
+
+def corpus_context(db: Path, protected_csv: list[Path], *, config: settings.Settings | None = None) -> CorpusContext:
+    """Resolve one active v5 Pro answer scope and its protection from the corpus DB."""
+    profile = deploy.get_profile() if config is None else config.profile
+    decree = deploy.decree(profile) if config is None else config.decree
+    token = active_token(db, PROFILE)
+    release = active_release(db, PROFILE)
+    snapshot = cache_snapshot(profile, release, decree)
+    if token is None or snapshot is None or snapshot.release_id != token[0]:
+        raise ValueError('활성 코퍼스 또는 승인할 답변 범위를 확인할 수 없습니다.')
+    context = CorpusContext(db, snapshot, token[1], load_protection(db, protected_csv), tuple(protected_csv))
+    context.check()
+    return context
+
+
 def scope(args):
-    """Resolve the active corpus snapshot and protected split from the corpus DB only."""
     cfg = settings.load()
     if cfg.db is None or cfg.corpus != 'db' or cfg.profile.name != PROFILE:
         raise ValueError('현행 v5 DB 코퍼스 설정이 필요합니다.')
-    if args.db is not None and db_path(args.db) == cfg.db:
+    if args.db is not None and same_file(db_path(args.db), cfg.db):
         raise ValueError('정확 일치 캐시는 별도 SQLite 파일을 사용해야 합니다.')
-    token = active_token(cfg.db, PROFILE)
-    release = active_release(cfg.db, PROFILE)
-    snapshot = cache_snapshot(cfg.profile, release, cfg.decree)
-    if token is None or snapshot is None or release.release_id != token[0]:
-        raise ValueError('활성 코퍼스 또는 승인할 답변 범위를 확인할 수 없습니다.')
-    protection = load_protection(cfg.db, args.protected_csv)
-    identity = {
-        'namespace_id': snapshot.namespace.id,
-        'release_id': token[0],
-        'activation_event': token[1],
-        'protection_hash': protection.fingerprint,
-    }
-    return cfg.db, snapshot, protection, identity
+    return corpus_context(cfg.db, args.protected_csv, config=cfg)
 
 
 def context(args):
-    """Prepare reviewed P07 drafts from the handoff ZIP given on the command line."""
-    db, snapshot, protection, identity = scope(args)
-    bundle = load_bundle(args.bundle)
-    require_db_protection(bundle, protection)
-    seed = prepare(bundle, protection, snapshot)
-    if active_token(db, PROFILE) != (identity['release_id'], identity['activation_event']):
-        raise ValueError('검사 중 활성 코퍼스가 변경되었습니다.')
-    return snapshot, seed, identity
+    """Prepare reviewed P07 drafts from a development-only handoff ZIP."""
+    bundle_path = development_path(args.bundle)
+    args.protected_csv = [development_path(path) for path in args.protected_csv]
+    for name in ('report_dir', 'review_file'):
+        if path := getattr(args, name, None):
+            development_path(path)
+    for path in getattr(args, 'correction_file', ()):
+        development_path(path)
+    if corpus := os.environ.get('LAWBOT_DB', '').strip():
+        development_path(corpus)
+    ctx = scope(args)
+    development_path(ctx.db)
+    bundle = load_bundle(bundle_path)
+    require_db_protection(bundle, ctx.protection)
+    seed = prepare(bundle, ctx.protection, ctx.snapshot)
+    ctx.check()
+    return ctx.snapshot, seed, ctx.identity()
 
 
 def reports(folder, seed, identity):
@@ -170,13 +222,17 @@ def parser():
         'revoke',
         'backup',
         'exclude-calculations',
+        'import-db',
     ):
         cmd = sub.add_parser(name)
         cmd.add_argument('--db', required=name != 'inspect')
         if name in ('inspect', 'seed', 'approve', 'replace'):
             cmd.add_argument('--bundle', type=Path, required=True)
-        if name in ('inspect', 'seed', 'approve', 'replace', 'set-mode'):
+        if name in ('inspect', 'seed', 'approve', 'replace', 'set-mode', 'import-db'):
             cmd.add_argument('--protected-csv', type=Path, action='append', default=[])
+        if name == 'import-db':
+            cmd.add_argument('--from', dest='source_db', required=True)
+            cmd.add_argument('--corpus-db', required=True)
         if name in ('seed', 'approve', 'replace', 'set-mode', 'revoke'):
             cmd.add_argument('--reason', required=name != 'seed')
         if name in ('inspect', 'seed'):
@@ -200,8 +256,6 @@ def parser():
         if name == 'set-mode':
             cmd.add_argument('mode', choices=('off', 'shadow', 'on'))
             cmd.add_argument('--approval')
-            cmd.add_argument('--semantic-seed', action='store_true')
-            cmd.add_argument('--corpus-db', help='development corpus DB for --semantic-seed')
         if name == 'revoke':
             cmd.add_argument('kind', choices=('query', 'answer'))
             cmd.add_argument('target')
@@ -226,9 +280,11 @@ def main(argv=None):
 
 
 def run(args):
+    command = args.command
+    if command in ('inspect', 'seed', 'approve', 'replace') and args.db:
+        development_path(args.db)
     path = db_path(args.db) if args.db else None
     actor = pwd.getpwuid(os.geteuid()).pw_name
-    command = args.command
     reason = getattr(args, 'reason', None) or ('P01~P07 draft import' if command == 'seed' else '')
     if command == 'inspect':
         _, seed, identity = context(args)
@@ -244,6 +300,21 @@ def run(args):
     if command == 'backup':
         backup(path, db_path(args.out))
         return {'backup': 'ok'}
+    if command == 'import-db':
+        source, corpus = db_path(args.source_db), db_path(args.corpus_db)
+        if same_file(source, path) or same_file(corpus, path) or same_file(source, corpus):
+            raise ValueError('원천·대상 캐시와 대상 코퍼스에는 서로 다른 DB 파일을 지정하세요.')
+        ctx = corpus_context(corpus, args.protected_csv)
+        seed, checksum = read_source(source)
+        return import_seed(
+            path,
+            seed,
+            ctx.snapshot,
+            ctx.event,
+            ctx.protection,
+            check_snapshot=ctx.check_import,
+            source_db_sha256=checksum,
+        )
     store = Store(path)
     if command == 'exclude-calculations':
         if args.apply and not reason.strip():
@@ -264,38 +335,11 @@ def run(args):
     if command == 'revoke':
         store.revoke(args.kind, args.target, actor, reason)
         return {'revoked': args.target}
-    if command == 'set-mode' and args.semantic_seed:
-        from lawbot.semantic_tools import development_path
-
-        path = development_path(str(path))
-        store = Store(path)
     if command == 'set-mode' and args.mode == 'off':
         store.set_mode('off', actor, reason)
         return {'mode': 'off'}
-    if command == 'set-mode' and args.semantic_seed:
-        from lawbot.semantic_import_store import activate_seed
-        from lawbot.semantic_tools import corpus_context, development_protection
-
-        if not args.corpus_db or not args.approval:
-            raise ValueError('시맨틱 seed 활성화에는 --corpus-db와 --approval이 필요합니다.')
-        corpus = db_path(str(development_path(args.corpus_db)))
-        if path.samefile(corpus):
-            raise ValueError('코퍼스와 캐시에는 서로 다른 개발 DB 사본을 지정하세요.')
-        ctx = corpus_context(corpus)
-        return activate_seed(
-            path,
-            args.mode,
-            actor,
-            reason,
-            args.approval,
-            ctx.snapshot,
-            ctx.event,
-            development_protection(corpus, args.protected_csv),
-            ctx.check,
-        )
     if command == 'set-mode':
-        _, _, _, identity = scope(args)
-        require_identity(store.control(), identity)
+        require_identity(store.control(), scope(args).identity())
         store.set_mode(args.mode, actor, reason, args.approval)
         return {'mode': args.mode}
     snapshot, seed, identity = context(args)

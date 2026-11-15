@@ -1,59 +1,23 @@
-"""Read the verified semantic handoffs without extracting them or logging their contents."""
+"""Import the reviewed pass handoff into an exact-cache development copy."""
 
+import argparse
 import json
 import zlib
 from contextlib import contextmanager
-from dataclasses import dataclass
 from hashlib import file_digest
 from pathlib import Path
 from zipfile import BadZipFile, ZipFile
 
+from lawbot import envfile
+from lawbot.cache_admin import corpus_context, development_path, same_file
 from lawbot.cache_seed import csv_rows, json_lines
+from lawbot.cache_seed_store import Answer, Handoff, Question, Reference, import_seed
+from lawbot.cache_store import translate_sqlite_errors
+from lawbot.db.connection import check_db_path
 from lawbot.exact_cache import canonical, digest, normalize, read_articles
 
 PASS_SHA256 = '2da4c96ed8541c7c13fdc948db1f3c39e9e19d42c55972842851c0f77a75166f'
-DEFERRED_SHA256 = '41dd33d4c1e7eae01bdfc95bb18793eeb1f11a24d0fc7b5b917d799955183862'
 PROVENANCE = ('batch_id', 'source_report', 'source_report_sha256', 'source_snapshot_id')
-
-
-@dataclass(frozen=True)
-class Reference:
-    article_id: str
-    sha256: str
-
-
-@dataclass(frozen=True)
-class Answer:
-    key: str
-    unit_id: str
-    parent: str
-    raw: str
-    sha256: str
-    display: tuple[Reference, ...]
-    evidence: tuple[Reference, ...]
-    metadata: dict
-    proposition: str
-    start: int
-    parent_sha256: str
-
-    @property
-    def group_id(self):
-        return digest(canonical(['semantic-answer-group-v1', self.parent, self.unit_id]))
-
-
-@dataclass(frozen=True)
-class Question:
-    id: str
-    answer_key: str
-    text: str
-    metadata: dict
-
-
-@dataclass(frozen=True)
-class Handoff:
-    sha256: str
-    answers: tuple[Answer, ...]
-    questions: tuple[Question, ...]
 
 
 def archive_member(archive: ZipFile, name: str) -> bytes:
@@ -85,7 +49,7 @@ def read_records(archive: ZipFile, name: str, fields):
 
 
 @contextmanager
-def verified_zip(path: Path, expected: str, kind: str):
+def verified_zip(path: Path, expected: str):
     with path.open('rb') as stream:
         if file_digest(stream, 'sha256').hexdigest() != expected:
             raise ValueError('handoff ZIP SHA-256 mismatch')
@@ -97,24 +61,20 @@ def verified_zip(path: Path, expected: str, kind: str):
         with archive:
             manifest = require_record(
                 json.loads(archive_member(archive, 'manifest.json')),
-                ('package_kind', 'approval_status', 'semantic_enabled', 'exact_enabled'),
+                ('package_kind', 'approval_status', 'exact_enabled', 'question_pairs', 'answer_units_used_by_pairs'),
             )
             if (
-                manifest['package_kind'] != kind
+                manifest['package_kind'] != 'pass'
                 or manifest['approval_status'] != 'not_approved'
-                or manifest['semantic_enabled'] is not False
                 or manifest['exact_enabled'] is not False
                 or len(archive.namelist()) != len(set(archive.namelist()))
             ):
                 raise ValueError('invalid handoff manifest')
-            required_value(manifest, 'question_pairs')
-            if kind == 'pass':
-                required_value(manifest, 'answer_units_used_by_pairs')
             yield archive, manifest
 
 
 def read_pass(path: Path) -> Handoff:
-    with verified_zip(path, PASS_SHA256, 'pass') as (archive, manifest):
+    with verified_zip(path, PASS_SHA256) as (archive, manifest):
         return parse_pass(archive, manifest)
 
 
@@ -170,7 +130,6 @@ def parse_pass(archive, manifest):
         or len(answers) != manifest['answer_units_used_by_pairs']
     ):
         raise ValueError('inconsistent handoff record counts')
-    quotes: dict[str, set[tuple[int, str]]] = {}
     questions = []
     for row in pair_rows:
         answer = answers[row['answer_key']]
@@ -187,14 +146,8 @@ def parse_pass(archive, manifest):
             or key['normalized_question_sha256'] != digest(normalize(row['question']))
         ):
             raise ValueError('invalid reviewed handoff linkage')
-        primary = row['primary_article_id']
-        raw_article = required_value(corpus, primary).text
-        found = quotes.setdefault(row['answer_key'], set())
         for evidence in review['evidence']:
             require_record(evidence, ('article_id', 'quote'))
-            quote = evidence['quote']
-            if evidence['article_id'] == primary and quote and (start := raw_article.find(quote)) >= 0:
-                found.add((start, quote))
         provenance = {k: row[k] for k in (*PROVENANCE, 'split_emb', 'split_sllm', 'answer_verdict', 'pair_verdict')}
         questions.append(Question(row['id'], row['answer_key'], row['question'], provenance))
     if len({normalize(q.text) for q in questions}) != len(questions):
@@ -213,9 +166,6 @@ def parse_pass(archive, manifest):
             or any(required_value(corpus, r.article_id).text_hash != r.sha256 for r in display)
         ):
             raise ValueError('invalid handoff answer or citation hash')
-        start, proposition = min(
-            quotes[key], key=lambda entry: (entry[0], -len(entry[1]), entry[1]), default=(0, parent.text)
-        )
         verified.append(
             Answer(
                 key,
@@ -226,47 +176,43 @@ def parse_pass(archive, manifest):
                 display,
                 evidence,
                 {k: row[k] for k in PROVENANCE},
-                proposition,
-                start,
                 parent.text_hash,
             )
         )
-    if len({answer.group_id for answer in verified}) != len(verified):
-        raise ValueError('duplicate atom groups')
+    if len({(answer.parent, answer.unit_id) for answer in verified}) != len(verified):
+        raise ValueError('duplicate reviewed answer units')
     return Handoff(PASS_SHA256, tuple(verified), tuple(questions))
 
 
-def read_deferred(path: Path) -> tuple[Question, ...]:
-    """Load only deferred evaluation questions and their pair verdicts."""
-    with verified_zip(path, DEFERRED_SHA256, 'deferred') as (archive, manifest):
-        rows = read_records(
-            archive,
-            'data/deferred_pairs_full.jsonl',
-            ('id', 'answer_key', 'question', 'question_sha256', 'pair_verdict', 'split_emb', 'split_sllm'),
-        )
-        if len(rows) != manifest['question_pairs'] or len({r['id'] for r in rows}) != len(rows):
-            raise ValueError('inconsistent deferred record counts')
-        if any(
-            row['pair_verdict'] not in ('review', 'revise') or digest(row['question']) != row['question_sha256']
-            for row in rows
-        ):
-            raise ValueError('invalid deferred verdict or question hash')
-        return tuple(
-            Question(
-                row['id'],
-                row['answer_key'],
-                row['question'],
-                {k: row[k] for k in ('pair_verdict', 'split_emb', 'split_sllm')},
-            )
-            for row in rows
-        )
+def run(args):
+    bundle = development_path(args.bundle)
+    corpus = check_db_path(development_path(args.corpus_db))
+    cache = check_db_path(development_path(args.cache_db))
+    protected_csv = [development_path(path) for path in args.protected_csv]
+    if same_file(cache, corpus):
+        raise ValueError('코퍼스와 캐시에는 서로 다른 개발 DB 사본을 지정하세요.')
+    seed = read_pass(bundle)
+    ctx = corpus_context(corpus, protected_csv)
+    return import_seed(cache, seed, ctx.snapshot, ctx.event, ctx.protection, check_snapshot=ctx.check_import) | {
+        'protected_unique': len(ctx.protection.exact)
+    }
 
 
-def evidence_result(answer: Answer, snapshot) -> dict[str, str]:
-    expected = {ref.article_id: ref.sha256 for ref in (*answer.display, *answer.evidence)}
-    expected[answer.parent] = answer.parent_sha256
-    result = {}
-    for key, checksum in expected.items():
-        article = snapshot.articles.get(key)
-        result[key] = 'missing' if article is None else ('match' if article.text_hash == checksum else 'mismatch')
-    return result
+def main(argv=None):
+    cli = argparse.ArgumentParser(description=__doc__)
+    cli.add_argument('--corpus-db', required=True)
+    cli.add_argument('--cache-db', required=True)
+    cli.add_argument('--bundle', required=True)
+    cli.add_argument('--protected-csv', action='append', default=[])
+    args = cli.parse_args(argv)
+    try:
+        envfile.load()
+        with translate_sqlite_errors():
+            result = run(args)
+    except (OSError, RuntimeError, ValueError) as exc:
+        cli.exit(2, f'통과 ZIP 적재 실패: {exc}\n')
+    print(canonical(result))
+
+
+if __name__ == '__main__':
+    main()

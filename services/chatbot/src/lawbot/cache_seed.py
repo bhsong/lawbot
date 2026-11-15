@@ -25,7 +25,6 @@ DRAFT_FLAGS = {
     'currency_status': 'unverified',
     'final_rendering_policy_status': 'unverified',
     'exact_enabled': False,
-    'semantic_enabled': False,
 }
 
 

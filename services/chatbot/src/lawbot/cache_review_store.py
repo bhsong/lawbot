@@ -10,7 +10,10 @@ from lawbot.cache_carry import FIELDS, allowed_question, article_rows, verified_
 from lawbot.cache_release_store import citations_for, preview, query_rows, raw_for
 from lawbot.cache_store import (
     CALCULATION_EXCLUDED,
+    REVIEW_EVIDENCE_CONFLICT,
+    REVIEW_EVIDENCE_CONFLICT_DETAIL,
     Draft,
+    ReviewEvidenceConflict,
     audit,
     calculation_exclusions,
     insert_answer,
@@ -19,6 +22,7 @@ from lawbot.cache_store import (
     revoke_in,
     set_mode_in,
     translate_sqlite_errors,
+    with_review_evidence,
 )
 from lawbot.calc_gate import is_calculation_question
 from lawbot.db.connection import connect, transaction
@@ -186,6 +190,8 @@ class ReviewCatalog:
         excluded, calculation_only = calculation_links(queries) if state != 'revoked' else (set(), False)
         if calculation_only:
             state, reason, disabled = 'off', 'calculation_question', CALCULATION_EXCLUDED
+        elif reason == REVIEW_EVIDENCE_CONFLICT:
+            disabled = REVIEW_EVIDENCE_CONFLICT_DETAIL
         if disabled is None and state in ('pending', 'draft'):
             try:
                 protection = verified_inputs(self.corpus_db)
@@ -380,7 +386,7 @@ class ReviewCatalog:
             audit(conn, 'approve', answer_id, actor, reason, {'approval_id': approval, 'query_ids': query_ids})
 
     def prepare_approval(self, conn, control, protection, current, target, preview_hash):
-        key, raw_hash, _, source, status, stored, verdict, *_ = self.answer(conn, control, target)
+        key, raw_hash, _, source, status, stored, verdict, reason, *_ = self.answer(conn, control, target)
         state = disposition(status, verdict)
         if state == 'revoked':
             raise StoreError('invalid_state', '철회한 답변은 승인할 수 없습니다.', 409)
@@ -390,6 +396,8 @@ class ReviewCatalog:
             raise StoreError('calculation_question', CALCULATION_EXCLUDED, 409)
         if state not in ('draft', 'pending'):
             raise StoreError('invalid_state', '검토 대기 또는 초안 답변만 승인할 수 있습니다.', 409)
+        if reason == REVIEW_EVIDENCE_CONFLICT:
+            raise StoreError(REVIEW_EVIDENCE_CONFLICT, REVIEW_EVIDENCE_CONFLICT_DETAIL, 409)
         query_ids = [q[0] for q in queries if reviewable_query(q, protection, control.mode, state)]
         if not query_ids:
             if queries and all(q[7] == 'revoked' for q in queries):
@@ -400,6 +408,10 @@ class ReviewCatalog:
         if shown is None or digest(shown) != preview_hash:
             raise StoreError('review_changed', '확인한 표시본이 현재 표시본과 다릅니다.', 409)
         lineage = json.loads(source)
+        try:
+            lineage = with_review_evidence(conn, target, lineage)
+        except ReviewEvidenceConflict as exc:
+            raise StoreError(REVIEW_EVIDENCE_CONFLICT, str(exc), 409) from exc
         if any(key not in current or current[key][-1] != '0' for key in lineage.get('review_evidence_article_ids', [])):
             raise StoreError('review_changed', '검토 참고 조문을 현재 릴리스에서 확인할 수 없습니다.', 409)
         return Draft('', '', key, raw_hash, shown, citations, lineage, raw), query_ids

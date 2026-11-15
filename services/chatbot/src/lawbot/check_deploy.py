@@ -12,7 +12,7 @@ from io import BytesIO
 import pandas as pd
 
 from lawbot import corpus_store, deploy, envfile, manifest, security, service, settings
-from lawbot.cache_store import SCHEMA, Store, translate_sqlite_errors
+from lawbot.cache_store import Store, translate_sqlite_errors
 from lawbot.calc_corpus import calculator_report
 from lawbot.db.migrate import startup_path
 from lawbot.deploy import get_profile
@@ -307,11 +307,6 @@ def run():
             try:
                 with translate_sqlite_errors():
                     store = Store(cache_path)
-                    if (
-                        os.environ.get('LAWBOT_SEMANTIC_CACHE_MODE', '').strip() == 'shadow'
-                        and store.check_schema() < SCHEMA
-                    ):
-                        out.append(('WARN', '시맨틱 shadow에는 캐시 DB 스키마 0003이 필요합니다.'))
                     rows = store.calculation_exclusions()
             except OSError, RuntimeError:
                 out.append(('WARN', '정확 일치 캐시의 계산 질문 제외 항목을 읽지 못했습니다.'))

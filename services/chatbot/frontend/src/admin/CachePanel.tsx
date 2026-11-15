@@ -10,6 +10,7 @@ const reasons: Record<string, string> = {
   related_law_changed: '같은 법령의 다른 조문이 변경되었습니다.', policy_changed: '표시 정책이 변경되었습니다.',
   protection_changed: '보호 분할이 변경되었습니다.', bundle_missing: 'P07 번들이 설정되지 않았습니다.', protection_unavailable: '보호 분할을 확인할 수 없습니다.',
   protected_question: '보호 질문과 겹칩니다.', render_unavailable: '원문 또는 표시본을 확인할 수 없습니다.',
+  review_evidence_conflict: '검수 근거 해시가 충돌했습니다.',
   display_changed: '현재 조문으로 렌더링한 표시본이 달라졌습니다.', awaiting_approval: '이전 릴리스부터 검토가 필요합니다.',
   withdrawn: '철회한 답변입니다.',
   calculation_question: '계산 질문이므로 캐시가 꺼졌습니다.',

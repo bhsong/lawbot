@@ -49,14 +49,14 @@ def _current_version(conn: sqlite3.Connection, migrations: list[Migration]) -> i
     return version
 
 
-def check_schema(path: str | Path, *, directory: Traversable | None = None, minimum_version: int | None = None) -> int:
-    """Check the applied migration history and require at least the requested schema version."""
-    return _check_schema(check_db_path(path), directory, minimum_version=minimum_version)
+def check_schema(path: str | Path, *, directory: Traversable | None = None) -> int:
+    """Check the applied migration history and require the current schema version."""
+    return _check_schema(check_db_path(path), directory)
 
 
-def _check_schema(path: Path, directory: Traversable | None = None, *, minimum_version: int | None = None) -> int:
+def _check_schema(path: Path, directory: Traversable | None = None) -> int:
     migrations = _migrations(directory)
-    required = migrations[-1].version if minimum_version is None else minimum_version
+    required = migrations[-1].version
     with connect(path) as conn:
         version = _current_version(conn, migrations)
     if version < required:

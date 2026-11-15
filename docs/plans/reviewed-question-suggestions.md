@@ -11,7 +11,7 @@
    - 시맨틱 캐시: 1,008개 설정 중 `not_reusable` 오적중 0건을 지키면서 1건이라도 재사용하는 설정이 없었다. miss마다 시맨틱 검색이 p50 3.7초를 더했다.
 2. **정확 일치 캐시는 유지하고, "검토된 비슷한 질문" 추천으로 활용한다.** 사용자가 추천을 누르면 검토 질문 원문이 그대로 전송되어 정확 일치 캐시에 적중한다. 같은 질문인지는 사용자가 판단하므로, 시맨틱 자동 재사용의 오적중 문제를 피한다.
 3. **v5 예시 질문 하나는 정확 일치 캐시 시연용으로 유지한다.** 현재 `view.V5_EXAMPLES[0]`이 P07 seed 원문과 같다. 예시가 캐시에 적중하는지 테스트로 고정한다.
-4. **#153의 ZIP 규칙을 유지한다.** 운영 런타임은 ZIP·JSONL을 읽지 않고 DB만 읽는다. ZIP은 개발 적재 명령의 입력으로만 쓴다.
+4. **운영의 모든 적재·확인·사용은 DB로 수행한다.** 2026-11-16 사용자 결정에 따라 통과 ZIP은 개발에서만 개발 캐시 DB로 변환한다. 운영 명령과 런타임은 ZIP·JSONL을 열지 않는다.
 
 ## 2. PR 나누기
 
@@ -24,10 +24,12 @@ A를 먼저 병합하고 B는 A 위에서 시작한다. 운영 반영은 B까지
 
 ## 3. PR A: 제거
 
+[PR A 구현 및 개발 검증 계획](../archives/remove-semantic-cache.md) · [DB 전송과 리뷰 반영](../archives/reviewed-cache-db-transfer.md)
+
 ### 제거 대상 (main 기준)
 
 - 모듈: `semantic_gate`, `semantic_handoff`, `semantic_import_store`, `semantic_index_store`, `semantic_index_tools`, `semantic_pointer`, `semantic_policy`, `semantic_runtime`, `semantic_settings`, `semantic_store`, `semantic_tools`, `semantic_val`.
-- 캐시 DB 마이그레이션 `0003_atomic_semantic_cache.sql`, `cache_store.SCHEMA=3`과 `MINIMUM_EXACT_SCHEMA`, `migrate.check_schema(minimum_version=)`. 운영 캐시 DB는 스키마 2라 영향이 없다. 개발 사본(스키마 3)은 더 쓰지 않는다.
+- 캐시 DB 마이그레이션 `0003_atomic_semantic_cache.sql`, `cache_store.SCHEMA=3`과 `MINIMUM_EXACT_SCHEMA`, `migrate.check_schema(minimum_version=)`. 적용된 0001·0002의 바이트는 유지한다. 개발 사본(스키마 3)은 더 쓰지 않는다.
 - 런타임 연결: `settings.semantic_shadow`, `service.load_app`의 shadow 로드와 calibration 검사, `web.chat_events`의 `defer_shadow`와 `ChatResponse`의 지연 기록, `Decision.allows_semantic_shadow`.
 - 테스트 `test_semantic_cache.py`, `test_semantic_seed.py`, `test_semantic_index_tools.py`와 다른 테스트의 shadow 사례.
 
@@ -47,7 +49,7 @@ A를 먼저 병합하고 B는 A 위에서 시작한다. 운영 반영은 B까지
 
 ### 완료 기준
 
-- `grep -ri semantic services/chatbot/src services/chatbot/tests`에 남는 것이 없다. 추천 기능의 새 이름에는 `semantic`을 쓰지 않는다.
+- `grep -ri semantic services/chatbot/src services/chatbot/tests`의 유일한 소스 일치는 원래 `0001_exact_cache.sql`에 있는 항상 0인 `semantic_enabled` 열이다. 추천 기능의 새 이름에는 `semantic`을 쓰지 않는다.
 - 기본 pytest 전체, ruff, pyright, 프론트 타입 검사·테스트·빌드가 통과한다. 정확 일치 캐시·이월·검수 화면·`set-mode` 테스트가 그대로 통과한다.
 
 ## 4. PR B: 검토된 비슷한 질문 추천
@@ -99,17 +101,19 @@ A를 먼저 병합하고 B는 A 위에서 시작한다. 운영 반영은 B까지
 
 ## 5. 운영 반영 (PR A·B 병합 후, 사용자 승인)
 
-1. 운영 `e165933`과 대상 커밋의 diff를 확인한다. #148~#153과 이 계획의 PR이 함께 들어간다.
-2. #149로 QA 세트 이름이 `reasoning_v5_2`로 바뀌었으므로 운영 코퍼스 DB에 QA를 다시 가져온다. 보호 지문이 바뀌어 기존 정확 일치 답변이 검토 대기가 된다. 어드민에서 다시 승인한다.
-3. 운영 `.env`에서 `LAWBOT_EXACT_CACHE_BUNDLE`을 지운다.
-4. 캐시 DB 마이그레이션 후 추천 벡터를 만든다(임베딩 요청 수 승인).
-5. 정확 일치 캐시 모드를 `on`으로 바꾼다(사용자 승인).
+1. 운영에 반영할 버전의 캐시 스키마로 개발 DB를 준비하고 `cache_seed_pass`로 통과 ZIP을 검증된 정확 일치 캐시 DB로 한 번 변환한다. 운영 적재에는 닫힌 DB 사본을 준비한다.
+2. 운영 `e165933`과 대상 커밋의 diff를 확인한다. #148~#153과 이 계획의 PR이 함께 들어간다. 운영 `.env`에서 `LAWBOT_EXACT_CACHE_BUNDLE`을 지운다.
+3. 캐시를 `off`로 두고 #149의 QA 세트 이름 변경에 맞춰 운영 코퍼스 DB에 QA를 다시 가져온다. 캐시 DB를 마이그레이션하고 활성 릴리스 기준으로 이월한다. 보호 지문이 바뀌었는데 현재 활성화 이벤트의 이월이 이미 끝났다면, 검증된 현행 조문을 내보내 새 릴리스 ID로 가져와 활성화한 뒤 이월한다.
+4. 사용자 승인 후 운영에서 `cache_admin import-db`로 개발 DB의 검수 답변을 적재한다. 보호 지문이 바뀐 경우 먼저 대상 namespace에 승인·활성 질문이 0개인지 확인한다. 적재 결과에 새 승인과 현행 보호 지문이 반영됐는지 확인하고, 제외·충돌 집계와 현재 승인 ID를 기록한다.
+5. 관리자 화면에서 검토 대기 P07 답변을 검수·재승인한다. 추천 벡터를 만든 뒤(임베딩 요청 수 승인) 최종 승인 ID로 `set-mode on`을 실행한다(사용자 승인).
 6. 다음 06:30 조문 갱신 뒤 06:41에 캐시 판정과 추천 후보 수를 확인한다.
 7. `data/db/p07-handoff.zip`을 운영 트리 밖으로 옮기는 일은 별도로 승인받는다.
 
+배포 직전에는 운영 코퍼스·캐시 DB의 읽기 전용 백업에서 만든 작업 사본으로 3~5단계의 QA 재적재 → 이월 → `import-db` → P07 재승인을 리허설한다. 운영 백업은 읽기 전용으로 보존하고 작업 사본에만 쓴다. QA 재적재 전후의 보호 지문, 이월 후 승인·활성 질문 수, 적재가 채택한 보호 지문과 P07 재승인 결과를 대조한다. 기존 지문이 남아 있으면 P07 재승인이 거부되므로, 새 승인이 생기는 DB 적재가 먼저 현행 지문을 채택해야 한다. 적재가 거부되거나 새 지문을 채택하지 못하면 실제 배포 전에 원인과 순서를 다시 확인한다.
+
 ## 6. 사용자 결정 (2026-11-15)
 
-1. **추천 후보는 통과 ZIP을 정확 일치 캐시로만 적재해 넓힌다.** 답변 634개, 질문 2,813개이고 사용자가 전수 검수·승인한 데이터다. PR A에서 통과 ZIP 읽기와 정확 일치 적재만 `cache_seed` 쪽 개발 도구로 남기고 원자·binding·정책 적재는 지운다. 운영 적재는 §5에서 한 번, 개발 경로의 ZIP을 입력으로 승인 후 실행한다.
+1. **추천 후보는 전수 검수된 답변 634개와 질문 2,813개를 정확 일치 캐시에 적재해 넓힌다.** 2026-11-16 사용자 결정에 따라 개발에서 `cache_seed_pass`로 통과 ZIP을 개발 캐시 DB로 한 번 변환한다. 운영 적재는 §5에서 승인 후 `cache_admin import-db`로 수행한다. DB 전송은 원천 DB의 답변 무결성과 운영 코퍼스의 조문·보호 분할을 확인하고, DB와 원천 ZIP의 SHA-256을 대상 DB 감사에 기록한다.
 2. **보충 원자 질문 60개의 운영 적재를 취소한다.** 파일도 삭제했다.
 3. **#154를 병합하지 않고 닫았다.** 평가 기록은 이 계획 PR로 main에 옮겼다.
 4. **개발 데이터 삭제를 마쳤다.** `data/db/semantic/`의 `pr2-dev-index`, `pr2-fresh-import`, `pr3-search`, 보충 JSONL과 `results/semantic-union-pr154/`. `pass-handoff.zip`은 1번 적재 입력이라 남겼다. `deferred-handoff.zip`은 τ val 라벨 2,424행 중 1,174행(`uncertain` 1,007, `not_reusable` 167)의 질의 원문이라 삭제를 보류하고 사용자에게 다시 확인한다.

@@ -1,5 +1,6 @@
 """Read and mutate the separate SQLite catalog for reviewed cache answers."""
 
+import json
 import sqlite3
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -13,10 +14,15 @@ from lawbot.db.connection import connect, transaction
 from lawbot.exact_cache import Namespace, canonical, digest, normalize
 
 MIGRATIONS = files('lawbot.db') / 'cache_migrations'
-SCHEMA = 3
-MINIMUM_EXACT_SCHEMA = 2
+SCHEMA = 2
 READ_TIMEOUT = 0.01
 CALCULATION_EXCLUDED = '계산 질문은 정확 일치 캐시에 저장하거나 승인할 수 없습니다.'
+REVIEW_EVIDENCE_CONFLICT = 'review_evidence_conflict'
+REVIEW_EVIDENCE_CONFLICT_DETAIL = '검수 근거 해시가 충돌해 답변을 승인할 수 없습니다.'
+
+
+class ReviewEvidenceConflict(ValueError):
+    """An immutable answer has incompatible hashes for a review dependency."""
 
 
 class CacheDatabaseError(RuntimeError):
@@ -53,6 +59,28 @@ def audit(conn, action, target, actor, reason, detail=None):
         'INSERT INTO cache_audit_events (action,target,actor,reason,created_at,detail) VALUES (?,?,?,?,?,?)',
         (action, target, actor, reason, now(), canonical(detail)),
     )
+
+
+def with_review_evidence(conn, answer_id, source):
+    """Attach the audited dependencies of a reused immutable answer revision."""
+    rows = conn.execute(
+        "SELECT detail FROM cache_audit_events WHERE action='review_evidence' AND target=? ORDER BY event_id",
+        (answer_id,),
+    )
+    hashes = source.get('review_evidence_hashes', {}).copy()
+    found = False
+    for (detail,) in rows:
+        for key, checksum in json.loads(detail)['review_evidence_hashes'].items():
+            if key in hashes and hashes[key] != checksum:
+                raise ReviewEvidenceConflict(REVIEW_EVIDENCE_CONFLICT_DETAIL)
+            hashes[key] = checksum
+        found = True
+    if not found:
+        return source
+    return source | {
+        'review_evidence_article_ids': sorted(set(source.get('review_evidence_article_ids', ())) | hashes.keys()),
+        'review_evidence_hashes': hashes,
+    }
 
 
 @dataclass(frozen=True)
@@ -120,7 +148,7 @@ class Control:
 
 def read_control(conn) -> Control:
     row = conn.execute('SELECT max(version) FROM schema_migrations').fetchone()
-    if row not in ((MINIMUM_EXACT_SCHEMA,), (SCHEMA,)):
+    if row != (SCHEMA,):
         raise sqlite3.DatabaseError('unsupported cache schema')
     row = conn.execute(
         'SELECT mode,generation,namespace_id,activation_event,protection_hash,approval_id '
@@ -188,7 +216,7 @@ class Store:
             return read_control(conn)
 
     def check_schema(self) -> int:
-        return migrations.check_schema(self.path, directory=MIGRATIONS, minimum_version=MINIMUM_EXACT_SCHEMA)
+        return migrations.check_schema(self.path, directory=MIGRATIONS)
 
     def calculation_exclusions(self) -> list[CalculationExclusion]:
         with connect(self.path) as conn:
