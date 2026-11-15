@@ -29,10 +29,10 @@ from lawbot.retriever import Retriever
 from lawbot.semantic_eval_replay import (
     CachedDocumentEncoder,
     item_key,
+    paired_sample,
     plan_proposals,
     proposed_queries,
     result_values,
-    sampled_rows,
     verify_replay,
 )
 from lawbot.semantic_eval_store import StageJournal, call_signature
@@ -219,7 +219,7 @@ def phase_plan(labor_val, labor_test, tax_test, semantic_questions):
     test_questions = labor_test + tax_test
     return {
         'compare-val': {'embedding': queries + 1, 'rerank': queries},
-        'union-val': {'embedding': 100, 'rerank': labor_val + 100},
+        'union-val': {'embedding': 200, 'rerank': labor_val + 200},
         'shadow-val': {'embedding': semantic_questions, 'rerank': 2 * semantic_questions},
         'once-test': {'embedding': 2 * test_questions, 'rerank': 3 * test_questions},
     }
@@ -445,22 +445,27 @@ def union_replay_phase(phase, history, ctx, directory, search, calibration, save
         'replay_unavailable': unavailable,
     }
     if compare:
-        sampled = sampled_rows(trials[limit])
-        online = list(
-            evaluate_routes(
-                search,
-                [(row['id'], row['gold'], row['question']) for row in sampled],
-                ('union',),
-                chosen,
-                limit,
-                covered,
-                supplemental,
-                bound=bound,
+        sample = paired_sample(trials[limit])
+        online = [
+            next(
+                evaluate_routes(
+                    search,
+                    [(row['id'], row['gold'], row['question'])],
+                    routes,
+                    chosen,
+                    limit,
+                    covered,
+                    supplemental,
+                    bound=bound,
+                )
             )
-        )
-        comparisons, verification = verify_replay(sampled, online)
+            for row, routes in sample
+        ]
+        comparisons, verification = verify_replay([row for row, _ in sample], online)
         write_derived(directory / 'union-verification.rows.json', comparisons)
-        verification['requests'] = bound.journal.request_counts(prefix='union:')
+        by_route = {route: bound.journal.request_counts(prefix=route + ':') for route in ('base', 'union')}
+        verification['requests_by_route'] = by_route
+        verification['requests'] = dict(Counter(by_route['base']) + Counter(by_route['union']))
         result['verification'] = verification
     else:
         result['union_latency_val100'] = history['union-val']['verification']
@@ -887,9 +892,17 @@ def run(args):
             )
             counts = plan_proposals(proposals, limits)
         sample = min(len(examples), 100)
-        budget = {'embedding': sample, 'rerank': counts['additional_rerank_requests'].get(str(limits[-1]), 0) + sample}
+        budget = {
+            'embedding': 2 * sample,
+            'rerank': counts['additional_rerank_requests'].get(str(limits[-1]), 0) + 2 * sample,
+        }
         plan[phase] = budget
-        details = counts | {'sample_requests': {'embedding': sample, 'rerank': sample}, 'request_ceiling': budget}
+        details = counts | {
+            'sample_questions': sample,
+            'sample_requests': {'embedding': 2 * sample, 'rerank': 2 * sample},
+            'additional_base_requests_for_pairing': {'embedding': sample, 'rerank': sample},
+            'request_ceiling': budget,
+        }
         if args.phase == 'union-plan':
             return details
     return live_run(

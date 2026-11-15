@@ -101,7 +101,9 @@ def verify_replay(offline_rows, online_rows):
     for offline, online in zip(offline_rows, online_rows, strict=True):
         if offline['id'] != online['id']:
             raise ValueError('union verification sample IDs are out of order')
-        base, expected, actual = offline['results']['base'], offline['results']['union'], online['results']['union']
+        expected = offline['results']['union']
+        base, actual = (online['results'][route] for route in ('base', 'union'))
+        routes = list(online['results'])
         left, right = expected.get('scores', {}), actual.get('scores', {})
         deltas = {doc: right[doc] - left[doc] for doc in left.keys() & right.keys()}
         valid = not (expected.get('error') or actual.get('error'))
@@ -110,7 +112,7 @@ def verify_replay(offline_rows, online_rows):
             delta = actual['total_ms'] - base['total_ms']
             added.append(delta)
             for group in offline['cohorts']:
-                cohort_times.setdefault(group, []).append((actual['total_ms'], delta))
+                cohort_times.setdefault(group, []).append((base['total_ms'], actual['total_ms'], delta))
         reports.append(
             {
                 'id': offline['id'],
@@ -119,6 +121,12 @@ def verify_replay(offline_rows, online_rows):
                 'offline_top3': expected['top3'],
                 'live_top3': actual['top3'],
                 'score_deltas': deltas,
+                'route_order': routes,
+                'base_ms': base.get('total_ms'),
+                'union_ms': actual.get('total_ms'),
+                'paired_added_ms': actual['total_ms'] - base['total_ms']
+                if not base.get('error') and not actual.get('error')
+                else None,
             }
         )
     return reports, {
@@ -130,8 +138,9 @@ def verify_replay(offline_rows, online_rows):
         'cohort_latency': {
             group: {
                 'questions': len(times),
-                'union_ms': latency([total for total, _ in times]),
-                'miss_added_ms': latency([delta for _, delta in times]),
+                'base_ms': latency([base for base, _, _ in times]),
+                'union_ms': latency([union for _, union, _ in times]),
+                'miss_added_ms': latency([delta for _, _, delta in times]),
             }
             for group, times in cohort_times.items()
         },
@@ -190,3 +199,11 @@ def plan_proposals(proposals, limits):
 
 def sampled_rows(rows):
     return sorted(rows, key=lambda row: digest(row['id']))[:100]
+
+
+def paired_sample(rows):
+    """Counterbalance actual route execution in the deterministic hash-ordered sample."""
+    return [
+        (row, ('base', 'union') if position % 2 == 0 else ('union', 'base'))
+        for position, row in enumerate(sampled_rows(rows))
+    ]

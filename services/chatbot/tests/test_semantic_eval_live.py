@@ -159,10 +159,25 @@ def test_union_validation_sample_reports_order_score_and_latency_differences():
     }
     online = {
         'id': 'case',
-        'results': {'union': {'top3': ['B', 'A'], 'scores': {'B': 0.7, 'A': 0.6}, 'total_ms': 15.0}},
+        'results': {
+            'base': {'total_ms': 12.0},
+            'union': {'top3': ['B', 'A'], 'scores': {'B': 0.7, 'A': 0.6}, 'total_ms': 15.0},
+        },
     }
     records, metrics = verify_replay([offline], [online])
     assert records[0]['different_top3']
     assert abs(records[0]['score_deltas']['B'] - 0.2) < 1e-10
     assert metrics['top3_compared'] == metrics['top3_different'] == 1
-    assert metrics['miss_added_ms'] == {'p50': 5.0, 'p95': 5.0}
+    assert metrics['miss_added_ms'] == {'p50': 3.0, 'p95': 3.0}
+
+
+def test_latency_sample_counterbalances_route_order_by_question_hash():
+    from lawbot.semantic_eval_replay import paired_sample
+
+    rows = [{'id': str(n)} for n in range(110)]
+    sample = paired_sample(rows)
+    assert len(sample) == 100
+    assert sample == paired_sample(list(reversed(rows)))
+    assert all(
+        routes == (('base', 'union') if i % 2 == 0 else ('union', 'base')) for i, (_, routes) in enumerate(sample)
+    )
