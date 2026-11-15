@@ -17,7 +17,6 @@ from lawbot.semantic_policy import INTENTS, ReusePolicy, classify_intent
 IMPORT_REASON = '사용자 전수 검수 승인 2026-11-15'
 ACTOR = 'import'
 ACTION = 'semantic_seed_import'
-UPGRADE = 'semantic_seed_policy_upgrade'
 
 
 def make_policies(conn, at):
@@ -216,7 +215,7 @@ def attach_atom(conn, snapshot, answer, q, atom, revision, query, policy, matche
     binding = digest(canonical([query_revision, revision, policy]))
     enabled = approved
     conn.execute(
-        'INSERT INTO atomic_questions VALUES (?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT DO NOTHING',
+        'INSERT INTO atomic_questions VALUES (?,?,?,?,?,?,?,?,?,?,?)',
         (
             query_revision,
             q.id,
@@ -277,32 +276,14 @@ def attach_atom(conn, snapshot, answer, q, atom, revision, query, policy, matche
 
 def seed_receipt(conn, receipt):
     row = conn.execute(
-        'SELECT detail FROM cache_audit_events WHERE action IN (?,?) AND target=? AND actor=? ORDER BY event_id DESC LIMIT 1',
-        (ACTION, UPGRADE, receipt, ACTOR),
+        'SELECT detail FROM cache_audit_events WHERE action=? AND target=? AND actor=? ORDER BY event_id DESC LIMIT 1',
+        (ACTION, receipt, ACTOR),
     ).fetchone()
     return json.loads(row[0]) if row else None
 
 
-def previous_exact_approval(conn, receipt, namespace, event):
-    # The legacy import overwrote both fields. Recover an audited, release-scoped exact approval if available.
-    row = conn.execute(
-        "SELECT target,json_extract(detail,'$.protection_hash') FROM cache_audit_events "
-        "WHERE action='approve' AND json_extract(detail,'$.namespace_id')=? "
-        "AND json_extract(detail,'$.activation_event')=? AND event_id < ("
-        'SELECT min(event_id) FROM cache_audit_events WHERE action=? AND target=?) '
-        'ORDER BY event_id DESC LIMIT 1',
-        (namespace, event, ACTION, receipt),
-    ).fetchone()
-    return row if row is not None else (None, None)
-
-
-def retire_legacy_bindings(conn, ns, sha):
-    conn.execute(
-        "UPDATE atom_answer_bindings SET semantic_enabled=0,carry_status='off' WHERE namespace_id=? "
-        'AND binding_id IN (SELECT target FROM cache_audit_events WHERE action=? AND actor=? '
-        "AND json_extract(detail,'$.bundle_sha256')=?)",
-        (ns, 'semantic_seed_question', ACTOR, sha),
-    )
+def seed_approval_id(bundle_hash: str, namespace: str, event: int) -> str:
+    return digest(canonical(['semantic-seed', bundle_hash, namespace, event]))
 
 
 def import_seed(
@@ -312,7 +293,7 @@ def import_seed(
     if Store(db).check_schema() != SCHEMA:
         raise ValueError('semantic seed requires the current cache schema')
     ns = snapshot.namespace.id
-    receipt = digest(canonical([seed.sha256, ns, event]))
+    receipt = seed_approval_id(seed.sha256, ns, event)
     groups = defaultdict(list)
     rejected = []
     result: Counter[str] = Counter(
@@ -356,7 +337,7 @@ def import_seed(
     with connect(db, write=True) as conn, transaction(conn):
         control = read_control(conn)
         previous = seed_receipt(conn, receipt)
-        if previous is not None and previous.get('policy_format') == 'intent':
+        if previous is not None:
             if previous['protection_hash'] != protection.fingerprint:
                 raise ValueError('protected split changed since import')
             return previous['counts']
@@ -366,8 +347,6 @@ def import_seed(
             'INSERT INTO cache_namespaces VALUES (?,?,?) ON CONFLICT DO NOTHING',
             (ns, snapshot.namespace.serialize(), at),
         )
-        if previous is not None:
-            retire_legacy_bindings(conn, ns, seed.sha256)
         policies = make_policies(conn, at)
         checked = {}
         existing_queries = prior_queries(conn, ns, seed.questions)
@@ -388,7 +367,7 @@ def import_seed(
                 canonical([ns, answer.group_id, answer.parent_sha256, answer.start, digest(answer.proposition)])
             )
             conn.execute(
-                'INSERT INTO atoms VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT DO NOTHING',
+                'INSERT INTO atoms VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
                 (
                     atom,
                     answer.group_id,
@@ -446,32 +425,25 @@ def import_seed(
                     result['existing_links'] += bundle != seed.sha256
                     result['p07_links'] += bundle == P07_SHA256
                 result['inserted_questions'] += outcome == 'inserted'
-                if previous is None:
-                    audit(
-                        conn,
-                        'semantic_seed_question',
-                        binding,
-                        ACTOR,
-                        IMPORT_REASON,
-                        q.metadata
-                        | {
-                            'bundle_sha256': seed.sha256,
-                            'source_id': q.id,
-                            'answer_id': revision,
-                            'question_sha256': digest(q.text),
-                            'exact_approved': approved,
-                            'semantic_enabled': enabled,
-                            'outcome': outcome,
-                        },
-                    )
+                audit(
+                    conn,
+                    'semantic_seed_question',
+                    binding,
+                    ACTOR,
+                    IMPORT_REASON,
+                    q.metadata
+                    | {
+                        'bundle_sha256': seed.sha256,
+                        'source_id': q.id,
+                        'answer_id': revision,
+                        'question_sha256': digest(q.text),
+                        'exact_approved': approved,
+                        'semantic_enabled': enabled,
+                        'outcome': outcome,
+                    },
+                )
         result['approved_answers'] = len(approved_revisions)
         result.update(f'hash_{value}' for value in checked.values())
-        if previous is not None and control.approval_id == receipt:
-            exact_approval, exact_protection = previous_exact_approval(conn, receipt, ns, event)
-            conn.execute(
-                'UPDATE cache_control SET protection_hash=?,approval_id=? WHERE singleton=1',
-                (exact_protection, exact_approval),
-            )
         if approved_revisions:
             # The exact controller keeps any existing exact approval and its protection identity.
             conn.execute(
@@ -479,26 +451,20 @@ def import_seed(
                 'generation=generation+1 WHERE singleton=1',
                 (ns, event, protection.fingerprint),
             )
-        elif previous is not None:
-            conn.execute('UPDATE cache_control SET generation=generation+1 WHERE singleton=1')
         payload: dict[str, int | str] = dict(result)
-        if previous is not None:
-            payload['inserted_questions'] += previous['counts']['inserted_questions']
-            payload['existing_exclusions'] += previous['counts']['existing_exclusions']
         if approved_revisions:
             payload['approval_id'] = receipt
 
         check_snapshot()
         audit(
             conn,
-            ACTION if previous is None else UPGRADE,
+            ACTION,
             receipt,
             ACTOR,
             IMPORT_REASON,
             {
                 'bundle_sha256': seed.sha256,
                 'counts': payload,
-                'policy_format': 'intent',
                 'protection_hash': protection.fingerprint,
                 'snapshot': snapshot.release_id,
             },
@@ -516,15 +482,19 @@ def activate_seed(db, mode, actor, reason, approval, snapshot, event, protection
         if (
             (control.namespace_id, control.activation_event) != (snapshot.namespace.id, event)
             or receipt['snapshot'] != snapshot.release_id
+            or control.protection_hash != protection.fingerprint
             or receipt['protection_hash'] != protection.fingerprint
-            or approval != digest(canonical([receipt['bundle_sha256'], snapshot.namespace.id, event]))
+            or approval != seed_approval_id(receipt['bundle_sha256'], snapshot.namespace.id, event)
         ):
             raise ValueError('semantic seed approval, corpus, or protected split changed')
         check_snapshot()
+        result = {'mode': mode}
         if mode != 'off' and control.approval_id is None:
             # The exact controller requires an approval for a serving mode. Seed receipts stay separate.
             exact_approval = digest(canonical(['exact-from-semantic-seed', approval]))
             conn.execute('UPDATE cache_control SET approval_id=? WHERE singleton=1', (exact_approval,))
             audit(conn, 'semantic_seed_exact_activation', exact_approval, actor, reason, {'seed_approval_id': approval})
+            result['approval_id'] = exact_approval
             control = read_control(conn)
         set_mode_in(conn, control, mode, actor, reason, control.approval_id)
+    return result

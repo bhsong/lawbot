@@ -265,15 +265,15 @@ def run(args):
         return {'mode': 'off'}
     if command == 'set-mode' and args.semantic_seed:
         from lawbot.semantic_import_store import activate_seed
-        from lawbot.semantic_tools import corpus_context, development_path, seed_protection
+        from lawbot.semantic_tools import corpus_context, development_path
 
-        if not args.corpus_db or not args.approval or args.bundle or args.protected_csv:
+        if not args.corpus_db or not args.approval or args.bundle:
             raise ValueError('시맨틱 seed 활성화에는 --corpus-db와 --approval이 필요합니다.')
         corpus = db_path(str(development_path(args.corpus_db)))
         if path.samefile(corpus):
             raise ValueError('코퍼스와 캐시에는 서로 다른 개발 DB 사본을 지정하세요.')
         ctx = corpus_context(corpus)
-        activate_seed(
+        return activate_seed(
             path,
             args.mode,
             actor,
@@ -281,10 +281,9 @@ def run(args):
             args.approval,
             ctx.snapshot,
             ctx.event,
-            seed_protection(corpus),
+            load_protection(corpus, None, [development_path(str(path)) for path in args.protected_csv]),
             ctx.check,
         )
-        return {'mode': args.mode}
     if args.bundle is None:
         raise ValueError('승인 및 검증에는 P07 인계 ZIP이 필요합니다.')
     snapshot, seed, identity = context(args)

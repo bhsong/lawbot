@@ -720,7 +720,7 @@ def test_semantic_import_preserves_legacy_exact_review_and_release_paths(tmp_pat
     ref = Reference(ID, snapshot.articles[ID].text_hash)
     bundle = Bundle([], frozenset())
     protection = load_protection(corpus, bundle, [])
-    assert load_protection(corpus, None, [], frozen_root=tmp_path).fingerprint == protection.fingerprint
+    assert load_protection(corpus, None, []).fingerprint == protection.fingerprint
     shown = snapshot.render(RAW, [(ID, ref.sha256)])
     assert shown is not None
     ns = snapshot.namespace.id
@@ -778,7 +778,6 @@ def test_semantic_import_preserves_legacy_exact_review_and_release_paths(tmp_pat
         pytest.fail('activation repeated the near-duplicate scan')
 
     monkeypatch.setattr(Protection, 'match', unexpected_scan)
-    monkeypatch.setattr(semantic_tools, 'seed_protection', lambda *a: load_protection(corpus, bundle, []))
     monkeypatch.setattr(
         semantic_tools, 'corpus_context', lambda *a: SimpleNamespace(snapshot=snapshot, event=1, check=lambda: None)
     )
@@ -798,7 +797,9 @@ def test_semantic_import_preserves_legacy_exact_review_and_release_paths(tmp_pat
         ]
     )
     assert cache_admin.run(args) == {'mode': 'shadow'}
-    monkeypatch.setattr(semantic_tools, 'seed_protection', lambda *a: replace(protection, fingerprint='changed'))
+    extra = tmp_path / 'additional-protected.csv'
+    extra.write_text('question\n별도 보호 대상 합성 문항\n', encoding='utf-8')
+    args.protected_csv = [extra]
     with pytest.raises(ValueError, match='protected split changed'):
         cache_admin.run(args)
     assert store.control().approval_id == approval

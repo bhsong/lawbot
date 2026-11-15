@@ -3,11 +3,11 @@
 import hashlib
 from pathlib import Path
 
-EDGE = 1 << 20  # 파일마다 앞뒤로 읽는 바이트
+EDGE = 1 << 20  # Bytes to read at each end of a file.
 
 
 def fingerprint(path):
-    """'sha256:<16자>' 또는 폴더가 없으면(경로 없음 포함) None"""
+    """Return a sha256 revision with a 16-hex-digit digest, or None for a missing directory."""
     if path is None or not Path(path).is_dir():
         return None
     root = Path(path)

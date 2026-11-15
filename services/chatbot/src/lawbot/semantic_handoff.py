@@ -5,7 +5,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from hashlib import file_digest
 from pathlib import Path
-from zipfile import ZipFile
+from zipfile import BadZipFile, ZipFile
 
 from lawbot.cache_seed import csv_rows, json_lines
 from lawbot.exact_cache import canonical, digest, normalize, read_articles
@@ -55,6 +55,32 @@ class Handoff:
     questions: tuple[Question, ...]
 
 
+def archive_member(archive: ZipFile, name: str) -> bytes:
+    try:
+        return archive.read(name)
+    except KeyError as exc:
+        raise ValueError('handoff is missing a required field or reference') from exc
+    except BadZipFile as exc:
+        raise ValueError('invalid handoff ZIP entry') from exc
+
+
+def required_value(record, key):
+    try:
+        return record[key]
+    except KeyError as exc:
+        raise ValueError('handoff is missing a required field or reference') from exc
+
+
+def validate_record(value, text_fields, *, fields=None):
+    if not isinstance(value, dict):
+        raise ValueError('handoff record must be an object')
+    if any(not isinstance(required_value(value, key), str) for key in text_fields):
+        raise ValueError('invalid handoff text field')
+    if fields and any(type(required_value(value, key)) is not kind for key, kind in fields.items()):
+        raise ValueError('invalid handoff field type')
+    return value
+
+
 @contextmanager
 def verified_zip(path: Path, expected: str, kind: str):
     with path.open('rb') as stream:
@@ -62,20 +88,28 @@ def verified_zip(path: Path, expected: str, kind: str):
             raise ValueError('handoff ZIP SHA-256 mismatch')
         stream.seek(0)
         try:
-            with ZipFile(stream) as archive:
-                manifest = json.loads(archive.read('manifest.json'))
-                if (
-                    manifest['package_kind'] != kind
-                    or manifest['approval_status'] != 'not_approved'
-                    or manifest['semantic_enabled'] is not False
-                    or manifest['exact_enabled'] is not False
-                    or len(archive.namelist()) != len(set(archive.namelist()))
-                ):
-                    raise ValueError('invalid handoff manifest')
-                yield archive, manifest
-
-        except KeyError as exc:
-            raise ValueError('handoff is missing a required field or reference') from exc
+            archive = ZipFile(stream)
+        except BadZipFile as exc:
+            raise ValueError('invalid handoff ZIP') from exc
+        with archive:
+            manifest = validate_record(
+                json.loads(archive_member(archive, 'manifest.json')),
+                ('package_kind', 'approval_status'),
+                fields={'semantic_enabled': bool, 'exact_enabled': bool},
+            )
+            if (
+                manifest['package_kind'] != kind
+                or manifest['approval_status'] != 'not_approved'
+                or manifest['semantic_enabled'] is not False
+                or manifest['exact_enabled'] is not False
+                or len(archive.namelist()) != len(set(archive.namelist()))
+            ):
+                raise ValueError('invalid handoff manifest')
+            counts = {'question_pairs': int}
+            if kind == 'pass':
+                counts['answer_units_used_by_pairs'] = int
+            validate_record(manifest, (), fields=counts)
+            yield archive, manifest
 
 
 def read_pass(path: Path) -> Handoff:
@@ -84,11 +118,47 @@ def read_pass(path: Path) -> Handoff:
 
 
 def parse_pass(archive, manifest):
-    corpus = read_articles(archive.read('corpus/law_articles_v5_decree.csv'))
-    pair_rows = json_lines(archive.read('data/pass_seed_candidates.jsonl'))
-    answer_rows = json_lines(archive.read('data/pass_answers.jsonl'))
-    from_keys = csv_rows(archive.read('data/cache_key_inputs.csv'))
-    review_rows = json_lines(archive.read('reviews/pass_review_evidence.jsonl'))
+    articles = archive_member(archive, 'corpus/law_articles_v5_decree.csv')
+    for row in csv_rows(articles):
+        validate_record(row, ('article_id', 'deleted', 'law', 'article_no', 'title', 'text'))
+    corpus = read_articles(articles)
+    pair_rows = json_lines(archive_member(archive, 'data/pass_seed_candidates.jsonl'))
+    answer_rows = json_lines(archive_member(archive, 'data/pass_answers.jsonl'))
+    from_keys = csv_rows(archive_member(archive, 'data/cache_key_inputs.csv'))
+    review_rows = json_lines(archive_member(archive, 'reviews/pass_review_evidence.jsonl'))
+    answer_text = (*PROVENANCE, 'answer_key', 'answer', 'answer_sha256', 'review_unit_id', 'primary_article_id')
+    citation_fields = {
+        'display_citation_article_ids': list,
+        'display_citation_hashes': dict,
+        'review_evidence_article_ids': list,
+    }
+    for row in answer_rows:
+        validate_record(row, answer_text, fields=citation_fields)
+        if any(
+            not isinstance(key, str) for key in row['display_citation_article_ids'] + row['review_evidence_article_ids']
+        ):
+            raise ValueError('invalid handoff citation ID')
+    for row in pair_rows:
+        validate_record(
+            row,
+            (
+                *answer_text,
+                'id',
+                'question',
+                'question_sha256',
+                'answer_verdict',
+                'pair_verdict',
+                'split_emb',
+                'split_sllm',
+            ),
+            fields=citation_fields,
+        )
+    for row in from_keys:
+        validate_record(row, ('id', 'answer_key', 'normalized_question_sha256'))
+    for row in review_rows:
+        validate_record(row, ('id', 'answer_verdict', 'pair_verdict'), fields={'evidence': list})
+        for cited in row['evidence']:
+            validate_record(cited, ('article_id', 'quote'))
     keys = {row['id']: row for row in from_keys}
     reviews = {row['id']: row for row in review_rows}
     answers = {row['answer_key']: row for row in answer_rows}
@@ -134,7 +204,7 @@ def parse_pass(archive, manifest):
         ):
             raise ValueError('invalid reviewed handoff linkage')
         primary = row['primary_article_id']
-        raw_article = corpus[primary].text
+        raw_article = required_value(corpus, primary).text
         found = quotes.setdefault(row['answer_key'], set())
         for evidence in review['evidence']:
             quote = evidence['quote']
@@ -146,14 +216,16 @@ def parse_pass(archive, manifest):
         raise ValueError('duplicate normalized seed questions')
     verified = []
     for key, row in answers.items():
-        parent = corpus[row['primary_article_id']]
-        display = tuple(Reference(a, row['display_citation_hashes'][a]) for a in row['display_citation_article_ids'])
-        evidence = tuple(Reference(a, corpus[a].text_hash) for a in row['review_evidence_article_ids'])
+        parent = required_value(corpus, row['primary_article_id'])
+        display = tuple(
+            Reference(a, required_value(row['display_citation_hashes'], a)) for a in row['display_citation_article_ids']
+        )
+        evidence = tuple(Reference(a, required_value(corpus, a).text_hash) for a in row['review_evidence_article_ids'])
         if (
             not display
             or len({ref.article_id for ref in display}) != len(display)
             or digest(row['answer']) != row['answer_sha256']
-            or any(corpus[r.article_id].text_hash != r.sha256 for r in display)
+            or any(required_value(corpus, r.article_id).text_hash != r.sha256 for r in display)
         ):
             raise ValueError('invalid handoff answer or citation hash')
         start, proposition = min(
@@ -182,7 +254,11 @@ def parse_pass(archive, manifest):
 def read_deferred(path: Path) -> tuple[Question, ...]:
     """Load only deferred evaluation questions and their pair verdicts."""
     with verified_zip(path, DEFERRED_SHA256, 'deferred') as (archive, manifest):
-        rows = json_lines(archive.read('data/deferred_pairs_full.jsonl'))
+        rows = json_lines(archive_member(archive, 'data/deferred_pairs_full.jsonl'))
+        for row in rows:
+            validate_record(
+                row, ('id', 'answer_key', 'question', 'question_sha256', 'pair_verdict', 'split_emb', 'split_sllm')
+            )
         if len(rows) != manifest['question_pairs'] or len({r['id'] for r in rows}) != len(rows):
             raise ValueError('inconsistent deferred record counts')
         if any(

@@ -400,6 +400,7 @@ def test_v2_01_and_28_exact_hit_skips_all_inference_and_keeps_approved_revision(
         (None, 'hit'),
         ("UPDATE cache_answers SET status='draft'", 'not_approved'),
         ('UPDATE atom_answer_bindings SET activation_event=NULL', 'not_released'),
+        ("UPDATE cache_control SET mode='off',approval_id=NULL", 'not_released'),
         ('UPDATE atom_answer_bindings SET semantic_enabled=0', 'semantic_disabled'),
         ("UPDATE atom_answer_bindings SET carry_status='pending'", 'semantic_disabled'),
         ("UPDATE cache_queries SET status='revoked',exact_enabled=0", 'revoked'),

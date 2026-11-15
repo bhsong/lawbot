@@ -18,7 +18,7 @@ class ProtectionRow:
     split: str
 
 
-def protection_rows(path: Path, *, allow_missing=False) -> list[ProtectionRow]:
+def protection_rows(path: Path) -> list[ProtectionRow]:
     """Require the imported protected sets and classify each item once."""
     with connect(path) as conn:
         rows = conn.execute(
@@ -44,7 +44,7 @@ def protection_rows(path: Path, *, allow_missing=False) -> list[ProtectionRow]:
         if split is not None:
             items.append(ProtectionRow(uid, dataset, source, question, split))
     missing = sorted(DATASETS.keys() - {item.split_set for item in items if item.split != 'train'})
-    if missing and not allow_missing:
+    if missing:
         raise RuntimeError(
             '관리자 API에 필요한 QA 세트가 없습니다. migrate_csv_to_sqlite qa --set …를 먼저 실행하세요. '
             + ', '.join(missing)

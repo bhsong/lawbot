@@ -120,3 +120,25 @@ def test_pointer_reads_once_until_atomic_replacement(tmp_path, monkeypatch):
     replacement.replace(pointer)
     assert active_revision(tmp_path) == active_revision(tmp_path) == 'b' * 64
     assert calls == [pointer, pointer]
+
+
+def test_pointer_retries_after_transient_read_error(tmp_path, monkeypatch):
+    from pathlib import Path
+
+    from lawbot.semantic_pointer import active_revision
+
+    pointer = tmp_path / 'active.json'
+    pointer.write_text(json.dumps({'index_revision': 'a' * 64}))
+    read_bytes = Path.read_bytes
+    calls = []
+
+    def read(path):
+        calls.append(path)
+        if len(calls) == 1:
+            raise OSError('temporary failure')
+        return read_bytes(path)
+
+    monkeypatch.setattr(Path, 'read_bytes', read)
+    assert active_revision(tmp_path) is None
+    assert active_revision(tmp_path) == active_revision(tmp_path) == 'a' * 64
+    assert calls == [pointer, pointer]

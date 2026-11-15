@@ -123,7 +123,7 @@ class SemanticStore:
 
     def check_catalog(self, conn, ns, event, manifest):
         control = read_control(conn)
-        if (control.namespace_id, control.activation_event) != (ns, event):
+        if control.approval_id is None or (control.namespace_id, control.activation_event) != (ns, event):
             raise ShadowMiss('not_released')
         if manifest_row(conn, self.index_revision) != manifest:
             raise ShadowMiss('stale_index')

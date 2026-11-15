@@ -14,9 +14,8 @@ from lawbot.cache_store import Draft
 from lawbot.calc_gate import is_calculation_question
 from lawbot.dataset_store import protection_rows
 from lawbot.db.connection import connect
-from lawbot.db.dataset_import import DATASETS
 from lawbot.exact_cache import NORMALIZER, Snapshot, canonical, digest, normalize, read_articles
-from lawbot.qa_rules import THRESHOLD, Overlap, norm, protected_split
+from lawbot.qa_rules import THRESHOLD, Overlap, norm
 
 P07_SHA256 = '69034f850b39769e0684d8e83b4a1b3653e2b3750bd74d43b37a2a8b43349f59'
 BATCH_COUNTS = dict(zip((f'P{i:02}' for i in range(1, 8)), (21, 23, 31, 18, 43, 27, 14), strict=True))
@@ -190,26 +189,9 @@ class Protection:
         return self.results[key]
 
 
-def frozen_protected(root: Path, missing):
-    for name in sorted(missing):
-        dataset = DATASETS[name]
-        accepted = None
-        if dataset.split is not None:
-            split_rows = csv_rows((root / dataset.split).read_bytes())
-            accepted = {row['id'] for row in split_rows if protected_split(row['split_emb'], row['split_sllm'])}
-        rows = csv_rows((root / dataset.path).read_bytes())
-        pairs = [(row['id'], row['question']) for row in rows if accepted is None or row['id'] in accepted]
-        if not pairs or (accepted is not None and {key for key, _ in pairs} != accepted):
-            raise ValueError('incomplete protected split')
-        for key, question in pairs:
-            yield name, key, question
-
-
-def load_protection(
-    db: Path, bundle: Bundle | None, extra: list[Path], *, frozen_root: Path | None = None
-) -> Protection:
-    """Read protected rows once, preserving the exact-cache fingerprint for complete QA databases."""
-    rows = protection_rows(db, allow_missing=True) if frozen_root is not None else protection_rows(db)
+def load_protection(db: Path, bundle: Bundle | None, extra: list[Path]) -> Protection:
+    """Compute the exact-cache fingerprint. A None bundle is for fingerprint comparison only."""
+    rows = protection_rows(db)
     blocked = set(bundle.protected) if bundle is not None else set()
     questions = set()
     train = {}
@@ -222,13 +204,6 @@ def load_protection(
             questions.add(row.question)
         elif row.split_set == 'v4':
             train[row.source_id] = digest(row.question)
-    if frozen_root is not None:
-        missing = DATASETS.keys() - {row.split_set for row in rows if row.split != 'train'}
-        for dataset, key, question in frozen_protected(frozen_root, missing):
-            checksum = digest(normalize(question))
-            blocked.add(checksum)
-            questions.add(question)
-            manifest.append(('frozen-file', dataset, key, checksum))
     # Include assigned feedback and protected sets added after the original DB import.
     with connect(db) as conn:
         protected = conn.execute(

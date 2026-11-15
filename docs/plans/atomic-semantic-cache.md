@@ -107,12 +107,20 @@
 
 ### PR 2 도구 계약
 
-- 챗봇 uv 프로젝트에서 `uv run python -m lawbot.semantic_tools`를 호출한다. 코퍼스 사본과 0003 캐시 사본을 별개로 준비한다. 코퍼스·검색 프로필·시스템 프롬프트·하위법령 설정은 개발 웹앱과 같다. 도구는 활성 코퍼스와 activation event를 확인한다.
+- 챗봇 uv 프로젝트에서 `uv run python -m lawbot.semantic_tools`를 호출한다. 코퍼스 사본과 0003 캐시 사본을 별개로 준비한다. 코퍼스·검색 프로필·시스템 프롬프트·하위법령 설정은 개발 웹앱과 같다. 도구는 활성 코퍼스와 activation event를 확인한다. 개발 코퍼스에는 기존 exact 검증에 필요한 QA 8개 세트를 이관한다. 시맨틱 import와 val에는 `LAWBOT_EXACT_CACHE_BUNDLE`로 검증용 P07 원본 ZIP의 개발 경로를 지정한다.
 - `import --bundle <pass ZIP> --corpus-db <코퍼스 사본> --cache-db <캐시 사본>`은 승인 상태와 감사 기록을 한 번만 남긴다. 보호 문항과 겹치는 기존 질문의 답변까지 동일하면 해당 exact 플래그를 끄고 기존 승인과 이력을 보존한다.
 - `val --bundle <pass ZIP> --deferred-bundle <deferred ZIP> --corpus-db <코퍼스 사본> --output <새 JSONL>`은 원문 없는 ID와 라벨을 생성한다. pass ID는 출처와 원본 ID의 해시, 답변 ID는 주 조문과 검수 단위 ID의 해시다. 같은 주 조문의 다른 답변은 대표 질문과 대상 답변의 쌍으로 기록한다. `--v6-training-dir`에는 Colab 기록의 QA·분할 CSV 8개를 지정한다. 임베딩 train만 대상으로 정규화 문장 또는 동일 원본 ID의 노출을 대조한다.
 - `index --cache-db <캐시 사본> --corpus-db <코퍼스 사본>`은 인덱스 행 수와 필요 요청 수만 출력한다. 승인 후 `--embed-live`와 승인 요청 수, 시간 상한, 모델·revision·최대 길이·차원·로컬 모델 디렉터리·출력 디렉터리를 지정한다. 전체 generation은 승인된 질문을 담는다. PR 3 평가 generation은 별도 출력 디렉터리에 `--exclude-val data/v5/semantic_val_ids.jsonl`을 지정해 양성 질의 524개를 뺀다.
 - 관리형 인덱스 디렉터리를 `LAWBOT_SEMANTIC_INDEX`에 지정하면 shadow는 `active.json`의 generation과 calibration의 revision을 대조한다. 기존 단일 `.npy` 경로도 계속 지원한다. manifest 등록과 검증 뒤 포인터를 교체한다.
-- exact 활성화는 별도 절차다. `uv run python -m lawbot.cache_admin set-mode shadow --semantic-seed --db <캐시 사본> --corpus-db <코퍼스 사본> --approval <import 승인 ID> --reason <활성화 사유>`에서 `shadow` 또는 `on`을 지정한다. import와 index는 모드를 바꾸지 않는다.
+- exact 활성화는 별도 절차다. `uv run python -m lawbot.cache_admin set-mode shadow --semantic-seed --db <캐시 사본> --corpus-db <코퍼스 사본> --approval <import 승인 ID> --reason <활성화 사유>`에서 `shadow` 또는 `on`을 지정한다. import와 index는 모드를 바꾸지 않는다. 활성화는 현재 exact 보호 지문과 seed 영수증의 보호 지문을 함께 확인하며 ZIP은 읽지 않는다. 추가 보호 CSV를 사용하면 import와 활성화에 같은 `--protected-csv` 인자를 전달한다. 최초 활성화로 새 exact 승인 ID가 생기면 결과의 `approval_id`로 출력한다.
+
+
+### PR 2 두 번째 인라인 리뷰 반영
+
+1. 레거시 시맨틱 정책 업그레이드를 제거하고 새 개발용 DB에 검증된 P07과 동일한 보호 지문으로 import한다. 새 DB에서 답변·binding 집계와 질문별 감사를 확인한다.
+2. 승인 ID가 없는 shadow 조회는 `not_released`로 막는다. 명시적 seed 활성화는 승인 영수증과 exact 보호 지문을 함께 검사한다. 활성화 시에는 ZIP을 읽지 않고, 새로 발급된 exact 승인 ID는 CLI 결과로 출력한다.
+3. 번들 오류의 범위를 파일 읽기와 데이터 검증으로 한정한다. 포인터의 일시적 읽기 실패가 캐시에 남지 않는지 확인한다. 공용 모델 지문 설명은 영어로 쓴다.
+4. Red를 확인한 뒤 기본 pytest·Ruff·Pyright·프런트엔드 빌드를 통과시킨다. 새 개발 DB의 정렬된 질문 ID와 기존 manifest 및 벡터 SHA-256을 대조한다. 기존 벡터를 재사용할 수 없는 경우 임베딩 전에 사용자 승인을 요청한다.
 
 ## 데이터 ZIP 위치
 

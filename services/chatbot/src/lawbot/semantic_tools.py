@@ -123,6 +123,7 @@ def parser():
             item.add_argument('--cache-db', required=True)
         if command != 'index':
             item.add_argument('--bundle', required=True)
+            item.add_argument('--protected-csv', action='append', default=[])
         if command == 'val':
             item.add_argument('--deferred-bundle', required=True)
             item.add_argument('--v6-training-dir', help='verified Colab QA and split CSV files')
@@ -201,11 +202,14 @@ def run_index(args, db, ctx):
             client.http.close()
 
 
-def seed_protection(corpus):
+def seed_protection(corpus, extra):
     configured = bundle_path(os.environ)
-    path = development_path(str(configured)) if configured is not None else None
-    bundle = load_bundle(path) if path is not None and path.is_file() else None
-    return load_protection(corpus, bundle, [], frozen_root=DATA)
+    if configured is None:
+        raise ValueError('시맨틱 import에 LAWBOT_EXACT_CACHE_BUNDLE 설정이 필요합니다.')
+    path = development_path(str(configured))
+    if not path.is_file():
+        raise ValueError('LAWBOT_EXACT_CACHE_BUNDLE의 P07 번들 파일을 찾을 수 없습니다.')
+    return load_protection(corpus, load_bundle(path), [development_path(value) for value in extra])
 
 
 def run(args):
@@ -217,7 +221,7 @@ def run(args):
     if args.command == 'index':
         return run_index(args, cache, ctx)
     seed = read_pass(development_path(args.bundle))
-    protection = seed_protection(corpus)
+    protection = seed_protection(corpus, args.protected_csv)
     if args.command == 'val':
         deferred = read_deferred(development_path(args.deferred_bundle))
         training = read_v6_training(development_path(args.v6_training_dir)) if args.v6_training_dir else None

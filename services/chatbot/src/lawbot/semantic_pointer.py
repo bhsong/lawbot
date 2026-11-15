@@ -15,12 +15,9 @@ def pointer_identity(path: Path) -> tuple:
 
 @lru_cache(maxsize=32)
 def read_revision(path: Path, identity: tuple) -> str | None:
-    try:
-        pointer = json.loads(path.read_bytes())
-        if pointer_identity(path) != identity:
-            return None
-    except OSError, ValueError:
-        return None
+    pointer = json.loads(path.read_bytes())
+    if pointer_identity(path) != identity:
+        raise OSError('generation pointer changed while being read')
     revision = pointer.get('index_revision') if isinstance(pointer, dict) else None
     return revision if isinstance(revision, str) and re.fullmatch(r'[0-9a-f]{64}', revision) else None
 
@@ -29,5 +26,5 @@ def active_revision(directory: Path) -> str | None:
     path = directory / ACTIVE_FILE
     try:
         return read_revision(path, pointer_identity(path))
-    except OSError:
+    except OSError, ValueError:
         return None
