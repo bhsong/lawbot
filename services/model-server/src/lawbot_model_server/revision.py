@@ -2,33 +2,10 @@
 # 지문: 폴더 안 모든 파일(숨김 제외)의 상대 경로·크기·앞뒤 EDGE바이트를 경로 순서로 sha256
 #   가중치 전체(27B 약 15GB)를 해시하지 않는다: 시작이 수십 초 늘어나기 때문. 폴더 교체·가중치 변경은 이것으로 잡힌다
 #   (docs/archives/e2e-playwright.md 5-1절)
-import hashlib
 import subprocess
-from pathlib import Path
 
-EDGE = 1 << 20  # 파일마다 앞뒤로 읽는 바이트
-
-
-def fingerprint(path):
-    """'sha256:<16자>' 또는 폴더가 없으면(경로 없음 포함) None"""
-    if path is None or not Path(path).is_dir():
-        return None
-    root = Path(path)
-    h = hashlib.sha256()
-    files = sorted(
-        p
-        for p in root.rglob('*')
-        if p.is_file() and not any(part.startswith('.') for part in p.relative_to(root).parts)
-    )
-    for p in files:
-        size = p.stat().st_size
-        h.update(f'{p.relative_to(root).as_posix()}\0{size}\0'.encode())
-        with p.open('rb') as f:
-            h.update(f.read(EDGE))
-            if size > EDGE:
-                f.seek(max(EDGE, size - EDGE))
-                h.update(f.read(EDGE))
-    return 'sha256:' + h.hexdigest()[:16]
+from lawbot_common.model_revision import EDGE as EDGE
+from lawbot_common.model_revision import fingerprint as fingerprint
 
 
 def git_commit(repo):

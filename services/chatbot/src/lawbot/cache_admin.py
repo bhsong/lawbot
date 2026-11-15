@@ -200,6 +200,8 @@ def parser():
         if name == 'set-mode':
             cmd.add_argument('mode', choices=('off', 'shadow', 'on'))
             cmd.add_argument('--approval')
+            cmd.add_argument('--semantic-seed', action='store_true')
+            cmd.add_argument('--corpus-db', help='development corpus DB for --semantic-seed')
         if name == 'revoke':
             cmd.add_argument('kind', choices=('query', 'answer'))
             cmd.add_argument('target')
@@ -262,9 +264,35 @@ def run(args):
     if command == 'revoke':
         store.revoke(args.kind, args.target, actor, reason)
         return {'revoked': args.target}
+    if command == 'set-mode' and args.semantic_seed:
+        from lawbot.semantic_tools import development_path
+
+        path = development_path(str(path))
+        store = Store(path)
     if command == 'set-mode' and args.mode == 'off':
         store.set_mode('off', actor, reason)
         return {'mode': 'off'}
+    if command == 'set-mode' and args.semantic_seed:
+        from lawbot.semantic_import_store import activate_seed
+        from lawbot.semantic_tools import corpus_context, development_protection
+
+        if not args.corpus_db or not args.approval:
+            raise ValueError('시맨틱 seed 활성화에는 --corpus-db와 --approval이 필요합니다.')
+        corpus = db_path(str(development_path(args.corpus_db)))
+        if path.samefile(corpus):
+            raise ValueError('코퍼스와 캐시에는 서로 다른 개발 DB 사본을 지정하세요.')
+        ctx = corpus_context(corpus)
+        return activate_seed(
+            path,
+            args.mode,
+            actor,
+            reason,
+            args.approval,
+            ctx.snapshot,
+            ctx.event,
+            development_protection(corpus, args.protected_csv),
+            ctx.check,
+        )
     if command == 'set-mode':
         _, _, _, identity = scope(args)
         require_identity(store.control(), identity)

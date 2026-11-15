@@ -15,6 +15,7 @@ from lawbot.cache_store import READ_TIMEOUT, CacheDatabaseError, translate_sqlit
 from lawbot.corpus_store import active_token
 from lawbot.exact_cache import FORMAT, MODEL, PROFILE
 from lawbot.semantic_gate import assess, score_pairs, valid_vectors
+from lawbot.semantic_pointer import active_revision
 from lawbot.semantic_settings import QUERY_PROMPT_RESERVE, ShadowSettings
 from lawbot.semantic_store import SemanticStore, ShadowMiss
 from lawbot_common.logs import logger
@@ -38,6 +39,10 @@ class AtomicIndex:
     manifest: tuple
     query_ids: tuple[str, ...]
     vectors: np.ndarray
+    directory: Path | None = None
+
+    def active(self, revision: str) -> bool:
+        return self.directory is None or active_revision(self.directory) == revision
 
     def top_queries(self, query: np.ndarray, eligible: set[str], k: int) -> list[str]:
         positions = np.fromiter(
@@ -61,6 +66,12 @@ class AtomicIndex:
         if settings.index_path is None:
             return unavailable_index('LAWBOT_SEMANTIC_INDEX가 비어 있습니다.')
         calibration = settings.calibration
+        path = settings.index_path
+        directory = path if path.is_dir() else None
+        if directory is not None:
+            if active_revision(directory) != calibration.index_revision:
+                return unavailable_index('활성 인덱스가 calibration의 revision과 일치하지 않습니다.')
+            path = directory / f'{calibration.index_revision}.npy'
         try:
             row = store.manifest()
         except CacheDatabaseError, OSError:
@@ -72,7 +83,7 @@ class AtomicIndex:
         ):
             return unavailable_index('인덱스 manifest의 revision, 코퍼스 또는 임베딩 계약이 일치하지 않습니다.')
         try:
-            raw = settings.index_path.read_bytes()
+            raw = path.read_bytes()
         except OSError:
             return unavailable_index('인덱스 파일을 읽을 수 없습니다.')
         if not raw.startswith(b'\x93NUMPY') or sha256(raw).hexdigest() != row[6]:
@@ -95,7 +106,7 @@ class AtomicIndex:
         if not isinstance(vectors, np.ndarray) or not valid_vectors(vectors, row[4], row[5]):
             return unavailable_index('인덱스 벡터의 형태 또는 값이 유효하지 않습니다.')
         vectors.setflags(write=False)
-        return cls(row, tuple(query_ids), vectors)
+        return cls(row, tuple(query_ids), vectors, directory)
 
 
 @dataclass(frozen=True)
@@ -154,9 +165,9 @@ class SemanticShadow:
     def evaluate(self, question: str, model: str, fmt: str, metrics: dict, deadline: float) -> str:
         if (model, fmt) != (MODEL, FORMAT) or self.store.snapshot.namespace.visibility_scope != 'public':
             return 'unsupported_scope'
-        if self.index is None:
-            return 'stale_index'
         calibration = self.settings.calibration
+        if self.index is None or not self.index.active(calibration.index_revision):
+            return 'stale_index'
         if len(question.encode()) > calibration.query_max_seq - QUERY_PROMPT_RESERVE:
             return 'truncated_input'
         token = self.active_snapshot()
@@ -210,6 +221,8 @@ class SemanticShadow:
         if self.active_snapshot() != token:
             return 'corpus_mismatch'
         reason = self.store.recheck(self.index.manifest, token[1], control, selected)
+        if not self.index.active(calibration.index_revision):
+            return 'stale_index'
         return reason if self.active_snapshot() == token else 'corpus_mismatch'
 
     def check_model_revisions(self, metrics: dict, deadline: float) -> None:

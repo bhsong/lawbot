@@ -400,6 +400,7 @@ def test_v2_01_and_28_exact_hit_skips_all_inference_and_keeps_approved_revision(
         (None, 'hit'),
         ("UPDATE cache_answers SET status='draft'", 'not_approved'),
         ('UPDATE atom_answer_bindings SET activation_event=NULL', 'not_released'),
+        ("UPDATE cache_control SET mode='off'", 'not_released'),
         ('UPDATE atom_answer_bindings SET semantic_enabled=0', 'semantic_disabled'),
         ("UPDATE atom_answer_bindings SET carry_status='pending'", 'semantic_disabled'),
         ("UPDATE cache_queries SET status='revoked',exact_enabled=0", 'revoked'),
@@ -419,6 +420,17 @@ def test_v2_02_03_04_shadow_records_but_does_not_serve_approved_answer(shadow_si
     assert row['response_source'] == 'rag' and row['call_counts']['llm'] == 1
     assert (row['semantic_reason'], row['semantic_would_hit']) == (reason, change is None)
     assert [call[0] for call in model.calls] == (['embed', 'rerank', 'rerank'] if change is None else [])
+
+
+def test_shadow_rejects_missing_approval_with_mode_still_on(shadow_site, monkeypatch):
+    from lawbot import semantic_store
+
+    app, _, store, model, _ = shadow_site
+    original = semantic_store.read_control
+    monkeypatch.setattr(semantic_store, 'read_control', lambda conn: replace(original(conn), approval_id=None))
+    assert store.control().mode == 'on' and store.control().approval_id is not None
+    assert app.semantic_shadow.lookup(QUESTION, 'pro', 'concise')['semantic_reason'] == 'not_released'
+    assert not model.calls
 
 
 def test_shadow_starts_after_terminal_sse_frame(shadow_site, env):
@@ -649,3 +661,37 @@ def test_calculation_bypasses_both_caches(shadow_site):
     assert emitted[0][0] == 'status' and not model.calls
     row = json.loads(request_log.read_bytes())
     assert row['cache_reason'] == 'calculation_question' and 'semantic_reason' not in row
+
+
+@pytest.mark.parametrize(
+    ('question', 'intent_id', 'expected'),
+    [
+        ('새로운 표현으로 접수 마감은 언제인가요?', 'deadline', 'hit'),
+        ('새로운 표현으로 접수 마감은 언제인가요?', 'procedure', 'intent_conflict'),
+        ('새로운 표현으로 접수 마감은 언제인가요?', None, 'hit'),
+        ('마감일이 궁금합니다.', 'deadline', 'hit'),
+        ('제재 관련 마감일이 궁금합니다.', 'deadline', 'condition_conflict'),
+    ],
+)
+def test_intent_policy_handles_exact_miss_with_paraphrases(calibration, question, intent_id, expected):
+    policy_json = json.dumps({'kind': 'intent', 'intent_id': intent_id, 'query_must_not_include': ['제재']})
+    item = replace(candidate(), policy_json=policy_json)
+    assert item.question != question
+    assert assess(question, [item], scores([(item, 0.98, 0.98)]), calibration).reason == expected
+    if expected == 'hit':
+        decision = assess(question, [item], scores([(item, 0.98, 0.80)]), calibration)
+        assert decision.reason == 'question_score_low' and decision.condition.reason == 'matched'
+
+
+def test_corrected_exact_answer_does_not_leave_the_old_semantic_revision_active(shadow_site):
+    from lawbot.cache_store import insert_answer
+
+    app, _, store, model, draft = shadow_site
+    ns = app.exact_cache.snapshot.namespace.id
+    with connect(store.path, write=True) as conn:
+        new_id = insert_answer(conn, ns, replace(draft, answer_key='corrected'))
+        conn.execute("UPDATE cache_answers SET status='approved',valid_from=? WHERE answer_id=?", (now(), new_id))
+        conn.execute('UPDATE cache_queries SET answer_id=? WHERE query_id=?', (new_id, draft.query_id(ns)))
+    result = app.semantic_shadow.lookup(QUESTION, 'pro', 'concise')
+    assert result['semantic_reason'] == 'semantic_disabled' and not result['semantic_would_hit']
+    assert not model.calls

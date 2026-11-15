@@ -706,3 +706,111 @@ def test_pending_reapproval_in_on_leaves_new_question_inactive(review_api, prepa
     assert response.status_code == 200
     assert store.lookup(snapshot.namespace.id, QUESTION)[2] == 'hit'
     assert store.lookup(snapshot.namespace.id, question)[2] == 'inactive'
+
+
+def test_semantic_import_preserves_legacy_exact_review_and_release_paths(tmp_path, monkeypatch):
+    from lawbot import semantic_tools
+    from lawbot.cache_seed import P07_SHA256
+    from lawbot.semantic_handoff import Answer, Handoff, Question, Reference
+    from lawbot.semantic_import_store import import_seed
+
+    corpus = tmp_path / 'corpus.db'
+    init_corpus(corpus)
+    variant = '합성 대체 표현의 해고 예고 절차는 무엇인가요?'
+    review_question = '별도로 검수할 합성 질문입니다.'
+    seed_qa(corpus, v4_train=(QUESTION, variant, review_question))
+    path = tmp_path / 'cache.db'
+    init(path)
+    store = Store(path)
+    old = release('before')
+    snapshot = Snapshot.load(old, system='synthetic', combined=True, attach_decrees=True)
+    token = ('before', 1)
+    ref = Reference(ID, snapshot.articles[ID].text_hash)
+    protection = load_protection(corpus, [])
+    shown = snapshot.render(RAW, [(ID, ref.sha256)])
+    assert shown is not None
+    ns = snapshot.namespace.id
+    draft = Draft('1', QUESTION, 'old-key', digest(RAW), shown, [(ID, ref.sha256)], {'bundle_sha256': P07_SHA256}, RAW)
+    review = replace(draft, source_id='3', question=review_question, answer_key='review')
+    store.stage(snapshot.namespace, [draft, review], 'test', 'stage')
+    approval = store.approve(
+        ns, 1, protection.fingerprint, {draft.query_id(ns): draft.answer_id(ns)}, actor='test', reason='legacy review'
+    )
+    seed_answer = Answer(
+        'old-key', 'seed', ID, RAW, digest(RAW), (ref,), (), {}, snapshot.articles[ID].text, 0, ref.sha256
+    )
+    seed = Handoff(
+        'a' * 64, (seed_answer,), (Question('1', 'old-key', QUESTION, {}), Question('2', 'old-key', variant, {}))
+    )
+    result = import_seed(path, seed, snapshot, 1, load_protection(corpus, []))
+    assert result['approved_questions'] == 2 and store.control().approval_id == approval
+
+    monkeypatch.setattr(corpus_store, 'active_token', lambda *a: token)
+    monkeypatch.setattr(cache_admin, 'active_token', lambda *a: token)
+    monkeypatch.setattr(cache_admin, 'active_release', lambda *a: old)
+    monkeypatch.setattr(cache_admin, 'cache_snapshot', lambda *a: snapshot)
+    monkeypatch.setattr(
+        cache_admin.settings,
+        'load',
+        lambda: SimpleNamespace(db=corpus, corpus='db', profile=SimpleNamespace(name='v5'), decree=None),
+    )
+
+    catalog = cache_review_store.ReviewCatalog(path, corpus, snapshot)
+    detail = catalog.detail(review.answer_id(ns))
+    assert detail['preview_sha256'] == digest(shown) and detail['disabled_reason'] is None
+    with connect(path, write=True) as conn, transaction(conn):
+        catalog.change_mode(conn, store.control(), 'shadow', 'test', 'review')
+    assert store.control().mode == 'shadow'
+    args = cache_admin.parser().parse_args(
+        [
+            'set-mode',
+            'shadow',
+            '--db',
+            str(path),
+            '--approval',
+            approval,
+            '--reason',
+            'legacy',
+        ]
+    )
+    assert cache_admin.run(args) == {'mode': 'shadow'}
+
+    def unexpected_scan(*a):
+        pytest.fail('activation repeated the near-duplicate scan')
+
+    monkeypatch.setattr(Protection, 'match', unexpected_scan)
+    monkeypatch.setattr(
+        semantic_tools, 'corpus_context', lambda *a: SimpleNamespace(snapshot=snapshot, event=1, check=lambda: None)
+    )
+    args = cache_admin.parser().parse_args(
+        [
+            'set-mode',
+            'shadow',
+            '--semantic-seed',
+            '--db',
+            str(path),
+            '--corpus-db',
+            str(corpus),
+            '--approval',
+            result['approval_id'],
+            '--reason',
+            'verified seed',
+        ]
+    )
+    assert cache_admin.run(args) == {'mode': 'shadow'}
+    extra = tmp_path / 'additional-protected.csv'
+    extra.write_text('question\n별도 보호 대상 합성 문항\n', encoding='utf-8')
+    args.protected_csv = [extra]
+    with pytest.raises(ValueError, match='protected split changed'):
+        cache_admin.run(args)
+    assert store.control().approval_id == approval
+
+    monkeypatch.setattr(corpus_store, 'release_at_event', lambda *a: old)
+    target = release('after')
+    token = ('after', 2)
+    current = Snapshot.load(target, system='synthetic', combined=True, attach_decrees=True)
+    assert apply_release(path, corpus, token, target, current) == {
+        'keep': 1,
+        'pending': 0,
+        'off': 0,
+    }

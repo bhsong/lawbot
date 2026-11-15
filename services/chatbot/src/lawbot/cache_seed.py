@@ -5,6 +5,7 @@ import hashlib
 import json
 from collections import Counter, defaultdict
 from dataclasses import dataclass
+from functools import cached_property
 from io import StringIO
 from pathlib import Path
 from zipfile import ZipFile
@@ -14,6 +15,7 @@ from lawbot.calc_gate import is_calculation_question
 from lawbot.dataset_store import protection_rows
 from lawbot.db.connection import connect
 from lawbot.exact_cache import NORMALIZER, Snapshot, canonical, digest, normalize, read_articles
+from lawbot.qa_rules import THRESHOLD, Overlap, norm
 
 P07_SHA256 = '69034f850b39769e0684d8e83b4a1b3653e2b3750bd74d43b37a2a8b43349f59'
 BATCH_COUNTS = dict(zip((f'P{i:02}' for i in range(1, 8)), (21, 23, 31, 18, 43, 27, 14), strict=True))
@@ -153,12 +155,45 @@ class Protection:
     blocked: frozenset[str]
     v4_train: dict[str, str]
     fingerprint: str
+    questions: tuple[str, ...] = ()
+
+    @cached_property
+    def exact(self) -> frozenset[str]:
+        return frozenset(norm(normalize(q)) for q in self.questions) - {''}
+
+    @cached_property
+    def by_length(self) -> dict[int, Overlap]:
+        buckets = defaultdict(list)
+        for index, question in enumerate(sorted(self.exact)):
+            buckets[len(question)].append(('protected', index, question))
+        return {length: Overlap(rows) for length, rows in buckets.items()}
+
+    @cached_property
+    def results(self) -> dict[str, str | None]:
+        return {}
+
+    def match(self, question: str) -> str | None:
+        key = norm(normalize(question))
+        if digest(normalize(question)) in self.blocked or key in self.exact:
+            return 'exact'
+        if key not in self.results:
+            self.results[key] = (
+                'near'
+                if any(
+                    index.match(key)
+                    for length, index in self.by_length.items()
+                    if 2 * min(len(key), length) >= THRESHOLD * (len(key) + length)
+                )
+                else None
+            )
+        return self.results[key]
 
 
 def load_protection(db: Path, extra: list[Path]) -> Protection:
     """Build the protected split from the corpus DB and optional reviewer CSVs; no ZIP is read."""
     rows = protection_rows(db)
     blocked = set()
+    questions = set()
     train = {}
     manifest = []
     for row in rows:
@@ -166,6 +201,7 @@ def load_protection(db: Path, extra: list[Path]) -> Protection:
         manifest.append((row.qa_uid, row.split_set, row.split, checksum))
         if row.split != 'train':
             blocked.add(checksum)
+            questions.add(row.question)
         elif row.split_set == 'v4':
             train[row.source_id] = digest(row.question)
     # Include assigned feedback and protected sets added after the original DB import.
@@ -177,6 +213,7 @@ def load_protection(db: Path, extra: list[Path]) -> Protection:
     for uid, split_set, purpose, split, question in protected:
         checksum = digest(normalize(question))
         blocked.add(checksum)
+        questions.add(question)
         manifest.append((uid, split_set, purpose, split, checksum))
     for path in extra:
         raw = path.read_bytes()
@@ -184,9 +221,10 @@ def load_protection(db: Path, extra: list[Path]) -> Protection:
         if not additions or any(not normalize(row.get('question') or '') for row in additions):
             raise ValueError('추가 보호셋은 question 열에 보호 질문을 포함해야 합니다.')
         blocked.update(digest(normalize(row['question'])) for row in additions)
+        questions.update(row['question'] for row in additions)
         manifest.append(('extra', hashlib.sha256(raw).hexdigest(), len(additions)))
     fingerprint = digest(canonical([NORMALIZER, P07_SHA256, sorted(manifest)]))
-    return Protection(frozenset(blocked), train, fingerprint)
+    return Protection(frozenset(blocked), train, fingerprint, tuple(sorted(questions)))
 
 
 def require_db_protection(bundle: Bundle, protection: Protection) -> None:
