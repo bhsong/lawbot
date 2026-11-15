@@ -17,6 +17,12 @@ MIGRATIONS = files('lawbot.db') / 'cache_migrations'
 SCHEMA = 2
 READ_TIMEOUT = 0.01
 CALCULATION_EXCLUDED = '계산 질문은 정확 일치 캐시에 저장하거나 승인할 수 없습니다.'
+REVIEW_EVIDENCE_CONFLICT = 'review_evidence_conflict'
+REVIEW_EVIDENCE_CONFLICT_DETAIL = '검수 근거 해시가 충돌해 답변을 승인할 수 없습니다.'
+
+
+class ReviewEvidenceConflict(ValueError):
+    """An immutable answer has incompatible hashes for a review dependency."""
 
 
 class CacheDatabaseError(RuntimeError):
@@ -66,7 +72,7 @@ def with_review_evidence(conn, answer_id, source):
     for (detail,) in rows:
         for key, checksum in json.loads(detail)['review_evidence_hashes'].items():
             if key in hashes and hashes[key] != checksum:
-                raise ValueError('답변의 검수 근거 해시가 일치하지 않습니다.')
+                raise ReviewEvidenceConflict(REVIEW_EVIDENCE_CONFLICT_DETAIL)
             hashes[key] = checksum
         found = True
     if not found:

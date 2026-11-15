@@ -142,6 +142,63 @@ def test_release_projection_and_runtime(prepared, tmp_path, monkeypatch, changes
     assert apply_release(store.path, tmp_path / 'corpus.db', token, target, snapshot) == counts
 
 
+def test_review_evidence_conflict_isolated_across_release_projections(prepared, tmp_path, monkeypatch):
+    store, old, previous, conflict = prepared
+    healthy = replace(conflict, source_id='healthy', question='별도의 합성 질문입니다.', answer_key='healthy-answer')
+    namespace = previous.namespace.id
+    store.set_mode('off', 'test', 'stage second answer')
+    store.stage(previous.namespace, [healthy], 'test', 'stage')
+    approval = store.approve(
+        namespace,
+        1,
+        'protected',
+        {draft.query_id(namespace): draft.answer_id(namespace) for draft in (conflict, healthy)},
+        actor='test',
+        reason='review',
+    )
+    store.set_mode('on', 'test', 'enable', approval)
+    with connect(store.path, write=True) as conn, transaction(conn):
+        for checksum in ('a' * 64, 'b' * 64):
+            cache_store.audit(
+                conn,
+                'review_evidence',
+                conflict.answer_id(namespace),
+                'test',
+                'synthetic',
+                {'review_evidence_hashes': {'최저임금법 제6조': checksum}},
+            )
+    protection = Protection(frozenset(), {d.source_id: digest(d.question) for d in (conflict, healthy)}, 'protected')
+    monkeypatch.setattr(cache_release_store, 'verified_inputs', lambda *a: protection)
+    monkeypatch.setattr(cache_review_store, 'verified_inputs', lambda *a: protection)
+
+    db = tmp_path / 'corpus.db'
+    before = old
+    for event in (2, 3):
+        target = release(f'after-{event}')
+        snapshot = Snapshot.load(target, system='synthetic', combined=True, attach_decrees=True)
+        token = (target.release_id, event)
+        with monkeypatch.context() as active:
+            active.setattr(corpus_store, 'release_at_event', lambda *a, before=before: before)
+            active.setattr(corpus_store, 'release_by_id', lambda *a: old)
+            active.setattr(corpus_store, 'active_token', lambda *a, token=token: token)
+            active.setattr(cache_runtime, 'active_token', lambda *a, token=token, **kw: token)
+            assert apply_release(store.path, db, token, target, snapshot) == {'keep': 1, 'pending': 1, 'off': 0}
+            exact = cache_runtime.ExactCache(store, db, snapshot)
+            assert exact.lookup(healthy.question, 'pro', 'concise').reason == 'hit'
+            assert exact.lookup(conflict.question, 'pro', 'concise').match is None
+            catalog = cache_review_store.ReviewCatalog(store.path, db, snapshot)
+            pending = catalog.index('pending')['items']
+            assert len(pending) == 1 and pending[0]['reason'] == 'review_evidence_conflict'
+            answer_id = pending[0]['answer_id']
+            assert catalog.detail(answer_id)['preview_sha256'] is None
+            with connect(store.path) as conn:
+                with pytest.raises(cache_review_store.StoreError) as exc:
+                    catalog.prepare_approvals(conn, store.control(), [(answer_id, digest(conflict.answer_text))])
+                assert exc.value.code == 'review_evidence_conflict'
+            assert apply_release(store.path, db, token, target, snapshot) == {'keep': 1, 'pending': 1, 'off': 0}
+        before = target
+
+
 @pytest.mark.parametrize('mixed', [False, True])
 def test_release_projection_does_not_restore_legacy_calculation_links(prepared, tmp_path, monkeypatch, mixed):
     store, _, previous, ordinary = prepared
@@ -550,6 +607,65 @@ def test_import_db_rechecks_target_protection_and_review_evidence(db_transfer, t
     assert result['approved_questions'] == 0
     with connect(Path(args.db)) as conn:
         assert conn.execute('SELECT status,exact_enabled FROM cache_queries').fetchall() == [('draft', 0)]
+
+
+def test_qa_refresh_requires_carry_and_db_import_before_p07_reapproval(db_transfer, tmp_path, monkeypatch):
+    from pathlib import Path
+
+    args, before, staged, old_protection, _, _ = db_transfer
+    changed_corpus = tmp_path / 'refreshed-corpus.db'
+    init_corpus(changed_corpus)
+    seed_qa(changed_corpus, v4_train=(QUESTION,))
+    protection = load_protection(changed_corpus, [])
+    assert protection.fingerprint != old_protection.fingerprint
+    args.corpus_db = str(changed_corpus)
+    store = Store(Path(args.db))
+    p07 = replace(staged, source_id='1', answer_key='p07')
+    namespace = before.namespace.id
+    store.stage(before.namespace, [p07], 'test', 'P07 stage')
+    store.approve(
+        namespace,
+        1,
+        old_protection.fingerprint,
+        {p07.query_id(namespace): p07.answer_id(namespace)},
+        actor='test',
+        reason='P07 review',
+    )
+    old_release = release('before')
+    assert apply_release(store.path, changed_corpus, ('before', 1), old_release, before) == {
+        'keep': 0,
+        'pending': 0,
+        'off': 0,
+    }
+    with pytest.raises(ValueError, match='보호 지문'):
+        cache_admin.run(args)
+
+    target = release('refreshed')
+    snapshot = Snapshot.load(target, system='synthetic', combined=True, attach_decrees=True)
+    token = (target.release_id, 2)
+    monkeypatch.setattr(corpus_store, 'release_at_event', lambda *a: old_release)
+    monkeypatch.setattr(corpus_store, 'release_by_id', lambda *a: old_release)
+    monkeypatch.setattr(corpus_store, 'active_token', lambda *a: token)
+    monkeypatch.setattr(cache_admin, 'active_token', lambda *a: token)
+    monkeypatch.setattr(cache_admin, 'active_release', lambda *a: target)
+    monkeypatch.setattr(cache_admin, 'cache_snapshot', lambda *a: snapshot)
+    assert apply_release(store.path, changed_corpus, token, target, snapshot) == {'keep': 0, 'pending': 1, 'off': 0}
+    catalog = cache_review_store.ReviewCatalog(store.path, changed_corpus, snapshot)
+    answer_id = p07.answer_id(snapshot.namespace.id)
+    items = [(answer_id, digest(p07.answer_text))]
+    with connect(store.path) as conn:
+        with pytest.raises(cache_review_store.StoreError) as exc:
+            catalog.prepare_approvals(conn, store.control(), items)
+        assert exc.value.code == 'protection_changed'
+
+    result = cache_admin.run(args)
+    assert result['approved_questions'] == result['existing_conflicts'] == 1
+    assert store.control().protection_hash == protection.fingerprint
+    with connect(store.path, write=True) as conn, transaction(conn):
+        control = cache_store.read_control(conn)
+        approvals = catalog.prepare_approvals(conn, control, items)
+        catalog.write_approvals(conn, control, approvals, 'test', 'P07 reapproval')
+    assert catalog.detail(answer_id)['status'] == 'approved'
 
 
 def test_cache_review_approves_without_any_zip(review_api, monkeypatch):

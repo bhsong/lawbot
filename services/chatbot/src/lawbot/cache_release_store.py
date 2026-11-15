@@ -4,7 +4,16 @@ import json
 
 from lawbot import corpus_store
 from lawbot.cache_carry import allowed_question, article_rows, classify, corpus_changes, verified_inputs
-from lawbot.cache_store import Draft, audit, insert_answer, now, read_control, with_review_evidence
+from lawbot.cache_store import (
+    REVIEW_EVIDENCE_CONFLICT,
+    Draft,
+    ReviewEvidenceConflict,
+    audit,
+    insert_answer,
+    now,
+    read_control,
+    with_review_evidence,
+)
 from lawbot.calc_gate import is_calculation_question
 from lawbot.db.connection import connect, transaction
 from lawbot.exact_cache import PROFILE, canonical, corpus_version, digest
@@ -129,7 +138,7 @@ def apply_release(path, db, token, release, snapshot):
             guard = 'protection_changed'
         rows = conn.execute(
             'SELECT a.answer_id,answer_key,raw_sha256,answer_text,source,status,reviewed_by,reviewed_at,valid_from,'
-            'valid_until,expires_at,i.raw_answer,d.previous_release_id '
+            'valid_until,expires_at,i.raw_answer,d.previous_release_id,d.reason '
             'FROM cache_answers a LEFT JOIN cache_render_inputs i USING(answer_id) '
             'LEFT JOIN cache_release_decisions d ON d.answer_id=a.answer_id AND d.activation_event=? '
             'WHERE a.namespace_id=? AND EXISTS(SELECT 1 FROM cache_queries q WHERE q.answer_id=a.answer_id '
@@ -146,22 +155,39 @@ def apply_release(path, db, token, release, snapshot):
         )
         conn.execute('UPDATE cache_queries SET exact_enabled=0 WHERE namespace_id=? AND exact_enabled=1', (namespace,))
         for row, queries in source_rows:
-            old_id, key, raw_hash, old_text, encoded, status, actor, reviewed, start, end, expires, stored, baseline = (
-                row
-            )
+            (
+                old_id,
+                key,
+                raw_hash,
+                old_text,
+                encoded,
+                status,
+                actor,
+                reviewed,
+                start,
+                end,
+                expires,
+                stored,
+                baseline,
+                previous_reason,
+            ) = row
             baseline = baseline if status == 'draft' and baseline else old.release_id
             if baseline not in comparisons:
                 prior_rows = article_rows(corpus_store.release_by_id(db, PROFILE, baseline))
                 comparisons[baseline] = (prior_rows, corpus_changes(prior_rows, current_rows))
             before, changed = comparisons[baseline]
-            source = with_review_evidence(conn, old_id, json.loads(encoded))
+            source = json.loads(encoded)
+            answer_guard = REVIEW_EVIDENCE_CONFLICT if previous_reason == REVIEW_EVIDENCE_CONFLICT else guard
+            try:
+                source = with_review_evidence(conn, old_id, source)
+            except ReviewEvidenceConflict:
+                answer_guard = REVIEW_EVIDENCE_CONFLICT
             prior = citations_for(conn, old_id)
             dependencies = {key for key, _ in prior} | set(source.get('review_evidence_article_ids', []))
             raw = raw_for(raw_hash, stored)
             shown, citations = preview(snapshot, raw, prior)
             eligible = [q for q in queries if not is_calculation_question(q[2])]
             excluded_ids = {q[0] for q in queries} - {q[0] for q in eligible}
-            answer_guard = guard
             if protection is not None and any(q[-1] and not allowed_question(protection, q[1], q[2]) for q in eligible):
                 answer_guard = answer_guard or 'protected_question'
             verdict, reason, changes = classify(dependencies, before, changed, answer_guard, old_text, shown)
