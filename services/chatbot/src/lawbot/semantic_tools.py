@@ -5,6 +5,7 @@ import fcntl
 import json
 import os
 import time
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -15,7 +16,7 @@ from tokenizers import Tokenizer
 from lawbot import deploy, envfile, security
 from lawbot.api_client import ModelServerClient, ModelServerError, request_timeout
 from lawbot.cache_carry import bundle_path
-from lawbot.cache_seed import load_bundle, load_protection
+from lawbot.cache_seed import Bundle, load_bundle, load_protection
 from lawbot.cache_store import translate_sqlite_errors
 from lawbot.corpus_store import active_release, active_token
 from lawbot.db.connection import check_db_path, repo_path
@@ -202,6 +203,11 @@ def run_index(args, db, ctx):
             client.http.close()
 
 
+def development_protection(corpus: Path, extra: Sequence[str | Path], bundle: Bundle | None = None):
+    protected_csv = [development_path(str(filename)) for filename in extra]
+    return load_protection(corpus, bundle, protected_csv)
+
+
 def seed_protection(corpus, extra):
     configured = bundle_path(os.environ)
     if configured is None:
@@ -209,7 +215,7 @@ def seed_protection(corpus, extra):
     path = development_path(str(configured))
     if not path.is_file():
         raise ValueError('LAWBOT_EXACT_CACHE_BUNDLE의 P07 번들 파일을 찾을 수 없습니다.')
-    return load_protection(corpus, load_bundle(path), [development_path(value) for value in extra])
+    return development_protection(corpus, extra, load_bundle(path))
 
 
 def run(args):

@@ -265,7 +265,7 @@ def run(args):
         return {'mode': 'off'}
     if command == 'set-mode' and args.semantic_seed:
         from lawbot.semantic_import_store import activate_seed
-        from lawbot.semantic_tools import corpus_context, development_path
+        from lawbot.semantic_tools import corpus_context, development_path, development_protection
 
         if not args.corpus_db or not args.approval or args.bundle:
             raise ValueError('시맨틱 seed 활성화에는 --corpus-db와 --approval이 필요합니다.')
@@ -281,7 +281,7 @@ def run(args):
             args.approval,
             ctx.snapshot,
             ctx.event,
-            load_protection(corpus, None, [development_path(str(path)) for path in args.protected_csv]),
+            development_protection(corpus, args.protected_csv),
             ctx.check,
         )
     if args.bundle is None:

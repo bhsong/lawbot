@@ -286,6 +286,28 @@ def seed_approval_id(bundle_hash: str, namespace: str, event: int) -> str:
     return digest(canonical(['semantic-seed', bundle_hash, namespace, event]))
 
 
+def check_seed_import(conn, namespace, event, receipt, protection):
+    control = read_control(conn)
+    previous = seed_receipt(conn, receipt)
+    if previous is None and (
+        conn.execute('SELECT 1 FROM cache_audit_events WHERE action=? LIMIT 1', (ACTION,)).fetchone()
+        or conn.execute('SELECT 1 FROM atoms LIMIT 1').fetchone()
+    ):
+        raise ValueError('이전 형식 seed import가 있는 DB입니다. 새 개발 사본을 사용하세요')
+    if control.protection_hash not in (None, protection.fingerprint):
+        raise ValueError('기존 exact 보호 지문과 seed 보호 지문이 다릅니다.')
+    if previous is not None:
+        if previous['protection_hash'] != protection.fingerprint:
+            raise ValueError('protected split changed since import')
+        return previous['counts']
+    if control.mode != 'off' or (control.namespace_id, control.activation_event) not in (
+        (None, None),
+        (namespace, event),
+    ):
+        raise ValueError('seed import requires an inactive cache copy for the current snapshot')
+    return None
+
+
 def import_seed(
     db: Path, seed: Handoff, snapshot: Snapshot, event: int, protection: Protection, *, check_snapshot=lambda: None
 ):
@@ -294,6 +316,11 @@ def import_seed(
         raise ValueError('semantic seed requires the current cache schema')
     ns = snapshot.namespace.id
     receipt = seed_approval_id(seed.sha256, ns, event)
+    with connect(db) as conn:
+        conn.execute('BEGIN')
+        previous = check_seed_import(conn, ns, event, receipt, protection)
+    if previous is not None:
+        return previous
     groups = defaultdict(list)
     rejected = []
     result: Counter[str] = Counter(
@@ -335,14 +362,10 @@ def import_seed(
     at = now()
     approved_revisions = set()
     with connect(db, write=True) as conn, transaction(conn):
-        control = read_control(conn)
-        previous = seed_receipt(conn, receipt)
+        # Recheck after the near-duplicate scan, which runs outside the write transaction.
+        previous = check_seed_import(conn, ns, event, receipt, protection)
         if previous is not None:
-            if previous['protection_hash'] != protection.fingerprint:
-                raise ValueError('protected split changed since import')
-            return previous['counts']
-        if control.mode != 'off' or (control.namespace_id, control.activation_event) not in ((None, None), (ns, event)):
-            raise ValueError('seed import requires an inactive cache copy for the current snapshot')
+            return previous
         conn.execute(
             'INSERT INTO cache_namespaces VALUES (?,?,?) ON CONFLICT DO NOTHING',
             (ns, snapshot.namespace.serialize(), at),
@@ -447,7 +470,7 @@ def import_seed(
         if approved_revisions:
             # The exact controller keeps any existing exact approval and its protection identity.
             conn.execute(
-                'UPDATE cache_control SET namespace_id=?,activation_event=?,protection_hash=coalesce(protection_hash,?),'
+                'UPDATE cache_control SET namespace_id=?,activation_event=?,protection_hash=?,'
                 'generation=generation+1 WHERE singleton=1',
                 (ns, event, protection.fingerprint),
             )
