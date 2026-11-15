@@ -83,7 +83,7 @@
 
 ## 데이터 ZIP 위치
 
-통과·추후 검토 ZIP은 답변과 질문 원문을 담고 있어 커밋하지 않는다. exact 캐시의 P07 ZIP(운영 `data/db/p07-handoff.zip`, 권한 600)과 같은 규칙을 쓴다.
+통과·추후 검토 ZIP은 답변과 질문 원문을 담고 있어 커밋하지 않는다. ZIP은 적재 명령의 입력으로만 쓰고 운영 트리에 복사하지 않는다. 운영 런타임은 ZIP을 읽지 않고 DB만 읽는다(사용자 결정 2026-11-15, [exact-cache-zip-free-runtime](exact-cache-zip-free-runtime.md)).
 
 - 개발 트리: `data/db/semantic/pass-handoff.zip`, `data/db/semantic/deferred-handoff.zip` (`data/db/`는 `.gitignore` 대상). 권한 600.
 - 사용자가 넣은 뒤 SHA-256을 이 계획서에 적고, 도구는 경로를 인수(`--bundle`)나 `LAWBOT_` 설정으로 받는다. 코드에 경로를 박지 않는다.

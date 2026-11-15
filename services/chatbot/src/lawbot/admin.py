@@ -254,9 +254,7 @@ def router(db, app, *, protected=None, calendar_url=None, calendar_token=None):
         cache = getattr(app, 'exact_cache', None)
         if cache is None:
             raise AdminError(503, 'v5 정확 일치 캐시가 설정되지 않았습니다.', 'cache_unavailable')
-        return ReviewCatalog(
-            cache.store.path, cache.corpus_db, cache.snapshot, getattr(app.settings, 'exact_cache_bundle', None)
-        )
+        return ReviewCatalog(cache.store.path, cache.corpus_db, cache.snapshot)
 
     @api.get('/cache')
     async def cache_index(status: Literal['all', 'keep', 'pending', 'off', 'approved', 'revoked', 'draft'] = 'all'):

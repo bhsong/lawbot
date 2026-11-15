@@ -262,22 +262,7 @@ def test_check_deploy_warns_for_shadow_on_cache_schema_0002(corpus_db, env, tmp_
     assert ('WARN', '시맨틱 shadow에는 캐시 DB 스키마 0003이 필요합니다.') in check_deploy.run()
 
 
-@pytest.mark.parametrize('bundle_state', ['unset', 'missing', 'present'])
-def test_check_deploy_warns_when_carry_bundle_is_missing(corpus_db, env, tmp_path, bundle_state):
-    configure(env, corpus_db)
-    cache = tmp_path / 'private' / 'cache.db'
-    init_cache(cache)
-    env.setenv('LAWBOT_EXACT_CACHE_DB', str(cache))
-    bundle = tmp_path / 'p07.zip'
-    if bundle_state == 'present':
-        bundle.touch()
-    if bundle_state != 'unset':
-        env.setenv('LAWBOT_EXACT_CACHE_BUNDLE', str(bundle))
-    warning = ('WARN', '정확 일치 캐시: 자동 유지 안 됨 (LAWBOT_EXACT_CACHE_BUNDLE 필요)')
-    assert (warning in check_deploy.run()) == (bundle_state != 'present')
-
-
-def test_startup_warns_when_carry_bundle_is_missing(corpus_db, env, tmp_path, model_server, caplog):
+def test_exact_cache_status_does_not_depend_on_a_p07_zip(corpus_db, env, tmp_path, model_server, caplog):
     from conftest import set_auth
 
     configure(env, corpus_db)
@@ -285,9 +270,9 @@ def test_startup_warns_when_carry_bundle_is_missing(corpus_db, env, tmp_path, mo
     cache = tmp_path / 'private' / 'cache.db'
     init_cache(cache)
     env.setenv('LAWBOT_EXACT_CACHE_DB', str(cache))
-    env.setenv('LAWBOT_EXACT_CACHE_BUNDLE', str(tmp_path / 'absent-p07.zip'))
+    assert not any('P07' in message or 'BUNDLE' in message for _, message in check_deploy.run())
     assert service.load_app(settings.load(web=True)).corpus_release_id == RELEASE
-    assert '정확 일치 캐시: 자동 유지 안 됨 (LAWBOT_EXACT_CACHE_BUNDLE 필요)' in caplog.messages
+    assert not any('BUNDLE' in message for message in caplog.messages)
 
 
 def test_check_deploy_checks_db_bytes(corpus_db, env, tmp_path):

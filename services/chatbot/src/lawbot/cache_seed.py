@@ -155,9 +155,10 @@ class Protection:
     fingerprint: str
 
 
-def load_protection(db: Path, bundle: Bundle, extra: list[Path]) -> Protection:
+def load_protection(db: Path, extra: list[Path]) -> Protection:
+    """Build the protected split from the corpus DB and optional reviewer CSVs; no ZIP is read."""
     rows = protection_rows(db)
-    blocked = set(bundle.protected)
+    blocked = set()
     train = {}
     manifest = []
     for row in rows:
@@ -186,6 +187,12 @@ def load_protection(db: Path, bundle: Bundle, extra: list[Path]) -> Protection:
         manifest.append(('extra', hashlib.sha256(raw).hexdigest(), len(additions)))
     fingerprint = digest(canonical([NORMALIZER, P07_SHA256, sorted(manifest)]))
     return Protection(frozenset(blocked), train, fingerprint)
+
+
+def require_db_protection(bundle: Bundle, protection: Protection) -> None:
+    """Refuse a handoff whose protected hashes are not already covered by the corpus DB split."""
+    if not bundle.protected <= protection.blocked:
+        raise ValueError('인계 ZIP의 보호 문항이 코퍼스 DB 보호 분할에 없습니다. QA 세트를 먼저 가져오세요.')
 
 
 @dataclass(frozen=True)

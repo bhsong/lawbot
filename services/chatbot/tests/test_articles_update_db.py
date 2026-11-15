@@ -320,7 +320,7 @@ def test_db_git_generation_gate_restart_recovery_and_manual_rollback(blob_clones
         token = corpus_store.active_token(db, profile)
         release = active_release(db, profile)
         snapshot = Snapshot.load(release, system='synthetic', combined=True, attach_decrees=True)
-        counts = cache_release_store.apply_release(cache_path, db, token, release, snapshot, None)
+        counts = cache_release_store.apply_release(cache_path, db, token, release, snapshot)
         assert counts == {'keep': 0, 'pending': 1, 'off': 0}
         assessed.append(token)
         return counts

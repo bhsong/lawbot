@@ -1,3 +1,4 @@
+import zipfile
 from dataclasses import replace
 from types import SimpleNamespace
 
@@ -9,6 +10,7 @@ from conftest import ADMIN_PW, ADMIN_USER
 from lawbot import (
     auth,
     cache_admin,
+    cache_carry,
     cache_release_store,
     cache_review_store,
     cache_runtime,
@@ -18,7 +20,7 @@ from lawbot import (
 )
 from lawbot.cache_carry import classify, corpus_changes
 from lawbot.cache_release_store import apply_release
-from lawbot.cache_seed import Bundle, Protection, load_protection
+from lawbot.cache_seed import Protection, load_protection
 from lawbot.cache_store import Draft, Store, init, revoke_in
 from lawbot.db.connection import connect, transaction
 from lawbot.db.migrate import init as init_corpus
@@ -54,7 +56,7 @@ def test_classify_by_review_and_display_dependencies(updates, removed, expected)
     [
         ('policy_changed', 'same'),
         ('protection_changed', 'same'),
-        ('bundle_missing', 'same'),
+        ('protection_unavailable', 'same'),
         (None, 'changed'),
         (None, None),
     ],
@@ -100,7 +102,7 @@ def prepared(tmp_path, monkeypatch):
     store.set_mode('shadow', 'test', 'check', approval)
     store.set_mode('on', 'test', 'enable', approval)
     protected = Protection(frozenset(), {'fixture': digest(QUESTION)}, 'protected')
-    monkeypatch.setattr(cache_release_store, 'verified_inputs', lambda *a: (protected, {}))
+    monkeypatch.setattr(cache_release_store, 'verified_inputs', lambda *a: protected)
     monkeypatch.setattr(corpus_store, 'release_at_event', lambda *a: old)
     return store, old, snapshot, draft
 
@@ -122,7 +124,7 @@ def test_release_projection_and_runtime(prepared, tmp_path, monkeypatch, changes
     monkeypatch.setattr(corpus_store, 'active_token', lambda *a, **kw: token)
     monkeypatch.setattr(cache_runtime, 'active_token', lambda *a, **kw: token)
     monkeypatch.setattr(cache_runtime, 'active_token', lambda *a, **kw: token)
-    counts = apply_release(store.path, tmp_path / 'corpus.db', token, target, snapshot, tmp_path / 'fixture.zip')
+    counts = apply_release(store.path, tmp_path / 'corpus.db', token, target, snapshot)
     assert counts[verdict] == 1 and sum(counts.values()) == 1
     assert store.control().activation_event == 2 and store.control().mode == 'on'
     exact = cache_runtime.ExactCache(store, tmp_path / 'corpus.db', snapshot)
@@ -137,9 +139,7 @@ def test_release_projection_and_runtime(prepared, tmp_path, monkeypatch, changes
             verdict,
             draft.answer_id(previous.namespace.id),
         )
-    assert (
-        apply_release(store.path, tmp_path / 'corpus.db', token, target, snapshot, tmp_path / 'fixture.zip') == counts
-    )
+    assert apply_release(store.path, tmp_path / 'corpus.db', token, target, snapshot) == counts
 
 
 @pytest.mark.parametrize('mixed', [False, True])
@@ -166,7 +166,7 @@ def test_release_projection_does_not_restore_legacy_calculation_links(prepared, 
     snapshot = Snapshot.load(target, system='synthetic', combined=True, attach_decrees=True)
     token = ('after', 2)
     monkeypatch.setattr(corpus_store, 'active_token', lambda *args: token)
-    counts = apply_release(store.path, tmp_path / 'corpus.db', token, target, snapshot, tmp_path / 'fixture.zip')
+    counts = apply_release(store.path, tmp_path / 'corpus.db', token, target, snapshot)
     assert counts == {'keep': int(mixed), 'pending': 0, 'off': int(not mixed)}
     with connect(store.path) as conn:
         rows = dict(
@@ -184,7 +184,7 @@ def test_failed_projection_leaves_control_and_rows_unchanged(prepared, tmp_path,
     control = store.control()
     monkeypatch.setattr(corpus_store, 'active_token', lambda *a: ('unrelated', 3))
     with pytest.raises(ValueError, match='판정 중'):
-        apply_release(store.path, tmp_path / 'corpus.db', ('after', 2), target, snapshot, tmp_path / 'fixture.zip')
+        apply_release(store.path, tmp_path / 'corpus.db', ('after', 2), target, snapshot)
     assert store.control() == control
     with connect(store.path) as conn:
         assert conn.execute('SELECT count(*) FROM cache_release_decisions').fetchone() == (0,)
@@ -195,11 +195,11 @@ def test_rollback_does_not_restore_withdrawn_question(prepared, tmp_path, monkey
     target = release('after')
     snapshot = Snapshot.load(target, system='synthetic', combined=True, attach_decrees=True)
     monkeypatch.setattr(corpus_store, 'active_token', lambda *a: ('after', 2))
-    apply_release(store.path, tmp_path, ('after', 2), target, snapshot, tmp_path / 'fixture.zip')
+    apply_release(store.path, tmp_path, ('after', 2), target, snapshot)
     store.revoke('query', draft.query_id(snapshot.namespace.id), 'test', 'withdraw')
     monkeypatch.setattr(corpus_store, 'release_at_event', lambda *a: target)
     monkeypatch.setattr(corpus_store, 'active_token', lambda *a: ('before', 3))
-    apply_release(store.path, tmp_path, ('before', 3), old, previous, tmp_path / 'fixture.zip')
+    apply_release(store.path, tmp_path, ('before', 3), old, previous)
     assert store.lookup(previous.namespace.id, QUESTION)[1] is None
 
 
@@ -208,13 +208,13 @@ def test_unreviewed_answer_keeps_its_approval_baseline(prepared, tmp_path, monke
     second = release('second', review='변경된 검토 조문')
     snapshot = Snapshot.load(second, system='synthetic', combined=True, attach_decrees=True)
     monkeypatch.setattr(corpus_store, 'active_token', lambda *a: ('second', 2))
-    assert apply_release(store.path, tmp_path, ('second', 2), second, snapshot, None)['off'] == 1
+    assert apply_release(store.path, tmp_path, ('second', 2), second, snapshot)['off'] == 1
     third = replace(second, release_id='third')
     snapshot = Snapshot.load(third, system='synthetic', combined=True, attach_decrees=True)
     monkeypatch.setattr(corpus_store, 'release_at_event', lambda *a: second)
     monkeypatch.setattr(corpus_store, 'release_by_id', lambda *a: old)
     monkeypatch.setattr(corpus_store, 'active_token', lambda *a: ('third', 3))
-    assert apply_release(store.path, tmp_path, ('third', 3), third, snapshot, None)['off'] == 1
+    assert apply_release(store.path, tmp_path, ('third', 3), third, snapshot)['off'] == 1
     with connect(store.path) as conn:
         assert conn.execute(
             'SELECT previous_release_id FROM cache_release_decisions WHERE activation_event=3'
@@ -245,9 +245,8 @@ def review_api(prepared, tmp_path, monkeypatch, admin_hash, request):
     if getattr(request, 'param', None) == 'extra_csv':
         extra = tmp_path / 'extra.csv'
         extra.write_text('question\n추가 보호 합성 문항\n', encoding='utf-8')
-        bundle_fixture = Bundle([], frozenset())
-        prior = load_protection(db, bundle_fixture, [extra])
-        base = load_protection(db, bundle_fixture, [])
+        prior = load_protection(db, [extra])
+        base = load_protection(db, [])
         assert prior.fingerprint != base.fingerprint and prior.blocked > base.blocked
         namespace = previous.namespace.id
         store.set_mode('off', 'test', 'review additional protection')
@@ -262,28 +261,27 @@ def review_api(prepared, tmp_path, monkeypatch, admin_hash, request):
         store.set_mode('shadow', 'test', 'check', approval)
         store.set_mode('on', 'test', 'enable', approval)
         protection = replace(base, v4_train={'fixture': digest(QUESTION)})
-        monkeypatch.setattr(cache_release_store, 'verified_inputs', lambda *a: (protection, {}))
+        monkeypatch.setattr(cache_release_store, 'verified_inputs', lambda *a: protection)
         monkeypatch.setattr(
             cache_admin,
-            'context',
+            'scope',
             lambda args: (
+                None,
                 snapshot,
                 None,
                 dict(
                     namespace_id=snapshot.namespace.id,
                     activation_event=token[1],
-                    protection_hash=load_protection(db, bundle_fixture, args.protected_csv).fingerprint,
+                    protection_hash=load_protection(db, args.protected_csv).fingerprint,
                 ),
             ),
         )
-    monkeypatch.setattr(cache_review_store, 'verified_inputs', lambda *a: (protection, {}))
-    bundle = tmp_path / 'bundle.zip'
-    bundle.write_bytes(b'synthetic bundle fixture')
-    assert apply_release(store.path, db, token, target, snapshot, bundle)['pending'] == 1
+    monkeypatch.setattr(cache_review_store, 'verified_inputs', lambda *a: protection)
+    assert apply_release(store.path, db, token, target, snapshot)['pending'] == 1
     cache = cache_runtime.ExactCache(store, db, snapshot)
     state = SimpleNamespace(
         exact_cache=cache,
-        settings=SimpleNamespace(exact_cache_bundle=bundle),
+        settings=SimpleNamespace(),
         retriever=SimpleNamespace(ids=[], laws=[], kinds=[], titles=[], docs=[]),
     )
     credentials = auth.AdminCredentials(ADMIN_USER, auth.parse_password_hash(admin_hash))
@@ -348,7 +346,7 @@ def test_calculation_links_are_off_and_only_other_links_can_be_approved(review_a
                 'remove ordinary query',
             )
     protection = Protection(frozenset(), {'fixture': digest(QUESTION), 'calculation': digest(CALCULATION)}, 'protected')
-    monkeypatch.setattr(cache_review_store, 'verified_inputs', lambda *args: (protection, {}))
+    monkeypatch.setattr(cache_review_store, 'verified_inputs', lambda *args: protection)
     origin = {'Origin': 'http://testserver'}
     with TestClient(app) as client:
         assert client.post('/api/login', json={'user': ADMIN_USER, 'password': ADMIN_PW}).status_code == 200
@@ -377,26 +375,38 @@ def test_calculation_links_are_off_and_only_other_links_can_be_approved(review_a
         assert store.lookup(namespace.id, CALCULATION)[1] is None
 
 
-def test_cache_api_missing_bundle_allows_off_and_withdrawal(review_api):
-    app, store, answer_id, state = review_api
-    state.settings.exact_cache_bundle = None
+def forbid_zip(monkeypatch):
+    def forbidden(*args, **kwargs):
+        raise AssertionError('runtime opened a ZIP archive')
+
+    monkeypatch.setattr(zipfile.ZipFile, '__init__', forbidden)
+
+
+def test_carry_inputs_come_from_the_corpus_db_only(tmp_path, monkeypatch):
+    db = tmp_path / 'corpus.db'
+    init_corpus(db)
+    seed_qa(db)
+    forbid_zip(monkeypatch)
+    assert cache_carry.verified_inputs(db) == load_protection(db, [])
+
+
+def test_cache_review_approves_without_any_zip(review_api, monkeypatch):
+    app, store, answer_id, _ = review_api
+    forbid_zip(monkeypatch)
     origin = {'Origin': 'http://testserver'}
     with TestClient(app) as client:
         assert client.post('/api/login', json={'user': ADMIN_USER, 'password': ADMIN_PW}).status_code == 200
         detail = client.get(f'/api/admin/cache/answers/{answer_id}').json()
-        assert 'LAWBOT_EXACT_CACHE_BUNDLE' in detail['disabled_reason'] and detail['preview'] is None
-        path = '/api/admin/cache/actions'
-        action = dict(generation=detail['generation'], idempotency_key='one', reason='검토')
-        assert (
-            client.post(path, json=action | dict(action='approve', target=answer_id), headers=origin).status_code == 409
+        assert detail['disabled_reason'] is None and detail['preview'] is not None
+        action = dict(
+            action='approve',
+            target=answer_id,
+            generation=detail['generation'],
+            preview_sha256=detail['preview_sha256'],
+            idempotency_key='zip-free',
+            reason='표시본 확인',
         )
-        assert client.post(path, json=action | dict(action='mode', target='off'), headers=origin).status_code == 200
-        action = action | dict(generation=store.control().generation, idempotency_key='two')
-        assert (
-            client.post(path, json=action | dict(action='revoke_answer', target=answer_id), headers=origin).status_code
-            == 200
-        )
-        assert client.get(f'/api/admin/cache/answers/{answer_id}').json()['status'] == 'revoked'
+        assert client.post('/api/admin/cache/actions', json=action, headers=origin).status_code == 200
 
 
 @pytest.mark.parametrize('review_api', ['extra_csv'], indirect=True)
@@ -436,8 +446,6 @@ def test_release_preserves_extra_csv_protection_and_requires_cli(review_api, tmp
             'shadow',
             '--db',
             str(store.path),
-            '--bundle',
-            str(tmp_path / 'bundle.zip'),
             '--protected-csv',
             str(tmp_path / 'extra.csv'),
             '--approval',
@@ -462,7 +470,7 @@ def stage_review_drafts(review_api, monkeypatch, count):
     protection = Protection(
         frozenset(), {d.source_id: digest(d.question) for d in drafts}, store.control().protection_hash
     )
-    monkeypatch.setattr(cache_review_store, 'verified_inputs', lambda *a: (protection, {}))
+    monkeypatch.setattr(cache_review_store, 'verified_inputs', lambda *a: protection)
     return drafts, protection
 
 
@@ -601,7 +609,7 @@ def test_cache_api_batch_rolls_back_and_reports_failed_answer(review_api, monkey
             store.revoke('query', drafts[1].query_id(namespace), 'test', 'withdrawn')
         else:
             protection = replace(protection, blocked=frozenset({digest(drafts[1].question)}))
-            monkeypatch.setattr(cache_review_store, 'verified_inputs', lambda *a: (protection, {}))
+            monkeypatch.setattr(cache_review_store, 'verified_inputs', lambda *a: protection)
         control = store.control()
         body['generation'] = control.generation
         response = client.post(BATCH_PATH, json=body, headers=ORIGIN)
@@ -679,7 +687,7 @@ def test_pending_reapproval_in_on_leaves_new_question_inactive(review_api, prepa
     assert draft.answer_id(snapshot.namespace.id) == answer_id
     store.stage(snapshot.namespace, [draft], 'test', 'draft')
     protection = Protection(frozenset(), {'fixture': digest(QUESTION), 'new': digest(question)}, 'protected')
-    monkeypatch.setattr(cache_review_store, 'verified_inputs', lambda *a: (protection, {}))
+    monkeypatch.setattr(cache_review_store, 'verified_inputs', lambda *a: protection)
     with TestClient(app) as client:
         assert client.post('/api/login', json={'user': ADMIN_USER, 'password': ADMIN_PW}).status_code == 200
         detail = client.get(f'/api/admin/cache/answers/{answer_id}').json()
