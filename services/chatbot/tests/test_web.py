@@ -4,6 +4,7 @@ import asyncio
 import json
 import subprocess
 import sys
+from dataclasses import replace
 from threading import Event
 from types import SimpleNamespace
 
@@ -359,6 +360,25 @@ def test_chat_streams_events_in_order(authed):
     assert '완료' in stats[-1] and all('완료' not in s for s in stats[:-1])
     done = evs[-1][1]
     assert '예고해야 합니다' in done['text'] and done['turn_id'] is None  # 피드백이 꺼져 있으면 turn_id 없음
+
+
+def test_semantic_off_preserves_sse_and_request_log(authed, lawbot, tmp_path):
+    request_log = tmp_path / 'requests.jsonl'
+    lawbot.settings = replace(lawbot.settings, request_log=request_log)
+    assert lawbot.settings.semantic_shadow is None
+    streamed = events(chat(authed, question='해고 통보 전에 예고를 해야 하나요?'))
+    event_names = names(streamed)
+    assert event_names[:2] == ['status', 'sources'] and event_names[-1] == 'done'
+    assert event_names.count('sources') == 2 and 'answer' in event_names and 'stats' in event_names
+    done = streamed[-1][1]
+    assert '예고해야 합니다.' in done['text'] and done['turn_id'] is None
+    assert not any(key.startswith('semantic_') for _, event in streamed for key in event)
+
+    row = json.loads(request_log.read_bytes())
+    assert (row['model'], row['fmt'], row['status'], row['error_type']) == ('fast', 'full', 'ok', None)
+    assert row['answer_verdict'] == 'shown' and row['cite_ok'] == 1
+    assert 0 <= row['request_to_first_answer_ms'] <= row['request_to_complete_ms']
+    assert 'call_counts' not in row and not any(key.startswith('semantic_') for key in row)
 
 
 def test_chat_item_fields(authed):

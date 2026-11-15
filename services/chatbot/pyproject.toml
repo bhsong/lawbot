@@ -13,6 +13,7 @@ dependencies = [   # 모델 라이브러리(mlx·torch)는 쓰지 않음: 모델
     "numpy>=2.0",
     "openai>=2.0",
     "pandas>=3.0.6",
+    "tokenizers>=0.23.3",
     "uvicorn>=0.54.0",
 ]
 

@@ -36,6 +36,7 @@ from lawbot.llm import LLM
 from lawbot.paths import ROOT
 from lawbot.reranker import Reranker
 from lawbot.retriever import Retriever
+from lawbot.semantic_runtime import SemanticShadow
 from lawbot_common.logs import logger
 
 log = logger('lawbot', 'lawbot')
@@ -93,6 +94,7 @@ class LawbotApp:
     articles_sha256: str | None = None
     exact_cache: object = None
     calculator_dependencies: dict[str, tuple[str, ...]] | None = None
+    semantic_shadow: SemanticShadow | None = None
 
 
 def uses_decrees(app, model_key):
@@ -235,6 +237,9 @@ def load_app(settings=None):
     revision = next(
         (m.get('revision') for m in available if m['id'] == p.emb_model and m.get('type') == 'embedding'), None
     )
+    if (shadow := cfg.semantic_shadow) is not None:
+        if not shadow.calibration.matches_revisions(available):
+            raise ValueError('LAWBOT_SEMANTIC_CALIBRATION의 모델 revision이 서버와 일치해야 합니다.')
     t0 = time.perf_counter()
     retriever = Retriever(
         Embedder(client, p.emb_model, query_timeout=limit),
@@ -281,6 +286,13 @@ def load_app(settings=None):
         (log.warning if level == 'WARN' else log.info)('정확 일치 캐시: %s', message)
         if warning := bundle_warning(cfg.exact_cache_bundle):
             log.warning('정확 일치 캐시: %s', warning)
+    semantic_shadow = None
+    if shadow is not None:
+        if exact_cache is None:
+            raise ValueError('시맨틱 shadow에 사용할 캐시 DB와 코퍼스 스냅샷을 확인할 수 없습니다.')
+        semantic_shadow = SemanticShadow.load(
+            shadow, exact_cache.store.path, exact_cache.corpus_db, exact_cache.snapshot, client, timeout=limit
+        )
     return LawbotApp(
         p,
         retriever,
@@ -296,6 +308,7 @@ def load_app(settings=None):
         articles_sha256=getattr(retriever, 'articles_sha256', None),
         exact_cache=exact_cache,
         calculator_dependencies=calculator_compatibility(release.combined.data if release else p.articles),
+        semantic_shadow=semantic_shadow,
     )
 
 

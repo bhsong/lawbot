@@ -2,6 +2,7 @@
 
 import json
 import time
+from hashlib import sha256
 
 import pytest
 from playwright.sync_api import expect
@@ -13,10 +14,12 @@ from lawbot.corpus_store import active_release, active_token
 from lawbot.db import cli
 from lawbot.db.connection import connect
 from lawbot.exact_cache import Snapshot, digest
+from lawbot.semantic_policy import ReusePolicy
+from lawbot.semantic_settings import Calibration
 from lawbot.service import system_text
-from lawbot.view import V5_EXAMPLES
 from test_exact_cache import ID, RAW
 from test_migrate_csv_to_sqlite import run as migrate
+from test_semantic_cache import seed_binding, stub_tokenizer
 
 pytestmark = pytest.mark.e2e_stub
 
@@ -32,7 +35,7 @@ def request_row(stack, number):
 
 
 def test_exact_cache_browser_flow(tmp_path, page, request):
-    question = V5_EXAMPLES[0]
+    question = '합성 검증 사례에서 해고 예고는 어떤 요건을 갖춰야 하나요?'
     corpus = tmp_path / 'private' / 'corpus.db'
     cli.main(['init', '--db', str(corpus)])
     profile = deploy.get_profile({'LAWBOT_PROFILE': 'v5'})
@@ -64,6 +67,38 @@ def test_exact_cache_browser_flow(tmp_path, page, request):
         reason='test',
     )
     store.set_mode('shadow', 'tester', 'test', approval)
+    example = e2e.example_env()
+    raw_tokenizer = stub_tokenizer()
+    tokenizer_file = tmp_path / 'tokenizer.json'
+    tokenizer_file.write_bytes(raw_tokenizer)
+    calibration = Calibration(
+        calibration_id='synthetic',
+        embedding_model=example['LAWBOT_EMB_MODEL'],
+        embedding_revision=e2e.STUB_MODEL_REVISION,
+        reranker_model=example['LAWBOT_RERANK_MODEL'],
+        reranker_revision=e2e.STUB_MODEL_REVISION,
+        reranker_tokenizer_sha256=sha256(raw_tokenizer).hexdigest(),
+        index_revision='synthetic-browser',
+        query_max_seq=1024,
+        top_k=2,
+        parent_instruction='Find the legal basis.',
+        question_instruction='Check whether the same reviewed answer fits both questions.',
+        parent_threshold=0.0,
+        question_threshold=0.0,
+        min_answer_margin=0.05,
+    )
+    policy = ReusePolicy(
+        intent_id='eligibility',
+        query_must_include=[],
+        query_must_not_include=[],
+        required_slots={},
+        allowed_optional_slots={},
+        slot_terms={},
+        supported_query_patterns=[question],
+    )
+    calibration_file, index_file = tmp_path / 'calibration.json', tmp_path / 'index.npy'
+    calibration_file.write_text(calibration.model_dump_json(), encoding='utf-8')
+    seed_binding(store, snapshot, draft, calibration, index_file, question, policy, dimension=8)
     stack = e2e.Stack(
         tmp_path,
         3,
@@ -74,6 +109,10 @@ def test_exact_cache_browser_flow(tmp_path, page, request):
         LAWBOT_FEEDBACK='1',
         LAWBOT_DECREE_ENABLED='0',
         LAWBOT_RERANKER_ENABLED='1',
+        LAWBOT_SEMANTIC_CACHE_MODE='shadow',
+        LAWBOT_SEMANTIC_CALIBRATION=str(calibration_file),
+        LAWBOT_SEMANTIC_INDEX=str(index_file),
+        LAWBOT_SEMANTIC_RERANK_TOKENIZER=str(tokenizer_file),
     )
     try:
         assert stack.web.alive()
@@ -87,12 +126,13 @@ def test_exact_cache_browser_flow(tmp_path, page, request):
         expect(e2e.answer(page).last).to_contain_text('가짜 모델 답변입니다.')
         shadow = request_row(stack, 1)
         assert shadow['response_source'] == 'rag' and shadow['would_hit']
-        assert shadow['call_counts'] == {'embedding': 1, 'search': 1, 'rerank': 1, 'llm': 1}
+        assert shadow['call_counts'] == {'embedding': 2, 'search': 1, 'rerank': 3, 'llm': 1, 'models': 2}
+        assert shadow['semantic_would_hit'] and shadow['semantic_rerank_http_calls'] == 2
 
         store.set_mode('on', 'tester', 'test', approval)
         stack.stop_model_server()
         page.reload()
-        page.get_by_role('button', name=question, exact=True).click()
+        e2e.ask(page, question)
         hit = request_row(stack, 2)
         assert hit['cache_reason'] == 'hit', f'cache decision: {hit["cache_reason"]} ({hit["exact_lookup_ms"]}ms)'
         expect(e2e.answer(page).last).to_contain_text('합성 결론입니다.')
@@ -104,6 +144,7 @@ def test_exact_cache_browser_flow(tmp_path, page, request):
             page.get_by_role('button', name='좋아요').last.click()
         assert response.value.ok and json.loads(read_feedback()) == {'saved': True}
         assert hit['response_source'] == 'exact_cache' and set(hit['call_counts'].values()) == {0}
+        assert 'semantic_would_hit' not in hit
         with connect(corpus) as conn:
             record = json.loads(conn.execute('SELECT record FROM feedbacks').fetchone()[0])
         assert record['request_id'] == hit['request_id'] and record['cache_answer_id'] == draft.answer_id(namespace)

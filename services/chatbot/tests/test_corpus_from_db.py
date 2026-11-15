@@ -3,10 +3,22 @@ import json
 import numpy as np
 import pytest
 
-from lawbot import calc_corpus, check_deploy, deploy, embed_cache, feedback, manifest, service, settings, view
+from lawbot import (
+    cache_store,
+    calc_corpus,
+    check_deploy,
+    deploy,
+    embed_cache,
+    feedback,
+    manifest,
+    service,
+    settings,
+    view,
+)
 from lawbot.admin import Corpus
 from lawbot.cache_store import init as init_cache
 from lawbot.db import cli
+from lawbot.db import migrate as migrations
 from lawbot.db.connection import connect, transaction
 from lawbot.db.csv_import import sha256
 from test_migrate_csv_to_sqlite import db_path as db_path
@@ -230,11 +242,24 @@ def test_check_deploy_reports_configured_exact_cache(corpus_db, env, tmp_path):
     init_cache(path)
     checks = check_deploy.run()
     assert any(
-        level == 'OK' and '정확 일치 캐시:' in text and '스키마 2 · 모드 off · namespace ' in text
+        level == 'OK' and '정확 일치 캐시:' in text and '스키마 3 · 모드 off · namespace ' in text
         for level, text in checks
     )
     assert ('OK', '계산기 medical_expense_credit 켜짐 (근거 조문 본문 일치)') in checks
     assert ('INFO', '계산 질문 캐시 제외 0개 · 초안 0 · 승인 0') in checks
+
+
+def test_check_deploy_warns_for_shadow_on_cache_schema_0002(corpus_db, env, tmp_path):
+    configure(env, corpus_db)
+    path = tmp_path / 'private' / 'cache.db'
+    legacy = tmp_path / 'legacy-migrations'
+    legacy.mkdir()
+    for filename in ('0001_exact_cache.sql', '0002_release_review.sql'):
+        (legacy / filename).write_bytes((cache_store.MIGRATIONS / filename).read_bytes())
+    assert migrations.init(path, directory=legacy) == 2
+    env.setenv('LAWBOT_EXACT_CACHE_DB', str(path))
+    env.setenv('LAWBOT_SEMANTIC_CACHE_MODE', 'shadow')
+    assert ('WARN', '시맨틱 shadow에는 캐시 DB 스키마 0003이 필요합니다.') in check_deploy.run()
 
 
 @pytest.mark.parametrize('bundle_state', ['unset', 'missing', 'present'])

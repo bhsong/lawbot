@@ -8,6 +8,7 @@ from pathlib import Path
 from lawbot.auth import AdminCredentials, admin_credentials
 from lawbot.deploy import DecreeConfig, Profile, RerankerConfig
 from lawbot.feedback import Feedback
+from lawbot.semantic_settings import ShadowSettings, load_shadow
 
 
 class SettingsError(ValueError, RuntimeError):
@@ -41,6 +42,7 @@ class Settings:
     corpus: str = 'csv'
     exact_cache_db: Path | None = None
     exact_cache_bundle: Path | None = None
+    semantic_shadow: ShadowSettings | None = None
 
 
 MISSING_SERVER = (
@@ -133,6 +135,18 @@ def load(env=None, web=False):
             from lawbot.cache_carry import bundle_path
 
             take('exact_cache_bundle', lambda: bundle_path(env))
+        shadow = take('semantic_shadow', lambda: load_shadow(env))
+        if shadow is not None:
+            if corpus != 'db' or got.get('exact_cache_db') is None or got.get('reranker') is None:
+                errors.append('shadow 모드에는 DB 코퍼스, LAWBOT_EXACT_CACHE_DB와 리랭커 설정이 필요합니다.')
+            elif profile is not None:
+                calibration = shadow.calibration
+                if (
+                    profile.name != 'v5'
+                    or calibration.embedding_model != profile.emb_model
+                    or calibration.reranker_model != got['reranker'].model
+                ):
+                    errors.append('shadow 모드의 calibration 모델과 웹앱 프로필·리랭커 설정이 일치해야 합니다.')
     if errors:
         raise SettingsError(f'설정 오류 {len(errors)}개:\n' + '\n'.join(f'- {e}' for e in errors))
     fields = Settings.__dataclass_fields__

@@ -112,11 +112,11 @@ class ModelServerClient:
             raise error_from_body(r.status_code, body)
         return r.json()
 
-    def _parsed(self, model, method, path, body=None, timeout=None):
+    def _parsed(self, model, method, path, body=None, timeout=None, *, strict=False):
         """_call + 응답 계약 검증 (lawbot_common.api). 형식이 다르면 ModelServerError (서버·웹앱 버전 불일치 등)"""
         data = self._call(method, path, body, timeout)
         try:
-            return model.model_validate(data)
+            return model.model_validate(data, strict=strict)
         except ValidationError as e:
             loc = '.'.join(map(str, e.errors()[0].get('loc', ())))
             raise ModelServerError(f'모델 서버 응답 형식이 아닙니다 ({path}: {loc or "본문"})') from None
@@ -124,9 +124,9 @@ class ModelServerClient:
     def ready(self):
         return self._parsed(api.HealthResponse, 'GET', api.HEALTH_PATH, timeout=5).ready
 
-    def models(self):
+    def models(self, *, timeout=None):
         """[{id, type, loaded, …}] (/v1/models)"""
-        return [m.model_dump() for m in self._parsed(api.ModelsResponse, 'GET', api.MODELS_PATH).data]
+        return [m.model_dump() for m in self._parsed(api.ModelsResponse, 'GET', api.MODELS_PATH, timeout=timeout).data]
 
     def embed(
         self, model, texts, input_type: Literal['query', 'document'] = 'document', max_seq_length=None, timeout=None
@@ -147,12 +147,14 @@ class ModelServerClient:
             np.float32
         )
 
-    def rerank(self, model, query, documents, instruction=None, timeout=None):
+    def rerank(self, model, query, documents, instruction=None, timeout=None, *, strict=False):
         """문서 순서대로 점수 목록 (정렬은 호출한 쪽이 한다)"""
         req = api.RerankRequest(
             model=model, query=query, documents=list(documents), **({'instruction': instruction} if instruction else {})
         )
-        res = self._parsed(api.RerankResponse, 'POST', api.RERANK_PATH, req.model_dump(exclude_unset=True), timeout)
+        res = self._parsed(
+            api.RerankResponse, 'POST', api.RERANK_PATH, req.model_dump(exclude_unset=True), timeout, strict=strict
+        )
         return [item.relevance_score for item in _ordered_results(res.results, len(req.documents), api.RERANK_PATH)]
 
 

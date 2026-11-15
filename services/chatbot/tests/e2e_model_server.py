@@ -15,6 +15,8 @@ import re
 import sys
 from pathlib import Path
 
+import numpy as np
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / 'model-server' / 'tests'))  # ms_fakes
 
 import ms_fakes
@@ -144,6 +146,14 @@ class E2EChat(ms_fakes.FakeChat):
             print(f'e2e chat end {sent}/{len(chunks)}', flush=True)
 
 
+class E2EEmbedder(ms_fakes.FakeEmbedder):
+    def encode(self, texts, input_type='document', max_seq_length=None):
+        vectors = super().encode(texts, input_type, max_seq_length)
+        if input_type == 'query':
+            vectors /= np.maximum(np.linalg.norm(vectors, axis=1, keepdims=True), 1e-9)
+        return vectors
+
+
 def main():
     port, mode = int(sys.argv[1]), sys.argv[2]
     ms_fakes.reset_fakes()
@@ -155,8 +165,10 @@ def main():
         for kind, var in (('chat', 'CHAT'), ('embedding', 'EMBEDDING'), ('rerank', 'RERANK'))
         for e in parse_models(kind, os.environ.get(f'LAWBOT_SERVE_{var}'))
     ]
-    loaders = {'chat': E2EChat, 'embedding': ms_fakes.FakeEmbedder, 'rerank': ms_fakes.FakeReranker}
+    loaders = {'chat': E2EChat, 'embedding': E2EEmbedder, 'rerank': ms_fakes.FakeReranker}
     reg = Registry(entries, loaders, 1)
+    if revision := os.environ.get('LAWBOT_TEST_MODEL_REVISION'):
+        reg.revisions = {e.id: revision for e in entries}
     reg.load_fixed()
     reg.preload([next(e.id for e in entries if e.kind == 'chat')])
     max_queued = 1 if mode == 'busy' else 32

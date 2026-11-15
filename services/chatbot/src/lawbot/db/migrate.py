@@ -49,18 +49,18 @@ def _current_version(conn: sqlite3.Connection, migrations: list[Migration]) -> i
     return version
 
 
-def check_schema(path: str | Path, *, directory: Traversable | None = None) -> int:
-    """Require the complete schema version and migration history known to this code."""
-    return _check_schema(check_db_path(path), directory)
+def check_schema(path: str | Path, *, directory: Traversable | None = None, minimum_version: int | None = None) -> int:
+    """Check the applied migration history and require at least the requested schema version."""
+    return _check_schema(check_db_path(path), directory, minimum_version=minimum_version)
 
 
-def _check_schema(path: Path, directory: Traversable | None = None) -> int:
+def _check_schema(path: Path, directory: Traversable | None = None, *, minimum_version: int | None = None) -> int:
     migrations = _migrations(directory)
-    latest = migrations[-1].version
+    required = migrations[-1].version if minimum_version is None else minimum_version
     with connect(path) as conn:
         version = _current_version(conn, migrations)
-    if version < latest:
-        raise RuntimeError(f'DB 스키마 버전 {version}이 코드의 버전 {latest}보다 낮습니다. uv run lawbot-db migrate')
+    if version < required:
+        raise RuntimeError(f'DB 스키마 버전 {version}이 코드의 버전 {required}보다 낮습니다. uv run lawbot-db migrate')
     return version
 
 
