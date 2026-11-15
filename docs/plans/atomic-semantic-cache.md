@@ -109,7 +109,7 @@
 
 - 챗봇 uv 프로젝트에서 `uv run python -m lawbot.semantic_tools`를 호출한다. 코퍼스 사본과 0003 캐시 사본을 별개로 준비한다. 코퍼스·검색 프로필·시스템 프롬프트·하위법령 설정은 개발 웹앱과 같다. 도구는 활성 코퍼스와 activation event를 확인한다.
 - `import --bundle <pass ZIP> --corpus-db <코퍼스 사본> --cache-db <캐시 사본>`은 승인 상태와 감사 기록을 한 번만 남긴다. 보호 문항과 겹치는 기존 질문의 답변까지 동일하면 해당 exact 플래그를 끄고 기존 승인과 이력을 보존한다.
-- `val --bundle <pass ZIP> --deferred-bundle <deferred ZIP> --corpus-db <코퍼스 사본> --output <새 JSONL>`은 원문 없는 ID와 라벨을 생성한다. pass ID는 출처와 원본 ID의 해시, 답변 ID는 주 조문과 검수 단위 ID의 해시다. 같은 주 조문의 다른 답변은 대표 질문과 대상 답변의 쌍으로 기록한다.
+- `val --bundle <pass ZIP> --deferred-bundle <deferred ZIP> --corpus-db <코퍼스 사본> --output <새 JSONL>`은 원문 없는 ID와 라벨을 생성한다. pass ID는 출처와 원본 ID의 해시, 답변 ID는 주 조문과 검수 단위 ID의 해시다. 같은 주 조문의 다른 답변은 대표 질문과 대상 답변의 쌍으로 기록한다. `--v6-training-dir`에는 Colab 기록의 QA·분할 CSV 8개를 지정한다. 임베딩 train만 대상으로 정규화 문장 또는 동일 원본 ID의 노출을 대조한다.
 - `index --cache-db <캐시 사본> --corpus-db <코퍼스 사본>`은 인덱스 행 수와 필요 요청 수만 출력한다. 승인 후 `--embed-live`와 승인 요청 수, 시간 상한, 모델·revision·최대 길이·차원·로컬 모델 디렉터리·출력 디렉터리를 지정한다. 전체 generation은 승인된 질문을 담는다. PR 3 평가 generation은 별도 출력 디렉터리에 `--exclude-val data/v5/semantic_val_ids.jsonl`을 지정해 양성 질의 524개를 뺀다.
 - 관리형 인덱스 디렉터리를 `LAWBOT_SEMANTIC_INDEX`에 지정하면 shadow는 `active.json`의 generation과 calibration의 revision을 대조한다. 기존 단일 `.npy` 경로도 계속 지원한다. manifest 등록과 검증 뒤 포인터를 교체한다.
 - exact 활성화는 별도 절차다. `uv run python -m lawbot.cache_admin set-mode shadow --semantic-seed --db <캐시 사본> --corpus-db <코퍼스 사본> --approval <import 승인 ID> --reason <활성화 사유>`에서 `shadow` 또는 `on`을 지정한다. import와 index는 모드를 바꾸지 않는다.

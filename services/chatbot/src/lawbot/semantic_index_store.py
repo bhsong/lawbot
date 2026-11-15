@@ -15,7 +15,7 @@ def index_questions(conn, snapshot, event):
         'FROM atomic_questions q JOIN atoms t USING (atom_revision_id) '
         'JOIN atom_answer_bindings b USING (query_revision_id,atom_revision_id) '
         'JOIN cache_answers a ON a.answer_id=b.answer_id '
-        'JOIN cache_queries x ON x.query_id=b.candidate_query_id '
+        'JOIN cache_queries x ON x.query_id=b.candidate_query_id AND x.answer_id=b.answer_id '
         'WHERE b.namespace_id=? AND t.corpus_snapshot_id=? AND b.activation_event=? '
         "AND t.status='approved' AND q.status='approved' AND a.status='approved' "
         "AND x.status='approved' AND x.exact_enabled=1 AND b.carry_status='keep' "

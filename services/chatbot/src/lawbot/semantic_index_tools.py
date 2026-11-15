@@ -1,9 +1,7 @@
 """Build an immutable semantic index generation and publish it atomically."""
 
 import fcntl
-import json
 import os
-import re
 from collections.abc import Collection, Sequence
 from dataclasses import dataclass
 from hashlib import sha256
@@ -16,20 +14,10 @@ import numpy as np
 from lawbot.exact_cache import canonical, digest
 from lawbot.semantic_gate import valid_vectors
 from lawbot.semantic_index_store import read_questions, register
+from lawbot.semantic_pointer import ACTIVE_FILE
 from lawbot.semantic_settings import QUERY_PROMPT_RESERVE, embedding_fingerprint
 from lawbot.semantic_val import source_query_id
 from lawbot_common.api import MAX_SEQ_LIMIT
-
-ACTIVE_FILE = 'active.json'
-
-
-def active_revision(directory: Path) -> str | None:
-    try:
-        pointer = json.loads((directory / ACTIVE_FILE).read_bytes())
-    except OSError, ValueError:
-        return None
-    revision = pointer.get('index_revision') if isinstance(pointer, dict) else None
-    return revision if isinstance(revision, str) and re.fullmatch(r'[0-9a-f]{64}', revision) else None
 
 
 @dataclass(frozen=True)

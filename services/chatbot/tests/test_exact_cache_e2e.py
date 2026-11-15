@@ -10,6 +10,7 @@ from playwright.sync_api import expect
 
 import e2e_support as e2e
 from lawbot import deploy
+from lawbot.cache_seed import Protection
 from lawbot.cache_store import Store, init
 from lawbot.corpus_store import active_release, active_token
 from lawbot.db import cli
@@ -19,7 +20,6 @@ from lawbot.semantic_handoff import Answer, Handoff, Question, Reference
 from lawbot.semantic_import_store import activate_seed, import_seed
 from lawbot.semantic_index_tools import IndexContract, build_index
 from lawbot.semantic_settings import Calibration
-from lawbot.semantic_val import Protection
 from lawbot.service import system_text
 from test_exact_cache import ID, RAW
 from test_migrate_csv_to_sqlite import run as migrate
@@ -82,12 +82,15 @@ def test_exact_cache_browser_flow(tmp_path, page, request):
     token = active_token(corpus, 'v5')
     assert token is not None
     event = token[1]
-    protection = Protection([])
-    assert import_seed(path, handoff, snapshot, event, protection)['approved_questions'] == 1
+    protection = Protection(frozenset(), {}, 'protected')
+    report = import_seed(path, handoff, snapshot, event, protection)
+    assert report['approved_questions'] == 1
     assert store.control().mode == 'off'
-    approval = store.control().approval_id
+    approval = report['approval_id']
     assert approval is not None
+    assert store.control().approval_id is None
     activate_seed(path, 'shadow', 'tester', 'test', approval, snapshot, event, protection, lambda: None)
+    assert store.control().approval_id not in (None, approval)
     example = e2e.example_env()
     index_directory = tmp_path / 'index'
     contract = IndexContract(example['LAWBOT_EMB_MODEL'], e2e.STUB_MODEL_REVISION, 1024, 8)

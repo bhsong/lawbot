@@ -15,7 +15,7 @@ from lawbot.cache_store import READ_TIMEOUT, CacheDatabaseError, translate_sqlit
 from lawbot.corpus_store import active_token
 from lawbot.exact_cache import FORMAT, MODEL, PROFILE
 from lawbot.semantic_gate import assess, score_pairs, valid_vectors
-from lawbot.semantic_index_tools import active_revision
+from lawbot.semantic_pointer import active_revision
 from lawbot.semantic_settings import QUERY_PROMPT_RESERVE, ShadowSettings
 from lawbot.semantic_store import SemanticStore, ShadowMiss
 from lawbot_common.logs import logger

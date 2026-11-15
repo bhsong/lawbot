@@ -16,7 +16,7 @@ q.query_revision_id, q.status AS question_status, a.status AS atom_status,
        b.activation_event, b.semantic_enabled, b.carry_status, b.reviewed_at,
        b.valid_from AS binding_start, b.valid_until AS binding_end,
        r.status AS answer_status, r.valid_from, r.valid_until, r.expires_at, p.policy_id AS existing_policy,
-       b.candidate_query_id, src.status AS source_status, src.exact_enabled AS source_enabled
+       b.candidate_query_id, src.status AS source_status, src.exact_enabled AS source_enabled, src.answer_id=b.answer_id AS source_matches
 """
 DETAIL_COLUMNS = """
 q.question,q.question_sha256,a.atom_revision_id,a.parent_chunk_id,a.parent_sha256,a.source_end,
@@ -52,7 +52,7 @@ def binding_reason(row, event, current):
         return 'not_approved'
     if row['activation_event'] != event:
         return 'not_released'
-    if row['candidate_query_id'] is not None and row['source_enabled'] != 1:
+    if row['candidate_query_id'] is not None and (row['source_enabled'] != 1 or row['source_matches'] != 1):
         return 'semantic_disabled'
     if not row['semantic_enabled'] or row['carry_status'] != 'keep' or row['existing_policy'] is None:
         return 'semantic_disabled'
@@ -123,7 +123,7 @@ class SemanticStore:
 
     def check_catalog(self, conn, ns, event, manifest):
         control = read_control(conn)
-        if (control.namespace_id, control.activation_event) != (ns, event) or control.approval_id is None:
+        if (control.namespace_id, control.activation_event) != (ns, event):
             raise ShadowMiss('not_released')
         if manifest_row(conn, self.index_revision) != manifest:
             raise ShadowMiss('stale_index')

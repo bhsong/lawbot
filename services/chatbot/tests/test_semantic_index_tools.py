@@ -5,11 +5,12 @@ import json
 import numpy as np
 import pytest
 
+from lawbot.cache_seed import Protection
 from lawbot.cache_store import init
 from lawbot.db.connection import connect
 from lawbot.semantic_import_store import import_seed
 from lawbot.semantic_index_tools import IndexContract, build_index
-from lawbot.semantic_val import Protection, source_query_id
+from lawbot.semantic_val import source_query_id
 from test_semantic_seed import handoff as handoff
 
 
@@ -18,7 +19,7 @@ def catalog(handoff, tmp_path):
     seed, snapshot = handoff
     db = tmp_path / 'private' / 'cache.db'
     init(db)
-    import_seed(db, seed, snapshot, 1, Protection([]))
+    import_seed(db, seed, snapshot, 1, Protection(frozenset(), {}, 'protected'))
     output = tmp_path / 'private' / 'index'
     contract = IndexContract('synthetic', 'revision-1', 1024, 2)
     return db, output, snapshot, contract
@@ -69,7 +70,7 @@ def test_holdout_omits_only_the_designated_question_and_keeps_old_generation(cat
 
 
 def test_pointer_failure_retains_previous_readable_manifest(catalog, monkeypatch):
-    from lawbot.semantic_index_tools import active_revision
+    from lawbot.semantic_pointer import active_revision
 
     db, output, snapshot, contract = catalog
     first = build_index(db, output, snapshot, 1, contract, FakeEmbedding())
@@ -85,7 +86,7 @@ def test_pointer_failure_retains_previous_readable_manifest(catalog, monkeypatch
 
 
 def test_generation_with_existing_file_corruption_does_not_replace_current(catalog):
-    from lawbot.semantic_index_tools import active_revision
+    from lawbot.semantic_pointer import active_revision
 
     db, output, snapshot, contract = catalog
     first = build_index(db, output, snapshot, 1, contract, FakeEmbedding())
@@ -95,3 +96,27 @@ def test_generation_with_existing_file_corruption_does_not_replace_current(catal
     with pytest.raises(ValueError, match='corrupted'):
         build_index(db, output, snapshot, 1, contract, FakeEmbedding())
     assert active_revision(output) == second['index_revision']
+
+
+def test_pointer_reads_once_until_atomic_replacement(tmp_path, monkeypatch):
+    from pathlib import Path
+
+    from lawbot.semantic_pointer import active_revision
+
+    pointer = tmp_path / 'active.json'
+    replacement = tmp_path / 'next.json'
+    pointer.write_text(json.dumps({'index_revision': 'a' * 64}))
+    replacement.write_text(json.dumps({'index_revision': 'b' * 64}))
+    actual = Path.read_bytes
+    calls = []
+
+    def read(path):
+        calls.append(path)
+        return actual(path)
+
+    monkeypatch.setattr(Path, 'read_bytes', read)
+    assert active_revision(tmp_path) == active_revision(tmp_path) == 'a' * 64
+    assert calls == [pointer]
+    replacement.replace(pointer)
+    assert active_revision(tmp_path) == active_revision(tmp_path) == 'b' * 64
+    assert calls == [pointer, pointer]

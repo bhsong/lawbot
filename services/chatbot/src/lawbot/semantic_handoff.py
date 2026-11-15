@@ -61,26 +61,34 @@ def verified_zip(path: Path, expected: str, kind: str):
         if file_digest(stream, 'sha256').hexdigest() != expected:
             raise ValueError('handoff ZIP SHA-256 mismatch')
         stream.seek(0)
-        with ZipFile(stream) as archive:
-            manifest = json.loads(archive.read('manifest.json'))
-            if (
-                manifest['package_kind'] != kind
-                or manifest['approval_status'] != 'not_approved'
-                or manifest['semantic_enabled'] is not False
-                or manifest['exact_enabled'] is not False
-                or len(archive.namelist()) != len(set(archive.namelist()))
-            ):
-                raise ValueError('invalid handoff manifest')
-            yield archive, manifest
+        try:
+            with ZipFile(stream) as archive:
+                manifest = json.loads(archive.read('manifest.json'))
+                if (
+                    manifest['package_kind'] != kind
+                    or manifest['approval_status'] != 'not_approved'
+                    or manifest['semantic_enabled'] is not False
+                    or manifest['exact_enabled'] is not False
+                    or len(archive.namelist()) != len(set(archive.namelist()))
+                ):
+                    raise ValueError('invalid handoff manifest')
+                yield archive, manifest
+
+        except KeyError as exc:
+            raise ValueError('handoff is missing a required field or reference') from exc
 
 
 def read_pass(path: Path) -> Handoff:
     with verified_zip(path, PASS_SHA256, 'pass') as (archive, manifest):
-        corpus = read_articles(archive.read('corpus/law_articles_v5_decree.csv'))
-        pair_rows = json_lines(archive.read('data/pass_seed_candidates.jsonl'))
-        answer_rows = json_lines(archive.read('data/pass_answers.jsonl'))
-        from_keys = csv_rows(archive.read('data/cache_key_inputs.csv'))
-        review_rows = json_lines(archive.read('reviews/pass_review_evidence.jsonl'))
+        return parse_pass(archive, manifest)
+
+
+def parse_pass(archive, manifest):
+    corpus = read_articles(archive.read('corpus/law_articles_v5_decree.csv'))
+    pair_rows = json_lines(archive.read('data/pass_seed_candidates.jsonl'))
+    answer_rows = json_lines(archive.read('data/pass_answers.jsonl'))
+    from_keys = csv_rows(archive.read('data/cache_key_inputs.csv'))
+    review_rows = json_lines(archive.read('reviews/pass_review_evidence.jsonl'))
     keys = {row['id']: row for row in from_keys}
     reviews = {row['id']: row for row in review_rows}
     answers = {row['answer_key']: row for row in answer_rows}
@@ -175,22 +183,22 @@ def read_deferred(path: Path) -> tuple[Question, ...]:
     """Load only deferred evaluation questions and their pair verdicts."""
     with verified_zip(path, DEFERRED_SHA256, 'deferred') as (archive, manifest):
         rows = json_lines(archive.read('data/deferred_pairs_full.jsonl'))
-    if len(rows) != manifest['question_pairs'] or len({r['id'] for r in rows}) != len(rows):
-        raise ValueError('inconsistent deferred record counts')
-    if any(
-        row['pair_verdict'] not in ('review', 'revise') or digest(row['question']) != row['question_sha256']
-        for row in rows
-    ):
-        raise ValueError('invalid deferred verdict or question hash')
-    return tuple(
-        Question(
-            row['id'],
-            row['answer_key'],
-            row['question'],
-            {k: row[k] for k in ('pair_verdict', 'split_emb', 'split_sllm')},
+        if len(rows) != manifest['question_pairs'] or len({r['id'] for r in rows}) != len(rows):
+            raise ValueError('inconsistent deferred record counts')
+        if any(
+            row['pair_verdict'] not in ('review', 'revise') or digest(row['question']) != row['question_sha256']
+            for row in rows
+        ):
+            raise ValueError('invalid deferred verdict or question hash')
+        return tuple(
+            Question(
+                row['id'],
+                row['answer_key'],
+                row['question'],
+                {k: row[k] for k in ('pair_verdict', 'split_emb', 'split_sllm')},
+            )
+            for row in rows
         )
-        for row in rows
-    )
 
 
 def evidence_result(answer: Answer, snapshot) -> dict[str, str]:

@@ -76,6 +76,13 @@ def assess(question: str, candidates: list[Candidate], scores: PairScores, calib
     parent_score = scores.parents.get(best.parent.pair_id)
     margin = None if competitor is None else question_score - scores.questions[competitor.question_pair_id]
     result = Assessment('hit', best, parent_score, question_score, margin)
+    try:
+        condition = check_conditions(question, ReusePolicy.model_validate_json(best.policy_json))
+    except ValueError:
+        return replace(result, reason='invalid_policy')
+    result = replace(result, condition=condition)
+    if condition.reason != 'matched':
+        return replace(result, reason=condition.reason)
     if parent_score is None:
         return replace(
             result, reason='truncated_input' if best.parent.pair_id in scores.truncated else 'parent_score_missing'
@@ -86,11 +93,7 @@ def assess(question: str, candidates: list[Candidate], scores: PairScores, calib
         return replace(result, reason='question_score_low')
     if (margin is None and not complete) or (margin is not None and margin <= calibration.min_answer_margin):
         return replace(result, reason='ambiguous_candidates')
-    try:
-        condition = check_conditions(question, ReusePolicy.model_validate_json(best.policy_json))
-    except ValueError:
-        return replace(result, reason='invalid_policy')
-    return replace(result, reason='hit' if condition.reason == 'matched' else condition.reason, condition=condition)
+    return result
 
 
 def score_pairs(

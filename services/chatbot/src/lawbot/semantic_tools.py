@@ -3,10 +3,10 @@
 import argparse
 import fcntl
 import json
+import os
 import time
 from dataclasses import dataclass
 from datetime import datetime
-from hashlib import sha256
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
@@ -14,7 +14,9 @@ from tokenizers import Tokenizer
 
 from lawbot import deploy, envfile, security
 from lawbot.api_client import ModelServerClient, ModelServerError, request_timeout
-from lawbot.cache_store import Store, translate_sqlite_errors
+from lawbot.cache_carry import bundle_path
+from lawbot.cache_seed import load_bundle, load_protection
+from lawbot.cache_store import translate_sqlite_errors
 from lawbot.corpus_store import active_release, active_token
 from lawbot.db.connection import check_db_path, repo_path
 from lawbot.exact_cache import PROFILE, Snapshot, canonical
@@ -24,8 +26,9 @@ from lawbot.semantic_handoff import read_deferred, read_pass
 from lawbot.semantic_import_store import import_seed
 from lawbot.semantic_index_store import read_questions
 from lawbot.semantic_index_tools import IndexContract, build_index, select_questions
-from lawbot.semantic_val import build_val, read_holdout, repo_protection
+from lawbot.semantic_val import build_val, read_holdout, read_v6_training
 from lawbot.service import cache_snapshot
+from lawbot_common.model_revision import fingerprint
 
 
 def development_path(path: str) -> Path:
@@ -59,30 +62,12 @@ def corpus_context(db: Path, env=None) -> CorpusContext:
     return ctx
 
 
-def local_revision(directory: Path) -> str:
-    """Match the model registry fingerprint without importing inference packages."""
-    edge = 1 << 20
-    checksum = sha256()
-    for path in sorted(directory.rglob('*')):
-        relative = path.relative_to(directory)
-        if any(part.startswith('.') for part in relative.parts) or not path.is_file():
-            continue
-        size = path.stat().st_size
-        checksum.update(f'{relative.as_posix()}\0{size}\0'.encode())
-        with path.open('rb') as stream:
-            checksum.update(stream.read(edge))
-            if size > edge:
-                stream.seek(max(edge, size - edge))
-                checksum.update(stream.read(edge))
-    return 'sha256:' + checksum.hexdigest()[:16]
-
-
 class ServerEmbedding:
     def __init__(self, client, model_dir, contract, deadline):
         self.client = client
         self.contract = contract
         self.deadline = deadline
-        if local_revision(model_dir) != contract.revision:
+        if fingerprint(model_dir) != contract.revision:
             raise ValueError('로컬 tokenizer·prompt가 포함된 모델 revision이 일치하지 않습니다.')
         settings = json.loads((model_dir / 'config_sentence_transformers.json').read_bytes())
         self.prompt = settings.get('prompts', {}).get('query')
@@ -140,6 +125,7 @@ def parser():
             item.add_argument('--bundle', required=True)
         if command == 'val':
             item.add_argument('--deferred-bundle', required=True)
+            item.add_argument('--v6-training-dir', help='verified Colab QA and split CSV files')
             item.add_argument('--output', required=True)
         if command == 'index':
             item.add_argument('--output')
@@ -215,6 +201,13 @@ def run_index(args, db, ctx):
             client.http.close()
 
 
+def seed_protection(corpus):
+    configured = bundle_path(os.environ)
+    path = development_path(str(configured)) if configured is not None else None
+    bundle = load_bundle(path) if path is not None and path.is_file() else None
+    return load_protection(corpus, bundle, [], frozen_root=DATA)
+
+
 def run(args):
     corpus = check_db_path(development_path(args.corpus_db))
     cache = check_db_path(development_path(args.cache_db)) if args.command != 'val' else None
@@ -224,10 +217,13 @@ def run(args):
     if args.command == 'index':
         return run_index(args, cache, ctx)
     seed = read_pass(development_path(args.bundle))
-    protection = repo_protection(DATA, corpus)
+    protection = seed_protection(corpus)
     if args.command == 'val':
         deferred = read_deferred(development_path(args.deferred_bundle))
-        rows, held, counts = build_val(seed, deferred, protection, ctx.snapshot)
+        training = read_v6_training(development_path(args.v6_training_dir)) if args.v6_training_dir else None
+        rows, held, counts = build_val(seed, deferred, protection, ctx.snapshot, training=training)
+        if training is not None:
+            counts['v6_train_questions'] = len(training.by_id)
         ctx.check()
         with development_path(args.output).open('x', encoding='utf-8') as output:
             output.writelines(canonical(row) + '\n' for row in rows)
@@ -235,7 +231,7 @@ def run(args):
     if cache is None:
         raise ValueError('개발 캐시 DB 사본이 필요합니다.')
     result = import_seed(cache, seed, ctx.snapshot, ctx.event, protection, check_snapshot=ctx.check)
-    return result | {'approval_id': Store(cache).control().approval_id, 'protected_unique': len(protection.exact)}
+    return result | {'protected_unique': len(protection.exact)}
 
 
 def main(argv=None):
