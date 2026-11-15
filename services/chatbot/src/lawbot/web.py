@@ -27,6 +27,7 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 from lawbot import audit_store, envfile, feedback, security, settings, view
 from lawbot import auth as auth_logic
 from lawbot.answer_format import answer_citations, render
+from lawbot.api_client import REQUEST_ID
 from lawbot.calc_gate import is_calculation_question
 from lawbot.decree import is_decree
 from lawbot.hits import Timing
@@ -247,7 +248,9 @@ def chat_events(app, question, model_key, fmt, remember=None, *, started=None):
         outcomes.append((st, status, error))
 
     ask_options = {}
-    if is_calculation_question(question):
+    calculation_candidate = is_calculation_question(question)
+    exact_available = True
+    if calculation_candidate:
         request_id = secrets.token_hex(6)
         metadata = {'request_id': request_id, 'response_source': 'rag'}
         ask_options = {
@@ -268,8 +271,24 @@ def chat_events(app, question, model_key, fmt, remember=None, *, started=None):
         if decision.mode == 'on' and decision.match is not None:
             yield from cached_events(app, question, model_key, fmt, remember, decision, request_id, started)
             return
+        exact_available = decision.reason not in (
+            'db_error',
+            'db_timeout',
+            'namespace_mismatch',
+            'activation_mismatch',
+            'state_changed',
+        )
         metadata = {'request_id': request_id, 'response_source': 'rag'}
         ask_options = {'request_id': request_id, 'cache_metrics': decision.metrics() | metadata}
+    if not calculation_candidate and exact_available and (shadow := getattr(app, 'semantic_shadow', None)) is not None:
+        request_id = ask_options.get('request_id') or secrets.token_hex(6)
+        token = REQUEST_ID.set(request_id)
+        try:
+            shadow_metrics = shadow.lookup(question, model_key, fmt)
+        finally:
+            REQUEST_ID.reset(token)
+        ask_options['request_id'] = request_id
+        ask_options['cache_metrics'] = ask_options.get('cache_metrics', {'response_source': 'rag'}) | shadow_metrics
     spec = app.models.specs[model_key]
     yield 'status', {'text': view.searching_stats(app, model_key)}
     sent_sources, last = False, {}

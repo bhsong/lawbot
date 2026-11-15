@@ -20,6 +20,7 @@ TESTS = Path(__file__).resolve().parent
 USER, PW = 'tester', 'test-only-pw'  # 테스트 전용 가짜 값
 START_TIMEOUT = 90  # 웹앱 시작(조문 임베딩 포함)까지
 ANSWER_TIMEOUT = 30_000  # ms, 질문 하나가 끝날 때까지 (e2e_live는 따로 늘림)
+STUB_MODEL_REVISION = 'synthetic-e2e'
 
 
 def example_env(name='.env.example'):
@@ -135,7 +136,7 @@ class Stack:
         self.ms = Proc(
             f'model-server-{self.n}-{mode}',
             [sys.executable, str(TESTS / 'e2e_model_server.py'), str(self.ms_port), mode],
-            clean_env(LAWBOT_MODEL_TOKEN=self.token, **self.serve),
+            clean_env(LAWBOT_MODEL_TOKEN=self.token, LAWBOT_TEST_MODEL_REVISION=STUB_MODEL_REVISION, **self.serve),
             self.tmp,
         )
         self.mode = mode

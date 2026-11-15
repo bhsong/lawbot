@@ -230,7 +230,7 @@ def test_check_deploy_reports_configured_exact_cache(corpus_db, env, tmp_path):
     init_cache(path)
     checks = check_deploy.run()
     assert any(
-        level == 'OK' and '정확 일치 캐시:' in text and '스키마 2 · 모드 off · namespace ' in text
+        level == 'OK' and '정확 일치 캐시:' in text and '스키마 3 · 모드 off · namespace ' in text
         for level, text in checks
     )
     assert ('OK', '계산기 medical_expense_credit 켜짐 (근거 조문 본문 일치)') in checks

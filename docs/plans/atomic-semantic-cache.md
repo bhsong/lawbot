@@ -1,9 +1,9 @@
 # 계획: 원자 단위 시맨틱 캐시와 어드민 승인 연동
 
 - 작성: 2026-11-15 KST. 기준 `main` `b65cec5`, 운영 `e165933`(v6 임베딩).
-- 원본 명세: 사용자가 준 「[작업 지시서 v2] Lawbot 원자 단위 질문 검색·시맨틱 캐싱 및 어드민 승인 연동」(문서 ID `atomic-semantic-admin-spec-2.0`, 2026-11-11, 이하 "명세"). PR 1 첫 커밋에서 원문 그대로 `docs/plans/atomic-semantic-cache-spec-v2.md`로 넣는다.
+- 문서 ID `atomic-semantic-admin-spec-2.0`(2026-11-11, 이하 "명세")는 PR 1 첫 커밋에 원문 그대로 보존한다. [작업 지시서 v2](atomic-semantic-cache-spec-v2.md)
 - 이 문서는 명세를 이 레포에 맞춘 것이다. **명세와 다르게 하는 것**, **미리 확인한 사실**, **PR 나누기와 승인 지점**만 적는다. 나머지(처리 순서, 게이트 9개, 스키마 책임 분리, 모드, 로그, 테스트 V2-01~38, 출시·롤백)는 명세를 따른다.
-- 상태: 계획. 구현·실제 모델 평가·운영 반영 안 함.
+- PR 1 개발 검증을 완료했다. PR 2~5는 아래 계획을 따른다. [PR 1 검증 기록](../evals/2026-11-15-semantic-cache-core.md)
 
 ## 1. 명세와 다르게 하는 것
 
@@ -46,6 +46,32 @@
 
 - 운영 `on`(명세 I)은 PR 5까지 병합된 뒤, 사용자가 threshold·지연 상한·출시 표본을 승인했을 때만 한다. 운영 반영은 별도 승인.
 
+### PR 1 사전 탐색 (2026-11-15, `3acba50`)
+
+| 명세 §2 계약 | 실제 파일과 진입점 | PR 1 연결 지점 |
+| --- | --- | --- |
+| `CONTEXT.md` | 파일 없음. `AGENTS.md`, `docs/architecture.md`, `docs/operations.md`에서 개발·운영 분리와 런타임 구성 확인 | §1 #1 적용 |
+| 계산 질문 → exact → semantic | `services/chatbot/src/lawbot/web.py`의 `chat_events`, `calc_gate.py`의 `is_calculation_question`, `cache_runtime.py`의 `ExactCache.lookup`, `exact_cache.py`의 `normalize`·`Snapshot.resolve` | NFC·공백 정규화, Pro 간결형·공개 namespace, 유효기간·활성화 이벤트·근거 해시 확인은 기존 exact가 수행. 계산 게이트와 exact 응답 반환 뒤 shadow 조회 추가 |
+| 기존 응답, SSE, 요청 로그 | `service.py`의 `system_text`·`ask`·`request_record`, `llm.py`, `web.py`의 `cached_events`·`sse`·`answer_verdict`, `answer_format.py`, `citation.py` | 현재 프롬프트와 후처리를 사용. 가짜 모델과 고정한 시간·요청 ID로 기존 출력 바이트 대조 |
+| 캐시 마이그레이션과 답변 revision | `db/cache_migrations/0001_exact_cache.sql`, `0002_release_review.sql`, `cache_store.py`의 `Store`, `read_control`, `revision_id` | 독립 캐시 DB에 0003 추가. `semantic_store.py`가 읽기를 맡고 답변 본문은 `cache_answers`, 표시 근거는 `cache_citations`를 참조 |
+| 검수 후보와 배포 이력 | `cache_review_store.py`의 `ReviewCatalog`, `cache_release_store.py`의 `apply_release`, `cache_admin.py`, `cache_carry.py`, `corpus_store.py`의 `active_release`와 `active_token` | 기존 draft·approved·revoked와 cache control의 세대·활성화 이벤트를 참조. DB는 트랜잭션마다 연결. binding의 carry 상태와 판정 이력 구조 추가 |
+| 질문 임베딩과 조문 검색 | `api_client.py`의 `Embedder.encode`, `retriever.py`의 `Retriever`, `embed_cache.py`, `service.py`의 `retrieve`·`retrieve_decrees`, `deploy.py`, 모델 서버의 `embeddings.py`·`revision.py` | v5 기본 `lawbot-emb-v6`, query prompt, MPS fp16 → 정규화 float32. v5 법률 길이 4,352, 리랭킹 기본 후보 10 → 법률 3, 하위법령은 `decree.py` 별도 필터. 현재 차원과 revision은 인덱스·서버 계약에서 확인. 인덱스 생산은 PR 2 |
+| 리랭크 A/B | `reranker.py`의 `Reranker.score`, `api_client.py`의 `ModelServerClient.rerank`와 `_ordered_results`, 모델 서버의 `rerank.py`, `lawbot_common.api` | 요청마다 instruction 하나, 최대 문서 1,000개, 내부 pointwise 1페어씩. 최대 2,560토큰, 오른쪽 잘림, float32 softmax P(yes). 응답 인덱스를 검증한 뒤 `pair_id`에 대응. API에 잘림 필드가 없어 모델 계약의 보수적 입력 상한 사용 |
+| 웹 시작 설정과 앱 조립 | `settings.py`의 `load(web=True)`, `service.py`의 `load_app`, `web.py`의 `main` | 기본 `off`, `shadow`의 calibration 검증, `on` 거부 |
+| 관리자 검수 | `admin.py`, `services/chatbot/frontend/src/admin/CachePanel.tsx` | 어드민 화면과 승인 동작은 PR 4 |
+| 법령 범위와 권한 | 명세의 `lawbot/law_scope.py`는 없음. 실제 `packages/lawbot-common/src/lawbot_common/law_scope.py`, `web.py`의 인증, `exact_cache.py`의 공개 namespace | 활성 코퍼스와 승인된 answer namespace에 묶어 조회 |
+| 보호 데이터·실행 환경 | `cache_seed.py`의 `load_protection`, `cache_carry.py`의 `allowed_question`, `qa_rules.py`, `docs/evals/README.md`, `.env.example`, `pyproject.toml`, `uv.lock`, `.github/workflows/ci.yml` | PR 1 런타임은 읽기 전용. 개발 환경 Python 3.14.8, FastAPI 0.143.3, NumPy 2.5.4, OpenAI 3.42.0, pytest 9.1.1에서 가짜 모델과 합성 질문으로 확인 |
+
+- 0003 업그레이드와 FK 검사, 조건·점수와 shadow 게이트, dispatcher와 회귀 비교 순으로 구현한 뒤 기본 테스트·정적 검사·프론트 빌드를 실행한다.
+- V2-02는 승인된 합성 답변으로 shadow 판정이 적중하는지, 실제 사용자 응답은 기존 RAG인지 확인한다. 시맨틱 반환·생성 생략 검증은 `on`을 지원할 때 실행한다.
+
+### PR 1 런타임 계약
+
+- 설정 `LAWBOT_SEMANTIC_CACHE_MODE`의 기본값은 `off`다. `shadow`는 DB 코퍼스, 기존 `LAWBOT_EXACT_CACHE_DB`, v5 리랭커, `LAWBOT_SEMANTIC_CALIBRATION` JSON을 요구한다. calibration은 테스트 또는 검증에서 정한 모델 ID·revision, 쿼리 길이·후보 수, index revision, A/B instruction·threshold·margin을 담는다. 코드가 임계값을 채우지 않는다.
+- 기존 exact는 캐시 DB 0002와 0003을 지원한다. shadow를 관측할 개발 사본에는 `uv run python -m lawbot.cache_admin migrate --db <캐시 DB 사본>`으로 0003을 적용한다. shadow 인덱스는 `LAWBOT_SEMANTIC_INDEX`의 float32 `.npy`와 DB manifest의 행 순서, 차원, fingerprint, SHA-256을 읽는다. 파일이 없거나 호환되지 않으면 기존 RAG를 사용한다. 인덱스 생성 및 교체 도구는 PR 2 범위다.
+- 조건 정책은 질문 전체를 검수된 문형과 대조한다. 문형의 `{slot}`은 정책이 열거한 원문 표현만 받는다. 각 표현의 구조화 값과 범위를 비교하고, 질문 안에서 잡힌 조건의 위치를 판정에 남긴다. 문형 밖 표현과 슬롯 해석이 여러 개인 경우는 미스로 처리한다.
+- v5 모델 서버 응답에는 잘림 여부와 토큰 수가 없다. PR 1은 검증된 모델 revision과 현재 Qwen3 입력 계약을 기준으로 UTF-8 바이트 상한을 보수적으로 사용한다. 실측은 이후 val 평가에서 수행한다.
+
 ## 데이터 ZIP 위치
 
 통과·추후 검토 ZIP은 답변과 질문 원문을 담고 있어 커밋하지 않는다. exact 캐시의 P07 ZIP(운영 `data/db/p07-handoff.zip`, 권한 600)과 같은 규칙을 쓴다.
@@ -53,6 +79,11 @@
 - 개발 트리: `data/db/semantic/pass-handoff.zip`, `data/db/semantic/deferred-handoff.zip` (`data/db/`는 `.gitignore` 대상). 권한 600.
 - 사용자가 넣은 뒤 SHA-256을 이 계획서에 적고, 도구는 경로를 인수(`--bundle`)나 `LAWBOT_` 설정으로 받는다. 코드에 경로를 박지 않는다.
 - 운영에는 출시 반영 때 같은 상대 경로로 복사한다(별도 승인).
+
+| 개발 트리 경로 | 존재 여부 (2026-11-15 KST) | SHA-256 |
+| --- | --- | --- |
+| `data/db/semantic/pass-handoff.zip` | 없음 | 확인 불가 |
+| `data/db/semantic/deferred-handoff.zip` | 없음 | 확인 불가 |
 
 ## 4. 사용자 확인 필요
 

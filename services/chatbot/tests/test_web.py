@@ -4,6 +4,8 @@ import asyncio
 import json
 import subprocess
 import sys
+from dataclasses import replace
+from hashlib import sha256
 from threading import Event
 from types import SimpleNamespace
 
@@ -359,6 +361,28 @@ def test_chat_streams_events_in_order(authed):
     assert '완료' in stats[-1] and all('완료' not in s for s in stats[:-1])
     done = evs[-1][1]
     assert '예고해야 합니다' in done['text'] and done['turn_id'] is None  # 피드백이 꺼져 있으면 turn_id 없음
+
+
+def test_semantic_off_preserves_sse_and_request_log(authed, lawbot, env, tmp_path):
+    request_log = tmp_path / 'requests.jsonl'
+    lawbot.settings = replace(lawbot.settings, request_log=request_log)
+    env.setattr(web, 'time', SimpleNamespace(perf_counter=lambda: 100.0, monotonic=web.time.monotonic))
+    env.setattr(
+        service, 'time', SimpleNamespace(perf_counter=lambda: 100.0, strftime=lambda _: '2026-01-01T00:00:00+0000')
+    )
+    env.setattr(service, 'uuid', SimpleNamespace(uuid4=lambda: SimpleNamespace(hex='123456789012')))
+    env.setattr(service, 'sys', SimpleNamespace(argv=['pytest']))
+
+    response = chat(authed, question='해고 통보 전에 예고를 해야 하나요?')
+    assert events(response)[-1][0] == 'done'
+    # Captured on main before adding the semantic dispatcher, with the clock and request ID fixed.
+    assert sha256(response.content).hexdigest() == 'a9302a968ed28bdaa68f23e9ee61819513f44d094923c419ed171cb81cb34b91', (
+        response.text
+    )
+    log_bytes = request_log.read_bytes()
+    assert sha256(log_bytes).hexdigest() == '0bfcde178eb1d6f04ab2db1142b4b916352913f1748827870d9f69f28afe95be', (
+        log_bytes.decode()
+    )
 
 
 def test_chat_item_fields(authed):

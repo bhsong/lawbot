@@ -1,4 +1,4 @@
-"""Read and mutate the separate SQLite catalog for reviewed exact answers."""
+"""Read and mutate the separate SQLite catalog for reviewed cache answers."""
 
 import sqlite3
 from contextlib import contextmanager
@@ -13,7 +13,8 @@ from lawbot.db.connection import connect, transaction
 from lawbot.exact_cache import Namespace, canonical, digest, normalize
 
 MIGRATIONS = files('lawbot.db') / 'cache_migrations'
-SCHEMA = 2
+SCHEMA = 3
+MINIMUM_EXACT_SCHEMA = 2
 READ_TIMEOUT = 0.01
 CALCULATION_EXCLUDED = '계산 질문은 정확 일치 캐시에 저장하거나 승인할 수 없습니다.'
 
@@ -119,7 +120,7 @@ class Control:
 
 def read_control(conn) -> Control:
     row = conn.execute('SELECT max(version) FROM schema_migrations').fetchone()
-    if row != (SCHEMA,):
+    if row not in ((MINIMUM_EXACT_SCHEMA,), (SCHEMA,)):
         raise sqlite3.DatabaseError('unsupported cache schema')
     row = conn.execute(
         'SELECT mode,generation,namespace_id,activation_event,protection_hash,approval_id '
@@ -136,6 +137,21 @@ class CachedAnswer:
     text: str
     citations: list[tuple[str, str]]
     control: Control
+
+
+def verify_answer(conn, namespace_id, row):
+    """Verify the displayed answer body and all citations against the revision ID."""
+    answer_id, key, raw_hash, text, text_hash, count = row
+    citations = conn.execute(
+        'SELECT position,article_id,text_sha256 FROM cache_citations WHERE answer_id=? ORDER BY position',
+        (answer_id,),
+    ).fetchall()
+    pairs = [(article, checksum) for _, article, checksum in citations]
+    if [pos for pos, _, _ in citations] != list(range(count)) or not pairs:
+        return None, 'citation_mismatch'
+    if digest(text) != text_hash or revision_id(namespace_id, key, raw_hash, text_hash, pairs) != answer_id:
+        return None, 'revision_mismatch'
+    return pairs, 'hit'
 
 
 @dataclass(frozen=True)
@@ -172,7 +188,7 @@ class Store:
             return read_control(conn)
 
     def check_schema(self) -> int:
-        return migrations.check_schema(self.path, directory=MIGRATIONS)
+        return migrations.check_schema(self.path, directory=MIGRATIONS, minimum_version=MINIMUM_EXACT_SCHEMA)
 
     def calculation_exclusions(self) -> list[CalculationExclusion]:
         with connect(self.path) as conn:
@@ -214,17 +230,9 @@ class Store:
             current = now()
             if not all(valid(current, *bounds) for bounds in (row[3:6], row[7:10])):
                 return control, None, 'expired'
-            answer_id, key, raw_hash, text, text_hash, count = row[10:]
-            citations = conn.execute(
-                'SELECT position,article_id,text_sha256 FROM cache_citations WHERE answer_id=? ORDER BY position',
-                (answer_id,),
-            ).fetchall()
-        pairs = [(article, checksum) for _, article, checksum in citations]
-        if [pos for pos, _, _ in citations] != list(range(count)) or not pairs:
-            return control, None, 'citation_mismatch'
-        if digest(text) != text_hash or revision_id(namespace_id, key, raw_hash, text_hash, pairs) != answer_id:
-            return control, None, 'revision_mismatch'
-        return control, CachedAnswer(answer_id, text, pairs, control), 'hit'
+            pairs, reason = verify_answer(conn, namespace_id, row[10:])
+            answer_id, _, _, text, _, _ = row[10:]
+        return control, None if pairs is None else CachedAnswer(answer_id, text, pairs, control), reason
 
     def stage(self, namespace: Namespace, drafts: list[Draft], actor: str, reason: str) -> int:
         namespace_id = namespace.id
