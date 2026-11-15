@@ -107,7 +107,7 @@
 
 ### PR 2 도구 계약
 
-- 챗봇 uv 프로젝트에서 `uv run python -m lawbot.semantic_tools`를 호출한다. 코퍼스 사본과 0003 캐시 사본을 별개로 준비한다. 코퍼스·검색 프로필·시스템 프롬프트·하위법령 설정은 개발 웹앱과 같다. 도구는 활성 코퍼스와 activation event를 확인한다. 개발 코퍼스에는 기존 exact 검증에 필요한 QA 8개 세트를 이관한다. 시맨틱 import와 val에는 `LAWBOT_EXACT_CACHE_BUNDLE`로 검증용 P07 원본 ZIP의 개발 경로를 지정한다.
+- 챗봇 uv 프로젝트에서 `uv run python -m lawbot.semantic_tools`를 호출한다. 코퍼스 사본과 0003 캐시 사본을 별개로 준비한다. 코퍼스·검색 프로필·시스템 프롬프트·하위법령 설정은 개발 웹앱과 같다. 도구는 활성 코퍼스와 activation event를 확인한다. 개발 코퍼스에는 기존 exact 검증에 필요한 QA 8개 세트를 이관한다. 시맨틱 import와 seed 활성화의 exact 보호 목록은 P07 ZIP 없이 코퍼스 DB 분할과 추가 보호 CSV로 만든다(#153).
 - `import --bundle <pass ZIP> --corpus-db <코퍼스 사본> --cache-db <캐시 사본>`은 승인 상태와 감사 기록을 한 번만 남긴다. 보호 문항과 겹치는 기존 질문의 답변까지 동일하면 해당 exact 플래그를 끄고 기존 승인과 이력을 보존한다.
 - `val --bundle <pass ZIP> --deferred-bundle <deferred ZIP> --corpus-db <코퍼스 사본> --output <새 JSONL>`은 원문 없는 ID와 라벨을 생성한다. pass ID는 출처와 원본 ID의 해시, 답변 ID는 주 조문과 검수 단위 ID의 해시다. 같은 주 조문의 다른 답변은 대표 질문과 대상 답변의 쌍으로 기록한다. `--v6-training-dir`에는 Colab 기록의 QA·분할 CSV 8개를 지정한다. 임베딩 train만 대상으로 정규화 문장 또는 동일 원본 ID의 노출을 대조한다.
 - `index --cache-db <캐시 사본> --corpus-db <코퍼스 사본>`은 인덱스 행 수와 필요 요청 수만 출력한다. 승인 후 `--embed-live`와 승인 요청 수, 시간 상한, 모델·revision·최대 길이·차원·로컬 모델 디렉터리·출력 디렉터리를 지정한다. 전체 generation은 승인된 질문을 담는다. PR 3 평가 generation은 별도 출력 디렉터리에 `--exclude-val data/v5/semantic_val_ids.jsonl`을 지정해 양성 질의 524개를 뺀다.
@@ -131,7 +131,7 @@
 
 ## 데이터 ZIP 위치
 
-통과·추후 검토 ZIP은 답변과 질문 원문을 담고 있어 커밋하지 않는다. exact 캐시의 P07 ZIP(운영 `data/db/p07-handoff.zip`, 권한 600)과 같은 규칙을 쓴다.
+통과·추후 검토 ZIP은 답변과 질문 원문을 담고 있어 커밋하지 않는다. ZIP은 적재 명령의 입력으로만 쓰고 운영 트리에 복사하지 않는다. 운영 런타임은 ZIP을 읽지 않고 DB만 읽는다(사용자 결정 2026-11-15, [exact-cache-zip-free-runtime](exact-cache-zip-free-runtime.md)).
 
 - 개발 트리: `data/db/semantic/pass-handoff.zip`, `data/db/semantic/deferred-handoff.zip` (`data/db/`는 `.gitignore` 대상). 권한 600.
 - 사용자가 넣은 뒤 SHA-256을 이 계획서에 적고, 도구는 경로를 인수(`--bundle`)나 `LAWBOT_` 설정으로 받는다. 코드에 경로를 박지 않는다.

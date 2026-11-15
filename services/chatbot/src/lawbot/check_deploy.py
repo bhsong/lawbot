@@ -296,14 +296,10 @@ def run():
         )
     out.extend(calculator_report(None if corpus_unavailable else (release.combined.data if release else p.articles)))
     if cache_value := os.environ.get('LAWBOT_EXACT_CACHE_DB', '').strip():
-        from lawbot.cache_carry import bundle_path, bundle_warning
-
         cache_path = None
         try:
             cache_path = settings.exact_cache_path(cache_value, db)
             _, (level, message) = service.inspect_exact_cache(cache_path, db, p, release, deploy.decree(p))
-            if warning := bundle_warning(bundle_path(os.environ)):
-                out.append(('WARN', f'정확 일치 캐시: {warning}'))
         except OSError, RuntimeError, ValueError:
             level, message = 'WARN', '사용 안 함 (캐시 설정 확인 실패)'
         out.append((level, f'정확 일치 캐시: {message}'))

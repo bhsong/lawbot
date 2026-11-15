@@ -11,7 +11,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from lawbot import envfile, settings
-from lawbot.cache_seed import load_bundle, load_protection, prepare
+from lawbot.cache_seed import load_bundle, load_protection, prepare, require_db_protection
 from lawbot.cache_store import Store, init, migrate, translate_sqlite_errors
 from lawbot.corpus_store import active_release, active_token
 from lawbot.db.backup import backup
@@ -28,7 +28,8 @@ def reviewed_time(value):
     return when.astimezone(UTC).isoformat(timespec='microseconds')
 
 
-def context(args):
+def scope(args):
+    """Resolve the active corpus snapshot and protected split from the corpus DB only."""
     cfg = settings.load()
     if cfg.db is None or cfg.corpus != 'db' or cfg.profile.name != PROFILE:
         raise ValueError('현행 v5 DB 코퍼스 설정이 필요합니다.')
@@ -39,17 +40,24 @@ def context(args):
     snapshot = cache_snapshot(cfg.profile, release, cfg.decree)
     if token is None or snapshot is None or release.release_id != token[0]:
         raise ValueError('활성 코퍼스 또는 승인할 답변 범위를 확인할 수 없습니다.')
-    bundle = load_bundle(args.bundle)
-    protection = load_protection(cfg.db, bundle, args.protected_csv)
-    seed = prepare(bundle, protection, snapshot)
-    if active_token(cfg.db, PROFILE) != token:
-        raise ValueError('검사 중 활성 코퍼스가 변경되었습니다.')
+    protection = load_protection(cfg.db, args.protected_csv)
     identity = {
         'namespace_id': snapshot.namespace.id,
         'release_id': token[0],
         'activation_event': token[1],
         'protection_hash': protection.fingerprint,
     }
+    return cfg.db, snapshot, protection, identity
+
+
+def context(args):
+    """Prepare reviewed P07 drafts from the handoff ZIP given on the command line."""
+    db, snapshot, protection, identity = scope(args)
+    bundle = load_bundle(args.bundle)
+    require_db_protection(bundle, protection)
+    seed = prepare(bundle, protection, snapshot)
+    if active_token(db, PROFILE) != (identity['release_id'], identity['activation_event']):
+        raise ValueError('검사 중 활성 코퍼스가 변경되었습니다.')
     return snapshot, seed, identity
 
 
@@ -165,8 +173,9 @@ def parser():
     ):
         cmd = sub.add_parser(name)
         cmd.add_argument('--db', required=name != 'inspect')
+        if name in ('inspect', 'seed', 'approve', 'replace'):
+            cmd.add_argument('--bundle', type=Path, required=True)
         if name in ('inspect', 'seed', 'approve', 'replace', 'set-mode'):
-            cmd.add_argument('--bundle', type=Path, required=name != 'set-mode')
             cmd.add_argument('--protected-csv', type=Path, action='append', default=[])
         if name in ('seed', 'approve', 'replace', 'set-mode', 'revoke'):
             cmd.add_argument('--reason', required=name != 'seed')
@@ -267,7 +276,7 @@ def run(args):
         from lawbot.semantic_import_store import activate_seed
         from lawbot.semantic_tools import corpus_context, development_path, development_protection
 
-        if not args.corpus_db or not args.approval or args.bundle:
+        if not args.corpus_db or not args.approval:
             raise ValueError('시맨틱 seed 활성화에는 --corpus-db와 --approval이 필요합니다.')
         corpus = db_path(str(development_path(args.corpus_db)))
         if path.samefile(corpus):
@@ -284,8 +293,11 @@ def run(args):
             development_protection(corpus, args.protected_csv),
             ctx.check,
         )
-    if args.bundle is None:
-        raise ValueError('승인 및 검증에는 P07 인계 ZIP이 필요합니다.')
+    if command == 'set-mode':
+        _, _, _, identity = scope(args)
+        require_identity(store.control(), identity)
+        store.set_mode(args.mode, actor, reason, args.approval)
+        return {'mode': args.mode}
     snapshot, seed, identity = context(args)
     if command == 'seed':
         if args.report_dir:
@@ -315,20 +327,21 @@ def run(args):
             'approved_answer_rows': len(set(selected.values())),
         }
     control = store.control()
+    require_identity(control, identity)
+    if control.approval_id != args.approval:
+        raise ValueError('현재 승인 묶음을 지정하세요.')
+    previous, draft = correction(args.review_file, identity, seed, snapshot)
+    approval = store.replace_answer(control, draft, previous, actor, reason)
+    return {'approval_id': approval, 'answer_id': draft.answer_id(identity['namespace_id'])}
+
+
+def require_identity(control, identity):
     if (control.namespace_id, control.activation_event, control.protection_hash) != (
         identity['namespace_id'],
         identity['activation_event'],
         identity['protection_hash'],
     ):
         raise ValueError('코퍼스·정책 또는 보호 분할이 변경되었습니다. off에서 재검토하세요.')
-    if command == 'replace':
-        if control.approval_id != args.approval:
-            raise ValueError('현재 승인 묶음을 지정하세요.')
-        previous, draft = correction(args.review_file, identity, seed, snapshot)
-        approval = store.replace_answer(control, draft, previous, actor, reason)
-        return {'approval_id': approval, 'answer_id': draft.answer_id(identity['namespace_id'])}
-    store.set_mode(args.mode, actor, reason, args.approval)
-    return {'mode': args.mode}
 
 
 if __name__ == '__main__':

@@ -3,7 +3,6 @@
 import argparse
 import fcntl
 import json
-import os
 import time
 from collections.abc import Sequence
 from dataclasses import dataclass
@@ -15,8 +14,7 @@ from tokenizers import Tokenizer
 
 from lawbot import deploy, envfile, security
 from lawbot.api_client import ModelServerClient, ModelServerError, request_timeout
-from lawbot.cache_carry import bundle_path
-from lawbot.cache_seed import Bundle, load_bundle, load_protection
+from lawbot.cache_seed import load_protection
 from lawbot.cache_store import translate_sqlite_errors
 from lawbot.corpus_store import active_release, active_token
 from lawbot.db.connection import check_db_path, repo_path
@@ -203,19 +201,10 @@ def run_index(args, db, ctx):
             client.http.close()
 
 
-def development_protection(corpus: Path, extra: Sequence[str | Path], bundle: Bundle | None = None):
+def development_protection(corpus: Path, extra: Sequence[str | Path]):
+    """Exact-cache protection from the corpus DB split and reviewer CSVs; no ZIP is read."""
     protected_csv = [development_path(str(filename)) for filename in extra]
-    return load_protection(corpus, bundle, protected_csv)
-
-
-def seed_protection(corpus, extra):
-    configured = bundle_path(os.environ)
-    if configured is None:
-        raise ValueError('시맨틱 import에 LAWBOT_EXACT_CACHE_BUNDLE 설정이 필요합니다.')
-    path = development_path(str(configured))
-    if not path.is_file():
-        raise ValueError('LAWBOT_EXACT_CACHE_BUNDLE의 P07 번들 파일을 찾을 수 없습니다.')
-    return development_protection(corpus, extra, load_bundle(path))
+    return load_protection(corpus, protected_csv)
 
 
 def run(args):
@@ -227,7 +216,7 @@ def run(args):
     if args.command == 'index':
         return run_index(args, cache, ctx)
     seed = read_pass(development_path(args.bundle))
-    protection = seed_protection(corpus, args.protected_csv)
+    protection = development_protection(corpus, args.protected_csv)
     if args.command == 'val':
         deferred = read_deferred(development_path(args.deferred_bundle))
         training = read_v6_training(development_path(args.v6_training_dir)) if args.v6_training_dir else None

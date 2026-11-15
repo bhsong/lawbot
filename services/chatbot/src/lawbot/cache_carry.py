@@ -2,13 +2,11 @@
 
 import argparse
 import os
-from pathlib import Path
 
 from lawbot import corpus_store, deploy, envfile, settings
-from lawbot.cache_seed import csv_rows, load_bundle, load_protection
+from lawbot.cache_seed import csv_rows, load_protection
 from lawbot.cache_store import translate_sqlite_errors
 from lawbot.exact_cache import PROFILE, digest, normalize
-from lawbot.paths import ROOT
 from lawbot.service import cache_snapshot
 
 FIELDS = ('law', 'article_no', 'title', 'kind', 'text', 'deleted')
@@ -46,22 +44,9 @@ def classify(dependencies, old, changes, guard, old_text, shown):
     return 'keep', 'unchanged', affected
 
 
-def bundle_path(env):
-    value = env.get('LAWBOT_EXACT_CACHE_BUNDLE', '').strip()
-    return (ROOT / Path(value).expanduser()).resolve() if value else None
-
-
-def bundle_warning(path: Path | None) -> str | None:
-    if path is None or not path.is_file():
-        return '자동 유지 안 됨 (LAWBOT_EXACT_CACHE_BUNDLE 필요)'
-    return None
-
-
-def verified_inputs(db, bundle_file):
-    if bundle_file is None:
-        return None, {}
-    bundle = load_bundle(bundle_file)
-    return load_protection(db, bundle, []), {q['answer_sha256']: q['answer'] for q in bundle.candidates}
+def verified_inputs(db):
+    """Load the protected split for carry and review from the corpus DB."""
+    return load_protection(db, [])
 
 
 def allowed_question(protection, source_id, original):
@@ -84,7 +69,7 @@ def transition(db, profile, env=None):
     snapshot = cache_snapshot(config, release, deploy.decree(config, env))
     if token is None or token[0] != release.release_id or snapshot is None:
         raise ValueError('캐시 판정용 활성 릴리스 또는 v5 Pro 설정을 확인할 수 없습니다.')
-    return apply_release(path, db, token, release, snapshot, bundle_path(env))
+    return apply_release(path, db, token, release, snapshot)
 
 
 def summary(counts):

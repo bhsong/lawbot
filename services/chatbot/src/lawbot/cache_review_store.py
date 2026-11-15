@@ -92,7 +92,6 @@ class ReviewCatalog:
     path: Path
     corpus_db: Path
     snapshot: Snapshot
-    bundle: Path | None
 
     def current(self, control, token):
         return (
@@ -146,10 +145,6 @@ class ReviewCatalog:
         )
 
     def disabled(self, control, token):
-        if self.bundle is None:
-            return 'LAWBOT_EXACT_CACHE_BUNDLE 설정이 필요합니다.'
-        if not self.bundle.is_file():
-            return '설정된 P07 번들 파일을 찾을 수 없습니다.'
         if not self.current(control, token):
             return '활성 릴리스의 캐시 재판정과 웹앱 갱신이 필요합니다.'
         return None
@@ -186,29 +181,26 @@ class ReviewCatalog:
         cards = self.snapshot.resolve(citations) or []
         disabled = self.disabled(control, token)
         shown = None
-        raw = raw_for(raw_hash, stored, {})
+        raw = raw_for(raw_hash, stored)
         state = disposition(status, verdict)
         excluded, calculation_only = calculation_links(queries) if state != 'revoked' else (set(), False)
         if calculation_only:
             state, reason, disabled = 'off', 'calculation_question', CALCULATION_EXCLUDED
         if disabled is None and state in ('pending', 'draft'):
             try:
-                protection, originals = verified_inputs(self.corpus_db, self.bundle)
-                if protection is None:
-                    disabled = 'P07 번들 또는 보호 분할을 확인할 수 없습니다.'
-                elif control.protection_hash not in (None, protection.fingerprint):
+                protection = verified_inputs(self.corpus_db)
+                if control.protection_hash not in (None, protection.fingerprint):
                     disabled = PROTECTION_CHANGED
                 elif not any(reviewable_query(q, protection, control.mode, state) for q in queries):
                     disabled = '현재 모드에서 승인할 수 있는 질문이 없습니다.'
                 else:
-                    raw = raw_for(raw_hash, stored, originals)
                     shown, new_citations = preview(self.snapshot, raw, citations)
                     if shown is not None:
                         cards = self.snapshot.resolve(new_citations) or []
                     else:
                         disabled = '현재 조문으로 표시본을 확인할 수 없습니다. CLI replace로 정정하세요.'
             except ValueError, OSError, RuntimeError:
-                disabled = 'P07 번들 또는 보호 분할을 확인할 수 없습니다.'
+                disabled = '보호 분할을 확인할 수 없습니다.'
         changes = []
         if changed and old_release is not None and release_id is not None:
             before = article_rows(corpus_store.release_by_id(self.corpus_db, PROFILE, old_release))
@@ -269,10 +261,10 @@ class ReviewCatalog:
         token = corpus_store.active_token(self.corpus_db, PROFILE)
         if disabled := self.disabled(control, token):
             raise StoreError('cache_unavailable', disabled, 409)
-        protection, originals = verified_inputs(self.corpus_db, self.bundle)
-        if protection is None or token is None:
+        protection = verified_inputs(self.corpus_db)
+        if token is None:
             raise StoreError('cache_unavailable', '캐시 승인 범위를 확인할 수 없습니다.', 409)
-        return token, protection, originals
+        return token, protection
 
     def release_error(self, token):
         if corpus_store.active_token(self.corpus_db, PROFILE) != token:
@@ -283,7 +275,7 @@ class ReviewCatalog:
         if target == 'off':
             set_mode_in(conn, control, target, actor, reason, None)
             return
-        token, protection, _ = self.review_inputs(control)
+        token, protection = self.review_inputs(control)
         if protection.fingerprint != control.protection_hash:
             raise StoreError('protection_changed', PROTECTION_CHANGED, 409)
         try:
@@ -336,7 +328,7 @@ class ReviewCatalog:
                 return save_success(conn, mutation)
 
     def prepare_approvals(self, conn, control, items):
-        token, protection, originals = self.review_inputs(control)
+        token, protection = self.review_inputs(control)
         if control.protection_hash not in (None, protection.fingerprint):
             raise StoreError('protection_changed', PROTECTION_CHANGED, 409)
         current = article_rows(corpus_store.release_by_id(self.corpus_db, PROFILE, token[0]))
@@ -345,9 +337,7 @@ class ReviewCatalog:
             try:
                 if target in answers:
                     raise StoreError('duplicate_answer', '같은 답변을 두 번 선택할 수 없습니다.', 422)
-                answers[target] = self.prepare_approval(
-                    conn, control, protection, originals, current, target, preview_hash
-                )
+                answers[target] = self.prepare_approval(conn, control, protection, current, target, preview_hash)
             except StoreError as exc:
                 raise ApprovalError(target, exc) from exc
         return PreparedApprovals(token, protection.fingerprint, answers)
@@ -389,7 +379,7 @@ class ReviewCatalog:
         for answer_id, query_ids in approved:
             audit(conn, 'approve', answer_id, actor, reason, {'approval_id': approval, 'query_ids': query_ids})
 
-    def prepare_approval(self, conn, control, protection, originals, current, target, preview_hash):
+    def prepare_approval(self, conn, control, protection, current, target, preview_hash):
         key, raw_hash, _, source, status, stored, verdict, *_ = self.answer(conn, control, target)
         state = disposition(status, verdict)
         if state == 'revoked':
@@ -405,7 +395,7 @@ class ReviewCatalog:
             if queries and all(q[7] == 'revoked' for q in queries):
                 raise StoreError('review_changed', '연결 질문이 모두 철회되었습니다.', 409)
             raise StoreError('review_changed', '보호 분할과 검토 조건을 통과한 연결 질문이 없습니다.', 409)
-        raw = raw_for(raw_hash, stored, originals)
+        raw = raw_for(raw_hash, stored)
         shown, citations = preview(self.snapshot, raw, citations_for(conn, target))
         if shown is None or digest(shown) != preview_hash:
             raise StoreError('review_changed', '확인한 표시본이 현재 표시본과 다릅니다.', 409)

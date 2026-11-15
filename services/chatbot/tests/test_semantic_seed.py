@@ -398,7 +398,7 @@ def test_seed_cli_rejects_legacy_cache_without_writing(prior_kind, handoff, tmp_
         semantic_tools, 'corpus_context', lambda _: SimpleNamespace(snapshot=snapshot, event=1, check=lambda: None)
     )
     monkeypatch.setattr(semantic_tools, 'read_pass', lambda _: seed)
-    monkeypatch.setattr(semantic_tools, 'seed_protection', lambda *a: Protection(frozenset(), {}, 'current'))
+    monkeypatch.setattr(semantic_tools, 'development_protection', lambda *a: Protection(frozenset(), {}, 'current'))
     before = Store(db).control()
     with pytest.raises(SystemExit) as exc:
         semantic_tools.main(
@@ -470,7 +470,7 @@ def test_seed_mode_reports_new_exact_approval_without_reading_zip(handoff, tmp_p
 
     from admin_test_data import seed_qa
     from lawbot import cache_admin, semantic_tools
-    from lawbot.cache_seed import Bundle, load_protection
+    from lawbot.cache_seed import load_protection
     from lawbot.db.migrate import init as init_corpus
 
     seed, snapshot = handoff
@@ -481,14 +481,9 @@ def test_seed_mode_reports_new_exact_approval_without_reading_zip(handoff, tmp_p
     extra = tmp_path / 'protected.csv'
     extra.write_text('question\n추가로 보호할 합성 문항\n', encoding='utf-8')
     init(db)
-    zip_path = tmp_path / 'p07.zip'
-    zip_path.touch()
-    monkeypatch.setenv('LAWBOT_EXACT_CACHE_BUNDLE', str(zip_path))
-    monkeypatch.setattr(semantic_tools, 'load_bundle', lambda path: Bundle([], frozenset()))
-    protection = semantic_tools.seed_protection(corpus, [str(extra)])
-    assert protection.fingerprint == load_protection(corpus, None, [extra]).fingerprint
+    protection = semantic_tools.development_protection(corpus, [str(extra)])
+    assert protection.fingerprint == load_protection(corpus, [extra]).fingerprint
     receipt = import_seed(db, seed, snapshot, 1, protection)['approval_id']
-    monkeypatch.setattr(semantic_tools, 'load_bundle', lambda *a: pytest.fail('mode change loaded the P07 ZIP'))
 
     original_open = Path.open
 
@@ -522,40 +517,6 @@ def test_seed_mode_reports_new_exact_approval_without_reading_zip(handoff, tmp_p
     result = cache_admin.run(args)
     assert result == {'mode': 'shadow', 'approval_id': Store(db).control().approval_id}
     assert result['approval_id'] not in (None, receipt)
-
-
-@pytest.mark.parametrize('state', ['unset', 'missing', 'corrupt'])
-def test_import_requires_verified_p07_bundle(state, handoff, tmp_path, monkeypatch, capsys):
-    from types import SimpleNamespace
-
-    from lawbot import semantic_tools
-
-    seed, snapshot = handoff
-    db = tmp_path / 'cache.db'
-    corpus = tmp_path / 'corpus.db'
-    corpus.touch()
-    init(db)
-    bundle = tmp_path / 'p07.zip'
-    monkeypatch.delenv('LAWBOT_EXACT_CACHE_BUNDLE', raising=False)
-    if state != 'unset':
-        monkeypatch.setenv('LAWBOT_EXACT_CACHE_BUNDLE', str(bundle))
-    if state == 'corrupt':
-        bundle.write_bytes(b'invalid P07')
-    monkeypatch.setattr(semantic_tools.envfile, 'load', lambda: None)
-    monkeypatch.setattr(
-        semantic_tools, 'corpus_context', lambda *a: SimpleNamespace(snapshot=snapshot, event=1, check=lambda: None)
-    )
-    monkeypatch.setattr(semantic_tools, 'read_pass', lambda *a: seed)
-    monkeypatch.setattr(semantic_tools, 'load_protection', lambda *a, **kw: Protection(frozenset(), {}, 'current'))
-    with pytest.raises(SystemExit) as exc:
-        semantic_tools.main(
-            ['import', '--bundle', str(tmp_path / 'pass.zip'), '--cache-db', str(db), '--corpus-db', str(corpus)]
-        )
-    assert exc.value.code == 2
-    error = capsys.readouterr().err
-    assert '시맨틱 도구 실행 실패' in error and ('LAWBOT_EXACT_CACHE_BUNDLE' in error or 'P07' in error)
-    with connect(db) as conn:
-        assert conn.execute('SELECT count(*) FROM cache_audit_events').fetchone() == (0,)
 
 
 @pytest.mark.parametrize('malformed', ['zip', 'manifest', 'row'])
