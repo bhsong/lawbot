@@ -71,12 +71,15 @@ def test_exact_cache_browser_flow(tmp_path, page, request):
     assert store.control().mode == 'off'
     approval = report['approval_id']
     assert approval == store.control().approval_id
-    control, (approved,), _ = question_catalog(path, snapshot, profile.emb_model, e2e.STUB_MODEL_REVISION)
+    control, (approved,), _ = question_catalog(
+        path, snapshot, profile.emb_model, e2e.STUB_MODEL_REVISION, profile.max_seq
+    )
     save_vectors(
         path,
         control,
         profile.emb_model,
         e2e.STUB_MODEL_REVISION,
+        profile.max_seq,
         [(approved, np.full(8, 8**-0.5, dtype=np.float32))],
         lambda: None,
     )
@@ -111,6 +114,7 @@ def test_exact_cache_browser_flow(tmp_path, page, request):
         assert page.get_by_test_id('reviewed-question').count() == 0
 
         store.set_mode('on', 'tester', 'test', approval)
+        before_status_checks = stack.ms.output().count(' GET /v1/models')
         e2e.ask(page, V5_EXAMPLES[1])
         e2e.wait_done(page)
         recommendation = page.get_by_role('group', name='검토된 비슷한 질문').get_by_role('button', name=question)
@@ -118,12 +122,36 @@ def test_exact_cache_browser_flow(tmp_path, page, request):
         suggestion_log = request_row(stack, 2)
         assert suggestion_log['suggestion_count'] == 1 and suggestion_log['suggestion_click'] is False
         assert suggestion_log['call_counts']['embedding'] == 1 and suggestion_log['suggestion_ms'] >= 0
+        assert stack.ms.output().count(' GET /v1/models') - before_status_checks == 1
+        format_group = page.get_by_role('radiogroup', name='답변 형식')
+        other_name = format_group.get_by_role('radio', checked=False).inner_text()
+        other_format = format_group.get_by_role('radio', name=other_name, exact=True)
+        other_format.click()
+        expect(other_format).to_have_attribute('aria-checked', 'true')
+        selected_model = page.get_by_role('radiogroup', name='답변 모델').get_by_role('radio', checked=True)
+        model_name = selected_model.inner_text()
         stack.stop_model_server()
+        read_clicked = e2e.capture_response_body(page, '/api/chat')
         recommendation.click()
         clicked = request_row(stack, 3)
         expect(e2e.answer(page).last).to_contain_text('합성 결론입니다.')
-        assert clicked['response_source'] == 'cache' and clicked['suggestion_click'] is True
+        assert clicked['response_source'] == 'exact_cache' and clicked['suggestion_click'] is True
         assert set(clicked['call_counts'].values()) == {0}
+        done = next(
+            json.loads(event.split('data: ', 1)[1])
+            for event in read_clicked().split('\n\n')
+            if event.startswith('event: done\n')
+        )
+        assert done['response_source'] == clicked['response_source'] and done['suggestion_click'] is True
+        expect(other_format).to_have_attribute('aria-checked', 'true')
+        expect(selected_model).to_have_text(model_name)
+        with page.expect_response(stack.url + '/api/feedback', timeout=e2e.ANSWER_TIMEOUT) as response:
+            page.get_by_role('button', name='좋아요').last.click()
+        assert response.value.ok
+        with connect(corpus) as conn:
+            record = json.loads(conn.execute('SELECT record FROM feedbacks').fetchone()[0])
+        assert record['response_source'] == done['response_source'] and record['suggestion_click'] is True
+        assert record['question'] == question
 
         page.reload()
         page.get_by_role('button', name=question, exact=True).click()
@@ -140,7 +168,11 @@ def test_exact_cache_browser_flow(tmp_path, page, request):
         assert response.value.ok and json.loads(read_feedback()) == {'saved': True}
         assert hit['response_source'] == 'exact_cache' and set(hit['call_counts'].values()) == {0}
         with connect(corpus) as conn:
-            record = json.loads(conn.execute('SELECT record FROM feedbacks').fetchone()[0])
+            record = json.loads(
+                conn.execute(
+                    "SELECT record FROM feedbacks WHERE json_extract(record, '$.request_id')=?", (hit['request_id'],)
+                ).fetchone()[0]
+            )
         assert record['request_id'] == hit['request_id'] and record['cache_answer_id'] == answer_id
         assert record['question'] == question and record['answer_raw'] is None
 

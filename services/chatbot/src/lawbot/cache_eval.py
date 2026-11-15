@@ -24,7 +24,7 @@ def distribution(values):
 
 
 def stats(rows):
-    hits = [r for r in rows if r['response_source'] in ('exact_cache', 'cache') and r['status'] == 'ok']
+    hits = [r for r in rows if r['response_source'] == 'exact_cache' and r['status'] == 'ok']
     eligible = sum(r['cache_eligible'] for r in rows)
     return {
         'requests': len(rows),

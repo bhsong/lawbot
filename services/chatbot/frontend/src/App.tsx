@@ -195,8 +195,6 @@ function Chat({ config, onSignedOut, logout }: { config: Config; onSignedOut: ()
                   onShowSources={() => setSheet(t.id)}
                   onSuggestion={(question) => {
                     setSelected(null)
-                    setModel(t.model)
-                    setFormat(t.format)
                     chat.send(question, t.model, t.format, true)
                   }}
                 />

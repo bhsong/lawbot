@@ -47,7 +47,7 @@ def preview(snapshot, raw, prior_citations):
 
 def _put_query(conn, namespace, answer_id, row, keep):
     (
-        _old_id,
+        old_id,
         source_id,
         original,
         raw_hash,
@@ -95,6 +95,14 @@ def _put_query(conn, namespace, answer_id, row, keep):
     )
     if result.rowcount != 1:
         raise ValueError('릴리스 질문 연결의 출처가 기존 행과 다릅니다.')
+    if exact and old_id != query_id:
+        conn.execute(
+            'INSERT INTO cache_question_vectors '
+            'SELECT ?,embedding_model,model_revision,normalized_sha256,max_seq_length,dimension,vector '
+            'FROM cache_question_vectors WHERE query_id=? AND normalized_sha256=? '
+            'ON CONFLICT(query_id,embedding_model) DO NOTHING',
+            (query_id, old_id, key),
+        )
 
 
 def apply_release(path, db, token, release, snapshot):

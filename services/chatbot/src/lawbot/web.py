@@ -157,11 +157,13 @@ def cached_events(app, question, model_key, fmt, remember, decision, request_id,
     namespace = app.exact_cache.snapshot.namespace
     metadata = {
         'request_id': request_id,
-        'response_source': 'cache' if from_suggestion else 'exact_cache',
+        'response_source': 'exact_cache',
         'cache_answer_id': match.answer_id,
         'corpus_version': namespace.corpus_version,
         'answer_policy_version': namespace.answer_policy_version,
     }
+    if from_suggestion:
+        metadata['suggestion_click'] = True
     hits = [article.hit() for article in match.articles]
     items = [source_item(hit) | {'scores': ''} for hit in hits]
     sources = {'groups': [{'label': view.CITED_LABEL, 'open': True, 'items': items}]}
@@ -185,27 +187,23 @@ def cached_events(app, question, model_key, fmt, remember, decision, request_id,
         yield 'answer', {'text': match.text}
         tid = None
         if remember is not None:
-            record = (
-                {
-                    'question': question,
-                    'answer_shown': match.text,
-                    'answer_raw': None,
-                    'hits': [{k: v for k, v in h.items() if k != 'score'} for h in hits],
-                    'citations': [dict(law=h['law'], article_id=h['article_id'], verdict='ok') for h in hits],
-                    'model': model_key,
-                    'fmt': fmt,
-                    'refused': False,
-                    'n_cited': len(hits),
-                    'profile': app.profile.name,
-                    'dataset_version': app.dataset_version,
-                    'corpus_release_id': app.corpus_release_id,
-                    'articles_sha256': app.articles_sha256,
-                    'commit': feedback.commit(),
-                    'instance': security.instance_name(),
-                }
-                | metadata
-                | {'response_source': 'exact_cache'}
-            )
+            record = {
+                'question': question,
+                'answer_shown': match.text,
+                'answer_raw': None,
+                'hits': [{k: v for k, v in h.items() if k != 'score'} for h in hits],
+                'citations': [dict(law=h['law'], article_id=h['article_id'], verdict='ok') for h in hits],
+                'model': model_key,
+                'fmt': fmt,
+                'refused': False,
+                'n_cited': len(hits),
+                'profile': app.profile.name,
+                'dataset_version': app.dataset_version,
+                'corpus_release_id': app.corpus_release_id,
+                'articles_sha256': app.articles_sha256,
+                'commit': feedback.commit(),
+                'instance': security.instance_name(),
+            } | metadata
             try:
                 tid = remember(record)
             except (OSError, ValueError, RuntimeError) as exc:
@@ -354,14 +352,16 @@ def chat_events(app, question, model_key, fmt, remember=None, *, started=None, f
                 final['notice'] = notice
             if suggestions is not None and verdict == 'shown' and (vector := st.get('_query_vector')) is not None:
                 start_suggestions = time.perf_counter()
-                ranked = suggestions.recommend(question, vector)
+                recommendation = suggestions.recommend(question, vector)
+                ranked = recommendation.matches
+                st['cache_metrics'].update(
+                    suggestion_count=len(ranked),
+                    suggestion_top_score=ranked[0][1] if ranked else None,
+                    suggestion_click=from_suggestion,
+                    suggestion_ms=round((time.perf_counter() - start_suggestions) * 1000, 3),
+                    suggestion_error=recommendation.error,
+                )
                 if ranked:
-                    st['cache_metrics'].update(
-                        suggestion_count=len(ranked),
-                        suggestion_top_score=ranked[0][1],
-                        suggestion_click=from_suggestion,
-                        suggestion_ms=round((time.perf_counter() - start_suggestions) * 1000, 3),
-                    )
                     yield 'suggestions', {'questions': [row.question for row, _ in ranked]}
             yield 'done', final
             sent_done = True

@@ -117,7 +117,22 @@ def prepared(tmp_path, monkeypatch):
     ],
 )
 def test_release_projection_and_runtime(prepared, tmp_path, monkeypatch, changes, verdict):
+    import numpy as np
+
+    from lawbot.cache_question_store import question_catalog, save_vectors
+
     store, _, previous, draft = prepared
+    model, revision, max_seq_length = 'embed', 'rev', 100
+    control, (approved,), _ = question_catalog(store.path, previous, model, revision, max_seq_length)
+    save_vectors(
+        store.path,
+        control,
+        model,
+        revision,
+        max_seq_length,
+        [(approved, np.array([1.0, 0.0], dtype=np.float32))],
+        lambda: None,
+    )
     target = release('after', **changes)
     snapshot = Snapshot.load(target, system='synthetic', combined=True, attach_decrees=True)
     token = ('after', 2)
@@ -139,6 +154,10 @@ def test_release_projection_and_runtime(prepared, tmp_path, monkeypatch, changes
             verdict,
             draft.answer_id(previous.namespace.id),
         )
+    _, _, vectors = question_catalog(store.path, snapshot, model, revision, max_seq_length)
+    assert set(vectors) == ({draft.query_id(snapshot.namespace.id)} if verdict == 'keep' else set())
+    if vectors:
+        assert np.array_equal(next(iter(vectors.values())), [1, 0])
     assert apply_release(store.path, tmp_path / 'corpus.db', token, target, snapshot) == counts
 
 
@@ -731,6 +750,55 @@ def test_rebaseline_quarantines_old_approvals_in_the_same_activation(db_transfer
     assert catalog.detail(overlap.answer_id(ns))['status'] == 'pending'
     current = store.control()
     assert cache_admin.run(rebaseline)['pending_questions'] == 0 and store.control() == current
+
+
+@pytest.mark.parametrize('enabled', [False, True])
+def test_rebaseline_recovers_a_stale_scope_only_without_enabled_approvals(db_transfer, tmp_path, monkeypatch, enabled):
+    from pathlib import Path
+
+    args, old_snapshot, staged, old_protection, _, _ = db_transfer
+    corpus = tmp_path / 'updated.db'
+    init_corpus(corpus)
+    seed_qa(corpus, v4_train=(QUESTION,))
+    protection = load_protection(corpus, [])
+    assert old_protection.fingerprint != protection.fingerprint
+    target = release('new')
+    snapshot = Snapshot.load(target, system='synthetic', combined=True, attach_decrees=True)
+    token = ('new', 2)
+    store = Store(Path(args.db))
+    namespace = old_snapshot.namespace.id
+    store.stage(old_snapshot.namespace, [staged], 'test', 'prior')
+    old_approval = store.approve(
+        namespace,
+        1,
+        old_protection.fingerprint,
+        {staged.query_id(namespace): staged.answer_id(namespace)},
+        actor='test',
+        reason='prior',
+    )
+    if not enabled:
+        store.revoke('query', staged.query_id(namespace), 'test', 'disable')
+    before = store.control()
+    monkeypatch.setattr(cache_admin, 'active_token', lambda *a: token)
+    monkeypatch.setattr(cache_admin, 'active_release', lambda *a: target)
+    monkeypatch.setattr(cache_admin, 'cache_snapshot', lambda *a: snapshot)
+    args.corpus_db = str(corpus)
+    rebaseline = cache_admin.parser().parse_args(
+        ['rebaseline-protection', '--db', args.db, '--corpus-db', args.corpus_db, '--reason', 'changed release']
+    )
+    with pytest.raises(ValueError, match='보호 지문'):
+        cache_admin.run(args)
+    if enabled:
+        with pytest.raises(ValueError, match='승인·활성 질문'):
+            cache_admin.run(rebaseline)
+        assert store.control() == before
+    else:
+        assert cache_admin.run(rebaseline)['pending_questions'] == 0
+        control = store.control()
+        assert (control.namespace_id, control.activation_event) == (snapshot.namespace.id, 2)
+        assert (control.protection_hash, control.approval_id) == (protection.fingerprint, None)
+        result = cache_admin.run(args)
+        assert result['approved_questions'] == 2 and result['approval_id'] != old_approval
 
 
 def test_cache_review_approves_without_any_zip(review_api, monkeypatch):

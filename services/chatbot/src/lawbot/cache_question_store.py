@@ -19,9 +19,11 @@ class ApprovedQuestion:
     original: str
     normalized: str
     checksum: str
+    query_bounds: tuple[str | None, str | None, str | None]
+    answer_bounds: tuple[str | None, str | None, str | None]
 
 
-def approved_questions(conn, snapshot: Snapshot) -> list[ApprovedQuestion]:
+def approved_questions(conn, snapshot: Snapshot, *, include_scheduled=False) -> list[ApprovedQuestion]:
     """Mirror exact eligibility while allowing offline work with the cache off."""
     namespace = snapshot.namespace.id
     at = now()
@@ -58,15 +60,26 @@ def approved_questions(conn, snapshot: Snapshot) -> list[ApprovedQuestion]:
             or (normalize(original), digest(normalized), digest(original), digest(canonical([namespace, checksum])))
             != (normalized, checksum, raw, uid)
             or is_calculation_question(original)
-            or not valid(at, start, end, expiry)
-            or not valid(at, a_start, a_end, a_expiry)
+            or (not include_scheduled and not valid(at, start, end, expiry))
+            or (not include_scheduled and not valid(at, a_start, a_end, a_expiry))
         ):
             continue
         if aid not in answers:
             citations, _ = verify_answer(conn, namespace, (aid, *answer))
             answers[aid] = citations is not None and snapshot.resolve(citations) is not None
         if answers[aid]:
-            approved.append(ApprovedQuestion(uid, aid, source_id, original, normalized, checksum))
+            approved.append(
+                ApprovedQuestion(
+                    uid,
+                    aid,
+                    source_id,
+                    original,
+                    normalized,
+                    checksum,
+                    (start, end, expiry),
+                    (a_start, a_end, a_expiry),
+                )
+            )
     return approved
 
 
@@ -78,17 +91,27 @@ def unit_vector(vector):
     return vector / length
 
 
-def question_catalog(path: Path, snapshot: Snapshot, model: str, revision: str, *, timeout=READ_TIMEOUT):
+def question_catalog(
+    path: Path,
+    snapshot: Snapshot,
+    model: str,
+    revision: str,
+    max_seq_length: int,
+    *,
+    timeout=READ_TIMEOUT,
+    include_scheduled=False,
+):
     with connect(path, timeout=timeout) as conn:
         conn.execute('BEGIN')
         control = read_control(conn)
         if control.namespace_id != snapshot.namespace.id:
             return control, [], {}
-        questions = approved_questions(conn, snapshot)
+        questions = approved_questions(conn, snapshot, include_scheduled=include_scheduled)
         rows = conn.execute(
             'SELECT v.query_id,v.normalized_sha256,v.dimension,v.vector FROM cache_question_vectors v '
-            'JOIN cache_queries q USING(query_id) WHERE q.namespace_id=? AND v.embedding_model=? AND v.model_revision=?',
-            (snapshot.namespace.id, model, revision),
+            'JOIN cache_queries q USING(query_id) WHERE q.namespace_id=? AND v.embedding_model=? AND v.model_revision=? '
+            'AND v.max_seq_length=?',
+            (snapshot.namespace.id, model, revision, max_seq_length),
         ).fetchall()
     hashes = {q.id: q.checksum for q in questions}
     vectors = {}
@@ -99,16 +122,20 @@ def question_catalog(path: Path, snapshot: Snapshot, model: str, revision: str, 
     return control, questions, vectors
 
 
-def save_vectors(path: Path, expected: Control, model: str, revision: str, rows, check):
+def save_vectors(path: Path, expected: Control, model: str, revision: str, max_seq_length: int, rows, check):
     with connect(path, write=True) as conn, transaction(conn):
         if read_control(conn) != expected:
             raise ValueError('벡터 생성 중 캐시 승인 또는 모드가 변경되었습니다.')
         check()
         conn.executemany(
-            'INSERT INTO cache_question_vectors VALUES (?,?,?,?,?,?) '
+            'INSERT INTO cache_question_vectors VALUES (?,?,?,?,?,?,?) '
             'ON CONFLICT(query_id,embedding_model) DO UPDATE SET model_revision=excluded.model_revision,'
-            'normalized_sha256=excluded.normalized_sha256, dimension=excluded.dimension, vector=excluded.vector',
-            ((q.id, model, revision, q.checksum, vector.size, vector.astype('<f4').tobytes()) for q, vector in rows),
+            'normalized_sha256=excluded.normalized_sha256, max_seq_length=excluded.max_seq_length, '
+            'dimension=excluded.dimension, vector=excluded.vector',
+            (
+                (q.id, model, revision, q.checksum, max_seq_length, vector.size, vector.astype('<f4').tobytes())
+                for q, vector in rows
+            ),
         )
         if rows:
             conn.execute('UPDATE cache_control SET generation=generation+1 WHERE singleton=1')

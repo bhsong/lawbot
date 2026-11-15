@@ -566,7 +566,7 @@ uv run python -m lawbot.cache_admin import-db --from "$source_db" --db "$cache_d
 
 ### 검토된 비슷한 질문
 
-P07 재승인 후 다음 명령으로 생성할 질문 벡터와 임베딩 요청 수를 확인합니다. 벡터는 승인 질문의 정규화 원문에서 만들며, 모델 revision과 질문 해시가 맞는 벡터는 재사용합니다.
+P07 재승인 후 다음 명령으로 생성할 질문 벡터와 임베딩 요청 수를 확인합니다. 벡터는 승인 질문을 정규화해 만들며, 모델 revision·질문 해시·최대 인코딩 길이가 맞는 벡터는 재사용합니다. 개발 val과 벡터 생성은 같은 사용자의 worktree 공용 잠금을 사용합니다.
 
 ```zsh
 uv run python -m lawbot.cache_admin generate-question-vectors --db "$cache_db" --corpus-db "$corpus_db" --dry-run
@@ -575,7 +575,7 @@ uv run python -m lawbot.cache_admin generate-question-vectors --db "$cache_db" -
 
 둘째 명령은 표시된 요청 수를 승인받은 뒤 실행합니다. 배치 상한은 16이며 한 번에 한 요청씩 실행합니다. 검증셋에서 선택한 `LAWBOT_SUGGESTIONS_TAU`를 설정하고 최종 승인 ID로 `set-mode on`을 실행하면 추천을 표시합니다. 웹앱의 시작 로그에서 벡터가 있는 승인 후보 수와 벡터가 없는 수를 확인합니다.
 
-개발에서는 `python -m lawbot_tools.eval_suggestions --help`로 고정 val 도구의 인자를 확인합니다. `--dry-run`은 질의와 요청 수를 출력하며, 승인 후 실행한 `--out`에는 τ별 집계 표를 작성합니다. 운영 명령은 SQLite 백업과 현재 코퍼스를 사용합니다.
+개발에서는 `python -m lawbot_tools.eval_suggestions --help`로 고정 val 도구의 인자를 확인합니다. `--dry-run`은 전체와 v6 학습 문장 제외 집합의 질의·요청 수를 출력합니다. 승인 후 `--out`에 두 집합의 τ별 집계 표를 작성하며 학습 문장 제외 표에서 τ를 고릅니다. 운영 명령은 SQLite 백업과 현재 코퍼스를 사용합니다.
 
 ### CSV·JSONL 이관과 대조
 

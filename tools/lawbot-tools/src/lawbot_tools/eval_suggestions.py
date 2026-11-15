@@ -27,19 +27,39 @@ from lawbot.suggestions import candidates_with_vectors, rank
 DEFERRED_SHA256 = '41dd33d4c1e7eae01bdfc95bb18793eeb1f11a24d0fc7b5b917d799955183862'
 LABELS_SHA256 = '777f6e7bf1750f55ebfbbb321340e679d0e4954e464e6c468d04a97270381e28'
 MAX_VAL_QUERIES = 1797
+MIN_LABELED = 100
+DEFINITIVE_LABELS = frozenset({'reusable', 'not_reusable'})
 # These IDs were published with the fixed validation labels.
 GROUP_ID_TAG = 'semantic-answer-group-v1'
 
 
 def read_deferred(path):
     with verified_zip(path, DEFERRED_SHA256, 'deferred') as (archive, manifest):
-        rows = read_records(archive, 'data/deferred_pairs_full.jsonl', ('id', 'question', 'question_sha256'))
-    questions = {row['id']: row['question'] for row in rows}
+        rows = read_records(
+            archive, 'data/deferred_pairs_full.jsonl', ('id', 'question', 'question_sha256', 'pair_verdict')
+        )
+    questions = {row['id']: (row['question'], row['pair_verdict']) for row in rows}
     if len(questions) != len(rows) or len(rows) != manifest['question_pairs']:
         raise ValueError('deferred ZIP 문항 수가 일치하지 않습니다.')
     if any(digest(row['question']) != row['question_sha256'] for row in rows):
         raise ValueError('deferred ZIP 질문 해시가 일치하지 않습니다.')
     return questions
+
+
+def recommendation_label(labels, target, *, query_wide_negative):
+    label = labels.get(target)
+    if label is None and query_wide_negative and labels.get(None) == 'not_reusable':
+        return 'not_reusable'
+    return label if label in DEFINITIVE_LABELS else 'unlabeled'
+
+
+def maximum_labeled(ids, labels, negative, targets):
+    return sum(
+        min(2, len(targets))
+        if uid in negative
+        else min(2, sum(labels[uid][target] in DEFINITIVE_LABELS for target in labels[uid].keys() & targets))
+        for uid in ids
+    )
 
 
 def validation_input(path, handoff, deferred, protection):
@@ -54,11 +74,14 @@ def validation_input(path, handoff, deferred, protection):
         digest(canonical([source, uid])): text
         for source, items in (
             ('pass', ((q.id, q.text) for q in handoff.questions)),
-            ('deferred', deferred.items()),
+            ('deferred', ((uid, question) for uid, (question, _) in deferred.items())),
         )
         for uid, text in items
     }
     labels = defaultdict(dict)
+    training = {}
+    revised = {digest(canonical(['deferred', uid])) for uid, (_, verdict) in deferred.items() if verdict == 'revise'}
+    negative = set()
     exclusions = set()
     for row in json_lines(raw):
         uid, target, label = row['query_id'], row['target_answer_id'], row['label']
@@ -70,11 +93,24 @@ def validation_input(path, handoff, deferred, protection):
             continue
         if target in labels[uid] and labels[uid][target] != label:
             raise ValueError('같은 val 질의와 답변에 상충하는 라벨이 있습니다.')
+        exposure = row['v6_embedding_training']
+        if training.setdefault(uid, exposure) != exposure:
+            raise ValueError('같은 val 질의의 v6 학습 포함 분류가 일치하지 않습니다.')
+        if target is None and label == 'not_reusable' and row['source'] == 'deferred' and uid in revised:
+            negative.add(uid)
         labels[uid][target] = label
     queries = {uid: texts[uid] for uid in sorted(labels)}
     if not 0 < len(queries) <= MAX_VAL_QUERIES:
         raise ValueError('고정 검증셋 질의 수 범위를 벗어났습니다.')
-    return queries, labels, {uid: groups[q.answer_key] for uid, q in pass_queries.items()}, len(exclusions)
+    subset = frozenset(uid for uid in queries if training[uid] != 'same_text')
+    return (
+        queries,
+        labels,
+        {uid: groups[q.answer_key] for uid, q in pass_queries.items()},
+        len(exclusions),
+        subset,
+        negative,
+    )
 
 
 def curve(scored, taus):
@@ -89,7 +125,7 @@ def curve(scored, taus):
             counts.update(selected)
         known = counts['reusable'] + counts['not_reusable']
         shown = counts.total()
-        exposure = exposed / len(scored)
+        exposure = exposed / len(scored) if scored else 0.0
         rows.append(
             {
                 'tau': tau,
@@ -101,26 +137,30 @@ def curve(scored, taus):
                 'unlabeled': (shown - known) / shown if shown else None,
             }
         )
-        if known and counts['not_reusable'] * 10 <= known:
+        if known >= MIN_LABELED and counts['not_reusable'] * 10 <= known:
             eligible.append((exposure, tau))
     return rows, max(eligible)[1] if eligible else None
 
 
-def write_curve(path, summary, rows, chosen):
+def write_curve(path, summary, curves, chosen):
     def percent(value):
         return '—' if value is None else f'{value:.2%}'
 
     with path.open('x', encoding='utf-8') as stream:
         stream.write('# 검토된 비슷한 질문 val\n\n')
         stream.write('집계 `' + canonical(summary) + '`\n\n')
-        stream.write(f'선택 τ `{chosen}`\n\n')
-        stream.write('| τ | 노출률 | 노출 질의 | 라벨 수 | reusable | not_reusable | 라벨 없음 |\n')
-        stream.write('| ---: | ---: | ---: | ---: | ---: | ---: | ---: |\n')
-        for row in rows:
-            stream.write(
-                f'| {row["tau"]:g} | {percent(row["exposure"])} | {row["exposed_queries"]} | {row["labeled"]} '
-                f'| {percent(row["reusable"])} | {percent(row["not_reusable"])} | {percent(row["unlabeled"])} |\n'
-            )
+        stream.write(f'v6 학습 문장 제외 곡선에서 선택한 τ `{chosen}`\n\n')
+        stream.write('val은 v4 train 분할에서 뽑았다. 같은 학습 문장을 빼도 실제 운영보다 낙관적일 수 있다.\n\n')
+        for title, rows in curves:
+            stream.write(f'## {title}\n\n')
+            stream.write('| τ | 노출률 | 노출 질의 | 라벨 수 | reusable | not_reusable | 라벨 없음 |\n')
+            stream.write('| ---: | ---: | ---: | ---: | ---: | ---: | ---: |\n')
+            for row in rows:
+                stream.write(
+                    f'| {row["tau"]:g} | {percent(row["exposure"])} | {row["exposed_queries"]} | {row["labeled"]} '
+                    f'| {percent(row["reusable"])} | {percent(row["not_reusable"])} | {percent(row["unlabeled"])} |\n'
+                )
+            stream.write('\n')
 
 
 def run(args):
@@ -138,23 +178,37 @@ def run(args):
         raise ValueError('τ는 -1~1 사이여야 합니다.')
     ctx = corpus_context(corpus, [])
     handoff = read_pass(development_path(args.pass_bundle))
-    queries, labels, answers, excluded = validation_input(
+    queries, labels, answers, excluded, subset, negative = validation_input(
         development_path(args.labels),
         handoff,
         read_deferred(development_path(args.deferred_bundle)),
         ctx.protection,
     )
     requests = request_count(len(queries))
-    summary = {'val_queries': len(queries), 'excluded_queries': excluded, 'embedding_requests': requests}
+    upper = maximum_labeled(subset, labels, negative, set(answers.values()))
+    summary = {
+        'val_queries': len(queries),
+        'excluded_queries': excluded,
+        'embedding_requests': requests,
+        'without_same_text_queries': len(subset),
+        'without_same_text_requests_if_run_alone': request_count(len(subset)),
+        'without_same_text_max_labeled': upper,
+        'minimum_labeled': MIN_LABELED,
+        'can_meet_minimum_labeled': upper >= MIN_LABELED,
+    }
     if args.dry_run:
         return summary
+    if upper < MIN_LABELED:
+        raise ValueError(f'v6 학습 문장 제외 후 확정 라벨 상한이 {upper}건입니다. 최소 {MIN_LABELED}건이 필요합니다.')
     cfg = settings.load()
     model = cfg.profile.emb_model
     client = ModelServerClient(cfg.model_server, cfg.model_token)
     try:
         with embedding_budget(requests, args.approved_requests, args.max_runtime_seconds) as deadline:
             revision = current_revision(client, model, min(5, seconds_remaining(deadline)))
-            control, approved, stored = question_catalog(cache, ctx.snapshot, model, revision, timeout=5)
+            control, approved, stored = question_catalog(
+                cache, ctx.snapshot, model, revision, cfg.profile.max_seq, timeout=5
+            )
             if (
                 control.protection_hash != ctx.protection.fingerprint
                 or control.activation_event != ctx.event
@@ -163,23 +217,29 @@ def run(args):
                 or any(q.source_id not in answers for q in approved)
             ):
                 raise ValueError('현행 보호 분할에서 통과 ZIP으로 만든 캐시와 모든 승인 벡터가 필요합니다.')
+            upper = maximum_labeled(subset, labels, negative, {answers[q.source_id] for q in approved})
+            if upper < MIN_LABELED:
+                raise ValueError(
+                    f'현재 승인 후보의 확정 라벨 상한이 {upper}건입니다. 최소 {MIN_LABELED}건이 필요합니다.'
+                )
             candidates = candidates_with_vectors(approved, stored)
             vectors = encode_questions(client, cfg, queries.values(), deadline)
             if current_revision(client, model, min(5, seconds_remaining(deadline))) != revision:
                 raise ValueError('val 도중 임베딩 모델 revision이 바뀌었습니다.')
         ctx.check_import()
-        scored = []
+        scored = {}
         for (uid, question), vector in zip(queries.items(), vectors, strict=True):
             if not candidates or candidates[0].vector.shape != vector.shape:
                 raise ValueError('val 질의와 캐시 벡터 차원이 일치하지 않습니다.')
             scores = []
             for row, score in rank(candidates, vector, normalize(question), taus[0]):
-                label = labels[uid].get(answers[row.source_id], labels[uid].get(None))
-                scores.append((score, label if label in ('reusable', 'not_reusable') else 'unlabeled'))
-            scored.append(scores)
-        rows, chosen = curve(scored, taus)
+                label = recommendation_label(labels[uid], answers[row.source_id], query_wide_negative=uid in negative)
+                scores.append((score, label))
+            scored[uid] = scores
+        rows, _ = curve(list(scored.values()), taus)
+        untrained, chosen = curve([scores for uid, scores in scored.items() if uid in subset], taus)
         summary.update(embedding_model=model, model_revision=revision, candidates=len(approved), chosen_tau=chosen)
-        write_curve(output, summary, rows, chosen)
+        write_curve(output, summary, [('전체', rows), ('v6 학습 문장 제외', untrained)], chosen)
         return summary
     finally:
         client.http.close()

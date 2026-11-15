@@ -1,15 +1,17 @@
 """Build query vectors with explicit request and elapsed-time limits."""
 
 import fcntl
+import os
+import stat
 import time
 from contextlib import contextmanager
 from datetime import datetime
 from itertools import batched
+from pathlib import Path
 from zoneinfo import ZoneInfo
 
 from lawbot.api_client import ModelServerClient, embedding_revision
 from lawbot.cache_question_store import question_catalog, save_vectors, unit_vector
-from lawbot.paths import DATA
 
 BATCH_SIZE = 16
 KST = ZoneInfo('Asia/Seoul')
@@ -25,14 +27,20 @@ def require_available_window():
         raise ValueError('06:20–06:50 KST에는 추천 임베딩을 실행할 수 없습니다.')
 
 
+def embedding_lock_path() -> Path:
+    return Path('/tmp') / f'lawbot-reviewed-question-embedding-{os.getuid()}.lock'
+
+
 @contextmanager
 def embedding_budget(requests, approved_requests, max_runtime):
     if requests <= 0 or approved_requests != requests or not max_runtime or max_runtime <= 0:
         raise ValueError('--dry-run 요청 수와 일치하는 --approved-requests 및 --max-runtime-seconds가 필요합니다.')
     require_available_window()
-    lock_path = DATA / 'db' / '.reviewed-question-embedding.lock'
-    lock_path.parent.mkdir(parents=True, exist_ok=True)
-    with lock_path.open('a') as lock:
+    fd = os.open(embedding_lock_path(), os.O_CREAT | os.O_NOFOLLOW | os.O_WRONLY, 0o600)
+    with os.fdopen(fd, 'wb') as lock:
+        info = os.fstat(lock.fileno())
+        if not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid():
+            raise ValueError('추천 임베딩 잠금 파일의 소유자 또는 유형이 올바르지 않습니다.')
         try:
             fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError as exc:
@@ -74,7 +82,9 @@ def generate_vectors(path, ctx, cfg, args):
     client = ModelServerClient(cfg.model_server, cfg.model_token)
     try:
         revision = current_revision(client, model)
-        control, questions, stored = question_catalog(path, ctx.snapshot, model, revision, timeout=5)
+        control, questions, stored = question_catalog(
+            path, ctx.snapshot, model, revision, cfg.profile.max_seq, timeout=5
+        )
         if (control.namespace_id, control.activation_event, control.protection_hash) != (
             ctx.snapshot.namespace.id,
             ctx.event,
@@ -100,7 +110,15 @@ def generate_vectors(path, ctx, cfg, args):
             vectors = encode_questions(client, cfg, [q.normalized for q in pending], deadline)
             if current_revision(client, model, min(5, seconds_remaining(deadline))) != revision:
                 raise ValueError('벡터 생성 중 모델 revision이 바뀌었습니다.')
-            save_vectors(path, control, model, revision, list(zip(pending, vectors, strict=True)), ctx.check_import)
+            save_vectors(
+                path,
+                control,
+                model,
+                revision,
+                cfg.profile.max_seq,
+                list(zip(pending, vectors, strict=True)),
+                ctx.check_import,
+            )
         return summary | {'generated_vectors': len(vectors)}
     finally:
         client.http.close()

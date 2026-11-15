@@ -224,10 +224,18 @@ class Store:
             control = read_control(conn)
             if control.mode != 'off':
                 raise ValueError('보호 지문 변경 전에 캐시 모드를 off로 전환하세요.')
-            if (control.namespace_id, control.activation_event) not in ((None, None), (namespace, event)):
-                raise ValueError('보호 지문은 현재 활성 코퍼스의 캐시 범위에서만 변경할 수 있습니다.')
+            same_scope = (control.namespace_id, control.activation_event) == (namespace, event)
+            if (
+                not same_scope
+                and conn.execute(
+                    "SELECT 1 FROM cache_queries WHERE namespace_id IN (?,?) AND status='approved' "
+                    'AND exact_enabled=1 LIMIT 1',
+                    (control.namespace_id, namespace),
+                ).fetchone()
+            ):
+                raise ValueError('승인·활성 질문이 있는 캐시는 현재 활성 코퍼스의 범위에서만 변경할 수 있습니다.')
             check()
-            if control.protection_hash == protection_hash:
+            if same_scope and control.protection_hash == protection_hash:
                 return 0
             conn.execute(
                 'INSERT INTO cache_namespaces VALUES (?,?,?) ON CONFLICT DO NOTHING',

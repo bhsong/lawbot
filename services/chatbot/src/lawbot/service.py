@@ -29,6 +29,7 @@ from lawbot.api_client import (
     request_timeout,
     wait_ready,
 )
+from lawbot.cache_store import CacheDatabaseError
 from lawbot.calc_corpus import calculator_compatibility, database_calculator_compatibility
 from lawbot.calc_router import check_conclusion, prompt_suffix, route_calculation
 from lawbot.embed_cache import EmbedCache, cache_key, embedding_metadata
@@ -37,7 +38,7 @@ from lawbot.llm import LLM
 from lawbot.paths import ROOT
 from lawbot.reranker import Reranker
 from lawbot.retriever import Retriever
-from lawbot.suggestions import Suggestions
+from lawbot.suggestions import Suggestions, error_kind
 from lawbot_common.logs import logger
 
 log = logger('lawbot', 'lawbot')
@@ -264,8 +265,18 @@ def load_app(settings=None):
     def factory(spec):  # system 파일이 없으면 FileNotFoundError (화면에서 오류 안내)
         return LLM(spec.model, client=oa, system=system_text(p, spec))
 
+    suggestions = None
+
     def loaded():
-        return {m['id'] for m in client.models() if m.get('loaded')}
+        try:
+            states = client.models()
+        except (ModelServerError, ConnectionError, ModelLoadError, ModelServerTimeout, ValueError) as exc:
+            if suggestions is not None:
+                suggestions.model_status_error(exc)
+            raise
+        if suggestions is not None:
+            suggestions.observe_revision(embedding_revision(states, p.emb_model))
+        return {m['id'] for m in states if m.get('loaded')}
 
     models = ChatModels(p.models, factory, None if external else loaded)
     log.info(
@@ -278,20 +289,19 @@ def load_app(settings=None):
     if cfg.exact_cache_db is not None:
         exact_cache, (level, message) = inspect_exact_cache(cfg.exact_cache_db, cfg.db, p, release, dc)
         (log.warning if level == 'WARN' else log.info)('정확 일치 캐시: %s', message)
-    suggestions = None
     if exact_cache is not None and cfg.suggestions_tau is not None and revision:
         suggestions = Suggestions(
             exact_cache,
             p.emb_model,
             revision,
             cfg.suggestions_tau,
-            lambda: embedding_revision(client.models(timeout=0.3), p.emb_model),
+            p.max_seq,
         )
         try:
             _, candidates, missing_vectors = suggestions.refresh()
             log.info('검토 질문 추천 후보 %d개 · 일치하는 벡터 없음 %d개', len(candidates), missing_vectors)
-        except OSError, RuntimeError, ValueError:
-            log.warning('검토 질문 추천 후보를 읽지 못했습니다.')
+        except (CacheDatabaseError, OSError) as exc:
+            log.warning('검토 질문 추천 후보를 읽지 못했습니다. (%s)', error_kind(exc))
     return LawbotApp(
         p,
         retriever,

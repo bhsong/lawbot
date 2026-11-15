@@ -558,34 +558,59 @@ def test_web_noncalculation_prompt_and_calls_unchanged(env, real_server, capsys)
     assert posts == ['/v1/embeddings', '/v1/rerank', '/v1/chat/completions']
 
 
-@pytest.mark.parametrize('refused', [False, True])
-def test_suggestions_use_the_same_embedding_request(env, real_server, capsys, refused):
+@pytest.mark.parametrize('outcome', ['shown', 'refused', 'empty', 'db_timeout'])
+def test_suggestions_use_the_same_embedding_request(env, real_server, capsys, tmp_path, outcome):
     from lawbot import web
     from lawbot.cache_runtime import Decision
+    from lawbot.cache_store import CacheDatabaseError
+    from lawbot.suggestions import Recommendation, Suggestions
 
     env.setenv('LAWBOT_RERANKER_ENABLED', '1')
+    request_log = tmp_path / 'requests.jsonl'
+    env.setenv('LAWBOT_REQUEST_LOG', str(request_log))
     app = service.load_app()
     app.exact_cache = types.SimpleNamespace(lookup=lambda *a: Decision('on', 'no_match', 0, True))
     captured = []
 
     def recommend(question, vector):
         captured.append(vector)
-        return [(types.SimpleNamespace(question='검토된 질문'), 0.9)]
+        return Recommendation([(types.SimpleNamespace(question='검토된 질문'), 0.9)] if outcome == 'shown' else [])
 
     app.suggestions = types.SimpleNamespace(recommend=recommend)
-    if refused:
+    if outcome == 'db_timeout':
+
+        def broken_refresh():
+            raise CacheDatabaseError('db_timeout', 'synthetic private content')
+
+        app.suggestions = Suggestions(app.exact_cache, 'embed', 'rev', 0, 1024)
+        env.setattr(app.suggestions, 'refresh', broken_refresh)
+        warnings = []
+        env.setattr(service.log, 'warning', lambda fmt, *args: warnings.append(fmt % args))
+    if outcome == 'refused':
         env.setattr(web, 'answer_citations', lambda *a: ([], [], True))
     capsys.readouterr()
     stream = list(web.chat_events(app, '해고 예고 절차를 알려 주세요.', 'pro', 'concise'))
-    if refused:
+    if outcome != 'shown':
         assert 'suggestions' not in [event for event, _ in stream]
-        assert not captured
     else:
         assert [event for event, _ in stream][-2:] == ['suggestions', 'done']
         assert stream[-2][1] == {'questions': ['검토된 질문']}
         assert len(captured) == 1 and captured[0].shape == (64,)
-    posts = [line.split()[2] for line in capsys.readouterr().out.splitlines() if ' POST ' in line]
+    lines = capsys.readouterr().out.splitlines()
+    posts = [line.split()[2] for line in lines if ' POST ' in line]
     assert posts == ['/v1/embeddings', '/v1/rerank', '/v1/chat/completions']
+    assert sum(' GET /v1/models' in line for line in lines) == 1
+    row = json.loads(request_log.read_text(encoding='utf-8'))
+    assert row['status'] == 'ok' and stream[-1][0] == 'done'
+    if outcome == 'refused':
+        assert 'suggestion_ms' not in row and not captured
+    else:
+        assert row['suggestion_count'] == int(outcome == 'shown')
+        assert 0 <= row['suggestion_ms'] <= row['request_to_complete_ms']
+        assert row['suggestion_error'] == ('db_timeout' if outcome == 'db_timeout' else None)
+    if outcome == 'db_timeout':
+        assert warnings == ['검토 질문 추천 실패 · catalog · db_timeout']
+        assert 'synthetic private content' not in request_log.read_text(encoding='utf-8')
 
 
 def test_gated_lookup_uses_identical_rag_messages_and_no_calculation_event(env, real_server, tmp_path, capsys):
