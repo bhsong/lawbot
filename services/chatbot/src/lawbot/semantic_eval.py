@@ -7,8 +7,13 @@ import os
 from collections import Counter
 from datetime import datetime
 from functools import partial
+from hashlib import sha256
+from io import BytesIO
+from subprocess import check_output
 from time import monotonic, perf_counter
 from zoneinfo import ZoneInfo
+
+import numpy as np
 
 from lawbot import deploy, envfile, security
 from lawbot.api_client import Embedder, ModelServerClient, ModelServerError, request_timeout
@@ -17,9 +22,11 @@ from lawbot.corpus_store import active_release
 from lawbot.db.connection import check_db_path, connect
 from lawbot.exact_cache import PROFILE, canonical
 from lawbot.feedback import check_private
-from lawbot.paths import DATA
+from lawbot.paths import DATA, ROOT
 from lawbot.reranker import TASK, Reranker
 from lawbot.retriever import Retriever
+from lawbot.semantic_eval_store import StageJournal
+from lawbot.semantic_eval_watch import EvaluationStopped, LiveMonitor
 from lawbot.semantic_gate import assess, score_pairs, valid_vectors
 from lawbot.semantic_index_store import SUPPLEMENT_EXPRESSION, read_questions
 from lawbot.semantic_index_tools import IndexContract, file_hash
@@ -63,32 +70,136 @@ def within_window(deadline):
     return request_timeout(min(remaining, 300))
 
 
-class BoundedModel:
-    """Count attempts before sending any inference and enforce the phase's aggregate ceiling."""
+class ItemFailure(RuntimeError):
+    """The active item failed; the next item will follow the monitoring pause."""
 
-    def __init__(self, client, calibration, budget, seconds):
+
+class BoundedModel:
+    """Persist the request attempt and response before advancing to another item."""
+
+    def __init__(self, client, calibration, budget, seconds, *, journal=None, monitor=None, items=0):
         self.client = client
         self.calibration = calibration
         self.budget = budget
         self.deadline = monotonic() + seconds
+        self.journal = journal
+        self.monitor = monitor
         self.calls = Counter(embedding=0, rerank=0)
+        if journal:
+            self.calls.update(journal.request_counts())
+        self.item, self.position = 'corpus-documents', 0
+        self.clock_adjustment = 0.0
+        self.item_count = items
+        self.run_started = monotonic()
+        self.initial_completed = journal.completed() if journal else 0
+        self.last_report = monotonic()
 
-    def infer_timeout(self, kind):
-        timeout = within_window(self.deadline)
+    def clock(self):
+        return perf_counter() + self.clock_adjustment
+
+    def run_item(self, key, evaluate):
+        if self.journal is None:
+            return evaluate()
+        if (saved := self.journal.get_item(key)) is not None:
+            return saved
+        self.item, self.position = key, 0
+        value = evaluate()
+        self.journal.save_item(key, value)
+        if self.monitor:
+            self.monitor.after_item()
+            if monotonic() - self.last_report >= 300:
+                complete = self.journal.completed()
+                increment = complete - self.initial_completed
+                elapsed = monotonic() - self.run_started
+                eta = elapsed * (self.item_count - complete) / increment if increment > 0 else None
+                self.monitor.record(
+                    'progress',
+                    completed_items=complete,
+                    total_items=self.item_count,
+                    requests=dict(self.calls),
+                    elapsed_s=elapsed,
+                    remaining_estimate_s=eta,
+                )
+                self.last_report = monotonic()
+        return value
+
+    def request(self, kind, signature, send):
+        housekeeping = perf_counter()
+        position, self.position = self.position, self.position + 1
+        if self.journal:
+            checksum = sha256(canonical(signature).encode()).hexdigest()
+            saved = self.journal.begin_call(self.item, position, kind, checksum, reserve=False)
+            if saved is not None:
+                status, response, duration = saved
+                self.clock_adjustment += duration / 1000 - (perf_counter() - housekeeping)
+                if status != 'done':
+                    if self.monitor and status == 'interrupted':
+                        self.monitor.record('unconfirmed_request_skipped', position=position, kind=kind)
+                    raise ItemFailure(status)
+                return np.load(BytesIO(response), allow_pickle=False) if kind == 'embedding' else response
+        if self.monitor:
+            self.monitor.before_request()
+            timeout = request_timeout(300)
+        else:
+            timeout = within_window(self.deadline)
         if self.calls[kind] >= self.budget[kind]:
             raise ValueError(f'승인된 {kind} 요청 수를 초과합니다.')
+        if self.journal:
+            self.journal.begin_call(self.item, position, kind, checksum)
         self.calls[kind] += 1
-        return timeout
+        self.clock_adjustment -= perf_counter() - housekeeping
+        started = perf_counter()
+        try:
+            result = send(timeout)
+        except (ConnectionError, TimeoutError, ModelServerError) as exc:
+            failed = not isinstance(exc, ModelServerError) or (exc.status is not None and exc.status >= 500)
+            if self.monitor is None:
+                raise
+            if not failed:
+                if isinstance(exc, ModelServerError) and exc.status in (400, 413, 422):
+                    if self.journal:
+                        self.journal.save_call(
+                            self.item, position, None, (perf_counter() - started) * 1000, status='input_rejected'
+                        )
+                    raise ItemFailure('model_input_rejected') from exc
+                raise
+            if self.journal:
+                self.journal.save_call(self.item, position, None, (perf_counter() - started) * 1000, status='failed')
+            self.monitor.request_failure(kind, exc)
+            raise ItemFailure('model_request_failure') from exc
+        finished = perf_counter()
+        duration = (finished - started) * 1000
+        if self.journal:
+            data = result
+            if kind == 'embedding':
+                stream = BytesIO()
+                np.save(stream, result, allow_pickle=False)
+                data = stream.getvalue()
+            self.journal.save_call(self.item, position, data, duration)
+        if self.monitor and kind == 'rerank':
+            self.monitor.rerank_timing(duration)
+        self.clock_adjustment -= perf_counter() - finished
+        return result
 
     def embed(self, model, texts, input_type, max_seq, timeout=None):
-        return self.client.embed(model, texts, input_type, max_seq, timeout=self.infer_timeout('embedding'))
+        return self.request(
+            'embedding',
+            [model, texts, input_type, max_seq],
+            lambda limit: self.client.embed(model, texts, input_type, max_seq, timeout=limit),
+        )
 
     def rerank(self, model, query, documents, instruction, timeout=None, *, strict=False):
-        return self.client.rerank(
-            model, query, documents, instruction, timeout=self.infer_timeout('rerank'), strict=strict
+        return self.request(
+            'rerank',
+            [model, query, documents, instruction, strict],
+            lambda limit: self.client.rerank(model, query, documents, instruction, timeout=limit, strict=strict),
         )
 
     def check(self):
+        if self.monitor is not None:
+            self.monitor.before_request()
+            self.monitor.ready()
+            return
         models = self.client.models(timeout=within_window(self.deadline))
         if not self.calibration.matches_revisions([model for model in models if model['loaded']]):
             raise ValueError('상주 임베딩 또는 리랭커 모델 revision이 평가 설정과 다릅니다.')
@@ -99,9 +210,9 @@ def phase_plan(labor_val, labor_test, tax_test, semantic_questions):
     unions = labor_val * len(UNION_EXTRA_GRID)
     return {
         'compare-val': {'embedding': queries + 1, 'rerank': queries},
-        'union-val': {'embedding': 2 * unions + 1, 'rerank': unions},
+        'union-val': {'embedding': unions + 1, 'rerank': unions},
         'shadow-val': {'embedding': semantic_questions, 'rerank': 2 * semantic_questions},
-        'once-test': {'embedding': 4 * labor_test + 3 * tax_test + 1, 'rerank': 3 * labor_test + 2 * tax_test},
+        'once-test': {'embedding': 3 * labor_test + 2 * tax_test + 1, 'rerank': 3 * labor_test + 2 * tax_test},
     }
 
 
@@ -109,6 +220,14 @@ def write_private(path, value):
     fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
     with os.fdopen(fd, 'w', encoding='utf-8') as stream:
         stream.write(canonical(value) + '\n')
+
+
+def write_derived(path, value):
+    if path.exists():
+        if json.loads(path.read_bytes()) != json.loads(canonical(value)):
+            raise ValueError('기존 결과 파일과 체크포인트 결과가 다릅니다.')
+    else:
+        write_private(path, value)
 
 
 def prior_stages(directory, phase, stamp):
@@ -124,7 +243,7 @@ def prior_stages(directory, phase, stamp):
     return history
 
 
-def evaluate_routes(search, examples, routes, query_k, union_limit, covered, supplemental):
+def evaluate_routes(search, examples, routes, query_k, union_limit, covered, supplemental, *, bound=None):
     for uid, gold, question in examples:
         tax = uid.startswith('v5:')
         cohorts = ['tax'] if tax else ['labor']
@@ -134,14 +253,22 @@ def evaluate_routes(search, examples, routes, query_k, union_limit, covered, sup
             cohorts.append('supplement')
         outputs = {}
         for route in routes:
-            result = search.run(route, question, query_k, union_limit)
-            ids = [hit_key(hit) for hit in result.hits]
-            if not tax and route != 'base' and result.metrics['atomic_reason'] not in ('ok', 'truncated_input'):
-                raise ValueError('노동 문항의 원자 검색 인덱스 계약을 확인하지 못했습니다.')
-            outputs[route] = dict(result.metrics) | {
-                'rank': ids.index(gold) + 1 if gold in ids else None,
-                'top3': ids[:3],
-            }
+
+            def evaluate(route=route, question=question, gold=gold):
+                started = search.clock() if bound else perf_counter()
+                try:
+                    result = search.run(route, question, query_k, union_limit)
+                except ItemFailure as exc:
+                    return {'error': str(exc), 'rank': None, 'top3': [], 'total_ms': (search.clock() - started) * 1000}
+                ids = [hit_key(hit) for hit in result.hits]
+                return dict(result.metrics) | {
+                    'rank': ids.index(gold) + 1 if gold in ids else None,
+                    'top3': ids[:3],
+                    'error': result.metrics['atomic_reason'] if not ids else None,
+                }
+
+            key = f'{route}:{query_k}:{union_limit}:{uid}'
+            outputs[route] = bound.run_item(key, evaluate) if bound else evaluate()
         row = {'id': uid, 'gold': gold, 'cohorts': cohorts, 'results': outputs, 'question': question}
         if 'base' in outputs and 'atomic' in outputs:
             row['base_vs_atomic'] = paired_outcome(outputs['base']['rank'], outputs['atomic']['rank'])
@@ -155,11 +282,11 @@ def best_budget(summaries, route):
     )
 
 
-def retrieval_phase(phase, history, ctx, directory, search, covered, supplemental):
+def retrieval_phase(phase, history, ctx, directory, search, covered, supplemental, *, bound=None):
     split = 'test' if phase == 'once-test' else 'val'
     examples = evaluation_rows(ctx.db, 'v4', split, questions=True)
     base_size = search.reranker.candidates
-    run = partial(evaluate_routes, search, examples, covered=covered, supplemental=supplemental)
+    run = partial(evaluate_routes, search, examples, covered=covered, supplemental=supplemental, bound=bound)
     if phase == 'compare-val':
         base = list(run(('base',), ATOMIC_GRID[0], base_size))
         details = {}
@@ -170,7 +297,7 @@ def retrieval_phase(phase, history, ctx, directory, search, covered, supplementa
                 for reference, trial in zip(base, atomic, strict=True)
             ]
             details[size] = summarize_comparison(rows)
-            write_private(directory / f'compare-val-{size}.rows.json', rows)
+            write_derived(directory / f'compare-val-{size}.rows.json', rows)
         return {'atomic_query_k': best_budget(details, 'atomic'), 'comparisons': details}
 
     query_k = history['compare-val']['atomic_query_k']
@@ -185,14 +312,16 @@ def retrieval_phase(phase, history, ctx, directory, search, covered, supplementa
                     raise ValueError('저장한 val 기준선의 순서 또는 정답이 바뀌었습니다.')
                 rows.append(base | {'results': base['results'] | trial['results']})
             details[base_size + extra] = summarize_comparison(rows)
-            write_private(directory / f'union-val-{base_size + extra}.rows.json', rows)
+            write_derived(directory / f'union-val-{base_size + extra}.rows.json', rows)
         return {'union_limit': best_budget(details, 'union'), 'comparisons': details}
 
     limit = history['union-val']['union_limit']
     labor = list(run(('base', 'atomic', 'union'), query_k, limit))
     tax = tax_legal_rows(ctx, 'test', questions=True)
-    rows = labor + list(evaluate_routes(search, tax, ('base', 'union'), query_k, limit, covered, supplemental))
-    write_private(directory / 'once-test.rows.json', rows)
+    rows = labor + list(
+        evaluate_routes(search, tax, ('base', 'union'), query_k, limit, covered, supplemental, bound=bound)
+    )
+    write_derived(directory / 'once-test.rows.json', rows)
     chosen_calibration = history['shadow-val']['calibration']
     return {
         'comparisons': summarize_comparison(rows),
@@ -214,13 +343,13 @@ def tax_legal_rows(ctx, split, *, questions=False):
 
 def score_shadow(question, index, eligible, bound, calibration, tokens, embed, store, event):
     metrics = {'embedding': 0, 'rerank_http': 0, 'rerank_pairs': 0}
-    started = perf_counter()
+    started = bound.clock()
     if not embed.fits(question):
-        return None, metrics | {'reason': 'truncated_input', 'total_ms': (perf_counter() - started) * 1000}
+        return None, metrics | {'reason': 'truncated_input', 'total_ms': (bound.clock() - started) * 1000}
     metrics['embedding'] = 1
-    vectors = embed.encode([question])
+    vectors = bound.embed(calibration.embedding_model, [question], 'query', calibration.query_max_seq)
     if not valid_vectors(vectors, 1, index.vectors.shape[1]):
-        raise ValueError('shadow val 임베딩 벡터의 차원 또는 값이 올바르지 않습니다.')
+        return None, metrics | {'reason': 'invalid_vector', 'total_ms': (bound.clock() - started) * 1000}
     matches = index.top_queries(vectors[0], set(eligible), calibration.top_k)
     candidates = [candidate for key in matches for candidate in eligible[key]]
 
@@ -236,7 +365,7 @@ def score_shadow(question, index, eligible, bound, calibration, tokens, embed, s
             reason = store.verify_selection(conn, store.snapshot.namespace.id, event, assessment.candidate)
     return assessment, metrics | {
         'reason': reason,
-        'total_ms': (perf_counter() - started) * 1000,
+        'total_ms': (bound.clock() - started) * 1000,
         'candidate_queries': len(matches),
         'unique_atoms': len({c.atom_revision for c in candidates}),
         'unique_parents': len({c.parent.chunk_id for c in candidates}),
@@ -259,6 +388,7 @@ def parser():
     cli.add_argument('--approved-embedding', type=int)
     cli.add_argument('--approved-rerank', type=int)
     cli.add_argument('--max-runtime-seconds', type=int)
+    cli.add_argument('--monitor-operations', action='store_true')
     return cli
 
 
@@ -291,16 +421,29 @@ def semantic_phase(ctx, cache, store, index, bound, calibration, tokens, embed, 
             'min_answer_margin': 0.0,
         }
     )
-    observations = {
-        key: score_shadow(inputs[key], index, eligible, bound, score_calibration, tokens, embed, store, ctx.event)
-        for key in required
-    }
+
+    def observe(key):
+        started = bound.clock()
+        try:
+            assessment, metrics = score_shadow(
+                inputs[key], index, eligible, bound, score_calibration, tokens, embed, store, ctx.event
+            )
+        except ItemFailure as exc:
+            return {'reason': str(exc), 'total_ms': (bound.clock() - started) * 1000, 'rerank_pairs': 0}
+        return metrics | {
+            'parent': assessment.linked_parent_score if assessment else None,
+            'question': assessment.question_match_score if assessment else None,
+            'margin': assessment.margin if assessment else None,
+            'group': groups[assessment.candidate.binding_id] if assessment and assessment.candidate else None,
+        }
+
+    observations = {key: bound.run_item('shadow:' + key, partial(observe, key)) for key in required}
     rows = []
     for label in labels:
-        assessment, metrics = observations[label['query_id']]
-        group = groups[assessment.candidate.binding_id] if assessment and assessment.candidate else None
+        metrics = observations[label['query_id']]
+        group = metrics.get('group')
         target = label['target_answer_id']
-        # A same-article negative labels a particular wrong answer, not every possible answer to that question.
+        # The same-article negative labels a particular wrong answer.
         eligible_row = metrics['reason'] == 'hit' and (
             label['label'] != 'not_reusable' or target is None or group == target
         )
@@ -308,9 +451,9 @@ def semantic_phase(ctx, cache, store, index, bound, calibration, tokens, embed, 
             ShadowRow(
                 label['label'],
                 group == target and target is not None,
-                assessment.linked_parent_score if assessment else None,
-                assessment.question_match_score if assessment else None,
-                assessment.margin if assessment else None,
+                metrics.get('parent'),
+                metrics.get('question'),
+                metrics.get('margin'),
                 eligible_row,
             )
         )
@@ -322,10 +465,8 @@ def semantic_phase(ctx, cache, store, index, bound, calibration, tokens, embed, 
         'min_answer_margin': margin,
     }
     decisions = []
-    for key, (assessment, metrics) in observations.items():
-        parent = assessment.linked_parent_score if assessment else None
-        match = assessment.question_match_score if assessment else None
-        gap = assessment.margin if assessment else None
+    for key, metrics in observations.items():
+        parent, match, gap = metrics.get('parent'), metrics.get('question'), metrics.get('margin')
         would_hit = (
             metrics['reason'] == 'hit'
             and parent is not None
@@ -342,12 +483,10 @@ def semantic_phase(ctx, cache, store, index, bound, calibration, tokens, embed, 
                 'question_match_score': match,
                 'answer_margin': gap,
                 'would_hit': would_hit,
-                'answer_group': groups[assessment.candidate.binding_id]
-                if assessment and assessment.candidate
-                else None,
+                'answer_group': metrics.get('group'),
             }
         )
-    write_private(development_path(args.output) / 'shadow-val.rows.json', decisions)
+    write_derived(development_path(args.output) / 'shadow-val.rows.json', decisions)
     return {
         'calibration': calibration.model_dump() | points,
         'counts': counts,
@@ -372,13 +511,11 @@ def live_run(
     args, ctx, cache, manifest, budget, directory, calibration, index_dir, store, index, tokens, stamp, history
 ):
     embedding_requests, rerank_requests = budget['embedding'], budget['rerank']
-    if (
-        (args.approved_embedding, args.approved_rerank) != (embedding_requests, rerank_requests)
-        or not args.max_runtime_seconds
-        or args.max_runtime_seconds < 1
+    if (args.approved_embedding, args.approved_rerank) != (embedding_requests, rerank_requests) or (
+        not args.monitor_operations and (not args.max_runtime_seconds or args.max_runtime_seconds < 1)
     ):
         raise ValueError('단계별 승인 요청 상한과 실행 시간 상한을 입력하세요.')
-    if (directory / f'{args.phase}.json').exists() or (directory / f'{args.phase}.started').exists():
+    if (directory / f'{args.phase}.json').exists() or (directory / f'{args.phase}.stopped.json').exists():
         raise ValueError('이미 시작한 단계입니다. 이전 결과 파일을 확인하세요.')
     url = security.model_server_url()
     if url is None:
@@ -396,17 +533,64 @@ def live_run(
         reranker_cfg is None or reranker_cfg.model != calibration.reranker_model
     ):
         raise ValueError('평가 모델이 개발 검색 설정과 다릅니다.')
+    if profile.max_seq < calibration.query_max_seq:
+        raise ValueError('union에는 원자 query 길이 이상을 지원하는 조문 검색 인코더가 필요합니다.')
     lock_path = development_path(str(DATA / 'db' / 'semantic' / '.embedding.lock'))
     lock_path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
-    with lock_path.open('a') as lock:
+    with lock_path.open('a') as lock, StageJournal(directory / f'{args.phase}.sqlite') as journal:
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         client = ModelServerClient(url, security.model_token())
-        bound = BoundedModel(client, calibration, budget, args.max_runtime_seconds)
+        monitor = None
+        if args.monitor_operations:
+            expected = {
+                f'embedding/{calibration.embedding_model}': calibration.embedding_revision,
+                f'rerank/{calibration.reranker_model}': calibration.reranker_revision,
+            }
+            monitor = LiveMonitor(client, directory, args.phase, ROOT.with_name('lawbot-prod') / 'logs', expected)
+        total_items = sum(budget.values())  # Exact counts for the phase's item journal are supplied below.
+        if args.phase == 'compare-val':
+            total_items = budget['rerank']
+        elif args.phase == 'union-val':
+            total_items = budget['rerank']
+        elif args.phase == 'shadow-val':
+            total_items = budget['embedding']
+        bound = BoundedModel(
+            client,
+            calibration,
+            budget,
+            args.max_runtime_seconds or float('inf'),
+            journal=journal,
+            monitor=monitor,
+            items=total_items,
+        )
+        begin = monotonic()
+
+        def current_config():
+            release = active_release(ctx.db, PROFILE)
+            return {
+                'web_commit': check_output(['git', 'rev-parse', 'HEAD'], text=True).strip(),
+                'server_commit': monitor.commit if monitor else None,
+                'model_revisions': monitor.model_rows if monitor else None,
+                'corpus_version': release.release_id,
+                'corpus_law_sha256': sha256(release.law.data).hexdigest(),
+                'corpus_combined_sha256': sha256(release.combined.data).hexdigest(),
+                'index_generation': active_revision(index_dir),
+                'embedding_model': calibration.embedding_model,
+                'reranker': {'model': reranker_cfg.model, 'candidates': reranker_cfg.candidates, 'task': TASK},
+                'semantic_top_k': calibration.top_k,
+                'semantic_instructions': [calibration.parent_instruction, calibration.question_instruction],
+            }
+
         try:
             embed = ServerEmbedding(bound, model_dir, contract, bound.deadline)
             ctx.check()
             bound.check()
-            write_private(directory / f'{args.phase}.started', stamp | {'request_budget': budget})
+            config = current_config()
+            write_derived(
+                directory / f'{args.phase}.started', stamp | {'request_budget': budget, 'configuration': config}
+            )
+            if monitor:
+                monitor.record('phase_start', config=config, completed_items=journal.completed())
             if args.phase == 'shadow-val':
                 result = semantic_phase(ctx, cache, store, index, bound, calibration, tokens, embed, manifest, args)
             else:
@@ -434,23 +618,58 @@ def live_run(
                     ctx.snapshot.release_id,
                     True,
                 )
+
+                def encode(question):
+                    if embed.fits(question):
+                        return bound.embed(calibration.embedding_model, [question], 'query', calibration.query_max_seq)
+                    return None
+
                 search = ResearchSearch(
                     retriever,
                     reranker,
                     index,
                     {key: ctx.snapshot.articles[parent].hit() for key, parent in parents.items()},
-                    lambda question: embed.encode([question]) if embed.fits(question) else None,
+                    encode,
                     pair,
                     calibration.index_revision,
+                    shared_query=embed.fits,
+                    clock=bound.clock,
                 )
-                result = retrieval_phase(args.phase, history, ctx, directory, search, set(parents.values()), supplement)
+                result = retrieval_phase(
+                    args.phase, history, ctx, directory, search, set(parents.values()), supplement, bound=bound
+                )
             bound.check()
             ctx.check()
-            if active_revision(index_dir) != calibration.index_revision:
-                raise ValueError('평가 도중 활성 인덱스가 바뀌었습니다.')
-            result |= {'input': stamp, 'requests': dict(bound.calls), 'generation_requests': 0}
+            final_config = current_config()
+            if final_config != config or final_config['index_generation'] != calibration.index_revision:
+                if monitor:
+                    monitor.stop('configuration_changed', before=config, after=final_config)
+                raise ValueError('평가 도중 실행 구성이 바뀌었습니다.')
+            result |= {
+                'input': stamp,
+                'configuration_start': config,
+                'configuration_end': final_config,
+                'requests': dict(bound.calls),
+                'generation_requests': 0,
+                'elapsed_s': monotonic() - begin,
+                'completed_items': journal.completed(),
+            }
             write_private(directory / f'{args.phase}.json', result)
+            if monitor:
+                monitor.record('phase_complete', **result)
             return result
+        except EvaluationStopped as exc:
+            report = {
+                'invalid': True,
+                'cause': str(exc),
+                'completed_items': journal.completed(),
+                'requests': dict(bound.calls),
+                'elapsed_s': monotonic() - begin,
+            }
+            write_private(directory / f'{args.phase}.stopped.json', report)
+            if monitor:
+                monitor.record('phase_stopped', **report)
+            raise
         finally:
             client.http.close()
 
@@ -465,7 +684,7 @@ def run(args):
     require_coverage(counts)
     manifest = development_path(args.val_ids)
     semantic_questions = len({row['query_id'] for row in json_lines(manifest.read_bytes())})
-    tax = len(tax_legal_rows(ctx, 'test'))
+    tax = len(tax_legal_rows(ctx, 'test')) if args.phase in ('plan', 'once-test') else 0
     plan = phase_plan(counts['val']['questions'], counts['test']['questions'], tax, semantic_questions)
     if args.phase == 'plan':
         return {

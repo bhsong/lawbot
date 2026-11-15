@@ -77,7 +77,14 @@ class Retriever:
 
     def search(self, query, k=3) -> list[Hit]:
         """법률 조문 상위 k개 (하위법령을 켜도 같음)"""
-        s = self.D @ self._encode_queries([query])[0]
+        return self.search_vector(self.query_vector(query), k)
+
+    def query_vector(self, query):
+        return self._encode_queries([query])[0]
+
+    def search_vector(self, query_vector, k) -> list[Hit]:
+        """Rank articles using a query vector encoded with this retriever's model contract."""
+        s = self.D @ query_vector
         return [self._hit(i, float(s[i])) for i in np.argsort(-s)[:k]]
 
     def search_decrees(self, query, k=10) -> list[Hit]:

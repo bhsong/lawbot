@@ -143,32 +143,48 @@ class ResearchSearch:
     encode: Callable[[str], np.ndarray | None] | None
     contract: PairContract
     index_revision: str = ''
+    shared_query: Callable[[str], bool] | None = None
+    clock: Callable[[], float] = perf_counter
 
-    def atomic_candidates(self, question: str, query_k: int):
-        if self.index is None or self.encode is None or not self.parents:
+    def atomic_candidates(self, question: str, query_k: int, *, vector=None):
+        if self.index is None or not self.parents:
             return [], 'unavailable_index', 0, 0
         if not self.index.active(self.index_revision):
             return [], 'stale_index', 0, 0
-        vectors = self.encode(question)
+        calls = 0
+        if vector is not None:
+            vectors = vector[None, :]
+        else:
+            vectors = self.encode(question) if self.encode is not None else None
+            calls = int(vectors is not None)
         if vectors is None:
             return [], 'truncated_input', 0, 0
         if not valid_vectors(vectors, 1, self.index.vectors.shape[1]):
-            return [], 'invalid_vector', 1, 0
+            return [], 'invalid_vector', calls, 0
         revisions = self.index.top_queries(vectors[0], set(self.parents).intersection(self.index.query_ids), query_k)
         unique: dict[str, Hit] = {}
         for revision in revisions:
             hit = self.parents[revision]
             unique.setdefault(hit_key(hit), hit)
-        return list(unique.values()), 'ok', 1, len(revisions)
+        return list(unique.values()), 'ok', calls, len(revisions)
 
     def run(self, route: str, question: str, query_k: int, union_limit: int, *, previous=None) -> SearchResult:
         if route not in ('base', 'atomic', 'union') or query_k < 1 or union_limit < 1:
             raise ValueError('invalid retrieval route or candidate budget')
-        started = perf_counter()
-        base = self.retriever.search(question, k=self.reranker.candidates) if route != 'atomic' else []
-        atomic, reason, atomic_calls, atomic_queries = (
-            self.atomic_candidates(question, query_k) if route != 'base' else ([], 'disabled', 0, 0)
-        )
+        started = self.clock()
+        if route == 'union' and self.shared_query is not None:
+            vector = self.retriever.query_vector(question)
+            base = self.retriever.search_vector(vector, self.reranker.candidates)
+            atomic, reason, atomic_calls, atomic_queries = (
+                self.atomic_candidates(question, query_k, vector=vector)
+                if self.shared_query(question)
+                else ([], 'truncated_input', 0, 0)
+            )
+        else:
+            base = self.retriever.search(question, k=self.reranker.candidates) if route != 'atomic' else []
+            atomic, reason, atomic_calls, atomic_queries = (
+                self.atomic_candidates(question, query_k) if route != 'base' else ([], 'disabled', 0, 0)
+            )
         collisions = 0
         if route == 'union':
             candidates, collisions = union_candidates(base, atomic, union_limit)
@@ -176,8 +192,8 @@ class ResearchSearch:
             candidates = atomic[: self.reranker.candidates]
         else:
             candidates = base
-        search_ms = (perf_counter() - started) * 1000
-        rerank_start = perf_counter()
+        search_ms = (self.clock() - started) * 1000
+        rerank_start = self.clock()
         hits, _, reused = rank_candidates(question, candidates, self.reranker, self.contract, previous)
         return SearchResult(
             hits,
@@ -193,8 +209,8 @@ class ResearchSearch:
                 'reused_pairs': reused,
                 'rerank_calls': int(len(candidates) > reused),
                 'search_ms': search_ms,
-                'rerank_ms': (perf_counter() - rerank_start) * 1000,
-                'total_ms': (perf_counter() - started) * 1000,
+                'rerank_ms': (self.clock() - rerank_start) * 1000,
+                'total_ms': (self.clock() - started) * 1000,
             },
         )
 
