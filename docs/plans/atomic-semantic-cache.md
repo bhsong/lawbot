@@ -14,9 +14,9 @@
 | 3 | §4 Step 2 "A/B를 한 배치에 담는 것을 우선 시험" | **리랭커 호출 2회(A, B)로 확정.** 모델 서버는 고치지 않는다 | 모델 서버 rerank는 요청 하나에 query 하나·instruction 하나다(`services/model-server/.../rerank.py` `score(query, docs, instruction)`, 챗봇 `api_client.rerank(model, query, documents, instruction)`). 페어별 instruction은 모델 서버 변경이고, 이는 별도 사용자 요청이 필요하다 |
 | 4 | §4.1 Step 0 앞 단계 없음 | **계산 질문 게이트를 맨 앞에 둔다.** `is_calculation_question(question)`이 참이면 exact·semantic 모두 조회하지 않고 RAG(계산기 경로)로 간다. pending 자동 등록과 원자 질문·seed에서도 제외한다 | 2026-11-10 사용자 결정: 계산 질문은 모든 캐시에서 제외. 지금 `web.chat_events`가 exact 앞에서 이미 이렇게 한다 |
 | 5 | §5.4·§7.3 지연은 측정·보고만 | **miss 추가 지연 상한을 출시 조건으로 둔다.** semantic `on` 전 shadow에서 miss 경로의 추가 지연 p95를 재고, 사용자에게 수치와 함께 상한 승인을 받는다. 상한을 넘으면 `on` 하지 않는다 | 답변이 느려지는 변경은 피한다는 사용자 방침. miss는 원자 검색 + 리랭크 2회 + 합집합 리랭크가 더해진다 |
-| 6 | §7.1 단계 A~J를 한 작업으로 | **PR 4개로 나눈다**(§3) | 범위가 커서 리뷰·되돌리기가 어렵다 |
-| 7 | §5.2 snapshot이 바뀌면 시맨틱 전체 우회 | 그대로 따르되 PR 1에서 **조문 release가 실제로 얼마나 자주 바뀌는지** 잰다(최근 30일 활성화 횟수·날짜). 거의 매일 바뀌면 exact처럼 답변별 유지·보류·끄기(`cache_carry.py`)를 시맨틱 binding에 적용하는 후속 PR을 계획에 올리고 사용자에게 묻는다 | 06:30 자동 갱신으로 snapshot이 자주 바뀌면 시맨틱이 사실상 늘 꺼진다 |
-| 8 | §10 Q1 초기 원자 범위 미정 | **A안**: 통과한 노동법 답변(통과 ZIP 634개)과 연결된 조문부터. B안(전체 조문)은 스키마·런타임만 지원 | 검수·평가 규모를 줄인다(권고, 사용자 확인 필요 — §4) |
+| 6 | §7.1 단계 A~J를 한 작업으로 | **PR 5개로 나눈다**(§3) | 범위가 커서 리뷰·되돌리기가 어렵다 |
+| 7 | §5.2 snapshot이 바뀌면 시맨틱 전체 우회 | **binding(답변·원자·정책 연결)별로 유지·검토 대기·끔을 판정한다.** 통째로 끄지 않는다(사용자 결정 2026-11-15). 규칙은 exact의 `cache_carry.py`를 따르고 원자 의존을 더한다: 표시·의존 근거, 원자 부모 조문, 원자 질문이 모두 같은 원문 hash면 새 snapshot으로 **유지**(감사 actor `articles-update`); 같은 법령의 다른 조문만 바뀌면 **검토 대기**; 의존 조문·부모 조문이 바뀌거나 사라지면 **끔**(새 revision 필요). 판정이 실패하면 새 snapshot의 시맨틱은 꺼진 채로(fail closed) 두고 조문 갱신은 계속한다. 유지된 binding의 원자 질문 벡터는 그대로 새 index generation으로 옮긴다 | 06:30 자동 갱신으로 snapshot이 자주 바뀌므로 전체 우회는 시맨틱을 사실상 늘 끈다 |
+| 8 | §10 Q1 초기 원자 범위 미정 | **A안 확정**(사용자 2026-11-15): 통과한 노동법 답변(통과 ZIP 634개)과 연결된 조문부터. B안(전체 조문)은 스키마·런타임만 지원 | 검수·평가 규모를 줄인다 |
 
 ### 그대로 두는 것(사용자 확인)
 
@@ -38,19 +38,26 @@
 
 | PR | 브랜치(예) | 범위(명세 단계) | 완료 기준 | 실제 모델 |
 | --- | --- | --- | --- | --- |
-| 1 | `feat/semantic-cache-core` | A 사전 탐색 기록, B 스키마(0003 migration, revision·binding·정책·index manifest), D 결정적 조건 검사·A/B 페어 매핑·`linked_parent_score`, E dispatcher(계산 게이트 → exact → semantic `off/shadow`) | V2-01~12, 19, 20, 28(exact 부분), 31, 37 Green. 기본값 `off`에서 기존 응답·SSE·로그가 바이트 단위로 같음. release 변경 빈도 측정 결과를 PR에 적음 | 없음(가짜 모델) |
+| 1 | `feat/semantic-cache-core` | A 사전 탐색 기록, B 스키마(0003 migration, revision·binding·정책·index manifest, **binding별 carry 상태와 판정 이력 칸**), D 결정적 조건 검사·A/B 페어 매핑·`linked_parent_score`, E dispatcher(계산 게이트 → exact → semantic `off/shadow`) | V2-01~12, 19, 20, 28(exact 부분), 31, 37 Green. 기본값 `off`에서 기존 응답·SSE·로그가 바이트 단위로 같음 | 없음(가짜 모델) |
 | 2 | `feat/atomic-index-tools` | C 원자·질문 구축 도구(오프라인), 인덱스 generation·manifest·원자적 교체, 통과 ZIP import(V2-35), val 세트(재사용 가능 / 불가 / 불확실, hard-negative 포함)와 누수 검사 | V2-20, 30, 35, 36 Green. A안 범위 manifest 확정. 생성한 원자·질문 수, val 구성 수 보고 | 원자·질문 생성에 모델이 필요하면 **요청 수·시간 추정 후 승인** |
 | 3 | `feat/semantic-union-rag` | F 미스 합집합 RAG(D_base ∪ D_atomic, 점수 재사용 조건), H shadow 평가 도구와 계측 필드 | V2-13~18, 32, 38 Green. shadow 평가(val)로 A/B threshold·margin·후보 예산 선택, miss 추가 지연 p50/p95, 합집합 vs 기존 검색 recall 비교 → `docs/evals/` 기록 | **val shadow 평가 승인**(요청 수·시간 먼저 제시) |
 | 4 | `feat/semantic-admin-pending` | G 어드민 검수 화면 최소 확장, 정상 완료 후보만 pending, 승인·배포·철회, 동시성(조건부 기록) | V2-21~27, 29, 33 Green. 대역 E2E 390px·1280px. `AUTO_STAGE_PENDING` 기본 off | 출시 판단용 실제 모델 평가(V2-33·34)는 **별도 승인** |
+| 5 | `feat/semantic-carry-forward` | §1 #7 binding별 유지·검토 대기·끔: DB 모드 `lawbot-articles-update`에서 활성화 직후·웹 재시작 전에 판정, 갱신 보고서에 판정 수, 유지 binding의 벡터를 새 index generation으로 이전, 어드민 캐시 탭에 binding별 판정·바뀐 조문(전후 원문)·재승인 | 유지/검토 대기/끔/판정 실패(fail closed)/롤백 각각 통합 테스트, V2-24 Green, 대역 E2E로 어드민 판정 화면 | 없음(가짜 모델) |
 
-- 운영 `on`(명세 I)은 PR 4 뒤 사용자가 threshold·지연 상한·출시 표본을 승인했을 때만 한다. 운영 반영은 별도 승인.
-- §1 #7에서 release가 자주 바뀌면 PR 5(시맨틱 binding carry-forward)를 제안한다.
+- 운영 `on`(명세 I)은 PR 5까지 병합된 뒤, 사용자가 threshold·지연 상한·출시 표본을 승인했을 때만 한다. 운영 반영은 별도 승인.
+
+## 데이터 ZIP 위치
+
+통과·추후 검토 ZIP은 답변과 질문 원문을 담고 있어 커밋하지 않는다. exact 캐시의 P07 ZIP(운영 `data/db/p07-handoff.zip`, 권한 600)과 같은 규칙을 쓴다.
+
+- 개발 트리: `data/db/semantic/pass-handoff.zip`, `data/db/semantic/deferred-handoff.zip` (`data/db/`는 `.gitignore` 대상). 권한 600.
+- 사용자가 넣은 뒤 SHA-256을 이 계획서에 적고, 도구는 경로를 인수(`--bundle`)나 `LAWBOT_` 설정으로 받는다. 코드에 경로를 박지 않는다.
+- 운영에는 출시 반영 때 같은 상대 경로로 복사한다(별도 승인).
 
 ## 4. 사용자 확인 필요
 
-1. 초기 원자 범위 A안 확정 여부(권고 A).
-2. PR 3 후 miss 추가 지연 상한 값(측정 결과를 보고 결정).
-3. pending 원문 보존 기간·접근 권한(PR 4 전에 결정, 명세 §5.3).
+1. PR 3 후 miss 추가 지연 상한 값(측정 결과를 보고 결정).
+2. pending 원문 보존 기간·접근 권한(PR 4 전에 결정, 명세 §5.3).
 
 ## 5. 지키는 규칙
 
