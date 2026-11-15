@@ -19,6 +19,7 @@ from lawbot.cache_store import (
     revoke_in,
     set_mode_in,
     translate_sqlite_errors,
+    with_review_evidence,
 )
 from lawbot.calc_gate import is_calculation_question
 from lawbot.db.connection import connect, transaction
@@ -399,7 +400,7 @@ class ReviewCatalog:
         shown, citations = preview(self.snapshot, raw, citations_for(conn, target))
         if shown is None or digest(shown) != preview_hash:
             raise StoreError('review_changed', '확인한 표시본이 현재 표시본과 다릅니다.', 409)
-        lineage = json.loads(source)
+        lineage = with_review_evidence(conn, target, json.loads(source))
         if any(key not in current or current[key][-1] != '0' for key in lineage.get('review_evidence_article_ids', [])):
             raise StoreError('review_changed', '검토 참고 조문을 현재 릴리스에서 확인할 수 없습니다.', 409)
         return Draft('', '', key, raw_hash, shown, citations, lineage, raw), query_ids

@@ -93,7 +93,7 @@ def activate(store, snapshot, draft, mode='on'):
     return approval
 
 
-def test_v2_accepts_original_checksum_and_preserves_serving_history(catalog):
+def test_v2_uses_original_migration_and_preserves_serving_history(catalog):
     store, snapshot, draft = catalog
     path = store.path
     original_checksum = 'f17b0cc8e4ba5f2580a20e97f74855f9e9f4fcbf869a8169bcc677515996dbbc'
@@ -102,9 +102,9 @@ def test_v2_accepts_original_checksum_and_preserves_serving_history(catalog):
     cache = cache_runtime.ExactCache(store, path, snapshot)
     before = cache.lookup(draft.question, 'pro', 'concise')
     assert before.match is not None
-    with connect(path, write=True) as conn:
-        conn.execute('UPDATE schema_migrations SET checksum=? WHERE version=1', (original_checksum,))
+    with connect(path) as conn:
         history = conn.execute('SELECT version,name,checksum FROM schema_migrations ORDER BY version').fetchall()
+        assert history[0] == (1, '0001_exact_cache.sql', original_checksum)
     assert cache.deployment_status()[0] == 'OK'
     assert migrate(path) == 2
     after = cache.lookup(draft.question, 'pro', 'concise')

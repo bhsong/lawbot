@@ -9,8 +9,7 @@ from playwright.sync_api import expect
 import e2e_support as e2e
 from lawbot import deploy
 from lawbot.cache_seed import Protection
-from lawbot.cache_seed_pass import Answer, Handoff, Question, Reference
-from lawbot.cache_seed_store import import_seed
+from lawbot.cache_seed_store import Answer, Handoff, Question, Reference, import_seed
 from lawbot.cache_store import Store, init
 from lawbot.corpus_store import active_release, active_token
 from lawbot.db import cli

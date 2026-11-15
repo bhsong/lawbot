@@ -7,11 +7,10 @@ from dataclasses import replace
 import pytest
 
 from lawbot.cache_seed import P07_SHA256, Protection
-from lawbot.cache_seed_pass import Answer, Handoff, Question, Reference
-from lawbot.cache_seed_store import IMPORT_REASON, import_seed
+from lawbot.cache_seed_store import IMPORT_REASON, Answer, Handoff, Question, Reference, import_seed
 from lawbot.cache_store import Draft, Store, init
 from lawbot.db.connection import connect
-from lawbot.exact_cache import Article, Namespace, Snapshot, digest
+from lawbot.exact_cache import Article, Namespace, Snapshot, canonical, digest
 
 PARENT = '근로기준법 제26조'
 SECONDARY = '근로기준법 제36조'
@@ -171,8 +170,13 @@ def test_existing_approval_is_linked_and_replay_does_not_append_history(handoff,
     assert first_run['p07_links'] == int(same_revision)
     assert first_run['existing_conflicts'] == int(not same_revision)
     assert first_run['approved_questions'] == (2 if same_revision else 1)
-    assert store.control().approval_id == prior_approval and store.control().protection_hash == 'protected'
-    assert first_run['approval_id'] == prior_approval
+    assert store.control().approval_id == first_run['approval_id'] and store.control().protection_hash == 'protected'
+    with connect(db) as conn:
+        receipt, detail = conn.execute(
+            "SELECT target,detail FROM cache_audit_events WHERE action='pass_seed_import'"
+        ).fetchone()
+        assert json.loads(detail)['previous_approval_id'] == prior_approval
+    assert first_run['approval_id'] == digest(canonical([prior_approval, receipt]))
     assert import_seed(db, seed, snapshot, 1, Protection(frozenset(), {}, 'protected')) == first_run
     with connect(db) as conn:
         assert selected(conn, 'SELECT * FROM cache_audit_events ORDER BY event_id') == history
@@ -318,7 +322,7 @@ def test_missing_handoff_field_exits_cli_without_traceback(tmp_path, monkeypatch
     with ZipFile(path, 'w') as bundle:
         bundle.writestr('manifest.json', '{}')
     monkeypatch.setattr('lawbot.cache_seed_pass.PASS_SHA256', sha256(path.read_bytes()).hexdigest())
-    monkeypatch.setattr(cache_seed_pass, 'corpus_context', lambda _: SimpleNamespace())
+    monkeypatch.setattr(cache_seed_pass, 'corpus_context', lambda *a: SimpleNamespace())
     monkeypatch.setattr(cache_seed_pass.envfile, 'load', lambda: None)
     with pytest.raises(SystemExit) as exc:
         cache_seed_pass.main(
@@ -335,6 +339,34 @@ def test_missing_handoff_field_exits_cli_without_traceback(tmp_path, monkeypatch
     output = capsys.readouterr().err
     assert '통과 ZIP 적재 실패' in output and 'missing a required field or reference' in output
     assert 'Traceback' not in output
+
+
+@pytest.mark.parametrize('option', ['--bundle', '--cache-db', '--corpus-db'])
+def test_pass_cli_rejects_all_production_paths_before_reading_zip(option, tmp_path, monkeypatch, capsys):
+    from lawbot import cache_admin, cache_seed_pass
+
+    monkeypatch.setattr(cache_seed_pass.envfile, 'load', lambda: None)
+    monkeypatch.setattr(cache_seed_pass, 'read_pass', lambda *_: pytest.fail('production ZIP command opened archive'))
+    args = {
+        '--bundle': tmp_path / 'pass.zip',
+        '--cache-db': tmp_path / 'cache.db',
+        '--corpus-db': tmp_path / 'corpus.db',
+    }
+    args[option] = cache_admin.ROOT.with_name('lawbot-prod') / args[option].name
+    with pytest.raises(SystemExit) as exc:
+        cache_seed_pass.main([value for key, path in args.items() for value in (key, str(path))])
+    assert exc.value.code == 2
+    assert '개발용 사본에서만' in capsys.readouterr().err
+
+
+def test_p07_zip_commands_reject_the_production_target(tmp_path, monkeypatch):
+    from lawbot import cache_admin
+
+    monkeypatch.setattr(cache_admin, 'load_bundle', lambda *_: pytest.fail('production command opened archive'))
+    db = cache_admin.ROOT.with_name('lawbot-prod') / 'cache.db'
+    args = cache_admin.parser().parse_args(['inspect', '--db', str(db), '--bundle', str(tmp_path / 'p07.zip')])
+    with pytest.raises(ValueError, match='개발용 사본에서만'):
+        cache_admin.run(args)
 
 
 def test_p07_dependency_conflict_preserves_only_the_original_exact_approval(handoff, tmp_path):

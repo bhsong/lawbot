@@ -4,21 +4,56 @@ import json
 from collections import Counter, defaultdict
 from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import TYPE_CHECKING
 
 from lawbot.answer_format import render
 from lawbot.cache_seed import P07_SHA256, Protection
-from lawbot.cache_store import Draft, Store, audit, insert_answer, now, read_control, valid
+from lawbot.cache_store import Draft, Store, audit, insert_answer, now, read_control, valid, with_review_evidence
 from lawbot.calc_gate import is_calculation_question
 from lawbot.db.connection import connect, transaction
 from lawbot.exact_cache import FORMAT, Snapshot, canonical, digest, normalize
 
-if TYPE_CHECKING:
-    from lawbot.cache_seed_pass import Answer, Handoff, Question
-
 IMPORT_REASON = '사용자 전수 검수 승인 2026-11-15'
 ACTOR = 'import'
 ACTION = 'pass_seed_import'
+DB_ACTION = 'cache_db_import'
+
+
+@dataclass(frozen=True)
+class Reference:
+    article_id: str
+    sha256: str
+
+
+@dataclass(frozen=True)
+class Answer:
+    key: str
+    unit_id: str
+    parent: str | None
+    raw: str
+    sha256: str
+    display: tuple[Reference, ...]
+    evidence: tuple[Reference, ...]
+    metadata: dict
+    parent_sha256: str | None
+    revision_key: str | None = None
+
+
+@dataclass(frozen=True)
+class Question:
+    id: str
+    answer_key: str
+    text: str
+    metadata: dict
+    valid_until: str | None = None
+    expires_at: str | None = None
+    source_id: str | None = None
+
+
+@dataclass(frozen=True)
+class Handoff:
+    sha256: str
+    answers: tuple[Answer, ...]
+    questions: tuple[Question, ...]
 
 
 @dataclass(frozen=True)
@@ -68,17 +103,24 @@ def compatible_revision(conn, revision, citations, evidence):
     if displayed != citations:
         return False
     row = conn.execute('SELECT source FROM cache_answers WHERE answer_id=?', (revision,)).fetchone()
-    source = json.loads(row[0])
-    reviewed = source.get('review_evidence_article_ids')
-    if reviewed is not None and set(reviewed) != evidence.keys():
+    source = with_review_evidence(conn, revision, json.loads(row[0]))
+    if set(source.get('review_evidence_article_ids', ())) - evidence.keys():
         return False
-    hashes = source.get('review_evidence_hashes')
-    return hashes is None or hashes == evidence
+    return all(evidence.get(key) == checksum for key, checksum in source.get('review_evidence_hashes', {}).items())
+
+
+def review_hashes(answer: Answer) -> dict[str, str]:
+    evidence = {ref.article_id: ref.sha256 for ref in answer.evidence}
+    if answer.parent is not None and answer.parent_sha256 is not None:
+        if answer.parent not in {ref.article_id for ref in answer.display}:
+            evidence[answer.parent] = answer.parent_sha256
+    return evidence
 
 
 def evidence_result(answer: Answer, snapshot: Snapshot) -> dict[str, str]:
-    expected = {ref.article_id: ref.sha256 for ref in (*answer.display, *answer.evidence)}
-    expected[answer.parent] = answer.parent_sha256
+    expected = {ref.article_id: ref.sha256 for ref in answer.display} | review_hashes(answer)
+    if answer.parent is not None and answer.parent_sha256 is not None:
+        expected[answer.parent] = answer.parent_sha256
     result = {}
     for key, checksum in expected.items():
         article = snapshot.articles.get(key)
@@ -86,11 +128,11 @@ def evidence_result(answer: Answer, snapshot: Snapshot) -> dict[str, str]:
     return result
 
 
-def answer_revision(conn, snapshot, answer: Answer, questions, prior, matched, at, sha):
+def answer_revision(conn, snapshot, answer: Answer, questions, prior, matched, at, sha, *, reuse_prior):
     ns = snapshot.namespace.id
     citations = [(ref.article_id, ref.sha256) for ref in answer.display]
-    evidence = {ref.article_id: ref.sha256 for ref in answer.evidence}
-    reusable = sorted({row.answer_id for row in prior.values() if row.raw_hash == answer.sha256})
+    evidence = review_hashes(answer)
+    reusable = sorted({row.answer_id for row in prior.values() if row.raw_hash == answer.sha256}) if reuse_prior else ()
     revision = next((key for key in reusable if compatible_revision(conn, key, citations, evidence)), None)
     if revision is None:
         hits = snapshot.resolve(citations)
@@ -102,23 +144,32 @@ def answer_revision(conn, snapshot, answer: Answer, questions, prior, matched, a
             'review_evidence_hashes': evidence,
         }
         draft = Draft(
-            questions[0].id, questions[0].text, answer.key, answer.sha256, text, citations, source, answer.raw
+            questions[0].id,
+            questions[0].text,
+            answer.revision_key or answer.key,
+            answer.sha256,
+            text,
+            citations,
+            source,
+            answer.raw,
         )
         intended = draft.answer_id(ns)
         if conn.execute(
             'SELECT 1 FROM cache_answers WHERE answer_id=?', (intended,)
         ).fetchone() is not None and not compatible_revision(conn, intended, citations, evidence):
             # Old exact revision IDs omit review-only evidence. Keep its existing audit and rendering.
-            draft = replace(draft, answer_key=f'{answer.key}:evidence:{digest(canonical(evidence))}')
+            draft = replace(draft, answer_key=f'{draft.answer_key}:evidence:{digest(canonical(evidence))}')
         revision = insert_answer(conn, ns, draft)
 
     def attachable(question):
+        if not valid(at, at, question.valid_until, question.expires_at):
+            return False
         row = prior.get(question.id)
         return row is None or (
             row.answer_id == revision
             and row.matches(question, answer.sha256)
             and (
-                row.status == 'draft'
+                (row.status == 'draft' and valid(at, at, row.valid_until, row.expires_at))
                 or (
                     row.status == 'approved'
                     and row.enabled
@@ -127,16 +178,43 @@ def answer_revision(conn, snapshot, answer: Answer, questions, prior, matched, a
             )
         )
 
+    added = False
     if matched and any(attachable(question) for question in questions):
-        conn.execute(
-            "UPDATE cache_answers SET status='approved',reviewed_by=?,reviewed_at=?,valid_from=? "
-            "WHERE answer_id=? AND status='draft'",
-            (ACTOR, at, at, revision),
+        added = bool(
+            conn.execute(
+                "UPDATE cache_answers SET status='approved',reviewed_by=?,reviewed_at=?,valid_from=? "
+                "WHERE answer_id=? AND status='draft'",
+                (ACTOR, at, at, revision),
+            ).rowcount
         )
     status, *bounds = conn.execute(
         'SELECT status,valid_from,valid_until,expires_at FROM cache_answers WHERE answer_id=?', (revision,)
     ).fetchone()
-    return revision, matched and status == 'approved' and valid(at, *bounds)
+    return revision, matched and status == 'approved' and valid(at, *bounds), added
+
+
+def record_review_evidence(conn, revision, answer, bundle_hash):
+    row = conn.execute('SELECT source FROM cache_answers WHERE answer_id=?', (revision,)).fetchone()
+    source = with_review_evidence(conn, revision, json.loads(row[0]))
+    known = source.get('review_evidence_hashes', {})
+    added = {key: checksum for key, checksum in review_hashes(answer).items() if key not in known}
+    if added:
+        audit(
+            conn,
+            'review_evidence',
+            revision,
+            ACTOR,
+            IMPORT_REASON,
+            {
+                'bundle_sha256': bundle_hash,
+                'review_evidence_hashes': added,
+            },
+        )
+    conn.execute('INSERT INTO cache_render_inputs VALUES (?,?) ON CONFLICT DO NOTHING', (revision, answer.raw))
+
+
+def earliest(*values):
+    return min((value for value in values if value is not None), default=None)
 
 
 def attach_query(conn, snapshot, q: Question, revision, raw_hash, prior, ready, at, sha):
@@ -144,14 +222,20 @@ def attach_query(conn, snapshot, q: Question, revision, raw_hash, prior, ready, 
     ns = snapshot.namespace.id
     qhash = digest(normalized)
     query = digest(canonical([ns, qhash]))
+    ready = ready and valid(at, at, q.valid_until, q.expires_at)
     if prior is not None:
         if not prior.matches(q, raw_hash) or prior.answer_id != revision:
             return None, False, 'existing_conflict'
         if prior.status == 'draft' and ready:
+            end, expires = earliest(prior.valid_until, q.valid_until), earliest(prior.expires_at, q.expires_at)
+        else:
+            end, expires = prior.valid_until, prior.expires_at
+        if prior.status == 'draft' and ready and valid(at, at, end, expires):
             conn.execute(
-                "UPDATE cache_queries SET status='approved',exact_enabled=1,reviewed_by=?,reviewed_at=?,valid_from=? "
+                "UPDATE cache_queries SET status='approved',exact_enabled=1,reviewed_by=?,reviewed_at=?,valid_from=?,"
+                'valid_until=?,expires_at=? '
                 'WHERE query_id=?',
-                (ACTOR, at, at, prior.query_id),
+                (ACTOR, at, at, end, expires, prior.query_id),
             )
             return prior.query_id, True, 'existing_link'
         approved = (
@@ -163,12 +247,13 @@ def attach_query(conn, snapshot, q: Question, revision, raw_hash, prior, ready, 
         return prior.query_id, approved, 'existing_link'
     conn.execute(
         'INSERT INTO cache_queries (query_id,namespace_id,answer_id,source_id,original,raw_sha256,normalized,'
-        'normalized_sha256,source,status,exact_enabled,reviewed_by,reviewed_at,valid_from) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
+        'normalized_sha256,source,status,exact_enabled,reviewed_by,reviewed_at,valid_from,valid_until,expires_at) '
+        'VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
         (
             query,
             ns,
             revision,
-            q.id,
+            q.source_id or q.id,
             q.text,
             digest(q.text),
             normalized,
@@ -179,31 +264,41 @@ def attach_query(conn, snapshot, q: Question, revision, raw_hash, prior, ready, 
             ACTOR if ready else None,
             at if ready else None,
             at if ready else None,
+            q.valid_until,
+            q.expires_at,
         ),
     )
     return query, ready, 'inserted'
 
 
-def seed_receipt(conn, receipt):
+def seed_receipt(conn, receipt, action):
     row = conn.execute(
         'SELECT detail FROM cache_audit_events WHERE action=? AND target=? AND actor=? ORDER BY event_id DESC LIMIT 1',
-        (ACTION, receipt, ACTOR),
+        (action, receipt, ACTOR),
     ).fetchone()
     return json.loads(row[0]) if row else None
 
 
-def check_seed_import(conn, namespace, event, receipt, protection):
+def check_seed_import(conn, namespace, event, receipt, protection, action):
     control = read_control(conn)
-    previous = seed_receipt(conn, receipt)
+    if action == DB_ACTION and control.mode != 'off':
+        raise ValueError('DB 적재 전에 대상 캐시 모드를 off로 전환하세요.')
+    previous = seed_receipt(conn, receipt, action)
     if (
-        previous is None
+        action == ACTION
+        and previous is None
         and conn.execute('SELECT 1 FROM cache_audit_events WHERE action=? LIMIT 1', (ACTION,)).fetchone()
     ):
         raise ValueError('다른 통과 ZIP 적재 또는 코퍼스 활성화 이력이 있습니다. 새 개발 사본을 사용하세요.')
     if previous is not None and previous['protection_hash'] != protection.fingerprint:
         raise ValueError('protected split changed since import')
     if control.protection_hash not in (None, protection.fingerprint):
-        raise ValueError('기존 exact 보호 지문과 seed 보호 지문이 다릅니다.')
+        active = conn.execute(
+            "SELECT 1 FROM cache_queries WHERE namespace_id=? AND status='approved' AND exact_enabled=1 LIMIT 1",
+            (control.namespace_id,),
+        ).fetchone()
+        if action == ACTION or active is not None or previous is not None:
+            raise ValueError('기존 exact 보호 지문과 seed 보호 지문이 다릅니다.')
     if previous is not None:
         return control, previous['counts']
     if control.mode != 'off' or (control.namespace_id, control.activation_event) not in (
@@ -215,15 +310,28 @@ def check_seed_import(conn, namespace, event, receipt, protection):
 
 
 def import_seed(
-    db: Path, seed: Handoff, snapshot: Snapshot, event: int, protection: Protection, *, check_snapshot=lambda: None
+    db: Path,
+    seed: Handoff,
+    snapshot: Snapshot,
+    event: int,
+    protection: Protection,
+    *,
+    check_snapshot=lambda: None,
+    source_db_sha256: str | None = None,
 ):
-    """Approve one verified pass bundle atomically, preserving mode and prior exact approval."""
+    """Approve a verified batch atomically under the destination corpus and split."""
     Store(db).check_schema()
     ns = snapshot.namespace.id
-    receipt = digest(canonical(['pass-seed', seed.sha256, ns, event]))
+    action = ACTION if source_db_sha256 is None else DB_ACTION
+    origin = (
+        ['pass-seed', seed.sha256]
+        if source_db_sha256 is None
+        else [DB_ACTION, source_db_sha256, protection.fingerprint]
+    )
+    receipt = digest(canonical([*origin, ns, event]))
     with connect(db) as conn:
         conn.execute('BEGIN')
-        _, previous = check_seed_import(conn, ns, event, receipt, protection)
+        _, previous = check_seed_import(conn, ns, event, receipt, protection, action)
     if previous is not None:
         return previous
     groups = defaultdict(list)
@@ -263,7 +371,7 @@ def import_seed(
     approved_revisions = set()
     with connect(db, write=True) as conn, transaction(conn):
         # Recheck after the near-duplicate scan, which runs outside the write transaction.
-        control, previous = check_seed_import(conn, ns, event, receipt, protection)
+        control, previous = check_seed_import(conn, ns, event, receipt, protection, action)
         if previous is not None:
             return previous
         conn.execute(
@@ -277,6 +385,7 @@ def import_seed(
             result['existing_exclusions'] += exclude_existing(
                 conn, existing_queries.get(q.id), q, answer_hashes[q.answer_key], reason, seed.sha256
             )
+        approval_added = False
         for answer in seed.answers:
             statuses = evidence_result(answer, snapshot)
             checked.update(statuses)
@@ -284,7 +393,11 @@ def import_seed(
                 continue
             matched = set(statuses.values()) == {'match'}
             prior = {q.id: existing_queries[q.id] for q in questions if q.id in existing_queries}
-            revision, ready = answer_revision(conn, snapshot, answer, questions, prior, matched, at, seed.sha256)
+            revision, ready, added = answer_revision(
+                conn, snapshot, answer, questions, prior, matched, at, seed.sha256, reuse_prior=action == ACTION
+            )
+            approval_added |= added
+            approved_for_answer = False
             for q in questions:
                 if not matched:
                     result['existing_exclusions'] += exclude_existing(
@@ -295,7 +408,9 @@ def import_seed(
                 )
                 result['approved_questions'] += approved
                 if approved:
+                    approved_for_answer = True
                     approved_revisions.add(revision)
+                    approval_added |= q.id not in prior or prior[q.id].status == 'draft'
                 result['blocked_evidence_questions'] += not matched
                 result['existing_conflicts'] += outcome == 'existing_conflict'
                 if outcome == 'existing_link':
@@ -312,30 +427,44 @@ def import_seed(
                     q.metadata
                     | {
                         'bundle_sha256': seed.sha256,
-                        'source_id': q.id,
+                        'source_id': q.source_id or q.id,
                         'answer_id': revision,
                         'question_sha256': digest(q.text),
                         'exact_approved': approved,
                         'outcome': outcome,
                     },
                 )
+            if approved_for_answer:
+                record_review_evidence(conn, revision, answer, seed.sha256)
         result['approved_answers'] = len(approved_revisions)
         result.update(f'hash_{value}' for value in checked.values())
         payload: dict[str, int | str] = dict(result)
         if approved_revisions:
-            # Give a fresh cache an exact approval while preserving any existing approval.
-            approval = control.approval_id or receipt
+            approval = digest(canonical([control.approval_id, receipt])) if approval_added else control.approval_id
             conn.execute(
                 'UPDATE cache_control SET namespace_id=?,activation_event=?,protection_hash=?,approval_id=?,'
                 'generation=generation+1 WHERE singleton=1',
                 (ns, event, protection.fingerprint, approval),
             )
-            payload['approval_id'] = approval
+            if approval is not None:
+                payload['approval_id'] = approval
+            if approval_added:
+                audit(
+                    conn,
+                    'approve',
+                    approval,
+                    ACTOR,
+                    IMPORT_REASON,
+                    {
+                        'previous_approval_id': control.approval_id,
+                        'import_receipt': receipt,
+                    },
+                )
 
         check_snapshot()
         audit(
             conn,
-            ACTION,
+            action,
             receipt,
             ACTOR,
             IMPORT_REASON,
@@ -344,6 +473,9 @@ def import_seed(
                 'counts': payload,
                 'protection_hash': protection.fingerprint,
                 'snapshot': snapshot.release_id,
-            },
+                'namespace_id': ns,
+                'previous_approval_id': control.approval_id,
+            }
+            | ({'source_db_sha256': source_db_sha256} if source_db_sha256 is not None else {}),
         )
     return payload

@@ -265,16 +265,7 @@ def review_api(prepared, tmp_path, monkeypatch, admin_hash, request):
         monkeypatch.setattr(
             cache_admin,
             'scope',
-            lambda args: (
-                None,
-                snapshot,
-                None,
-                dict(
-                    namespace_id=snapshot.namespace.id,
-                    activation_event=token[1],
-                    protection_hash=load_protection(db, args.protected_csv).fingerprint,
-                ),
-            ),
+            lambda args: cache_admin.CorpusContext(db, snapshot, token[1], load_protection(db, args.protected_csv)),
         )
     monkeypatch.setattr(cache_review_store, 'verified_inputs', lambda *a: protection)
     assert apply_release(store.path, db, token, target, snapshot)['pending'] == 1
@@ -388,6 +379,177 @@ def test_carry_inputs_come_from_the_corpus_db_only(tmp_path, monkeypatch):
     seed_qa(db)
     forbid_zip(monkeypatch)
     assert cache_carry.verified_inputs(db) == load_protection(db, [])
+
+
+@pytest.fixture
+def db_transfer(tmp_path, monkeypatch):
+    import json
+
+    from lawbot.cache_seed_store import Answer, Handoff, Question, Reference, import_seed
+    from lawbot.db.backup import backup
+
+    corpus = tmp_path / 'corpus.db'
+    source = tmp_path / 'source.db'
+    source_copy = tmp_path / 'source-copy.db'
+    target = tmp_path / 'target.db'
+    init_corpus(corpus)
+    seed_qa(corpus)
+    assert init(source) == init(target) == 2
+    old = release('before')
+    snapshot = Snapshot.load(old, system='synthetic', combined=True, attach_decrees=True)
+    ref = Reference(ID, snapshot.articles[ID].text_hash)
+    dependency = '최저임금법 제6조'
+    evidence = Reference(dependency, snapshot.articles[dependency].text_hash)
+    variant = '검토를 마친 합성 질문입니다.'
+    seed = Handoff(
+        'a' * 64,
+        (Answer('seed', 'unit', ID, RAW, digest(RAW), (ref,), (evidence,), {}, ref.sha256),),
+        (Question('fixture', 'seed', QUESTION, {}), Question('variant', 'seed', variant, {})),
+    )
+    shown = snapshot.render(RAW, [(ID, ref.sha256)])
+    assert shown is not None
+    protection = load_protection(corpus, [])
+    draft = Draft('fixture', QUESTION, 'seed', digest(RAW), shown, [(ID, ref.sha256)], {}, RAW)
+    Store(source).stage(snapshot.namespace, [draft], 'test', 'existing')
+    ns = snapshot.namespace.id
+    Store(source).approve(
+        ns, 1, protection.fingerprint, {draft.query_id(ns): draft.answer_id(ns)}, actor='test', reason='existing'
+    )
+    assert import_seed(source, seed, snapshot, 1, protection)['approved_questions'] == 2
+    with connect(source) as conn:
+        assert json.loads(conn.execute('SELECT source FROM cache_answers').fetchone()[0]) == {}
+        assert conn.execute("SELECT count(*) FROM cache_audit_events WHERE action='review_evidence'").fetchone() == (1,)
+    Store(source).stage(
+        snapshot.namespace,
+        [replace(draft, source_id='draft', question='검토 대기 질문', answer_key='draft')],
+        'test',
+        'draft',
+    )
+    backup(source, source_copy)
+    token = ('before', 1)
+    monkeypatch.setattr(cache_admin, 'active_token', lambda *a: token)
+    monkeypatch.setattr(cache_admin, 'active_release', lambda *a: old)
+    monkeypatch.setattr(cache_admin, 'cache_snapshot', lambda *a: snapshot)
+    forbid_zip(monkeypatch)
+    args = cache_admin.parser().parse_args(
+        ['import-db', '--from', str(source_copy), '--db', str(target), '--corpus-db', str(corpus)]
+    )
+    return args, snapshot, draft, protection, evidence, seed.sha256
+
+
+def test_import_db_uses_only_approved_catalog_rows_without_opening_zip(db_transfer):
+    import json
+    from hashlib import sha256
+    from pathlib import Path
+
+    from lawbot.exact_cache import canonical
+
+    args, _, _, _, evidence, bundle_hash = db_transfer
+    source, target = Path(args.source_db), Path(args.db)
+    source_hash = sha256(source.read_bytes()).hexdigest()
+    result = cache_admin.run(args)
+    assert result['approved_answers'] == 1
+    assert result['approved_questions'] == result['input_questions'] == 2
+    control = Store(target).control()
+    assert control.mode == 'off' and control.approval_id == result['approval_id']
+    with connect(target) as conn:
+        receipt, raw = conn.execute(
+            "SELECT target,detail FROM cache_audit_events WHERE action='cache_db_import'"
+        ).fetchone()
+        detail = json.loads(raw)
+        assert detail['source_db_sha256'] == source_hash and detail['bundle_sha256'] == bundle_hash
+        assert control.approval_id == digest(canonical([None, receipt]))
+        evidence_hashes = json.loads(conn.execute('SELECT source FROM cache_answers').fetchone()[0])[
+            'review_evidence_hashes'
+        ]
+        assert evidence_hashes[evidence.article_id] == evidence.sha256
+        count = conn.execute('SELECT count(*) FROM cache_audit_events').fetchone()
+    assert cache_admin.run(args) == result
+    assert Store(target).control() == control
+    assert sha256(source.read_bytes()).hexdigest() == source_hash
+    with connect(target) as conn:
+        assert conn.execute('SELECT count(*) FROM cache_audit_events').fetchone() == count
+
+
+def test_import_db_excludes_a_conflicting_revision_and_rotates_the_approval(db_transfer):
+    import json
+    from pathlib import Path
+
+    from lawbot.exact_cache import canonical
+
+    args, snapshot, staged, protection, _, _ = db_transfer
+    target = Path(args.db)
+    store = Store(target)
+    draft = replace(staged, answer_key='conflicting-revision')
+    namespace = snapshot.namespace.id
+    store.stage(snapshot.namespace, [draft], 'test', 'existing')
+    previous = store.approve(
+        namespace,
+        1,
+        protection.fingerprint,
+        {draft.query_id(namespace): draft.answer_id(namespace)},
+        actor='test',
+        reason='prior',
+    )
+    result = cache_admin.run(args)
+    assert result['existing_conflicts'] == result['approved_questions'] == 1
+    with connect(target) as conn:
+        receipt, detail = conn.execute(
+            "SELECT target,detail FROM cache_audit_events WHERE action='cache_db_import'"
+        ).fetchone()
+        assert json.loads(detail)['previous_approval_id'] == previous
+        assert conn.execute(
+            'SELECT answer_id FROM cache_queries WHERE query_id=?', (draft.query_id(namespace),)
+        ).fetchone() == (draft.answer_id(namespace),)
+    assert result['approval_id'] == digest(canonical([previous, receipt]))
+    with pytest.raises(ValueError, match='현재 승인 묶음'):
+        store.set_mode('on', 'test', 'old approval', previous)
+    store.set_mode('on', 'test', 'new approval', result['approval_id'])
+    with pytest.raises(ValueError, match='off로 전환'):
+        cache_admin.run(args)
+
+
+@pytest.mark.parametrize(
+    'alteration',
+    [
+        "UPDATE cache_render_inputs SET raw_answer='changed'",
+        'DELETE FROM cache_citations',
+        "UPDATE cache_queries SET raw_sha256='changed' WHERE status='approved'",
+    ],
+)
+def test_import_db_rolls_back_on_corrupt_source_rows(db_transfer, alteration):
+    from pathlib import Path
+
+    args, _, _, _, _, _ = db_transfer
+    with connect(Path(args.source_db), write=True) as conn:
+        conn.execute(alteration)
+    target = Path(args.db)
+    control = Store(target).control()
+    with pytest.raises(ValueError, match=r'원천 캐시.*해시'):
+        cache_admin.run(args)
+    assert Store(target).control() == control
+    with connect(target) as conn:
+        assert conn.execute('SELECT count(*) FROM cache_answers').fetchone() == (0,)
+        assert conn.execute('SELECT count(*) FROM cache_audit_events').fetchone() == (0,)
+
+
+def test_import_db_rechecks_target_protection_and_review_evidence(db_transfer, tmp_path, monkeypatch):
+    from pathlib import Path
+
+    args, snapshot, _, _, evidence, _ = db_transfer
+    protected = tmp_path / 'protected.csv'
+    protected.write_text(f'question\n  {QUESTION}  \n', encoding='utf-8')
+    args.protected_csv = [protected]
+    article = snapshot.articles[evidence.article_id]
+    current = replace(
+        snapshot, articles=snapshot.articles | {evidence.article_id: replace(article, text_hash='changed')}
+    )
+    monkeypatch.setattr(cache_admin, 'cache_snapshot', lambda *a: current)
+    result = cache_admin.run(args)
+    assert result['seed_protected_exact'] == result['blocked_evidence_questions'] == 1
+    assert result['approved_questions'] == 0
+    with connect(Path(args.db)) as conn:
+        assert conn.execute('SELECT status,exact_enabled FROM cache_queries').fetchall() == [('draft', 0)]
 
 
 def test_cache_review_approves_without_any_zip(review_api, monkeypatch):
@@ -708,10 +870,10 @@ def test_pending_reapproval_in_on_leaves_new_question_inactive(review_api, prepa
     assert store.lookup(snapshot.namespace.id, question)[2] == 'inactive'
 
 
-def test_pass_import_preserves_legacy_exact_review_and_release_paths(tmp_path, monkeypatch):
+@pytest.mark.parametrize('review_changed', [False, True])
+def test_pass_import_preserves_legacy_exact_review_and_release_paths(tmp_path, monkeypatch, review_changed):
     from lawbot.cache_seed import P07_SHA256
-    from lawbot.cache_seed_pass import Answer, Handoff, Question, Reference
-    from lawbot.cache_seed_store import import_seed
+    from lawbot.cache_seed_store import Answer, Handoff, Question, Reference, import_seed
 
     corpus = tmp_path / 'corpus.db'
     init_corpus(corpus)
@@ -735,12 +897,14 @@ def test_pass_import_preserves_legacy_exact_review_and_release_paths(tmp_path, m
     approval = store.approve(
         ns, 1, protection.fingerprint, {draft.query_id(ns): draft.answer_id(ns)}, actor='test', reason='legacy review'
     )
-    seed_answer = Answer('old-key', 'seed', ID, RAW, digest(RAW), (ref,), (), {}, ref.sha256)
+    dependency = '최저임금법 제6조'
+    evidence = (Reference(dependency, snapshot.articles[dependency].text_hash),)
+    seed_answer = Answer('old-key', 'seed', ID, RAW, digest(RAW), (ref,), evidence, {}, ref.sha256)
     seed = Handoff(
         'a' * 64, (seed_answer,), (Question('1', 'old-key', QUESTION, {}), Question('2', 'old-key', variant, {}))
     )
     result = import_seed(path, seed, snapshot, 1, load_protection(corpus, []))
-    assert result['approved_questions'] == 2 and store.control().approval_id == approval
+    assert result['approved_questions'] == 2
 
     monkeypatch.setattr(corpus_store, 'active_token', lambda *a: token)
     monkeypatch.setattr(cache_admin, 'active_token', lambda *a: token)
@@ -751,6 +915,12 @@ def test_pass_import_preserves_legacy_exact_review_and_release_paths(tmp_path, m
         'load',
         lambda: SimpleNamespace(db=corpus, corpus='db', profile=SimpleNamespace(name='v5'), decree=None),
     )
+    if not review_changed:
+        old_mode = cache_admin.parser().parse_args(
+            ['set-mode', 'on', '--db', str(path), '--approval', approval, '--reason', 'previous review']
+        )
+        with pytest.raises(ValueError, match='현재 승인 묶음'):
+            cache_admin.run(old_mode)
 
     catalog = cache_review_store.ReviewCatalog(path, corpus, snapshot)
     detail = catalog.detail(review.answer_id(ns))
@@ -781,14 +951,14 @@ def test_pass_import_preserves_legacy_exact_review_and_release_paths(tmp_path, m
     args.protected_csv = [extra]
     with pytest.raises(ValueError, match='보호 분할이 변경'):
         cache_admin.run(args)
-    assert store.control().approval_id == approval
+    assert store.control().approval_id == result['approval_id']
 
     monkeypatch.setattr(corpus_store, 'release_at_event', lambda *a: old)
-    target = release('after')
+    target = release('after', review='검토 참고 조문 변경') if review_changed else release('after')
     token = ('after', 2)
     current = Snapshot.load(target, system='synthetic', combined=True, attach_decrees=True)
     assert apply_release(path, corpus, token, target, current) == {
-        'keep': 1,
+        'keep': int(not review_changed),
         'pending': 0,
-        'off': 0,
+        'off': int(review_changed),
     }

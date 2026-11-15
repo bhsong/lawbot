@@ -4,7 +4,7 @@ import json
 
 from lawbot import corpus_store
 from lawbot.cache_carry import allowed_question, article_rows, classify, corpus_changes, verified_inputs
-from lawbot.cache_store import Draft, audit, insert_answer, now, read_control
+from lawbot.cache_store import Draft, audit, insert_answer, now, read_control, with_review_evidence
 from lawbot.calc_gate import is_calculation_question
 from lawbot.db.connection import connect, transaction
 from lawbot.exact_cache import PROFILE, canonical, corpus_version, digest
@@ -154,7 +154,7 @@ def apply_release(path, db, token, release, snapshot):
                 prior_rows = article_rows(corpus_store.release_by_id(db, PROFILE, baseline))
                 comparisons[baseline] = (prior_rows, corpus_changes(prior_rows, current_rows))
             before, changed = comparisons[baseline]
-            source = json.loads(encoded)
+            source = with_review_evidence(conn, old_id, json.loads(encoded))
             prior = citations_for(conn, old_id)
             dependencies = {key for key, _ in prior} | set(source.get('review_evidence_article_ids', []))
             raw = raw_for(raw_hash, stored)

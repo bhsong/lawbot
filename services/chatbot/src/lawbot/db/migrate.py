@@ -10,13 +10,6 @@ from pathlib import Path
 from lawbot.db.connection import check_db_path, connect, db_path, new_database, transaction
 
 MIGRATIONS = files('lawbot.db') / 'migrations'
-# Existing exact-cache databases may retain the unused, permanently disabled column from 0001.
-COMPATIBLE_CHECKSUMS = {
-    (
-        '0001_exact_cache.sql',
-        '57dcaf49aa4f508c143293ec8495b5a9ed51927b060ebbeb0dd7b7222de42fad',
-    ): 'f17b0cc8e4ba5f2580a20e97f74855f9e9f4fcbf869a8169bcc677515996dbbc',
-}
 
 
 @dataclass(frozen=True)
@@ -51,8 +44,7 @@ def _current_version(conn: sqlite3.Connection, migrations: list[Migration]) -> i
     if [row[0] for row in applied] != list(range(1, version + 1)):
         raise RuntimeError('DB 마이그레이션 이력이 연속되지 않습니다.')
     for (_, name, checksum), migration in zip(applied, migrations):
-        compatible = COMPATIBLE_CHECKSUMS.get((migration.name, migration.checksum))
-        if name != migration.name or checksum not in (migration.checksum, compatible):
+        if (name, checksum) != (migration.name, migration.checksum):
             raise RuntimeError(f'마이그레이션 파일 이름 또는 checksum 불일치: {migration.name}')
     return version
 

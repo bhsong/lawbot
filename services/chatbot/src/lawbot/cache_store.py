@@ -1,5 +1,6 @@
 """Read and mutate the separate SQLite catalog for reviewed cache answers."""
 
+import json
 import sqlite3
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -52,6 +53,28 @@ def audit(conn, action, target, actor, reason, detail=None):
         'INSERT INTO cache_audit_events (action,target,actor,reason,created_at,detail) VALUES (?,?,?,?,?,?)',
         (action, target, actor, reason, now(), canonical(detail)),
     )
+
+
+def with_review_evidence(conn, answer_id, source):
+    """Attach the audited dependencies of a reused immutable answer revision."""
+    rows = conn.execute(
+        "SELECT detail FROM cache_audit_events WHERE action='review_evidence' AND target=? ORDER BY event_id",
+        (answer_id,),
+    )
+    hashes = source.get('review_evidence_hashes', {}).copy()
+    found = False
+    for (detail,) in rows:
+        for key, checksum in json.loads(detail)['review_evidence_hashes'].items():
+            if key in hashes and hashes[key] != checksum:
+                raise ValueError('답변의 검수 근거 해시가 일치하지 않습니다.')
+            hashes[key] = checksum
+        found = True
+    if not found:
+        return source
+    return source | {
+        'review_evidence_article_ids': sorted(set(source.get('review_evidence_article_ids', ())) | hashes.keys()),
+        'review_evidence_hashes': hashes,
+    }
 
 
 @dataclass(frozen=True)
