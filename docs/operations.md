@@ -500,7 +500,7 @@ DB 갱신 뒤에도 `data/live/v5`는 이전 CSV를 담고 있습니다. 평가 
 
 v5 DB 코퍼스와 Pro 간결형에서 승인된 질문을 재사용합니다. `LAWBOT_EXACT_CACHE_DB`에는 코퍼스·피드백 DB와 분리한 비공개 로컬 SQLite 경로를 지정합니다. 미설정이면 웹앱은 캐시를 조회하지 않고, 새 DB의 모드는 `off`입니다. 웹앱 시작 로그와 `uv run python -m lawbot.check_deploy`에서 캐시 스키마·모드·namespace 또는 우회 사유를 확인합니다.
 
-운영 반영과 활성화는 별도 승인 후 진행합니다. 아래 명령은 fish 기준입니다. `$cache_db`는 전용 DB, `$cache_bundle`은 원본 P07 ZIP, `$review_dir`는 새 비공개 검토 폴더입니다.
+운영 반영과 활성화는 별도 승인 후 진행합니다. 아래 명령은 fish 기준입니다. `$cache_db`는 전용 DB, `$cache_bundle`은 원본 P07 ZIP, `$review_dir`는 새 비공개 검토 폴더입니다. P07 ZIP은 `inspect`·`seed`·`approve`·`replace`의 입력으로만 쓰고, 웹앱·조문 자동 갱신·관리자 화면·`set-mode`는 읽지 않습니다. ZIP의 보호 문항이 코퍼스 DB 보호 분할에 모두 들어 있지 않으면 이 명령들은 실패합니다.
 
 ```fish
 uv run python -m lawbot.cache_admin init --db "$cache_db"
@@ -508,19 +508,19 @@ uv run python -m lawbot.cache_admin seed --db "$cache_db" --bundle "$cache_bundl
 uv run python -m lawbot.cache_admin seed --db "$cache_db" --bundle "$cache_bundle"
 uv run python -m lawbot.cache_admin approve --db "$cache_db" --bundle "$cache_bundle" --review-file "$review_dir/review.json" --reviewed --reason "$reason"
 # 적중 후보를 먼저 관찰하려면 아래 shadow 명령을 실행합니다.
-uv run python -m lawbot.cache_admin set-mode shadow --db "$cache_db" --bundle "$cache_bundle" --approval "$approval_id" --reason "$reason"
-uv run python -m lawbot.cache_admin set-mode on --db "$cache_db" --bundle "$cache_bundle" --approval "$approval_id" --reason "$reason"
+uv run python -m lawbot.cache_admin set-mode shadow --db "$cache_db" --approval "$approval_id" --reason "$reason"
+uv run python -m lawbot.cache_admin set-mode on --db "$cache_db" --approval "$approval_id" --reason "$reason"
 ```
 
 승인 전에 `review.json`의 표시본·근거·적용 조건·공개 적합성을 확인하고 승인한 질문과 답변 ID만 `selection`에 적습니다. `approve`가 반환한 ID를 `$approval_id`에 넣습니다. `off`, `shadow`, `on`은 어느 방향으로든 직접 전환할 수 있습니다. `shadow`와 `on`에는 현재 승인 ID와 일치하는 보호 분할이 필요합니다. `shadow`는 승인 답변을 반환하지 않고 `would_hit`와 비용·우회 사유를 기록하는 선택 단계입니다. 추가 보호셋이 있으면 `--protected-csv`에 같은 입력을 검토·등록·승인·전환 때 지정합니다. 보호셋 갱신 전에 캐시를 `off`로 둡니다.
 
-`LAWBOT_EXACT_CACHE_BUNDLE`에 비공개 경로의 원본 P07 ZIP을 지정합니다. DB 조문 자동 갱신과 롤백은 활성화 직후 웹앱을 재시작하기 전에 답변별로 판정합니다. 표시·검토 참고 조문이 바뀌거나 사라지면 끔, 같은 법령의 다른 조문이 바뀌면 검토 대기입니다. 의존 범위와 재렌더링 결과가 동일한 답변은 새 리비전으로 자동 유지합니다. 번들이 없거나 표시 정책·보호 지문이 바뀌면 검토 대기입니다. 이전 모드는 유지되며, 기존의 미승인·철회 항목은 자동으로 돌아오지 않습니다. 실패하면 기존 제어 행을 보존해 RAG로 우회하고 조문 갱신은 계속합니다. 갱신 보고서와 마지막 상태 줄 바로 앞에 판정 수 또는 실패가 남습니다.
+보호 분할은 코퍼스 DB의 val/test 분할로, 표시본 원문은 캐시 DB의 `cache_render_inputs`로 확인합니다. DB 조문 자동 갱신과 롤백은 활성화 직후 웹앱을 재시작하기 전에 답변별로 판정합니다. 표시·검토 참고 조문이 바뀌거나 사라지면 끔, 같은 법령의 다른 조문이 바뀌면 검토 대기입니다. 의존 범위와 재렌더링 결과가 동일한 답변은 새 리비전으로 자동 유지합니다. 원문을 확인할 수 없거나 표시 정책·보호 지문이 바뀌면 검토 대기입니다. 이전 모드는 유지되며, 기존의 미승인·철회 항목은 자동으로 돌아오지 않습니다. 실패하면 기존 제어 행을 보존해 RAG로 우회하고 조문 갱신은 계속합니다. 갱신 보고서와 마지막 상태 줄 바로 앞에 판정 수 또는 실패가 남습니다.
 
 관리자 화면에서 **캐시** 탭을 열고 초안 또는 검토 대기 답변의 상세에서 연결 질문, 현재 표시본과 근거, 변경 조문의 이전·이후 본문을 확인합니다. 상세 하단의 **표시본 확인 및 승인** 또는 **표시본 확인 및 재승인**을 누릅니다. 여러 답변은 상세를 각각 연 뒤 목록에서 체크하고 **선택 승인**을 누릅니다. 한 번에 최대 50개를 처리하며, 하나라도 검증에 실패하면 선택한 답변 모두 이전 상태를 유지합니다. 검토 중 상태가 바뀌면 새로고침 후 표시본을 다시 확인합니다.
 
-승인 사유를 비우면 감사에 `표시본 확인 승인`이 남습니다. 모드 전환과 철회에는 사유가 필요합니다. 철회와 `off` 전환은 번들 없이도 가능합니다. CLI의 추가 보호 CSV를 별도로 쓰는 환경에서는 해당 보호 범위를 포함해 CLI로 승인합니다. 이전 정정 리비전의 원문을 확인할 수 없으면 재승인을 보류합니다.
+승인 사유를 비우면 감사에 `표시본 확인 승인`이 남습니다. 모드 전환과 철회에는 사유가 필요합니다. CLI의 추가 보호 CSV를 별도로 쓰는 환경에서는 해당 보호 범위를 포함해 CLI로 승인합니다. 이전 정정 리비전의 원문을 확인할 수 없으면 재승인을 보류합니다.
 
-캐시 DB 설정에 P07 번들이 빠졌거나 파일이 없으면 시작 로그와 배포 점검에서 자동 유지 경고를 표시합니다. 릴리스 판정은 마지막 승인 보호 지문을 유지합니다. 관리자 화면에서 같은 보호 범위를 확인할 수 없으면 `off`에서 CLI로 재승인합니다. 추가 보호 CSV를 사용했다면 이때도 `--protected-csv`로 포함합니다.
+릴리스 판정은 마지막 승인 보호 지문을 유지합니다. 관리자 화면에서 같은 보호 범위를 확인할 수 없으면 `off`에서 CLI로 재승인합니다. 추가 보호 CSV를 사용했다면 이때도 `--protected-csv`로 포함합니다.
 
 한 번도 승인되지 않은 초안은 이전 namespace에 보존됩니다. 새 릴리스의 캐시 탭에서 검토하려면 현재 릴리스로 `cache_admin seed`를 다시 실행합니다. 관리자 화면에서는 모든 모드에서 신규 초안을 승인할 수 있습니다. `on`에서 승인하면 보호 분할을 통과한 초안의 연결 질문에 즉시 반환됩니다. `on`에서 검토 대기 답변을 재승인하면 이전에 승인된 연결 질문에 즉시 반환됩니다. 이미 승인된 답변에 새 질문을 추가할 때는 `off`에서 CLI 승인 묶음에 포함합니다.
 

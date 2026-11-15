@@ -24,9 +24,8 @@ def query_rows(conn, answer_id):
     ).fetchall()
 
 
-def raw_for(raw_hash, stored, originals):
-    raw = stored if stored is not None else originals.get(raw_hash)
-    return raw if raw is not None and digest(raw) == raw_hash else None
+def raw_for(raw_hash, stored):
+    return stored if stored is not None and digest(stored) == raw_hash else None
 
 
 def preview(snapshot, raw, prior_citations):
@@ -89,7 +88,7 @@ def _put_query(conn, namespace, answer_id, row, keep):
         raise ValueError('릴리스 질문 연결의 출처가 기존 행과 다릅니다.')
 
 
-def apply_release(path, db, token, release, snapshot, bundle_file):
+def apply_release(path, db, token, release, snapshot):
     counts = dict.fromkeys(('keep', 'pending', 'off'), 0)
     namespace = snapshot.namespace.id
     with connect(path, write=True) as conn, transaction(conn):
@@ -117,12 +116,15 @@ def apply_release(path, db, token, release, snapshot, bundle_file):
         current_rows = article_rows(release)
         before = article_rows(old)
         comparisons = {old.release_id: (before, corpus_changes(before, current_rows))}
-        protection, originals = verified_inputs(db, bundle_file)
+        try:
+            protection = verified_inputs(db)
+        except RuntimeError:  # QA split sets missing from the corpus DB
+            protection = None
         guard = None
         if spec['answer_policy_version'] != snapshot.namespace.answer_policy_version:
             guard = 'policy_changed'
         elif protection is None:
-            guard = 'bundle_missing'
+            guard = 'protection_unavailable'
         elif control.protection_hash != protection.fingerprint:
             guard = 'protection_changed'
         rows = conn.execute(
@@ -155,7 +157,7 @@ def apply_release(path, db, token, release, snapshot, bundle_file):
             source = json.loads(encoded)
             prior = citations_for(conn, old_id)
             dependencies = {key for key, _ in prior} | set(source.get('review_evidence_article_ids', []))
-            raw = raw_for(raw_hash, stored, originals)
+            raw = raw_for(raw_hash, stored)
             shown, citations = preview(snapshot, raw, prior)
             eligible = [q for q in queries if not is_calculation_question(q[2])]
             excluded_ids = {q[0] for q in queries} - {q[0] for q in eligible}

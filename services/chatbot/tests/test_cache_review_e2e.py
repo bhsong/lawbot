@@ -1,7 +1,6 @@
 """Release review through Chromium, a real web app, and the model server with fakes."""
 
 import json
-import sys
 
 import pytest
 from playwright.sync_api import expect
@@ -9,9 +8,9 @@ from playwright.sync_api import expect
 import e2e_support as e2e
 from admin_test_data import seed_qa
 from conftest import ADMIN_PW, ADMIN_USER
-from lawbot import cache_release_store, corpus_store, deploy, manifest
+from lawbot import corpus_store, deploy, manifest
 from lawbot.cache_release_store import apply_release
-from lawbot.cache_seed import Bundle, load_protection
+from lawbot.cache_seed import load_protection
 from lawbot.cache_store import Draft, Store, init
 from lawbot.db import cli
 from lawbot.exact_cache import Snapshot, digest
@@ -69,19 +68,15 @@ def review_stack(tmp_path, page, request, admin_hash, monkeypatch):
             )
         )
     store.stage(snapshot.namespace, drafts, 'tester', 'draft')
-    bundle = tmp_path / 'synthetic.txt'
-    bundle.write_text('synthetic P07 bundle', encoding='utf-8')
     if not drafts_only:
-        carry_approved_answers(tmp_path, db, store, snapshot, system, drafts, bundle, monkeypatch)
+        carry_approved_answers(tmp_path, db, store, snapshot, system, drafts, monkeypatch)
     stack = e2e.Stack(
         tmp_path,
         3,
-        web_command=[sys.executable, str(e2e.TESTS / 'cache_review_test_server.py')],
         LAWBOT_PROFILE='v5',
         LAWBOT_CORPUS='db',
         LAWBOT_DB=str(db),
         LAWBOT_EXACT_CACHE_DB=str(path),
-        LAWBOT_EXACT_CACHE_BUNDLE=str(bundle),
         LAWBOT_ADMIN_USER=ADMIN_USER,
         LAWBOT_ADMIN_PW_HASH=admin_hash,
         LAWBOT_DECREE_ENABLED='0',
@@ -94,9 +89,9 @@ def review_stack(tmp_path, page, request, admin_hash, monkeypatch):
         stack.stop()
 
 
-def carry_approved_answers(tmp_path, db, store, snapshot, system, drafts, bundle, monkeypatch):
+def carry_approved_answers(tmp_path, db, store, snapshot, system, drafts, monkeypatch):
     ns = snapshot.namespace.id
-    protection = load_protection(db, Bundle([], frozenset()), [])
+    protection = load_protection(db, [])
     token = corpus_store.active_token(db, 'v5')
     approval = store.approve(
         ns,
@@ -121,8 +116,7 @@ def carry_approved_answers(tmp_path, db, store, snapshot, system, drafts, bundle
     token = corpus_store.active_token(db, 'v5')
     current = corpus_store.active_release(db, 'v5')
     new_snapshot = Snapshot.load(current, system=system, combined=False, attach_decrees=False)
-    monkeypatch.setattr(cache_release_store, 'verified_inputs', lambda *args: (protection, {}))
-    assert apply_release(store.path, db, token, current, new_snapshot, bundle) == {'keep': 1, 'pending': 1, 'off': 0}
+    assert apply_release(store.path, db, token, current, new_snapshot) == {'keep': 1, 'pending': 1, 'off': 0}
 
 
 @pytest.mark.parametrize('width', [390, 1280])

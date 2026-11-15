@@ -9,7 +9,7 @@ import pytest
 
 from lawbot import cache_admin, cache_runtime, cache_store
 from lawbot.cache_eval import compare
-from lawbot.cache_seed import Bundle, Protection, load_bundle, prepare
+from lawbot.cache_seed import Bundle, Protection, load_bundle, prepare, require_db_protection
 from lawbot.cache_store import Draft, Store, init, migrate, valid
 from lawbot.db import migrate as migrations
 from lawbot.db.connection import connect, transaction
@@ -571,6 +571,13 @@ def test_altered_bundle_is_rejected_before_parsing(tmp_path):
     path.write_bytes(b'different file')
     with pytest.raises(ValueError, match='해시'):
         load_bundle(path)
+
+
+def test_bundle_protection_must_already_be_in_the_corpus_db():
+    protection = Protection(frozenset({'a', 'b'}), {}, 'fingerprint')
+    require_db_protection(Bundle([], frozenset({'a'})), protection)
+    with pytest.raises(ValueError, match='보호'):
+        require_db_protection(Bundle([], frozenset({'a', 'c'})), protection)
 
 
 def test_paired_benchmark_keeps_hit_and_miss_costs_separate():
