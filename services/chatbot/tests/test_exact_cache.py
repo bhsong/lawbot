@@ -11,7 +11,6 @@ from lawbot import cache_admin, cache_runtime, cache_store
 from lawbot.cache_eval import compare
 from lawbot.cache_seed import Bundle, Protection, load_bundle, prepare, require_db_protection
 from lawbot.cache_store import Draft, Store, init, migrate, valid
-from lawbot.db import migrate as migrations
 from lawbot.db.connection import connect, transaction
 from lawbot.exact_cache import Article, Namespace, Snapshot, digest, normalize
 
@@ -57,11 +56,11 @@ def test_namespace_changes_with_scope_and_policy():
 
 def test_new_cache_is_off_and_independently_versioned(tmp_path):
     path = tmp_path / 'private' / 'cache.db'
-    assert init(path) == 3
+    assert init(path) == 2
     store = Store(path)
     assert store.control().mode == 'off'
     assert store.control().namespace_id is None
-    assert migrate(path) == 3
+    assert migrate(path) == 2
 
 
 @pytest.fixture
@@ -94,31 +93,31 @@ def activate(store, snapshot, draft, mode='on'):
     return approval
 
 
-def test_upgrade_v2_preserves_served_exact_revision_and_migration_history(tmp_path, catalog):
-    _, snapshot, draft = catalog
-    legacy_files = tmp_path / 'legacy-migrations'
-    legacy_files.mkdir()
-    for filename in ('0001_exact_cache.sql', '0002_release_review.sql'):
-        (legacy_files / filename).write_bytes((cache_store.MIGRATIONS / filename).read_bytes())
-    path = tmp_path / 'private' / 'legacy-cache.db'
-    assert migrations.init(path, directory=legacy_files) == 2
-    store = Store(path)
+def test_v2_accepts_original_checksum_and_preserves_serving_history(catalog):
+    store, snapshot, draft = catalog
+    path = store.path
+    original_checksum = 'f17b0cc8e4ba5f2580a20e97f74855f9e9f4fcbf869a8169bcc677515996dbbc'
     store.stage(snapshot.namespace, [draft], 'tester', 'synthetic V2 draft')
     activate(store, snapshot, draft)
     cache = cache_runtime.ExactCache(store, path, snapshot)
     before = cache.lookup(draft.question, 'pro', 'concise')
-    assert cache.deployment_status()[0] == 'OK' and before.match is not None
-    with connect(path) as conn:
+    assert before.match is not None
+    with connect(path, write=True) as conn:
+        conn.execute('UPDATE schema_migrations SET checksum=? WHERE version=1', (original_checksum,))
         history = conn.execute('SELECT version,name,checksum FROM schema_migrations ORDER BY version').fetchall()
-    assert migrate(path) == 3
+    assert cache.deployment_status()[0] == 'OK'
+    assert migrate(path) == 2
     after = cache.lookup(draft.question, 'pro', 'concise')
     assert (after.match, after.reason) == (before.match, before.reason)
     with connect(path) as conn:
         assert (
-            conn.execute('SELECT version,name,checksum FROM schema_migrations ORDER BY version').fetchall()[:2]
-            == history
+            conn.execute('SELECT version,name,checksum FROM schema_migrations ORDER BY version').fetchall() == history
         )
         assert conn.execute('PRAGMA foreign_key_check').fetchall() == []
+    with connect(path, write=True) as conn:
+        conn.execute('UPDATE schema_migrations SET checksum=? WHERE version=1', ('0' * 64,))
+    with pytest.raises(RuntimeError, match='checksum 불일치'):
+        store.check_schema()
 
 
 def test_modes_and_explicit_approval(catalog):
@@ -337,7 +336,7 @@ def test_deployment_status_reports_disabled_and_stale_cache(catalog, tmp_path):
     store, snapshot, draft = catalog
     cache = cache_runtime.ExactCache(store, store.path, snapshot)
     level, message = cache.deployment_status()
-    assert level == 'OK' and 'off' in message and '스키마 3' in message
+    assert level == 'OK' and 'off' in message and '스키마 2' in message
     store.stage(snapshot.namespace, [draft], 'tester', 'draft')
     activate(store, snapshot, draft)
     level, message = cache.deployment_status()

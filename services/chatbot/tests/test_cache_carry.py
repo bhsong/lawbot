@@ -708,11 +708,10 @@ def test_pending_reapproval_in_on_leaves_new_question_inactive(review_api, prepa
     assert store.lookup(snapshot.namespace.id, question)[2] == 'inactive'
 
 
-def test_semantic_import_preserves_legacy_exact_review_and_release_paths(tmp_path, monkeypatch):
-    from lawbot import semantic_tools
+def test_pass_import_preserves_legacy_exact_review_and_release_paths(tmp_path, monkeypatch):
     from lawbot.cache_seed import P07_SHA256
-    from lawbot.semantic_handoff import Answer, Handoff, Question, Reference
-    from lawbot.semantic_import_store import import_seed
+    from lawbot.cache_seed_pass import Answer, Handoff, Question, Reference
+    from lawbot.cache_seed_store import import_seed
 
     corpus = tmp_path / 'corpus.db'
     init_corpus(corpus)
@@ -736,9 +735,7 @@ def test_semantic_import_preserves_legacy_exact_review_and_release_paths(tmp_pat
     approval = store.approve(
         ns, 1, protection.fingerprint, {draft.query_id(ns): draft.answer_id(ns)}, actor='test', reason='legacy review'
     )
-    seed_answer = Answer(
-        'old-key', 'seed', ID, RAW, digest(RAW), (ref,), (), {}, snapshot.articles[ID].text, 0, ref.sha256
-    )
+    seed_answer = Answer('old-key', 'seed', ID, RAW, digest(RAW), (ref,), (), {}, ref.sha256)
     seed = Handoff(
         'a' * 64, (seed_answer,), (Question('1', 'old-key', QUESTION, {}), Question('2', 'old-key', variant, {}))
     )
@@ -761,36 +758,17 @@ def test_semantic_import_preserves_legacy_exact_review_and_release_paths(tmp_pat
     with connect(path, write=True) as conn, transaction(conn):
         catalog.change_mode(conn, store.control(), 'shadow', 'test', 'review')
     assert store.control().mode == 'shadow'
-    args = cache_admin.parser().parse_args(
-        [
-            'set-mode',
-            'shadow',
-            '--db',
-            str(path),
-            '--approval',
-            approval,
-            '--reason',
-            'legacy',
-        ]
-    )
-    assert cache_admin.run(args) == {'mode': 'shadow'}
 
     def unexpected_scan(*a):
         pytest.fail('activation repeated the near-duplicate scan')
 
     monkeypatch.setattr(Protection, 'match', unexpected_scan)
-    monkeypatch.setattr(
-        semantic_tools, 'corpus_context', lambda *a: SimpleNamespace(snapshot=snapshot, event=1, check=lambda: None)
-    )
     args = cache_admin.parser().parse_args(
         [
             'set-mode',
             'shadow',
-            '--semantic-seed',
             '--db',
             str(path),
-            '--corpus-db',
-            str(corpus),
             '--approval',
             result['approval_id'],
             '--reason',
@@ -801,7 +779,7 @@ def test_semantic_import_preserves_legacy_exact_review_and_release_paths(tmp_pat
     extra = tmp_path / 'additional-protected.csv'
     extra.write_text('question\n별도 보호 대상 합성 문항\n', encoding='utf-8')
     args.protected_csv = [extra]
-    with pytest.raises(ValueError, match='protected split changed'):
+    with pytest.raises(ValueError, match='보호 분할이 변경'):
         cache_admin.run(args)
     assert store.control().approval_id == approval
 

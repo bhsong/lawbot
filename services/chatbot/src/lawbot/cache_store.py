@@ -13,8 +13,7 @@ from lawbot.db.connection import connect, transaction
 from lawbot.exact_cache import Namespace, canonical, digest, normalize
 
 MIGRATIONS = files('lawbot.db') / 'cache_migrations'
-SCHEMA = 3
-MINIMUM_EXACT_SCHEMA = 2
+SCHEMA = 2
 READ_TIMEOUT = 0.01
 CALCULATION_EXCLUDED = '계산 질문은 정확 일치 캐시에 저장하거나 승인할 수 없습니다.'
 
@@ -120,7 +119,7 @@ class Control:
 
 def read_control(conn) -> Control:
     row = conn.execute('SELECT max(version) FROM schema_migrations').fetchone()
-    if row not in ((MINIMUM_EXACT_SCHEMA,), (SCHEMA,)):
+    if row != (SCHEMA,):
         raise sqlite3.DatabaseError('unsupported cache schema')
     row = conn.execute(
         'SELECT mode,generation,namespace_id,activation_event,protection_hash,approval_id '
@@ -188,7 +187,7 @@ class Store:
             return read_control(conn)
 
     def check_schema(self) -> int:
-        return migrations.check_schema(self.path, directory=MIGRATIONS, minimum_version=MINIMUM_EXACT_SCHEMA)
+        return migrations.check_schema(self.path, directory=MIGRATIONS)
 
     def calculation_exclusions(self) -> list[CalculationExclusion]:
         with connect(self.path) as conn:

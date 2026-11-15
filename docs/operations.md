@@ -539,6 +539,16 @@ uv run python -m lawbot.cache_admin exclude-calculations --db "$cache_db" --appl
 
 문제가 발생하면 `set-mode off --db "$cache_db" --reason "$reason"`로 먼저 우회하고, 개별 답변은 `revoke answer "$answer_id" --db "$cache_db" --reason "$reason"`로 철회합니다. 두 명령은 `uv run python -m lawbot.cache_admin`으로 실행합니다. 동일 namespace의 정정은 `off`에서 승인된 질문 하나씩 `replace`로 처리하고 새 승인 ID를 사용합니다. DB 복구가 필요하면 `cache_admin backup`의 온라인 백업을 별도 경로에 준비해 무결성과 마지막 철회·감사 이력을 대조합니다. 복구 DB도 `off`에서 시작합니다. [정정 검토 파일과 세부 절차](archives/exact-cache-p07.md#10-구현-명령과-개발-기록)
 
+### 통과 ZIP 개발 사본 적재
+
+활성 v5 Pro 코퍼스와 보호 분할을 가진 개발 코퍼스 사본, 스키마 2의 정확 일치 캐시 사본을 준비합니다. 캐시 모드는 `off`여야 합니다. `$pass_bundle`에는 전수 검수된 통과 ZIP을 지정합니다.
+
+```fish
+uv run python -m lawbot.cache_seed_pass --bundle "$pass_bundle" --corpus-db "$corpus_copy" --cache-db "$cache_copy"
+```
+
+명령은 승인과 제외 개수를 출력합니다. 같은 코퍼스·보호 분할에서 다시 실행하면 저장된 집계를 반환합니다. P07 승인 ID가 있으면 유지하고, 신규 승인 ID가 필요하면 첫 적재에서 생성합니다. 사본을 조회할 때는 개발 환경에서 이 코퍼스 DB를 지정한 뒤 기존 `cache_admin set-mode`에 반환된 승인 ID를 사용합니다. 추가 보호 CSV를 썼다면 두 명령에 같은 파일을 지정합니다.
+
 ### CSV·JSONL 이관과 대조
 
 개발 확인은 임시 DB에서 실행합니다. 이관 명령의 `--db`는 필수이며 상대 경로는 레포 최상위 기준입니다. 기존 스키마 버전 1의 DB에는 백업 후 `lawbot-db migrate --db PATH`로 CSV 복원 형식 열을 추가합니다. 이관 전에 `--dry-run`으로 원본을 검사할 수 있습니다. `verify --dry-run`은 경로만 검사합니다. 실제 대조는 `verify`가 DB를 읽기 전용으로 열어 수행합니다.

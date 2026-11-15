@@ -58,19 +58,6 @@ def test_web_only_values_not_required_for_tools(env):
     assert s.auth is None and s.port is None
 
 
-@pytest.mark.parametrize('mode', ['on', 'shadow', 'invalid'])
-def test_v2_37_rejects_unsupported_mode_or_shadow_without_calibration(mode):
-    hint = 'LAWBOT_SEMANTIC_CALIBRATION' if mode == 'shadow' else 'LAWBOT_SEMANTIC_CACHE_MODE'
-    with pytest.raises(settings.SettingsError, match=hint):
-        settings.load(BASE | {'LAWBOT_SEMANTIC_CACHE_MODE': mode}, web=True)
-
-
-def test_semantic_off_does_not_read_calibration_file(tmp_path):
-    unconfigured = str(tmp_path / 'missing.json')
-    cfg = settings.load(BASE | {'LAWBOT_SEMANTIC_CALIBRATION': unconfigured}, web=True)
-    assert cfg.semantic_shadow is None
-
-
 @pytest.mark.parametrize('extra', [{}, {'LAWBOT_DB': '  '}])
 def test_db_path_is_optional(extra):
     assert settings.load(BASE | extra, web=True).db is None

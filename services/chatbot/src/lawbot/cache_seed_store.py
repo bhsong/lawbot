@@ -1,35 +1,24 @@
-"""Write the reviewed handoff as an atomic cache approval."""
+"""Write the reviewed pass handoff into the exact-cache catalog."""
 
 import json
 from collections import Counter, defaultdict
 from dataclasses import dataclass, replace
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from lawbot.answer_format import render
 from lawbot.cache_seed import P07_SHA256, Protection
-from lawbot.cache_store import SCHEMA, Draft, Store, audit, insert_answer, now, read_control, set_mode_in, valid
+from lawbot.cache_store import Draft, Store, audit, insert_answer, now, read_control, valid
 from lawbot.calc_gate import is_calculation_question
 from lawbot.db.connection import connect, transaction
 from lawbot.exact_cache import FORMAT, Snapshot, canonical, digest, normalize
-from lawbot.semantic_handoff import Answer, Handoff, Question, evidence_result
-from lawbot.semantic_policy import INTENTS, ReusePolicy, classify_intent
+
+if TYPE_CHECKING:
+    from lawbot.cache_seed_pass import Answer, Handoff, Question
 
 IMPORT_REASON = '사용자 전수 검수 승인 2026-11-15'
 ACTOR = 'import'
-ACTION = 'semantic_seed_import'
-
-
-def make_policies(conn, at):
-    policies = {
-        intent: ReusePolicy(kind='intent', intent_id=intent).model_dump_json(exclude_none=True, exclude_defaults=True)
-        for intent in [*INTENTS, None]
-    }
-    ids = {intent: digest(conditions) for intent, conditions in policies.items()}
-    conn.executemany(
-        "INSERT INTO semantic_reuse_policies VALUES (?,'1',?,?,?) ON CONFLICT DO NOTHING",
-        ((ids[intent], value, at, ACTOR) for intent, value in policies.items()),
-    )
-    return ids
+ACTION = 'pass_seed_import'
 
 
 @dataclass(frozen=True)
@@ -68,7 +57,7 @@ def exclude_existing(conn, prior, question, raw_hash, reason, bundle_hash):
     if prior is None or not prior.enabled or not prior.matches(question, raw_hash):
         return False
     conn.execute('UPDATE cache_queries SET exact_enabled=0 WHERE query_id=?', (prior.query_id,))
-    audit(conn, 'semantic_seed_exclusion', prior.query_id, ACTOR, reason, {'bundle_sha256': bundle_hash})
+    audit(conn, 'pass_seed_exclusion', prior.query_id, ACTOR, reason, {'bundle_sha256': bundle_hash})
     return True
 
 
@@ -78,17 +67,23 @@ def compatible_revision(conn, revision, citations, evidence):
     ).fetchall()
     if displayed != citations:
         return False
-    source = conn.execute('SELECT source FROM cache_answers WHERE answer_id=?', (revision,)).fetchone()
-    reviewed = json.loads(source[0]).get('review_evidence_article_ids')
+    row = conn.execute('SELECT source FROM cache_answers WHERE answer_id=?', (revision,)).fetchone()
+    source = json.loads(row[0])
+    reviewed = source.get('review_evidence_article_ids')
     if reviewed is not None and set(reviewed) != evidence.keys():
         return False
-    stored = dict(
-        conn.execute(
-            "SELECT article_id,text_sha256 FROM semantic_answer_evidence WHERE answer_id=? AND kind='dependency'",
-            (revision,),
-        )
-    )
-    return not stored or stored == evidence
+    hashes = source.get('review_evidence_hashes')
+    return hashes is None or hashes == evidence
+
+
+def evidence_result(answer: Answer, snapshot: Snapshot) -> dict[str, str]:
+    expected = {ref.article_id: ref.sha256 for ref in (*answer.display, *answer.evidence)}
+    expected[answer.parent] = answer.parent_sha256
+    result = {}
+    for key, checksum in expected.items():
+        article = snapshot.articles.get(key)
+        result[key] = 'missing' if article is None else ('match' if article.text_hash == checksum else 'mismatch')
+    return result
 
 
 def answer_revision(conn, snapshot, answer: Answer, questions, prior, matched, at, sha):
@@ -103,8 +98,8 @@ def answer_revision(conn, snapshot, answer: Answer, questions, prior, matched, a
         source = answer.metadata | {
             'bundle_sha256': sha,
             'review_unit_id': answer.unit_id,
-            'group_id': answer.group_id,
             'review_evidence_article_ids': list(evidence),
+            'review_evidence_hashes': evidence,
         }
         draft = Draft(
             questions[0].id, questions[0].text, answer.key, answer.sha256, text, citations, source, answer.raw
@@ -138,26 +133,6 @@ def answer_revision(conn, snapshot, answer: Answer, questions, prior, matched, a
             "WHERE answer_id=? AND status='draft'",
             (ACTOR, at, at, revision),
         )
-    existing = dict(
-        conn.execute(
-            "SELECT article_id,text_sha256 FROM semantic_answer_evidence WHERE answer_id=? AND kind='dependency'",
-            (revision,),
-        )
-    )
-    if any(article in existing and existing[article] != checksum for article, checksum in evidence.items()):
-        raise ValueError('existing answer revision has incompatible review evidence')
-    position = conn.execute(
-        "SELECT coalesce(max(position)+1,0) FROM semantic_answer_evidence WHERE answer_id=? AND kind='dependency'",
-        (revision,),
-    ).fetchone()[0]
-    conn.executemany(
-        "INSERT INTO semantic_answer_evidence VALUES (?,'dependency',?,?,?)",
-        (
-            (revision, position + i, article, checksum)
-            for i, (article, checksum) in enumerate(evidence.items())
-            if article not in existing
-        ),
-    )
     status, *bounds = conn.execute(
         'SELECT status,valid_from,valid_until,expires_at FROM cache_answers WHERE answer_id=?', (revision,)
     ).fetchone()
@@ -209,71 +184,6 @@ def attach_query(conn, snapshot, q: Question, revision, raw_hash, prior, ready, 
     return query, ready, 'inserted'
 
 
-def attach_atom(conn, snapshot, answer, q, atom, revision, query, policy, matched, approved, outcome, event, at):
-    ns = snapshot.namespace.id
-    query_revision = digest(canonical([atom, q.id, digest(q.text)]))
-    binding = digest(canonical([query_revision, revision, policy]))
-    enabled = approved
-    conn.execute(
-        'INSERT INTO atomic_questions VALUES (?,?,?,?,?,?,?,?,?,?,?)',
-        (
-            query_revision,
-            q.id,
-            atom,
-            q.text,
-            digest(q.text),
-            'reviewed_handoff',
-            'approved' if approved else 'draft',
-            at,
-            ACTOR,
-            at if approved else None,
-            ACTOR if approved else None,
-        ),
-    )
-    conn.execute(
-        "INSERT INTO atom_answer_bindings VALUES (?,?,?,?,?,?,'1',?,?,?,?,?,?,NULL,?)",
-        (
-            binding,
-            ns,
-            atom,
-            query_revision,
-            revision,
-            policy,
-            query,
-            event if approved else None,
-            int(enabled),
-            at if approved else None,
-            ACTOR if approved else None,
-            at if approved else None,
-            'keep' if approved else 'off',
-        ),
-    )
-    if not matched or outcome == 'existing_conflict':
-        reason = 'source_evidence_mismatch' if not matched else 'existing_conflict'
-        changes = (
-            evidence_result(answer, snapshot)
-            if not matched
-            else {
-                'answer_revision': revision,
-                'reason': 'existing_exact_answer_revision_differs',
-            }
-        )
-        conn.execute(
-            "INSERT INTO semantic_binding_decisions VALUES (?,?,NULL,?,?,'off',?,?,?,?)",
-            (
-                binding,
-                event,
-                answer.metadata.get('source_snapshot_id', snapshot.release_id),
-                snapshot.release_id,
-                reason,
-                canonical(changes),
-                ACTOR,
-                at,
-            ),
-        )
-    return binding, enabled
-
-
 def seed_receipt(conn, receipt):
     row = conn.execute(
         'SELECT detail FROM cache_audit_events WHERE action=? AND target=? AND actor=? ORDER BY event_id DESC LIMIT 1',
@@ -282,45 +192,38 @@ def seed_receipt(conn, receipt):
     return json.loads(row[0]) if row else None
 
 
-def seed_approval_id(bundle_hash: str, namespace: str, event: int) -> str:
-    return digest(canonical(['semantic-seed', bundle_hash, namespace, event]))
-
-
 def check_seed_import(conn, namespace, event, receipt, protection):
     control = read_control(conn)
     previous = seed_receipt(conn, receipt)
-    if previous is None and (
-        conn.execute('SELECT 1 FROM cache_audit_events WHERE action=? LIMIT 1', (ACTION,)).fetchone()
-        or conn.execute('SELECT 1 FROM atoms LIMIT 1').fetchone()
+    if (
+        previous is None
+        and conn.execute('SELECT 1 FROM cache_audit_events WHERE action=? LIMIT 1', (ACTION,)).fetchone()
     ):
-        raise ValueError(
-            '다른 seed import(이전 형식, 다른 번들 또는 다른 activation event)가 있는 DB입니다. 새 개발 사본을 사용하세요'
-        )
+        raise ValueError('다른 통과 ZIP 적재 또는 코퍼스 활성화 이력이 있습니다. 새 개발 사본을 사용하세요.')
     if previous is not None and previous['protection_hash'] != protection.fingerprint:
         raise ValueError('protected split changed since import')
     if control.protection_hash not in (None, protection.fingerprint):
         raise ValueError('기존 exact 보호 지문과 seed 보호 지문이 다릅니다.')
     if previous is not None:
-        return previous['counts']
+        return control, previous['counts']
     if control.mode != 'off' or (control.namespace_id, control.activation_event) not in (
         (None, None),
         (namespace, event),
     ):
         raise ValueError('seed import requires an inactive cache copy for the current snapshot')
-    return None
+    return control, None
 
 
 def import_seed(
     db: Path, seed: Handoff, snapshot: Snapshot, event: int, protection: Protection, *, check_snapshot=lambda: None
 ):
-    """Approve one verified pass bundle in a private 0003 cache copy, preserving exact mode and history."""
-    if Store(db).check_schema() != SCHEMA:
-        raise ValueError('semantic seed requires the current cache schema')
+    """Approve one verified pass bundle atomically, preserving mode and prior exact approval."""
+    Store(db).check_schema()
     ns = snapshot.namespace.id
-    receipt = seed_approval_id(seed.sha256, ns, event)
+    receipt = digest(canonical(['pass-seed', seed.sha256, ns, event]))
     with connect(db) as conn:
         conn.execute('BEGIN')
-        previous = check_seed_import(conn, ns, event, receipt, protection)
+        _, previous = check_seed_import(conn, ns, event, receipt, protection)
     if previous is not None:
         return previous
     groups = defaultdict(list)
@@ -331,26 +234,21 @@ def import_seed(
                 'approved_questions',
                 'approved_answers',
                 'excluded_calculation',
-                'disabled_policy',
                 'blocked_evidence_questions',
                 'existing_conflicts',
                 'existing_exclusions',
                 'p07_links',
                 'existing_links',
                 'inserted_questions',
-                'atoms',
-                'atomic_questions',
                 'hash_match',
                 'hash_mismatch',
                 'hash_missing',
                 'seed_protected_exact',
                 'seed_protected_near',
-                'semantic_enabled',
             ),
             0,
         )
     )
-    result.update(dict.fromkeys((f'intent_{kind}' for kind in [*INTENTS, 'none']), 0))
     result.update(input_questions=len(seed.questions), input_answers=len(seed.answers))
     for q in seed.questions:
         if is_calculation_question(q.text):
@@ -365,14 +263,13 @@ def import_seed(
     approved_revisions = set()
     with connect(db, write=True) as conn, transaction(conn):
         # Recheck after the near-duplicate scan, which runs outside the write transaction.
-        previous = check_seed_import(conn, ns, event, receipt, protection)
+        control, previous = check_seed_import(conn, ns, event, receipt, protection)
         if previous is not None:
             return previous
         conn.execute(
             'INSERT INTO cache_namespaces VALUES (?,?,?) ON CONFLICT DO NOTHING',
             (ns, snapshot.namespace.serialize(), at),
         )
-        policies = make_policies(conn, at)
         checked = {}
         existing_queries = prior_queries(conn, ns, seed.questions)
         answer_hashes = {answer.key: answer.sha256 for answer in seed.answers}
@@ -388,31 +285,7 @@ def import_seed(
             matched = set(statuses.values()) == {'match'}
             prior = {q.id: existing_queries[q.id] for q in questions if q.id in existing_queries}
             revision, ready = answer_revision(conn, snapshot, answer, questions, prior, matched, at, seed.sha256)
-            atom = digest(
-                canonical([ns, answer.group_id, answer.parent_sha256, answer.start, digest(answer.proposition)])
-            )
-            conn.execute(
-                'INSERT INTO atoms VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
-                (
-                    atom,
-                    answer.group_id,
-                    ns,
-                    snapshot.release_id,
-                    answer.parent,
-                    answer.parent_sha256,
-                    answer.proposition,
-                    answer.start,
-                    answer.start + len(answer.proposition),
-                    'approved' if ready else 'draft',
-                    at,
-                    ACTOR,
-                    at if ready else None,
-                    ACTOR if ready else None,
-                ),
-            )
-            result['atoms'] += 1
             for q in questions:
-                intent = classify_intent(q.text)
                 if not matched:
                     result['existing_exclusions'] += exclude_existing(
                         conn, prior.get(q.id), q, answer.sha256, 'source_evidence_mismatch', seed.sha256
@@ -420,29 +293,9 @@ def import_seed(
                 query, approved, outcome = attach_query(
                     conn, snapshot, q, revision, answer.sha256, prior.get(q.id), ready, at, seed.sha256
                 )
-                binding, enabled = attach_atom(
-                    conn,
-                    snapshot,
-                    answer,
-                    q,
-                    atom,
-                    revision,
-                    query,
-                    policies[intent],
-                    matched,
-                    approved,
-                    outcome,
-                    event,
-                    at,
-                )
                 result['approved_questions'] += approved
                 if approved:
                     approved_revisions.add(revision)
-                result['atomic_questions'] += 1
-                result['semantic_enabled'] += enabled
-                if approved:
-                    result[f'intent_{intent or "none"}'] += 1
-                result['disabled_policy'] += approved and not enabled
                 result['blocked_evidence_questions'] += not matched
                 result['existing_conflicts'] += outcome == 'existing_conflict'
                 if outcome == 'existing_link':
@@ -452,8 +305,8 @@ def import_seed(
                 result['inserted_questions'] += outcome == 'inserted'
                 audit(
                     conn,
-                    'semantic_seed_question',
-                    binding,
+                    'pass_seed_question',
+                    query or q.id,
                     ACTOR,
                     IMPORT_REASON,
                     q.metadata
@@ -463,22 +316,21 @@ def import_seed(
                         'answer_id': revision,
                         'question_sha256': digest(q.text),
                         'exact_approved': approved,
-                        'semantic_enabled': enabled,
                         'outcome': outcome,
                     },
                 )
         result['approved_answers'] = len(approved_revisions)
         result.update(f'hash_{value}' for value in checked.values())
-        if approved_revisions:
-            # The exact controller keeps any existing exact approval and its protection identity.
-            conn.execute(
-                'UPDATE cache_control SET namespace_id=?,activation_event=?,protection_hash=?,'
-                'generation=generation+1 WHERE singleton=1',
-                (ns, event, protection.fingerprint),
-            )
         payload: dict[str, int | str] = dict(result)
         if approved_revisions:
-            payload['approval_id'] = receipt
+            # Give a fresh cache an exact approval while preserving any existing approval.
+            approval = control.approval_id or receipt
+            conn.execute(
+                'UPDATE cache_control SET namespace_id=?,activation_event=?,protection_hash=?,approval_id=?,'
+                'generation=generation+1 WHERE singleton=1',
+                (ns, event, protection.fingerprint, approval),
+            )
+            payload['approval_id'] = approval
 
         check_snapshot()
         audit(
@@ -495,31 +347,3 @@ def import_seed(
             },
         )
     return payload
-
-
-def activate_seed(db, mode, actor, reason, approval, snapshot, event, protection, check_snapshot):
-    """Select the imported exact approval explicitly through the existing mode interface."""
-    with connect(db, write=True) as conn, transaction(conn):
-        control = read_control(conn)
-        receipt = seed_receipt(conn, approval)
-        if receipt is None or receipt['counts'].get('approval_id') != approval:
-            raise ValueError('semantic seed approval was not found')
-        if (
-            (control.namespace_id, control.activation_event) != (snapshot.namespace.id, event)
-            or receipt['snapshot'] != snapshot.release_id
-            or control.protection_hash != protection.fingerprint
-            or receipt['protection_hash'] != protection.fingerprint
-            or approval != seed_approval_id(receipt['bundle_sha256'], snapshot.namespace.id, event)
-        ):
-            raise ValueError('semantic seed approval, corpus, or protected split changed')
-        check_snapshot()
-        result = {'mode': mode}
-        if mode != 'off' and control.approval_id is None:
-            # The exact controller requires an approval for a serving mode. Seed receipts stay separate.
-            exact_approval = digest(canonical(['exact-from-semantic-seed', approval]))
-            conn.execute('UPDATE cache_control SET approval_id=? WHERE singleton=1', (exact_approval,))
-            audit(conn, 'semantic_seed_exact_activation', exact_approval, actor, reason, {'seed_approval_id': approval})
-            result['approval_id'] = exact_approval
-            control = read_control(conn)
-        set_mode_in(conn, control, mode, actor, reason, control.approval_id)
-    return result

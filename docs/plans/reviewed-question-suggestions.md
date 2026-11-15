@@ -24,6 +24,8 @@ A를 먼저 병합하고 B는 A 위에서 시작한다. 운영 반영은 B까지
 
 ## 3. PR A: 제거
 
+[PR A 구현 및 개발 검증 계획](../archives/remove-semantic-cache.md)
+
 ### 제거 대상 (main 기준)
 
 - 모듈: `semantic_gate`, `semantic_handoff`, `semantic_import_store`, `semantic_index_store`, `semantic_index_tools`, `semantic_pointer`, `semantic_policy`, `semantic_runtime`, `semantic_settings`, `semantic_store`, `semantic_tools`, `semantic_val`.

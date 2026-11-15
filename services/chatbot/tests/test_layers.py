@@ -61,15 +61,3 @@ def test_sqlite_imports_are_confined_to_db_and_stores():
                 if any(module.split('.')[0] == 'sqlite3' for module in modules):
                     violations.append(f'{path.relative_to(ROOT)}:{node.lineno}')
     assert not violations
-
-
-def test_semantic_runtime_does_not_import_offline_tools():
-    code = """
-import sys
-import lawbot.semantic_runtime
-print([module for module in (
-    'lawbot.semantic_index_tools', 'lawbot.semantic_index_store', 'lawbot.semantic_val', 'lawbot.semantic_tools'
-) if module in sys.modules])
-"""
-    out = subprocess.run([sys.executable, '-c', code], capture_output=True, text=True, check=True).stdout.strip()
-    assert out == '[]'

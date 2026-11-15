@@ -10,6 +10,13 @@ from pathlib import Path
 from lawbot.db.connection import check_db_path, connect, db_path, new_database, transaction
 
 MIGRATIONS = files('lawbot.db') / 'migrations'
+# Existing exact-cache databases may retain the unused, permanently disabled column from 0001.
+COMPATIBLE_CHECKSUMS = {
+    (
+        '0001_exact_cache.sql',
+        '57dcaf49aa4f508c143293ec8495b5a9ed51927b060ebbeb0dd7b7222de42fad',
+    ): 'f17b0cc8e4ba5f2580a20e97f74855f9e9f4fcbf869a8169bcc677515996dbbc',
+}
 
 
 @dataclass(frozen=True)
@@ -44,19 +51,20 @@ def _current_version(conn: sqlite3.Connection, migrations: list[Migration]) -> i
     if [row[0] for row in applied] != list(range(1, version + 1)):
         raise RuntimeError('DB 마이그레이션 이력이 연속되지 않습니다.')
     for (_, name, checksum), migration in zip(applied, migrations):
-        if (name, checksum) != (migration.name, migration.checksum):
+        compatible = COMPATIBLE_CHECKSUMS.get((migration.name, migration.checksum))
+        if name != migration.name or checksum not in (migration.checksum, compatible):
             raise RuntimeError(f'마이그레이션 파일 이름 또는 checksum 불일치: {migration.name}')
     return version
 
 
-def check_schema(path: str | Path, *, directory: Traversable | None = None, minimum_version: int | None = None) -> int:
-    """Check the applied migration history and require at least the requested schema version."""
-    return _check_schema(check_db_path(path), directory, minimum_version=minimum_version)
+def check_schema(path: str | Path, *, directory: Traversable | None = None) -> int:
+    """Check the applied migration history and require the current schema version."""
+    return _check_schema(check_db_path(path), directory)
 
 
-def _check_schema(path: Path, directory: Traversable | None = None, *, minimum_version: int | None = None) -> int:
+def _check_schema(path: Path, directory: Traversable | None = None) -> int:
     migrations = _migrations(directory)
-    required = migrations[-1].version if minimum_version is None else minimum_version
+    required = migrations[-1].version
     with connect(path) as conn:
         version = _current_version(conn, migrations)
     if version < required:

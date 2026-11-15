@@ -1,4 +1,4 @@
-"""Atomic handoff ingestion and offline validation with synthetic artifacts."""
+"""Exact handoff ingestion and validation with synthetic artifacts."""
 
 import json
 import zlib
@@ -7,12 +7,11 @@ from dataclasses import replace
 import pytest
 
 from lawbot.cache_seed import P07_SHA256, Protection
+from lawbot.cache_seed_pass import Answer, Handoff, Question, Reference
+from lawbot.cache_seed_store import IMPORT_REASON, import_seed
 from lawbot.cache_store import Draft, Store, init
 from lawbot.db.connection import connect
 from lawbot.exact_cache import Article, Namespace, Snapshot, digest
-from lawbot.semantic_handoff import Answer, Handoff, Question, Reference
-from lawbot.semantic_import_store import IMPORT_REASON, import_seed
-from lawbot.semantic_val import build_val
 
 PARENT = '근로기준법 제26조'
 SECONDARY = '근로기준법 제36조'
@@ -34,8 +33,6 @@ def handoff():
         (Reference(PARENT, parent.text_hash), Reference(SECONDARY, other.text_hash)),
         (Reference(SECONDARY, other.text_hash),),
         {'batch_id': 'P01'},
-        '신청 기한',
-        7,
         parent.text_hash,
     )
     questions = (
@@ -74,20 +71,16 @@ def test_import_approves_exact_with_all_display_and_review_evidence(handoff, tmp
     result = import_seed(db, seed, snapshot, 1, Protection(frozenset(), {}, 'protected'))
     assert result['approved_questions'] == 2
     assert result['excluded_calculation'] == 1
-    assert result['disabled_policy'] == 0 and result['semantic_enabled'] == 2
+    assert result['approval_id'] == Store(db).control().approval_id
     assert Store(db).control().mode == 'off'
     with connect(db) as conn:
         assert selected(conn, 'SELECT status,exact_enabled FROM cache_queries') == [('approved', 1), ('approved', 1)]
         assert selected(conn, 'SELECT raw_answer FROM cache_render_inputs') == [(RAW,)]
         assert selected(conn, 'SELECT article_id FROM cache_citations ORDER BY position') == [(PARENT,), (SECONDARY,)]
-        assert selected(conn, 'SELECT article_id FROM semantic_answer_evidence') == [(SECONDARY,)]
-        assert selected(conn, 'SELECT semantic_enabled FROM atom_answer_bindings ORDER BY semantic_enabled') == [
-            (1,),
-            (1,),
-        ]
-        assert selected(conn, 'SELECT source_start,source_end FROM atoms') == [(7, 12)]
+        source = json.loads(conn.execute('SELECT source FROM cache_answers').fetchone()[0])
+        assert source['review_evidence_hashes'] == {SECONDARY: snapshot.articles[SECONDARY].text_hash}
         approvals = conn.execute(
-            "SELECT actor,reason,detail FROM cache_audit_events WHERE action='semantic_seed_import'"
+            "SELECT actor,reason,detail FROM cache_audit_events WHERE action='pass_seed_import'"
         ).fetchall()
         assert len(approvals) == 1
         assert approvals[0][:2] == ('import', IMPORT_REASON)
@@ -107,10 +100,46 @@ def test_incompatible_evidence_stays_unapproved_and_off(handoff, tmp_path, missi
     assert report['approved_questions'] == 0 and report['blocked_evidence_questions'] == 2
     with connect(db) as conn:
         assert selected(conn, 'SELECT status FROM cache_answers') == [('draft',)]
-        assert selected(conn, 'SELECT carry_status, semantic_enabled FROM atom_answer_bindings') == [
-            ('off', 0),
-            ('off', 0),
-        ]
+        assert selected(conn, 'SELECT status,exact_enabled FROM cache_queries') == [('draft', 0), ('draft', 0)]
+
+
+def test_import_excludes_normalized_and_near_protected_questions(handoff, tmp_path):
+    seed, snapshot = handoff
+    first, second, calculation = seed.questions
+    second = replace(second, text='근로계약이 끝난 뒤 회사는 미지급 임금을 언제 지급해야 하나요?')
+    protected = (
+        '  신청   기한은 언제인가요? ',
+        '근로계약이 끝난 뒤 회사는 미지급 임금을 언제까지 지급해야 하나요?',
+    )
+    db = tmp_path / 'cache.db'
+    init(db)
+    report = import_seed(
+        db,
+        replace(seed, questions=(first, second, calculation)),
+        snapshot,
+        1,
+        Protection(frozenset(), {}, 'protected', protected),
+    )
+    assert report['seed_protected_exact'] == report['seed_protected_near'] == report['excluded_calculation'] == 1
+    with connect(db) as conn:
+        assert selected(conn, 'SELECT source_id FROM cache_queries') == []
+
+
+def test_import_rolls_back_if_active_corpus_changes(handoff, tmp_path):
+    seed, snapshot = handoff
+    db = tmp_path / 'cache.db'
+    init(db)
+    control = Store(db).control()
+
+    def changed():
+        raise ValueError('active corpus changed')
+
+    with pytest.raises(ValueError, match='active corpus changed'):
+        import_seed(db, seed, snapshot, 1, Protection(frozenset(), {}, 'protected'), check_snapshot=changed)
+    assert Store(db).control() == control
+    with connect(db) as conn:
+        assert selected(conn, 'SELECT answer_id FROM cache_answers') == []
+        assert selected(conn, 'SELECT event_id FROM cache_audit_events') == []
 
 
 @pytest.mark.parametrize('same_revision', [False, True])
@@ -143,12 +172,7 @@ def test_existing_approval_is_linked_and_replay_does_not_append_history(handoff,
     assert first_run['existing_conflicts'] == int(not same_revision)
     assert first_run['approved_questions'] == (2 if same_revision else 1)
     assert store.control().approval_id == prior_approval and store.control().protection_hash == 'protected'
-    assert first_run['approval_id'] != prior_approval
-    with connect(db) as conn:
-        assert conn.execute(
-            'SELECT b.semantic_enabled FROM atom_answer_bindings b JOIN atomic_questions q USING(query_revision_id) '
-            "WHERE q.query_id='q1'"
-        ).fetchone() == (int(same_revision),)
+    assert first_run['approval_id'] == prior_approval
     assert import_seed(db, seed, snapshot, 1, Protection(frozenset(), {}, 'protected')) == first_run
     with connect(db) as conn:
         assert selected(conn, 'SELECT * FROM cache_audit_events ORDER BY event_id') == history
@@ -157,34 +181,12 @@ def test_existing_approval_is_linked_and_replay_does_not_append_history(handoff,
         ).fetchone() == (draft.answer_id(ns), 'p07')
 
 
-def test_protected_qs_are_excluded_and_val_is_deterministic(handoff, tmp_path):
-    seed, snapshot = handoff
-    protected = Protection(frozenset(), {}, 'protected', (seed.questions[1].text,))
-    db = tmp_path / 'private' / 'cache.db'
-    init(db)
-    report = import_seed(db, seed, snapshot, 1, protected)
-    assert report['seed_protected_exact'] == 1
-    with connect(db) as conn:
-        assert selected(conn, 'SELECT source_id FROM cache_queries') == [('q1',)]
-    deferred = (
-        Question('d1', 'deferred-key', '별도 합성 보류 사유는 무엇인가요?', {'pair_verdict': 'review'}),
-        Question('d2', 'deferred-key', '다른 합성 수정 사유가 있나요?', {'pair_verdict': 'revise'}),
-    )
-    rows, held, _ = build_val(seed, deferred, Protection(frozenset(), {}, 'protected'), snapshot)
-    reversed_seed = replace(seed, questions=tuple(reversed(seed.questions)))
-    assert build_val(reversed_seed, tuple(reversed(deferred)), Protection(frozenset(), {}, 'protected'), snapshot)[
-        :2
-    ] == (rows, held)
-    assert len(held) == 1 and {r['label'] for r in rows} == {'reusable', 'not_reusable', 'uncertain'}
-    assert RAW not in json.dumps(rows, ensure_ascii=False)
-
-
 def test_verified_zip_preserves_raw_provenance_and_rejects_deferred(tmp_path, handoff, monkeypatch):
     from hashlib import sha256
     from zipfile import ZipFile
 
+    from lawbot.cache_seed_pass import PROVENANCE, read_pass
     from lawbot.exact_cache import canonical
-    from lawbot.semantic_handoff import PROVENANCE, read_pass
 
     seed, snapshot = handoff
     answer = seed.answers[0]
@@ -192,7 +194,6 @@ def test_verified_zip_preserves_raw_provenance_and_rejects_deferred(tmp_path, ha
     manifest = {
         'package_kind': 'pass',
         'approval_status': 'not_approved',
-        'semantic_enabled': False,
         'exact_enabled': False,
         'question_pairs': 1,
         'answer_units_used_by_pairs': 1,
@@ -223,7 +224,7 @@ def test_verified_zip_preserves_raw_provenance_and_rejects_deferred(tmp_path, ha
         'id': question.id,
         'answer_verdict': 'pass',
         'pair_verdict': 'pass',
-        'evidence': [{'article_id': answer.parent, 'quote': answer.proposition}],
+        'evidence': [{'article_id': answer.parent, 'quote': '신청 기한'}],
     }
     articles = 'article_id,deleted,law,article_no,title,text\n' + ''.join(
         f'{key},0,{article.law},{article.number},{article.title},{article.text}\n'
@@ -244,16 +245,16 @@ def test_verified_zip_preserves_raw_provenance_and_rejects_deferred(tmp_path, ha
         for name, content in files.items():
             bundle.writestr(name, content)
     checksum = sha256(path.read_bytes()).hexdigest()
-    monkeypatch.setattr('lawbot.semantic_handoff.PASS_SHA256', checksum)
-    from lawbot import semantic_handoff
+    monkeypatch.setattr('lawbot.cache_seed_pass.PASS_SHA256', checksum)
+    from lawbot import cache_seed_pass
 
-    csv_rows = semantic_handoff.csv_rows
+    csv_rows = cache_seed_pass.csv_rows
 
     def key_records(raw):
         assert not raw.startswith(b'article_id,'), 'article CSV was parsed again for schema validation'
         return csv_rows(raw)
 
-    monkeypatch.setattr(semantic_handoff, 'csv_rows', key_records)
+    monkeypatch.setattr(cache_seed_pass, 'csv_rows', key_records)
     parsed = read_pass(path)
     assert parsed.sha256 == checksum
     assert parsed.answers == (replace(answer, metadata=provenance),)
@@ -265,7 +266,7 @@ def test_verified_zip_preserves_raw_provenance_and_rejects_deferred(tmp_path, ha
         bundle.writestr('manifest.json', canonical(manifest | {'package_kind': 'deferred'}))
     with pytest.raises(ValueError, match='SHA-256 mismatch'):
         read_pass(deferred)
-    monkeypatch.setattr('lawbot.semantic_handoff.PASS_SHA256', sha256(deferred.read_bytes()).hexdigest())
+    monkeypatch.setattr('lawbot.cache_seed_pass.PASS_SHA256', sha256(deferred.read_bytes()).hexdigest())
     with pytest.raises(ValueError, match='invalid handoff manifest'):
         read_pass(deferred)
 
@@ -298,7 +299,7 @@ def test_matching_legacy_query_excluded_by_protection_retains_approval_history(h
             'SELECT exact_enabled,status,reviewed_by FROM cache_queries WHERE query_id=?', (draft.query_id(ns),)
         ).fetchone() == (0, 'approved', 'p07')
         assert conn.execute(
-            "SELECT actor,reason FROM cache_audit_events WHERE action='semantic_seed_exclusion'"
+            "SELECT actor,reason FROM cache_audit_events WHERE action='pass_seed_exclusion'"
         ).fetchone() == (
             'import',
             'protected_exact',
@@ -311,18 +312,17 @@ def test_missing_handoff_field_exits_cli_without_traceback(tmp_path, monkeypatch
     from types import SimpleNamespace
     from zipfile import ZipFile
 
-    from lawbot import semantic_tools
+    from lawbot import cache_seed_pass
 
     path = tmp_path / 'incomplete.zip'
     with ZipFile(path, 'w') as bundle:
         bundle.writestr('manifest.json', '{}')
-    monkeypatch.setattr('lawbot.semantic_handoff.PASS_SHA256', sha256(path.read_bytes()).hexdigest())
-    monkeypatch.setattr(semantic_tools, 'corpus_context', lambda _: SimpleNamespace())
-    monkeypatch.setattr(semantic_tools.envfile, 'load', lambda: None)
+    monkeypatch.setattr('lawbot.cache_seed_pass.PASS_SHA256', sha256(path.read_bytes()).hexdigest())
+    monkeypatch.setattr(cache_seed_pass, 'corpus_context', lambda _: SimpleNamespace())
+    monkeypatch.setattr(cache_seed_pass.envfile, 'load', lambda: None)
     with pytest.raises(SystemExit) as exc:
-        semantic_tools.main(
+        cache_seed_pass.main(
             [
-                'import',
                 '--bundle',
                 str(path),
                 '--cache-db',
@@ -333,84 +333,8 @@ def test_missing_handoff_field_exits_cli_without_traceback(tmp_path, monkeypatch
         )
     assert exc.value.code == 2
     output = capsys.readouterr().err
-    assert '시맨틱 도구 실행 실패' in output and 'missing a required field or reference' in output
+    assert '통과 ZIP 적재 실패' in output and 'missing a required field or reference' in output
     assert 'Traceback' not in output
-
-
-def test_v6_exposure_compares_normalized_training_questions_only():
-    from lawbot.semantic_val import TrainingExposure, training_group
-
-    train = training_group(
-        [
-            {'id': 'train', 'question': '  합성 질문'},
-            {'id': 'protected', 'question': '보호용 예시'},
-        ],
-        [{'id': 'train', 'split_emb': 'train'}, {'id': 'protected', 'split_emb': 'test'}],
-    )
-    exposure = TrainingExposure(train, frozenset(train.values()))
-    assert exposure.classify(Question('other', 'key', '합성 질문', {})) == 'same_text'
-    assert exposure.classify(Question('train', 'key', '수정된 문장', {})) == 'same_id_changed'
-    assert exposure.classify(Question('protected', 'key', '보호용 예시', {})) == 'none'
-
-
-@pytest.mark.parametrize('prior_kind', ['receipt', 'atom'])
-def test_seed_cli_rejects_legacy_cache_without_writing(prior_kind, handoff, tmp_path, monkeypatch, capsys):
-    from types import SimpleNamespace
-
-    from lawbot import semantic_tools
-    from lawbot.cache_store import audit
-    from lawbot.exact_cache import canonical
-
-    seed, snapshot = handoff
-    db, corpus = tmp_path / 'cache.db', tmp_path / 'corpus.db'
-    init(db)
-    corpus.touch()
-    ns = snapshot.namespace.id
-    answer = seed.answers[0]
-    with connect(db, write=True) as conn:
-        if prior_kind == 'receipt':
-            legacy_id = digest(canonical([seed.sha256, ns, 1]))
-            audit(conn, 'semantic_seed_import', legacy_id, 'import', 'old', {'bundle_sha256': seed.sha256})
-        else:
-            conn.execute('INSERT INTO cache_namespaces VALUES (?,?,?)', (ns, snapshot.namespace.serialize(), 'now'))
-            atom = digest(
-                canonical([ns, answer.group_id, answer.parent_sha256, answer.start, digest(answer.proposition)])
-            )
-            conn.execute(
-                'INSERT INTO atoms (atom_revision_id,atom_id,namespace_id,corpus_snapshot_id,parent_chunk_id,'
-                'parent_sha256,proposition,source_start,source_end,created_at,created_by) VALUES (?,?,?,?,?,?,?,?,?,?,?)',
-                (
-                    atom,
-                    answer.group_id,
-                    ns,
-                    snapshot.release_id,
-                    answer.parent,
-                    answer.parent_sha256,
-                    answer.proposition,
-                    0,
-                    len(answer.proposition),
-                    'now',
-                    'import',
-                ),
-            )
-    monkeypatch.setattr(semantic_tools.envfile, 'load', lambda: None)
-    monkeypatch.setattr(
-        semantic_tools, 'corpus_context', lambda _: SimpleNamespace(snapshot=snapshot, event=1, check=lambda: None)
-    )
-    monkeypatch.setattr(semantic_tools, 'read_pass', lambda _: seed)
-    monkeypatch.setattr(semantic_tools, 'development_protection', lambda *a: Protection(frozenset(), {}, 'current'))
-    before = Store(db).control()
-    with pytest.raises(SystemExit) as exc:
-        semantic_tools.main(
-            ['import', '--bundle', str(tmp_path / 'seed.zip'), '--cache-db', str(db), '--corpus-db', str(corpus)]
-        )
-    assert exc.value.code == 2
-    error = capsys.readouterr().err
-    assert '다른 seed import(이전 형식, 다른 번들 또는 다른 activation event)가 있는 DB입니다' in error
-    assert 'UNIQUE' not in error
-    assert Store(db).control() == before
-    with connect(db) as conn:
-        assert conn.execute('SELECT count(*) FROM atom_answer_bindings').fetchone() == (0,)
 
 
 def test_p07_dependency_conflict_preserves_only_the_original_exact_approval(handoff, tmp_path):
@@ -446,7 +370,9 @@ def test_p07_dependency_conflict_preserves_only_the_original_exact_approval(hand
     with connect(db) as conn:
         assert conn.execute("SELECT reviewed_by FROM cache_answers WHERE status='approved'").fetchall() == [('p07',)]
         assert conn.execute('SELECT answer_id FROM cache_queries').fetchall() == [(draft.answer_id(ns),)]
-        assert conn.execute('SELECT reason FROM semantic_binding_decisions').fetchall() == [('existing_conflict',)]
+        assert conn.execute(
+            "SELECT json_extract(detail, '$.outcome') FROM cache_audit_events WHERE action='pass_seed_question'"
+        ).fetchall() == [('existing_conflict',)]
 
 
 def test_seed_rerun_reports_a_protection_change_since_import(handoff, tmp_path):
@@ -458,27 +384,12 @@ def test_seed_rerun_reports_a_protection_change_since_import(handoff, tmp_path):
         import_seed(db, seed, snapshot, 1, Protection(frozenset(), {}, 'changed'))
 
 
-def test_seed_activation_rejects_changed_exact_protection(handoff, tmp_path):
-    from lawbot.semantic_import_store import activate_seed
-
-    seed, snapshot = handoff
-    db = tmp_path / 'cache.db'
-    init(db)
-    protection = Protection(frozenset(), {}, 'current')
-    receipt = import_seed(db, seed, snapshot, 1, protection)['approval_id']
-    with connect(db, write=True) as conn:
-        conn.execute("UPDATE cache_control SET protection_hash='approved-with-extra-csv' WHERE singleton=1")
-    with pytest.raises(ValueError, match='protected split changed'):
-        activate_seed(db, 'shadow', 'test', 'activate seed', receipt, snapshot, 1, protection, lambda: None)
-    assert Store(db).control().mode == 'off'
-
-
 def test_seed_mode_reports_new_exact_approval_without_reading_zip(handoff, tmp_path, monkeypatch):
     from pathlib import Path
     from types import SimpleNamespace
 
     from admin_test_data import seed_qa
-    from lawbot import cache_admin, semantic_tools
+    from lawbot import cache_admin
     from lawbot.cache_seed import load_protection
     from lawbot.db.migrate import init as init_corpus
 
@@ -490,8 +401,7 @@ def test_seed_mode_reports_new_exact_approval_without_reading_zip(handoff, tmp_p
     extra = tmp_path / 'protected.csv'
     extra.write_text('question\n추가로 보호할 합성 문항\n', encoding='utf-8')
     init(db)
-    protection = semantic_tools.development_protection(corpus, [str(extra)])
-    assert protection.fingerprint == load_protection(corpus, [extra]).fingerprint
+    protection = load_protection(corpus, [extra])
     receipt = import_seed(db, seed, snapshot, 1, protection)['approval_id']
 
     original_open = Path.open
@@ -503,18 +413,20 @@ def test_seed_mode_reports_new_exact_approval_without_reading_zip(handoff, tmp_p
 
     monkeypatch.setattr(Path, 'open', reject_zip)
     monkeypatch.setattr(cache_admin, 'load_bundle', lambda *a: pytest.fail('mode change loaded the P07 ZIP'))
+    monkeypatch.setattr(cache_admin, 'active_token', lambda *a: (snapshot.release_id, 1))
+    monkeypatch.setattr(cache_admin, 'active_release', lambda *a: SimpleNamespace(release_id=snapshot.release_id))
+    monkeypatch.setattr(cache_admin, 'cache_snapshot', lambda *a: snapshot)
     monkeypatch.setattr(
-        semantic_tools, 'corpus_context', lambda *a: SimpleNamespace(snapshot=snapshot, event=1, check=lambda: None)
+        cache_admin.settings,
+        'load',
+        lambda: SimpleNamespace(db=corpus, corpus='db', profile=SimpleNamespace(name='v5'), decree=None),
     )
     args = cache_admin.parser().parse_args(
         [
             'set-mode',
             'shadow',
-            '--semantic-seed',
             '--db',
             str(db),
-            '--corpus-db',
-            str(corpus),
             '--approval',
             receipt,
             '--reason',
@@ -524,8 +436,11 @@ def test_seed_mode_reports_new_exact_approval_without_reading_zip(handoff, tmp_p
         ]
     )
     result = cache_admin.run(args)
-    assert result == {'mode': 'shadow', 'approval_id': Store(db).control().approval_id}
-    assert result['approval_id'] not in (None, receipt)
+    assert result == {'mode': 'shadow'}
+    assert Store(db).control().approval_id == receipt
+    args.protected_csv = []
+    with pytest.raises(ValueError, match='보호 분할이 변경'):
+        cache_admin.run(args)
 
 
 @pytest.mark.parametrize('malformed', ['zip', 'manifest', 'row'])
@@ -534,7 +449,7 @@ def test_bundle_type_or_zip_defects_exit_cli_with_status_two(malformed, tmp_path
     from types import SimpleNamespace
     from zipfile import ZipFile
 
-    from lawbot import semantic_tools
+    from lawbot import cache_seed_pass
 
     path = tmp_path / 'bad.zip'
     if malformed == 'zip':
@@ -543,7 +458,6 @@ def test_bundle_type_or_zip_defects_exit_cli_with_status_two(malformed, tmp_path
         manifest = {
             'package_kind': 'pass',
             'approval_status': 'not_approved',
-            'semantic_enabled': False,
             'exact_enabled': False,
             'question_pairs': 1,
             'answer_units_used_by_pairs': 1,
@@ -555,13 +469,12 @@ def test_bundle_type_or_zip_defects_exit_cli_with_status_two(malformed, tmp_path
             bundle.writestr('data/pass_answers.jsonl', '')
             bundle.writestr('data/cache_key_inputs.csv', 'id,answer_key,normalized_question_sha256\n')
             bundle.writestr('reviews/pass_review_evidence.jsonl', '')
-    monkeypatch.setattr('lawbot.semantic_handoff.PASS_SHA256', sha256(path.read_bytes()).hexdigest())
-    monkeypatch.setattr(semantic_tools, 'corpus_context', lambda *a: SimpleNamespace())
-    monkeypatch.setattr(semantic_tools.envfile, 'load', lambda: None)
+    monkeypatch.setattr('lawbot.cache_seed_pass.PASS_SHA256', sha256(path.read_bytes()).hexdigest())
+    monkeypatch.setattr(cache_seed_pass, 'corpus_context', lambda *a: SimpleNamespace())
+    monkeypatch.setattr(cache_seed_pass.envfile, 'load', lambda: None)
     with pytest.raises(SystemExit) as exc:
-        semantic_tools.main(
+        cache_seed_pass.main(
             [
-                'import',
                 '--bundle',
                 str(path),
                 '--cache-db',
@@ -572,14 +485,14 @@ def test_bundle_type_or_zip_defects_exit_cli_with_status_two(malformed, tmp_path
         )
     assert exc.value.code == 2
     error = capsys.readouterr().err
-    assert '시맨틱 도구 실행 실패' in error and 'Traceback' not in error
+    assert '통과 ZIP 적재 실패' in error and 'Traceback' not in error
 
 
 def test_verified_zip_does_not_relabel_callers_key_error(tmp_path):
     from hashlib import sha256
     from zipfile import ZipFile
 
-    from lawbot.semantic_handoff import verified_zip
+    from lawbot.cache_seed_pass import verified_zip
 
     path = tmp_path / 'caller.zip'
     with ZipFile(path, 'w') as bundle:
@@ -589,7 +502,6 @@ def test_verified_zip_does_not_relabel_callers_key_error(tmp_path):
                 {
                     'package_kind': 'pass',
                     'approval_status': 'not_approved',
-                    'semantic_enabled': False,
                     'exact_enabled': False,
                     'question_pairs': 1,
                     'answer_units_used_by_pairs': 1,
@@ -597,21 +509,8 @@ def test_verified_zip_does_not_relabel_callers_key_error(tmp_path):
             ),
         )
     with pytest.raises(KeyError, match='caller bug'):
-        with verified_zip(path, sha256(path.read_bytes()).hexdigest(), 'pass'):
+        with verified_zip(path, sha256(path.read_bytes()).hexdigest()):
             raise KeyError('caller bug')
-
-
-def test_first_seed_activation_returns_the_new_exact_approval(handoff, tmp_path):
-    from lawbot.semantic_import_store import activate_seed
-
-    seed, snapshot = handoff
-    db = tmp_path / 'cache.db'
-    init(db)
-    protection = Protection(frozenset(), {}, 'current')
-    receipt = import_seed(db, seed, snapshot, 1, protection)['approval_id']
-    result = activate_seed(db, 'shadow', 'test', 'verified seed', receipt, snapshot, 1, protection, lambda: None)
-    assert result == {'mode': 'shadow', 'approval_id': Store(db).control().approval_id}
-    assert result['approval_id'] not in (None, receipt)
 
 
 @pytest.mark.parametrize('replay', [False, True])
@@ -625,14 +524,14 @@ def test_import_checks_exact_fingerprint_before_writing(handoff, tmp_path, repla
     with connect(db, write=True) as conn:
         conn.execute("UPDATE cache_control SET protection_hash='p07-with-extra-csv' WHERE singleton=1")
         before = selected(conn, 'SELECT * FROM cache_audit_events ORDER BY event_id')
-        atoms = selected(conn, 'SELECT atom_revision_id FROM atoms ORDER BY atom_revision_id')
+        queries = selected(conn, 'SELECT query_id FROM cache_queries ORDER BY query_id')
     control = Store(db).control()
     with pytest.raises(ValueError, match='보호 지문'):
         import_seed(db, seed, snapshot, 1, protection)
     assert Store(db).control() == control
     with connect(db) as conn:
         assert selected(conn, 'SELECT * FROM cache_audit_events ORDER BY event_id') == before
-        assert selected(conn, 'SELECT atom_revision_id FROM atoms ORDER BY atom_revision_id') == atoms
+        assert selected(conn, 'SELECT query_id FROM cache_queries ORDER BY query_id') == queries
 
 
 @pytest.mark.parametrize('error_type', [EOFError, NotImplementedError, zlib.error])
@@ -641,7 +540,7 @@ def test_member_decompression_errors_exit_cli_with_status_two(error_type, tmp_pa
     from types import SimpleNamespace
     from zipfile import ZipFile
 
-    from lawbot import semantic_tools
+    from lawbot import cache_seed_pass
 
     path = tmp_path / 'bad-member.zip'
     with ZipFile(path, 'w') as archive:
@@ -651,13 +550,12 @@ def test_member_decompression_errors_exit_cli_with_status_two(error_type, tmp_pa
         raise error_type('synthetic decompression failure')
 
     monkeypatch.setattr(ZipFile, 'read', fail_read)
-    monkeypatch.setattr('lawbot.semantic_handoff.PASS_SHA256', sha256(path.read_bytes()).hexdigest())
-    monkeypatch.setattr(semantic_tools, 'corpus_context', lambda *a: SimpleNamespace())
-    monkeypatch.setattr(semantic_tools.envfile, 'load', lambda: None)
+    monkeypatch.setattr('lawbot.cache_seed_pass.PASS_SHA256', sha256(path.read_bytes()).hexdigest())
+    monkeypatch.setattr(cache_seed_pass, 'corpus_context', lambda *a: SimpleNamespace())
+    monkeypatch.setattr(cache_seed_pass.envfile, 'load', lambda: None)
     with pytest.raises(SystemExit) as exc:
-        semantic_tools.main(
+        cache_seed_pass.main(
             [
-                'import',
                 '--bundle',
                 str(path),
                 '--cache-db',
@@ -667,4 +565,4 @@ def test_member_decompression_errors_exit_cli_with_status_two(error_type, tmp_pa
             ]
         )
     assert exc.value.code == 2
-    assert '시맨틱 도구 실행 실패: invalid handoff ZIP entry' in capsys.readouterr().err
+    assert '통과 ZIP 적재 실패: invalid handoff ZIP entry' in capsys.readouterr().err

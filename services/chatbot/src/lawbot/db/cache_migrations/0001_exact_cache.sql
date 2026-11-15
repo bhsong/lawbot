@@ -22,7 +22,6 @@ CREATE TABLE cache_queries (
     status TEXT NOT NULL DEFAULT 'draft' CHECK (status IN ('draft','approved','revoked')),
     reviewed_by TEXT, reviewed_at TEXT, valid_from TEXT, valid_until TEXT, expires_at TEXT,
     exact_enabled INTEGER NOT NULL DEFAULT 0 CHECK (exact_enabled IN (0,1)),
-    semantic_enabled INTEGER NOT NULL DEFAULT 0 CHECK (semantic_enabled = 0),
     FOREIGN KEY (namespace_id, answer_id) REFERENCES cache_answers(namespace_id, answer_id),
     UNIQUE (namespace_id, normalized_sha256)
 );

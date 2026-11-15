@@ -25,19 +25,6 @@ class Decision:
     eligible: bool
     match: Match | None = None
 
-    @property
-    def allows_semantic_shadow(self) -> bool:
-        """Require a known exact decision with a readable shared catalog."""
-        return self.eligible and self.reason in (
-            'off',
-            'no_match',
-            'inactive',
-            'expired',
-            'hit',
-            'citation_mismatch',
-            'revision_mismatch',
-        )
-
     def metrics(self) -> dict:
         return {
             'cache_mode': self.mode,
