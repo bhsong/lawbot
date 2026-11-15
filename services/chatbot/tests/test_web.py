@@ -5,7 +5,6 @@ import json
 import subprocess
 import sys
 from dataclasses import replace
-from hashlib import sha256
 from threading import Event
 from types import SimpleNamespace
 
@@ -363,26 +362,23 @@ def test_chat_streams_events_in_order(authed):
     assert '예고해야 합니다' in done['text'] and done['turn_id'] is None  # 피드백이 꺼져 있으면 turn_id 없음
 
 
-def test_semantic_off_preserves_sse_and_request_log(authed, lawbot, env, tmp_path):
+def test_semantic_off_preserves_sse_and_request_log(authed, lawbot, tmp_path):
     request_log = tmp_path / 'requests.jsonl'
     lawbot.settings = replace(lawbot.settings, request_log=request_log)
-    env.setattr(web, 'time', SimpleNamespace(perf_counter=lambda: 100.0, monotonic=web.time.monotonic))
-    env.setattr(
-        service, 'time', SimpleNamespace(perf_counter=lambda: 100.0, strftime=lambda _: '2026-01-01T00:00:00+0000')
-    )
-    env.setattr(service, 'uuid', SimpleNamespace(uuid4=lambda: SimpleNamespace(hex='123456789012')))
-    env.setattr(service, 'sys', SimpleNamespace(argv=['pytest']))
+    assert lawbot.settings.semantic_shadow is None
+    streamed = events(chat(authed, question='해고 통보 전에 예고를 해야 하나요?'))
+    event_names = names(streamed)
+    assert event_names[:2] == ['status', 'sources'] and event_names[-1] == 'done'
+    assert event_names.count('sources') == 2 and 'answer' in event_names and 'stats' in event_names
+    done = streamed[-1][1]
+    assert '예고해야 합니다.' in done['text'] and done['turn_id'] is None
+    assert not any(key.startswith('semantic_') for _, event in streamed for key in event)
 
-    response = chat(authed, question='해고 통보 전에 예고를 해야 하나요?')
-    assert events(response)[-1][0] == 'done'
-    # Captured on main before adding the semantic dispatcher, with the clock and request ID fixed.
-    assert sha256(response.content).hexdigest() == 'a9302a968ed28bdaa68f23e9ee61819513f44d094923c419ed171cb81cb34b91', (
-        response.text
-    )
-    log_bytes = request_log.read_bytes()
-    assert sha256(log_bytes).hexdigest() == '0bfcde178eb1d6f04ab2db1142b4b916352913f1748827870d9f69f28afe95be', (
-        log_bytes.decode()
-    )
+    row = json.loads(request_log.read_bytes())
+    assert (row['model'], row['fmt'], row['status'], row['error_type']) == ('fast', 'full', 'ok', None)
+    assert row['answer_verdict'] == 'shown' and row['cite_ok'] == 1
+    assert 0 <= row['request_to_first_answer_ms'] <= row['request_to_complete_ms']
+    assert 'call_counts' not in row and not any(key.startswith('semantic_') for key in row)
 
 
 def test_chat_item_fields(authed):

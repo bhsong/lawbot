@@ -124,9 +124,9 @@ class ModelServerClient:
     def ready(self):
         return self._parsed(api.HealthResponse, 'GET', api.HEALTH_PATH, timeout=5).ready
 
-    def models(self):
+    def models(self, *, timeout=None):
         """[{id, type, loaded, …}] (/v1/models)"""
-        return [m.model_dump() for m in self._parsed(api.ModelsResponse, 'GET', api.MODELS_PATH).data]
+        return [m.model_dump() for m in self._parsed(api.ModelsResponse, 'GET', api.MODELS_PATH, timeout=timeout).data]
 
     def embed(
         self, model, texts, input_type: Literal['query', 'document'] = 'document', max_seq_length=None, timeout=None

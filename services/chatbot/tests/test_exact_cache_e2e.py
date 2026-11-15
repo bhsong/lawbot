@@ -2,6 +2,7 @@
 
 import json
 import time
+from hashlib import sha256
 
 import pytest
 from playwright.sync_api import expect
@@ -18,7 +19,7 @@ from lawbot.semantic_settings import Calibration
 from lawbot.service import system_text
 from test_exact_cache import ID, RAW
 from test_migrate_csv_to_sqlite import run as migrate
-from test_semantic_cache import seed_binding
+from test_semantic_cache import seed_binding, stub_tokenizer
 
 pytestmark = pytest.mark.e2e_stub
 
@@ -67,12 +68,16 @@ def test_exact_cache_browser_flow(tmp_path, page, request):
     )
     store.set_mode('shadow', 'tester', 'test', approval)
     example = e2e.example_env()
+    raw_tokenizer = stub_tokenizer()
+    tokenizer_file = tmp_path / 'tokenizer.json'
+    tokenizer_file.write_bytes(raw_tokenizer)
     calibration = Calibration(
         calibration_id='synthetic',
         embedding_model=example['LAWBOT_EMB_MODEL'],
         embedding_revision=e2e.STUB_MODEL_REVISION,
         reranker_model=example['LAWBOT_RERANK_MODEL'],
         reranker_revision=e2e.STUB_MODEL_REVISION,
+        reranker_tokenizer_sha256=sha256(raw_tokenizer).hexdigest(),
         index_revision='synthetic-browser',
         query_max_seq=1024,
         top_k=2,
@@ -107,6 +112,7 @@ def test_exact_cache_browser_flow(tmp_path, page, request):
         LAWBOT_SEMANTIC_CACHE_MODE='shadow',
         LAWBOT_SEMANTIC_CALIBRATION=str(calibration_file),
         LAWBOT_SEMANTIC_INDEX=str(index_file),
+        LAWBOT_SEMANTIC_RERANK_TOKENIZER=str(tokenizer_file),
     )
     try:
         assert stack.web.alive()
@@ -120,7 +126,7 @@ def test_exact_cache_browser_flow(tmp_path, page, request):
         expect(e2e.answer(page).last).to_contain_text('가짜 모델 답변입니다.')
         shadow = request_row(stack, 1)
         assert shadow['response_source'] == 'rag' and shadow['would_hit']
-        assert shadow['call_counts'] == {'embedding': 1, 'search': 1, 'rerank': 1, 'llm': 1}
+        assert shadow['call_counts'] == {'embedding': 2, 'search': 1, 'rerank': 3, 'llm': 1, 'models': 2}
         assert shadow['semantic_would_hit'] and shadow['semantic_rerank_http_calls'] == 2
 
         store.set_mode('on', 'tester', 'test', approval)

@@ -70,7 +70,16 @@
 - 설정 `LAWBOT_SEMANTIC_CACHE_MODE`의 기본값은 `off`다. `shadow`는 DB 코퍼스, 기존 `LAWBOT_EXACT_CACHE_DB`, v5 리랭커, `LAWBOT_SEMANTIC_CALIBRATION` JSON을 요구한다. calibration은 테스트 또는 검증에서 정한 모델 ID·revision, 쿼리 길이·후보 수, index revision, A/B instruction·threshold·margin을 담는다. 코드가 임계값을 채우지 않는다.
 - 기존 exact는 캐시 DB 0002와 0003을 지원한다. shadow를 관측할 개발 사본에는 `uv run python -m lawbot.cache_admin migrate --db <캐시 DB 사본>`으로 0003을 적용한다. shadow 인덱스는 `LAWBOT_SEMANTIC_INDEX`의 float32 `.npy`와 DB manifest의 행 순서, 차원, fingerprint, SHA-256을 읽는다. 파일이 없거나 호환되지 않으면 기존 RAG를 사용한다. 인덱스 생성 및 교체 도구는 PR 2 범위다.
 - 조건 정책은 질문 전체를 검수된 문형과 대조한다. 문형의 `{slot}`은 정책이 열거한 원문 표현만 받는다. 각 표현의 구조화 값과 범위를 비교하고, 질문 안에서 잡힌 조건의 위치를 판정에 남긴다. 문형 밖 표현과 슬롯 해석이 여러 개인 경우는 미스로 처리한다.
-- v5 모델 서버 응답에는 잘림 여부와 토큰 수가 없다. PR 1은 검증된 모델 revision과 현재 Qwen3 입력 계약을 기준으로 UTF-8 바이트 상한을 보수적으로 사용한다. 실측은 이후 val 평가에서 수행한다.
+- `shadow`는 `LAWBOT_SEMANTIC_RERANK_TOKENIZER`로 기존 Qwen3 리랭커의 로컬 `tokenizer.json`을 읽고 calibration의 `reranker_tokenizer_sha256`과 대조한다. 서버와 같은 prefix·중간 입력·suffix를 따로 인코딩해 2,560토큰을 넘는 페어를 제외한다. 모델 revision은 shadow 추론 전후 서버 모델 목록에서 확인한다.
+- SSE 종료 프레임 전송과 채팅 슬롯 해제 후 `shadow`를 한 건씩 실행한다. 이미 실행 중이면 `shadow_busy`를 기록한다. `shadow_timeout_s`는 기본 2초이며 각 호출에 남은 시간을 넘긴다. 마감 후 받은 점수는 폐기하고 `deadline_exceeded`로 기록한다. 요청 로그 `call_counts`에 shadow 임베딩·리랭크·모델 목록 호출을 합산한다.
+
+### PR #151 리뷰 반영 순서
+
+1. P1에서 SSE 종료 프레임과 요청 슬롯 해제 뒤 shadow를 실행하고 전체 deadline을 적용한다. 로컬 리랭커 토크나이저로 실제 입력 토큰 수를 확인해 긴 페어만 제외한다. 출처 질문의 철회·계산 제외를 binding 자격에 반영한다.
+2. P2에서 인덱스 시작 경고와 구 스키마 점검을 추가한다. exact 상태 판단을 `Decision`에 두고, 요청 중 모델 revision과 실패한 호출까지 기록한다.
+3. P3에서 카탈로그 자격 판정에 필요한 열을 읽고 임베딩 후 Top-K만 구성한다. SSE와 요청 로그 회귀 검사는 이벤트와 필드를 비교한다.
+
+가짜 모델로 회귀 테스트를 먼저 실패시키고, 전체 pytest·정적 검사·프론트 빌드가 통과하면 기존 PR을 갱신한다. [리뷰 요약](https://github.com/bhsong/lawbot/pull/151#issuecomment-6887095214)
 
 ## 데이터 ZIP 위치
 

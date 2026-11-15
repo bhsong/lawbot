@@ -234,7 +234,7 @@ def answer_verdict(raw, st: Timing, used, unknown, refused, *, calculated):
     return 'shown'
 
 
-def chat_events(app, question, model_key, fmt, remember=None, *, started=None):
+def chat_events(app, question, model_key, fmt, remember=None, *, started=None, defer_shadow=None):
     """질문 하나 → (이벤트, 데이터)를 차례로. remember(턴 기록) → turn_id (피드백이 꺼져 있으면 None)
     이벤트: status → sources(모두 펼침) → answer·stats… → sources(인용/검색만 구분) → stats → done, 실패하면 error
     생성 단계에서 화면 글이 그대로면(간결형의 근거·설명 토큰) TICK을 낸다: 받는 쪽이 토큰마다 연결 끊김을 확인하게"""
@@ -271,24 +271,12 @@ def chat_events(app, question, model_key, fmt, remember=None, *, started=None):
         if decision.mode == 'on' and decision.match is not None:
             yield from cached_events(app, question, model_key, fmt, remember, decision, request_id, started)
             return
-        exact_available = decision.reason not in (
-            'db_error',
-            'db_timeout',
-            'namespace_mismatch',
-            'activation_mismatch',
-            'state_changed',
-        )
+        exact_available = decision.allows_semantic_shadow
         metadata = {'request_id': request_id, 'response_source': 'rag'}
         ask_options = {'request_id': request_id, 'cache_metrics': decision.metrics() | metadata}
-    if not calculation_candidate and exact_available and (shadow := getattr(app, 'semantic_shadow', None)) is not None:
-        request_id = ask_options.get('request_id') or secrets.token_hex(6)
-        token = REQUEST_ID.set(request_id)
-        try:
-            shadow_metrics = shadow.lookup(question, model_key, fmt)
-        finally:
-            REQUEST_ID.reset(token)
-        ask_options['request_id'] = request_id
-        ask_options['cache_metrics'] = ask_options.get('cache_metrics', {'response_source': 'rag'}) | shadow_metrics
+    shadow = getattr(app, 'semantic_shadow', None) if not calculation_candidate and exact_available else None
+    if shadow is not None:
+        ask_options.setdefault('cache_metrics', {'response_source': 'rag'})
     spec = app.models.specs[model_key]
     yield 'status', {'text': view.searching_stats(app, model_key)}
     sent_sources, last = False, {}
@@ -362,7 +350,36 @@ def chat_events(app, question, model_key, fmt, remember=None, *, started=None):
             metrics = timing.setdefault('cache_metrics', {})
             metrics['request_to_first_answer_ms'] = first_ms
             metrics['request_to_complete_ms'] = round((time.perf_counter() - started) * 1000, 3)
-            log_request(app, timing, fmt, status, error)
+            if shadow is not None and status == 'ok':
+
+                def record_shadow(skip_reason=None):
+                    token = REQUEST_ID.set(timing.get('request_id'))
+                    try:
+                        if skip_reason is None:
+                            shadow_metrics = shadow.lookup(question, model_key, fmt)
+                            metrics.update(shadow_metrics)
+                            if (counts := timing.get('call_counts')) is not None:
+                                for key, field in (
+                                    ('embedding', 'semantic_embedding_calls'),
+                                    ('rerank', 'semantic_rerank_http_calls'),
+                                    ('models', 'semantic_model_list_calls'),
+                                ):
+                                    if amount := shadow_metrics.get(field, 0):
+                                        counts[key] = counts.get(key, 0) + amount
+                        else:
+                            metrics.update(
+                                semantic_mode='shadow', semantic_would_hit=False, semantic_reason=skip_reason
+                            )
+                    finally:
+                        REQUEST_ID.reset(token)
+                        log_request(app, timing, fmt, status, error)
+
+                if defer_shadow is None:
+                    record_shadow()
+                else:
+                    defer_shadow(record_shadow)
+            else:
+                log_request(app, timing, fmt, status, error)
 
 
 def _session(request: Request):
@@ -519,6 +536,7 @@ def create_app(
     api.add_middleware(ApiCacheControl)
     sessions, slots = Sessions(), asyncio.Semaphore(concurrency)
     chat_requests = 0
+    shadow_busy = False
     feedback_writes = asyncio.Lock()
     api.state.sessions = sessions
     api.state.admin_post_limit = auth_logic.AttemptWindow(30, 60, MAX_SESSIONS)
@@ -602,19 +620,23 @@ def create_app(
         started = time.perf_counter()
         question, model_key, fmt = valid_chat(app, await read_json(request))
         remember = partial(fb.remember_turn, who[1]) if fb is not None else None
-        return ChatResponse(stream(chat_events(app, question, model_key, fmt, remember, started=started)))
+        deferred = []
+        events = chat_events(app, question, model_key, fmt, remember, started=started, defer_shadow=deferred.append)
+        return ChatResponse(stream(events), deferred)
 
     class ChatResponse(StreamingResponse):
-        def __init__(self, content):
+        def __init__(self, content, deferred):
             super().__init__(content, media_type='text/event-stream')
             self.content = content
+            self.deferred = deferred
 
         async def __call__(self, scope, receive, send):
-            nonlocal chat_requests
+            nonlocal chat_requests, shadow_busy
             # Allow one waiting request per active slot.
             if chat_requests >= 2 * concurrency:
                 return await JSONResponse({'detail': CHAT_BUSY}, status_code=503)(scope, receive, send)
             chat_requests += 1
+            complete = False
             try:
                 async with anyio.create_task_group() as group:
 
@@ -625,6 +647,7 @@ def create_app(
                     group.start_soon(cancel_on_disconnect)
                     try:
                         await self.stream_response(send)
+                        complete = True
                     finally:
                         group.cancel_scope.cancel()
             finally:
@@ -633,6 +656,19 @@ def create_app(
                         await self.content.aclose()
                 finally:
                     chat_requests -= 1
+                    if self.deferred and not complete:
+                        with anyio.CancelScope(shield=True):
+                            await anyio.to_thread.run_sync(self.deferred[0], 'shadow_cancelled')
+            if complete and self.deferred:
+                record_shadow = self.deferred[0]
+                if shadow_busy:
+                    await anyio.to_thread.run_sync(record_shadow, 'shadow_busy')
+                else:
+                    shadow_busy = True
+                    try:
+                        await anyio.to_thread.run_sync(record_shadow)
+                    finally:
+                        shadow_busy = False
 
     async def stream(events):
         if slots.locked():

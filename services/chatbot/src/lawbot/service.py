@@ -238,12 +238,7 @@ def load_app(settings=None):
         (m.get('revision') for m in available if m['id'] == p.emb_model and m.get('type') == 'embedding'), None
     )
     if (shadow := cfg.semantic_shadow) is not None:
-        calibration = shadow.calibration
-        revisions = {(m.get('type'), m['id']): m.get('revision') for m in available}
-        if (
-            revision != calibration.embedding_revision
-            or revisions.get(('rerank', calibration.reranker_model)) != calibration.reranker_revision
-        ):
+        if not shadow.calibration.matches_revisions(available):
             raise ValueError('LAWBOT_SEMANTIC_CALIBRATION의 모델 revision이 서버와 일치해야 합니다.')
     t0 = time.perf_counter()
     retriever = Retriever(

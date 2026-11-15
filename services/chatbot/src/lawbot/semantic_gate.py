@@ -7,11 +7,7 @@ import numpy as np
 from lawbot.api_client import ModelServerError
 from lawbot.exact_cache import canonical, digest
 from lawbot.semantic_policy import Condition, ReusePolicy, check_conditions
-from lawbot.semantic_settings import RERANK_INPUT_BYTES, Calibration
-
-
-class TruncatedInput(ValueError):
-    pass
+from lawbot.semantic_settings import Calibration, RerankTokens
 
 
 @dataclass(frozen=True)
@@ -47,6 +43,7 @@ class Candidate:
 class PairScores:
     parents: dict[str, float]
     questions: dict[str, float]
+    truncated: frozenset[str] = frozenset()
 
 
 @dataclass(frozen=True)
@@ -66,7 +63,13 @@ class Assessment:
 def assess(question: str, candidates: list[Candidate], scores: PairScores, calibration: Calibration, *, complete=True):
     if not candidates:
         return Assessment('no_match')
-    ranked = sorted(candidates, key=lambda item: (-scores.questions[item.question_pair_id], item.binding_id))
+    expected = {item.question_pair_id for item in candidates}
+    if expected - scores.questions.keys() - scores.truncated:
+        return Assessment('score_contract_error')
+    scored = [item for item in candidates if item.question_pair_id in scores.questions]
+    if not scored:
+        return Assessment('truncated_input' if scores.truncated else 'score_contract_error')
+    ranked = sorted(scored, key=lambda item: (-scores.questions[item.question_pair_id], item.binding_id))
     best = ranked[0]
     competitor = next((item for item in ranked[1:] if item.answer_id != best.answer_id), None)
     question_score = scores.questions[best.question_pair_id]
@@ -74,7 +77,9 @@ def assess(question: str, candidates: list[Candidate], scores: PairScores, calib
     margin = None if competitor is None else question_score - scores.questions[competitor.question_pair_id]
     result = Assessment('hit', best, parent_score, question_score, margin)
     if parent_score is None:
-        return replace(result, reason='parent_score_missing')
+        return replace(
+            result, reason='truncated_input' if best.parent.pair_id in scores.truncated else 'parent_score_missing'
+        )
     if parent_score <= calibration.parent_threshold:
         return replace(result, reason='parent_score_low')
     if question_score <= calibration.question_threshold:
@@ -88,23 +93,33 @@ def assess(question: str, candidates: list[Candidate], scores: PairScores, calib
     return replace(result, reason='hit' if condition.reason == 'matched' else condition.reason, condition=condition)
 
 
-def score_pairs(question: str, candidates: list[Candidate], client, calibration: Calibration, *, timeout=None):
-    parents = {item.parent.pair_id: item.parent.text for item in candidates}
-    questions = {item.question_pair_id: item.question for item in candidates}
-    batches = ((parents, calibration.parent_instruction), (questions, calibration.question_instruction))
-    if any(
-        len(f'Instruct: {instruction}\nQuery: {question}\nDocument: {doc}'.encode()) > RERANK_INPUT_BYTES
-        for batch, instruction in batches
-        for doc in batch.values()
-    ):
-        raise TruncatedInput('truncated_input')
+def score_pairs(
+    question: str,
+    candidates: list[Candidate],
+    client,
+    calibration: Calibration,
+    tokens: RerankTokens,
+    *,
+    before_request=None,
+):
+    truncated: set[str] = set()
+
+    def fitting(pairs: dict[str, str], instruction: str) -> dict[str, str]:
+        omitted = {key for key, doc in pairs.items() if not tokens.fits(instruction, question, doc)}
+        truncated.update(omitted)
+        return {key: doc for key, doc in pairs.items() if key not in omitted}
 
     def score(pairs: dict[str, str], instruction: str) -> dict[str, float]:
         if not pairs:
             return {}
         try:
             scores = client.rerank(
-                calibration.reranker_model, question, list(pairs.values()), instruction, timeout=timeout, strict=True
+                calibration.reranker_model,
+                question,
+                list(pairs.values()),
+                instruction,
+                timeout=None if before_request is None else before_request(len(pairs)),
+                strict=True,
             )
         except ValueError as exc:
             raise ModelServerError('시맨틱 리랭크 응답을 읽지 못했습니다.') from exc
@@ -112,9 +127,14 @@ def score_pairs(question: str, candidates: list[Candidate], client, calibration:
             raise ModelServerError('시맨틱 리랭크 점수 계약 검증에 실패했습니다.')
         return dict(zip(pairs, scores, strict=True))
 
-    return PairScores(
-        score(parents, calibration.parent_instruction), score(questions, calibration.question_instruction)
+    questions = fitting({item.question_pair_id: item.question for item in candidates}, calibration.question_instruction)
+    parents = fitting(
+        {item.parent.pair_id: item.parent.text for item in candidates if item.question_pair_id in questions},
+        calibration.parent_instruction,
     )
+    parent_scores = score(parents, calibration.parent_instruction)
+    question_scores = score(questions, calibration.question_instruction)
+    return PairScores(parent_scores, question_scores, frozenset(truncated))
 
 
 def valid_vectors(vectors, rows: int, dimension: int) -> bool:
