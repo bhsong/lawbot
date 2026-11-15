@@ -293,12 +293,14 @@ def check_seed_import(conn, namespace, event, receipt, protection):
         conn.execute('SELECT 1 FROM cache_audit_events WHERE action=? LIMIT 1', (ACTION,)).fetchone()
         or conn.execute('SELECT 1 FROM atoms LIMIT 1').fetchone()
     ):
-        raise ValueError('이전 형식 seed import가 있는 DB입니다. 새 개발 사본을 사용하세요')
+        raise ValueError(
+            '다른 seed import(이전 형식, 다른 번들 또는 다른 activation event)가 있는 DB입니다. 새 개발 사본을 사용하세요'
+        )
+    if previous is not None and previous['protection_hash'] != protection.fingerprint:
+        raise ValueError('protected split changed since import')
     if control.protection_hash not in (None, protection.fingerprint):
         raise ValueError('기존 exact 보호 지문과 seed 보호 지문이 다릅니다.')
     if previous is not None:
-        if previous['protection_hash'] != protection.fingerprint:
-            raise ValueError('protected split changed since import')
         return previous['counts']
     if control.mode != 'off' or (control.namespace_id, control.activation_event) not in (
         (None, None),

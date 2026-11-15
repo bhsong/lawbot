@@ -274,7 +274,7 @@ def run(args):
         return {'mode': 'off'}
     if command == 'set-mode' and args.semantic_seed:
         from lawbot.semantic_import_store import activate_seed
-        from lawbot.semantic_tools import corpus_context, development_path, development_protection
+        from lawbot.semantic_tools import corpus_context, development_protection
 
         if not args.corpus_db or not args.approval:
             raise ValueError('시맨틱 seed 활성화에는 --corpus-db와 --approval이 필요합니다.')

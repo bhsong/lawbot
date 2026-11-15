@@ -406,7 +406,7 @@ def test_seed_cli_rejects_legacy_cache_without_writing(prior_kind, handoff, tmp_
         )
     assert exc.value.code == 2
     error = capsys.readouterr().err
-    assert '이전 형식 seed import가 있는 DB입니다. 새 개발 사본을 사용하세요' in error
+    assert '다른 seed import(이전 형식, 다른 번들 또는 다른 activation event)가 있는 DB입니다' in error
     assert 'UNIQUE' not in error
     assert Store(db).control() == before
     with connect(db) as conn:
@@ -447,6 +447,15 @@ def test_p07_dependency_conflict_preserves_only_the_original_exact_approval(hand
         assert conn.execute("SELECT reviewed_by FROM cache_answers WHERE status='approved'").fetchall() == [('p07',)]
         assert conn.execute('SELECT answer_id FROM cache_queries').fetchall() == [(draft.answer_id(ns),)]
         assert conn.execute('SELECT reason FROM semantic_binding_decisions').fetchall() == [('existing_conflict',)]
+
+
+def test_seed_rerun_reports_a_protection_change_since_import(handoff, tmp_path):
+    seed, snapshot = handoff
+    db = tmp_path / 'cache.db'
+    init(db)
+    import_seed(db, seed, snapshot, 1, Protection(frozenset(), {}, 'current'))
+    with pytest.raises(ValueError, match='protected split changed since import'):
+        import_seed(db, seed, snapshot, 1, Protection(frozenset(), {}, 'changed'))
 
 
 def test_seed_activation_rejects_changed_exact_protection(handoff, tmp_path):
