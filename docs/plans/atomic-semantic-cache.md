@@ -3,7 +3,7 @@
 - 작성: 2026-11-15 KST. 기준 `main` `b65cec5`, 운영 `e165933`(v6 임베딩).
 - 문서 ID `atomic-semantic-admin-spec-2.0`(2026-11-11, 이하 "명세")는 PR 1 첫 커밋에 원문 그대로 보존한다. [작업 지시서 v2](atomic-semantic-cache-spec-v2.md)
 - 이 문서는 명세를 이 레포에 맞춘 것이다. **명세와 다르게 하는 것**, **미리 확인한 사실**, **PR 나누기와 승인 지점**만 적는다. 나머지(처리 순서, 게이트 9개, 스키마 책임 분리, 모드, 로그, 테스트 V2-01~38, 출시·롤백)는 명세를 따른다.
-- PR 1 개발 검증을 완료했다. PR 2~5는 아래 계획을 따른다. [PR 1 검증 기록](../evals/2026-11-15-semantic-cache-core.md)
+- PR 1과 PR 2 개발 검증을 완료했다. PR 3~5는 아래 계획을 따른다. [PR 1 검증 기록](../evals/2026-11-15-semantic-cache-core.md), [PR 2 검증 기록](../evals/2026-11-15-atomic-index-tools.md)
 
 ## 1. 명세와 다르게 하는 것
 
@@ -94,6 +94,16 @@
 2. 승인과 감사는 캐시 DB의 한 트랜잭션에 묶는다. 모드·기존 P07 승인 및 원문을 보존한다. 원문 위치는 주 조문에 포함되는 검토 근거 구절로 찾고, 일치하는 구절이 없으면 주 조문 전체를 기록한다. 재사용 정책은 결정적 의도 패턴과 검수된 원문 표현으로 제한한다.
 3. 질문·후보 답변 ID 쌍과 라벨을 공개 가능한 val 산출물로 만든다. ID는 원문을 포함하지 않는 안정적 식별자로 만든다. 답변당 해시 순으로 대표 검증 질문 하나를 고르고, 평가용 generation에서 빼도 나머지 질문이 남도록 확인한다. 전체 질문을 쓰는 generation과 구분한다.
 4. 질문 임베딩과 manifest를 준비하고 검증한 다음 활성 포인터를 원자적으로 바꾼다. 길이·차원·유한값·모델 revision과 snapshot이 일치할 때만 교체한다. 테스트와 PR 전 개발 검증에는 대역 임베딩만 쓰고, 실제 요청 수는 PR 이후 승인받는다.
+
+
+### PR 2 도구 계약
+
+- 챗봇 uv 프로젝트에서 `uv run python -m lawbot.semantic_tools`를 호출한다. 코퍼스 사본과 0003 캐시 사본을 별개로 준비한다. 코퍼스·검색 프로필·시스템 프롬프트·하위법령 설정은 개발 웹앱과 같다. 도구는 활성 코퍼스와 activation event를 확인한다.
+- `import --bundle <pass ZIP> --corpus-db <코퍼스 사본> --cache-db <캐시 사본>`은 승인 상태와 감사 기록을 한 번만 남긴다. 보호 문항과 겹치는 기존 질문의 답변까지 동일하면 해당 exact 플래그를 끄고 기존 승인과 이력을 보존한다.
+- `val --bundle <pass ZIP> --deferred-bundle <deferred ZIP> --corpus-db <코퍼스 사본> --output <새 JSONL>`은 원문 없는 ID와 라벨을 생성한다. pass ID는 출처와 원본 ID의 해시, 답변 ID는 주 조문과 검수 단위 ID의 해시다. 같은 주 조문의 다른 답변은 대표 질문과 대상 답변의 쌍으로 기록한다.
+- `index --cache-db <캐시 사본> --corpus-db <코퍼스 사본>`은 인덱스 행 수와 필요 요청 수만 출력한다. 승인 후 `--embed-live`와 승인 요청 수, 시간 상한, 모델·revision·최대 길이·차원·로컬 모델 디렉터리·출력 디렉터리를 지정한다. 전체 generation은 승인된 질문을 담는다. PR 3 평가 generation은 별도 출력 디렉터리에 `--exclude-val data/v5/semantic_val_ids.jsonl`을 지정해 양성 질의 524개를 뺀다.
+- 관리형 인덱스 디렉터리를 `LAWBOT_SEMANTIC_INDEX`에 지정하면 shadow는 `active.json`의 generation과 calibration의 revision을 대조한다. 기존 단일 `.npy` 경로도 계속 지원한다. manifest 등록과 검증 뒤 포인터를 교체한다.
+- exact 활성화는 별도 절차다. `uv run python -m lawbot.cache_admin set-mode shadow --semantic-seed --db <캐시 사본> --corpus-db <코퍼스 사본> --approval <import 승인 ID> --reason <활성화 사유>`에서 `shadow` 또는 `on`을 지정한다. import와 index는 모드를 바꾸지 않는다.
 
 ## 데이터 ZIP 위치
 

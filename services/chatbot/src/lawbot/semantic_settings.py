@@ -45,6 +45,10 @@ class RerankTokens:
         return len(self.tokenizer.encode(middle, add_special_tokens=False).ids) <= self.max_middle
 
 
+def embedding_fingerprint(model: str, revision: str, max_seq: int) -> str:
+    return digest(canonical([model, revision, 'query', max_seq, 'mps-fp16-f32-l2', QUERY_PROMPT_RESERVE]))
+
+
 class Calibration(BaseModel):
     model_config = ConfigDict(extra='forbid', strict=True, frozen=True, str_min_length=1, str_strip_whitespace=True)
 
@@ -73,18 +77,7 @@ class Calibration(BaseModel):
 
     @property
     def embedding_fingerprint(self) -> str:
-        return digest(
-            canonical(
-                [
-                    self.embedding_model,
-                    self.embedding_revision,
-                    'query',
-                    self.query_max_seq,
-                    'mps-fp16-f32-l2',
-                    QUERY_PROMPT_RESERVE,
-                ]
-            )
-        )
+        return embedding_fingerprint(self.embedding_model, self.embedding_revision, self.query_max_seq)
 
     @property
     def reranker_fingerprint(self) -> str:

@@ -52,6 +52,17 @@ def protection_rows(path: Path) -> list[ProtectionRow]:
     return items
 
 
+def protected_questions(path: Path) -> list[str]:
+    with connect(path) as conn:
+        return [
+            question
+            for (question,) in conn.execute(
+                'SELECT DISTINCT q.question FROM qa_splits s JOIN qa_items q USING (qa_uid) '
+                "WHERE s.split IN ('val','test')"
+            )
+        ]
+
+
 def insert_feedback_qa(conn, *, key, feedback_id, question, answer, gold, rejected, at):
     """Write the QA, answer, unassigned splits, and optional preference together."""
     uid = f'feedback:{key}'
