@@ -215,6 +215,41 @@ class ResearchSearch:
         )
 
 
+@dataclass
+class UnionReplay:
+    """Replay pointwise scores keyed by exact reranker document text."""
+
+    base: list[Hit]
+    atomic: list[Hit]
+    scores: dict[str, float]
+
+    def missing(self, limit: int) -> list[str]:
+        candidates, _ = union_candidates(self.base, self.atomic, limit)
+        return [hit['doc'] for hit in candidates if hit['doc'] not in self.scores]
+
+    def rank(self, question, limit, reranker, contract):
+        started = perf_counter()
+        candidates, conflicts = union_candidates(self.base, self.atomic, limit)
+        hits, scored, reused = rank_candidates(
+            question,
+            candidates,
+            reranker,
+            contract,
+            SearchScores(question, contract, self.scores),
+        )
+        self.scores.update(scored.by_document)
+        return SearchResult(
+            hits,
+            {
+                'embedding_calls': 0,
+                'rerank_pairs': len(hits) - reused,
+                'reused_pairs': reused,
+                'conflicts': conflicts,
+                'total_ms': (perf_counter() - started) * 1000,
+            },
+        )
+
+
 @dataclass(frozen=True)
 class ShadowRow:
     label: str

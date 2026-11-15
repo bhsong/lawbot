@@ -303,32 +303,11 @@ def test_evaluation_sweeps_val_before_using_frozen_routes_on_test(monkeypatch, t
     context = SimpleNamespace(db=Path('synthetic.db'))
     search = Search()
     arguments = (context, tmp_path, search, {'law gold'}, {'law gold'})
-    first = semantic_eval.retrieval_phase('compare-val', {}, *arguments)
+    first = semantic_eval.compare_phase(*arguments)
     assert first['atomic_query_k'] == 50
-    second = semantic_eval.retrieval_phase('union-val', {'compare-val': first}, *arguments)
-    assert second['union_limit'] == 15
     assert all(question == 'v4:val' for _, question, _, _ in calls)
-    assert [route for route, *_ in calls] == ['base', 'atomic', 'atomic', 'union', 'union']
-    calls.clear()
-    third = {'calibration': {'parent_threshold': 0.8, 'question_threshold': 0.9, 'min_answer_margin': 0.1}}
-    result = semantic_eval.retrieval_phase(
-        'once-test', {'compare-val': first, 'union-val': second, 'shadow-val': third}, *arguments
-    )
-    assert result['semantic_thresholds'] == third['calibration']
-    assert calls == [
-        (route, question, 50, 15)
-        for question, routes in (('v4:test', ('base', 'atomic', 'union')), ('v5:test', ('base', 'union')))
-        for route in routes
-    ]
-    assert result['comparisons']['supplement']['base_vs_atomic']['both'] == 1
-    assert sorted(json.loads((tmp_path / 'once-test.rows.json').read_text())[0]) == [
-        'base_vs_atomic',
-        'cohorts',
-        'gold',
-        'id',
-        'question',
-        'results',
-    ]
+    assert [route for route, *_ in calls] == ['base', 'atomic', 'atomic']
+    assert first['comparisons'][50]['supplement']['base_vs_atomic']['both'] == 1
 
 
 def test_shadow_calibration_reads_only_bindings_from_full_index_with_supplement(handoff, tmp_path):

@@ -3,15 +3,24 @@
 import json
 import os
 import sqlite3
+from hashlib import sha256
 
 from lawbot.exact_cache import canonical
 
 
+def call_signature(value):
+    return sha256(canonical(value).encode()).hexdigest()
+
+
 class StageJournal:
-    def __init__(self, path):
+    def __init__(self, path, *, read_only=False):
         self.path = path
+        self.read_only = read_only
 
     def __enter__(self):
+        if self.read_only:
+            self.db = sqlite3.connect(self.path.resolve().as_uri() + '?mode=ro', uri=True, isolation_level=None)
+            return self
         fd = os.open(self.path, os.O_CREAT | os.O_RDWR, 0o600)
         os.close(fd)
         self.db = sqlite3.connect(self.path, isolation_level=None)
@@ -67,5 +76,5 @@ class StageJournal:
             (status, response, duration, item, position),
         )
 
-    def request_counts(self):
-        return dict(self.db.execute('SELECT kind,count(*) FROM calls GROUP BY kind'))
+    def request_counts(self, *, prefix=''):
+        return dict(self.db.execute('SELECT kind,count(*) FROM calls WHERE item LIKE ? GROUP BY kind', (prefix + '%',)))

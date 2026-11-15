@@ -5,6 +5,7 @@ import fcntl
 import json
 import os
 from collections import Counter
+from contextlib import ExitStack
 from datetime import datetime
 from functools import partial
 from hashlib import sha256
@@ -25,7 +26,16 @@ from lawbot.feedback import check_private
 from lawbot.paths import DATA, ROOT
 from lawbot.reranker import TASK, Reranker
 from lawbot.retriever import Retriever
-from lawbot.semantic_eval_store import StageJournal
+from lawbot.semantic_eval_replay import (
+    CachedDocumentEncoder,
+    item_key,
+    plan_proposals,
+    proposed_queries,
+    result_values,
+    sampled_rows,
+    verify_replay,
+)
+from lawbot.semantic_eval_store import StageJournal, call_signature
 from lawbot.semantic_eval_watch import EvaluationStopped, LiveMonitor
 from lawbot.semantic_gate import assess, score_pairs, valid_vectors
 from lawbot.semantic_index_store import SUPPLEMENT_EXPRESSION, read_questions
@@ -39,7 +49,6 @@ from lawbot.semantic_search_eval import (
     approved_parents,
     coverage,
     evaluation_rows,
-    hit_key,
     latency,
     paired_outcome,
     require_coverage,
@@ -127,7 +136,7 @@ class BoundedModel:
         housekeeping = perf_counter()
         position, self.position = self.position, self.position + 1
         if self.journal:
-            checksum = sha256(canonical(signature).encode()).hexdigest()
+            checksum = call_signature(signature)
             saved = self.journal.begin_call(self.item, position, kind, checksum, reserve=False)
             if saved is not None:
                 status, response, duration = saved
@@ -207,12 +216,12 @@ class BoundedModel:
 
 def phase_plan(labor_val, labor_test, tax_test, semantic_questions):
     queries = labor_val * (1 + len(ATOMIC_GRID))
-    unions = labor_val * len(UNION_EXTRA_GRID)
+    test_questions = labor_test + tax_test
     return {
         'compare-val': {'embedding': queries + 1, 'rerank': queries},
-        'union-val': {'embedding': unions + 1, 'rerank': unions},
+        'union-val': {'embedding': 100, 'rerank': labor_val + 100},
         'shadow-val': {'embedding': semantic_questions, 'rerank': 2 * semantic_questions},
-        'once-test': {'embedding': 3 * labor_test + 2 * tax_test + 1, 'rerank': 3 * labor_test + 2 * tax_test},
+        'once-test': {'embedding': 2 * test_questions, 'rerank': 3 * test_questions},
     }
 
 
@@ -260,14 +269,12 @@ def evaluate_routes(search, examples, routes, query_k, union_limit, covered, sup
                     result = search.run(route, question, query_k, union_limit)
                 except ItemFailure as exc:
                     return {'error': str(exc), 'rank': None, 'top3': [], 'total_ms': (search.clock() - started) * 1000}
-                ids = [hit_key(hit) for hit in result.hits]
-                return dict(result.metrics) | {
-                    'rank': ids.index(gold) + 1 if gold in ids else None,
-                    'top3': ids[:3],
-                    'error': result.metrics['atomic_reason'] if not ids else None,
-                }
+                values = result_values(result, gold)
+                if not values['top3']:
+                    values['error'] = result.metrics['atomic_reason']
+                return values
 
-            key = f'{route}:{query_k}:{union_limit}:{uid}'
+            key = item_key(route, query_k, union_limit, uid)
             outputs[route] = bound.run_item(key, evaluate) if bound else evaluate()
         row = {'id': uid, 'gold': gold, 'cohorts': cohorts, 'results': outputs, 'question': question}
         if 'base' in outputs and 'atomic' in outputs:
@@ -282,55 +289,191 @@ def best_budget(summaries, route):
     )
 
 
-def retrieval_phase(phase, history, ctx, directory, search, covered, supplemental, *, bound=None):
-    split = 'test' if phase == 'once-test' else 'val'
-    examples = evaluation_rows(ctx.db, 'v4', split, questions=True)
+def compare_phase(ctx, directory, search, covered, supplemental, *, bound=None):
+    examples = evaluation_rows(ctx.db, 'v4', 'val', questions=True)
     base_size = search.reranker.candidates
     run = partial(evaluate_routes, search, examples, covered=covered, supplemental=supplemental, bound=bound)
-    if phase == 'compare-val':
-        base = list(run(('base',), ATOMIC_GRID[0], base_size))
-        details = {}
-        for size in ATOMIC_GRID:
-            atomic = run(('atomic',), size, base_size)
-            rows = [
-                reference | {'results': reference['results'] | trial['results']}
-                for reference, trial in zip(base, atomic, strict=True)
-            ]
-            details[size] = summarize_comparison(rows)
-            write_derived(directory / f'compare-val-{size}.rows.json', rows)
-        return {'atomic_query_k': best_budget(details, 'atomic'), 'comparisons': details}
+    base = list(run(('base',), ATOMIC_GRID[0], base_size))
+    details = {}
+    for size in ATOMIC_GRID:
+        atomic = run(('atomic',), size, base_size)
+        rows = [
+            reference | {'results': reference['results'] | trial['results']}
+            for reference, trial in zip(base, atomic, strict=True)
+        ]
+        details[size] = summarize_comparison(rows)
+        write_derived(directory / f'compare-val-{size}.rows.json', rows)
+    return {'atomic_query_k': best_budget(details, 'atomic'), 'comparisons': details}
 
-    query_k = history['compare-val']['atomic_query_k']
-    if phase == 'union-val':
-        base_rows = json.loads((directory / f'compare-val-{query_k}.rows.json').read_bytes())
-        details = {}
-        for extra in UNION_EXTRA_GRID:
-            union = run(('union',), query_k, base_size + extra)
-            rows = []
-            for base, trial in zip(base_rows, union, strict=True):
-                if base['id'] != trial['id'] or base['gold'] != trial['gold']:
-                    raise ValueError('저장한 val 기준선의 순서 또는 정답이 바뀌었습니다.')
-                rows.append(base | {'results': base['results'] | trial['results']})
-            details[base_size + extra] = summarize_comparison(rows)
-            write_derived(directory / f'union-val-{base_size + extra}.rows.json', rows)
-        return {'union_limit': best_budget(details, 'union'), 'comparisons': details}
 
-    limit = history['union-val']['union_limit']
-    labor = list(run(('base', 'atomic', 'union'), query_k, limit))
-    tax = tax_legal_rows(ctx, 'test', questions=True)
-    rows = labor + list(
-        evaluate_routes(search, tax, ('base', 'union'), query_k, limit, covered, supplemental, bound=bound)
+def create_search(ctx, cache, profile, reranker_cfg, calibration, index, embed, bound, *, saved=None):
+    release = active_release(ctx.db, PROFILE)
+    if release.release_id != ctx.snapshot.release_id:
+        raise ValueError('검색 조문 코퍼스가 바뀌었습니다.')
+    encoder = (
+        CachedDocumentEncoder(saved, profile.emb_model, bound)
+        if saved is not None
+        else Embedder(bound, profile.emb_model)
     )
-    write_derived(directory / 'once-test.rows.json', rows)
-    chosen_calibration = history['shadow-val']['calibration']
-    return {
-        'comparisons': summarize_comparison(rows),
-        'atomic_query_k': query_k,
+    retriever = Retriever(encoder, release.law.data, profile.max_seq)
+    reranker = Reranker(bound, reranker_cfg.model, reranker_cfg.candidates)
+    parents = approved_parents(cache, ctx.snapshot, ctx.event)
+    with connect(cache) as conn:
+        supplemental = {
+            article
+            for (article,) in conn.execute(
+                'SELECT DISTINCT a.parent_chunk_id FROM atomic_questions q JOIN atoms a USING(atom_revision_id) '
+                "WHERE a.corpus_snapshot_id=? AND q.expression_type=? AND q.status='approved'",
+                (ctx.snapshot.release_id, SUPPLEMENT_EXPRESSION),
+            )
+        }
+    pair = PairContract(
+        reranker.model,
+        calibration.reranker_revision,
+        TASK,
+        f'{RERANK_MAX_LENGTH}/right',
+        'pointwise-f32-softmax-yes',
+        ctx.snapshot.release_id,
+        True,
+    )
+
+    def encode(question):
+        if embed.fits(question):
+            return bound.embed(calibration.embedding_model, [question], 'query', calibration.query_max_seq)
+        return None
+
+    search = ResearchSearch(
+        retriever,
+        reranker,
+        index,
+        {key: ctx.snapshot.articles[parent].hit() for key, parent in parents.items()},
+        encode,
+        pair,
+        calibration.index_revision,
+        shared_query=embed.fits,
+        **({'clock': bound.clock} if bound else {}),
+    )
+    return search, set(parents.values()), supplemental
+
+
+def val_replay_inputs(directory, ctx, search, history):
+    chosen = history['compare-val']['atomic_query_k']
+    base = search.reranker.candidates
+    limits = [base + extra for extra in UNION_EXTRA_GRID]
+    examples = evaluation_rows(ctx.db, 'v4', 'val', questions=True)
+    previous = json.loads((directory / f'compare-val-{chosen}.rows.json').read_bytes())
+    return chosen, limits, examples, previous
+
+
+def union_replay_phase(phase, history, ctx, directory, search, calibration, saved, bound, covered, supplemental):
+    compare = phase == 'union-val'
+    if compare:
+        chosen, limits, examples, previous = val_replay_inputs(directory, ctx, search, history)
+    else:
+        chosen, limits = history['compare-val']['atomic_query_k'], [history['union-val']['union_limit']]
+        examples = evaluation_rows(ctx.db, 'v4', 'test', questions=True) + tax_legal_rows(ctx, 'test', questions=True)
+        previous = list(
+            evaluate_routes(
+                search,
+                examples,
+                ('base', 'atomic'),
+                chosen,
+                limits[-1],
+                covered,
+                supplemental,
+                bound=bound,
+            )
+        )
+        saved = bound.journal
+    proposals = proposed_queries(
+        saved,
+        search,
+        calibration,
+        examples,
+        previous,
+        chosen,
+        limits,
+        compare=compare,
+        compare_grid=ATOMIC_GRID,
+    )
+    rows = []
+    additional_pairs = unavailable = 0
+    for uid, gold, question, baseline, replay, reason in proposals:
+
+        def evaluate(replay=replay, reason=reason, question=question, gold=gold):
+            default = {'rank': None, 'top3': [], 'total_ms': 0.0, 'error': reason}
+            if replay is None:
+                return {str(limit): default for limit in limits}
+            rankings = {}
+            # The largest budget contains every narrower candidate set.
+            for limit in reversed(limits):
+                try:
+                    result = replay.rank(question, limit, search.reranker, search.contract)
+                except ItemFailure as exc:
+                    return {str(n): default | {'error': str(exc)} for n in limits}
+                rankings[str(limit)] = result_values(result, gold)
+            return rankings
+
+        if replay is not None:
+            additional_pairs += len(replay.missing(limits[-1]))
+        outputs = bound.run_item(f'union-replay:{uid}', evaluate)
+        biggest = outputs[str(limits[-1])]
+        unavailable += int(biggest.get('error') is not None)
+        rows.append((baseline, outputs))
+
+    details, trials = {}, {}
+    for limit in limits:
+        result_rows = [
+            baseline | {'results': baseline['results'] | {'union': outputs[str(limit)]}} for baseline, outputs in rows
+        ]
+        details[limit] = summarize_comparison(result_rows)
+        trials[limit] = result_rows
+        filename = f'union-val-{limit}.rows.json' if compare else 'once-test.rows.json'
+        write_derived(directory / filename, result_rows)
+    limit = best_budget(details, 'union') if compare else limits[0]
+    for groups in details.values():
+        for row in groups.values():
+            # Offline replay time is not a measurement of model retrieval time.
+            row['union'].pop('search_ms', None)
+            row.pop('union_added_ms', None)
+    result = {
+        'comparisons': details if compare else details[limit],
+        'atomic_query_k': chosen,
         'union_limit': limit,
-        'semantic_thresholds': {
-            key: chosen_calibration[key] for key in ('parent_threshold', 'question_threshold', 'min_answer_margin')
-        },
+        'additional_rerank_pairs': additional_pairs,
+        'additional_rerank_requests': bound.journal.request_counts(prefix='union-replay:').get('rerank', 0),
+        'replay_unavailable': unavailable,
     }
+    if compare:
+        sampled = sampled_rows(trials[limit])
+        online = list(
+            evaluate_routes(
+                search,
+                [(row['id'], row['gold'], row['question']) for row in sampled],
+                ('union',),
+                chosen,
+                limit,
+                covered,
+                supplemental,
+                bound=bound,
+            )
+        )
+        comparisons, verification = verify_replay(sampled, online)
+        write_derived(directory / 'union-verification.rows.json', comparisons)
+        verification['requests'] = bound.journal.request_counts(prefix='union:')
+        result['verification'] = verification
+    else:
+        result['union_latency_val100'] = history['union-val']['verification']
+        chosen_calibration = history['shadow-val']['calibration']
+        result['semantic_thresholds'] = {
+            key: chosen_calibration[key]
+            for key in (
+                'parent_threshold',
+                'question_threshold',
+                'min_answer_margin',
+            )
+        }
+    return result
 
 
 def tax_legal_rows(ctx, split, *, questions=False):
@@ -374,7 +517,7 @@ def score_shadow(question, index, eligible, bound, calibration, tokens, embed, s
 
 def parser():
     cli = argparse.ArgumentParser(description=__doc__)
-    cli.add_argument('phase', choices=('coverage', 'plan', *PHASES))
+    cli.add_argument('phase', choices=('coverage', 'plan', 'union-plan', *PHASES))
     cli.add_argument('--corpus-db', required=True)
     cli.add_argument('--cache-db', required=True)
     cli.add_argument('--val-ids', default='data/v5/semantic_val_ids.jsonl')
@@ -537,7 +680,11 @@ def live_run(
         raise ValueError('union에는 원자 query 길이 이상을 지원하는 조문 검색 인코더가 필요합니다.')
     lock_path = development_path(str(DATA / 'db' / 'semantic' / '.embedding.lock'))
     lock_path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
-    with lock_path.open('a') as lock, StageJournal(directory / f'{args.phase}.sqlite') as journal:
+    with (
+        lock_path.open('a') as lock,
+        StageJournal(directory / f'{args.phase}.sqlite') as journal,
+        ExitStack() as stack,
+    ):
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         client = ModelServerClient(url, security.model_token())
         monitor = None
@@ -551,7 +698,7 @@ def live_run(
         if args.phase == 'compare-val':
             total_items = budget['rerank']
         elif args.phase == 'union-val':
-            total_items = budget['rerank']
+            total_items = 1110 + budget['embedding']
         elif args.phase == 'shadow-val':
             total_items = budget['embedding']
         bound = BoundedModel(
@@ -594,50 +741,38 @@ def live_run(
             if args.phase == 'shadow-val':
                 result = semantic_phase(ctx, cache, store, index, bound, calibration, tokens, embed, manifest, args)
             else:
-                release = active_release(ctx.db, PROFILE)
-                if release.release_id != ctx.snapshot.release_id:
-                    raise ValueError('검색 조문 코퍼스가 바뀌었습니다.')
-                retriever = Retriever(Embedder(bound, profile.emb_model), release.law.data, profile.max_seq)
-                reranker = Reranker(bound, reranker_cfg.model, reranker_cfg.candidates)
-                parents = approved_parents(cache, ctx.snapshot, ctx.event)
-                with connect(cache) as conn:
-                    supplement = {
-                        article
-                        for (article,) in conn.execute(
-                            'SELECT DISTINCT a.parent_chunk_id FROM atomic_questions q JOIN atoms a USING(atom_revision_id) '
-                            "WHERE a.corpus_snapshot_id=? AND q.expression_type=? AND q.status='approved'",
-                            (ctx.snapshot.release_id, SUPPLEMENT_EXPRESSION),
-                        )
-                    }
-                pair = PairContract(
-                    reranker.model,
-                    calibration.reranker_revision,
-                    TASK,
-                    f'{RERANK_MAX_LENGTH}/right',
-                    'pointwise-f32-softmax-yes',
-                    ctx.snapshot.release_id,
-                    True,
+                replay = args.phase in ('union-val', 'once-test')
+                saved = (
+                    stack.enter_context(StageJournal(directory / 'compare-val.sqlite', read_only=True))
+                    if replay
+                    else None
                 )
-
-                def encode(question):
-                    if embed.fits(question):
-                        return bound.embed(calibration.embedding_model, [question], 'query', calibration.query_max_seq)
-                    return None
-
-                search = ResearchSearch(
-                    retriever,
-                    reranker,
+                search, covered, supplemental = create_search(
+                    ctx,
+                    cache,
+                    profile,
+                    reranker_cfg,
+                    calibration,
                     index,
-                    {key: ctx.snapshot.articles[parent].hit() for key, parent in parents.items()},
-                    encode,
-                    pair,
-                    calibration.index_revision,
-                    shared_query=embed.fits,
-                    clock=bound.clock,
+                    embed,
+                    bound,
+                    saved=saved,
                 )
-                result = retrieval_phase(
-                    args.phase, history, ctx, directory, search, set(parents.values()), supplement, bound=bound
-                )
+                if saved is None:
+                    result = compare_phase(ctx, directory, search, covered, supplemental, bound=bound)
+                else:
+                    result = union_replay_phase(
+                        args.phase,
+                        history,
+                        ctx,
+                        directory,
+                        search,
+                        calibration,
+                        saved,
+                        bound,
+                        covered,
+                        supplemental,
+                    )
             bound.check()
             ctx.check()
             final_config = current_config()
@@ -725,7 +860,38 @@ def run(args):
         'base_query_max_seq': profile.max_seq,
         'base_candidate_count': reranker.candidates,
     }
-    history = prior_stages(directory, args.phase, stamp)
+    phase = 'union-val' if args.phase == 'union-plan' else args.phase
+    history = prior_stages(directory, phase, stamp)
+    if phase == 'union-val':
+        model_dir = required_path(args.embedding_model_dir, '로컬 임베딩 모델')
+        contract = IndexContract(
+            calibration.embedding_model,
+            calibration.embedding_revision,
+            calibration.query_max_seq,
+            index.vectors.shape[1],
+        )
+        embed = ServerEmbedding(None, model_dir, contract, float('inf'))
+        with StageJournal(directory / 'compare-val.sqlite', read_only=True) as saved:
+            search, _, _ = create_search(ctx, cache, profile, reranker, calibration, index, embed, None, saved=saved)
+            chosen, limits, examples, previous = val_replay_inputs(directory, ctx, search, history)
+            proposals = proposed_queries(
+                saved,
+                search,
+                calibration,
+                examples,
+                previous,
+                chosen,
+                limits,
+                compare=True,
+                compare_grid=ATOMIC_GRID,
+            )
+            counts = plan_proposals(proposals, limits)
+        sample = min(len(examples), 100)
+        budget = {'embedding': sample, 'rerank': counts['additional_rerank_requests'].get(str(limits[-1]), 0) + sample}
+        plan[phase] = budget
+        details = counts | {'sample_requests': {'embedding': sample, 'rerank': sample}, 'request_ceiling': budget}
+        if args.phase == 'union-plan':
+            return details
     return live_run(
         args,
         ctx,
