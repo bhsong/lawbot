@@ -101,6 +101,18 @@ def active_article_bodies(db: Path, profile: str, ids: frozenset[str]) -> list[t
         raise RuntimeError('활성 코퍼스 조문 조회 실패') from exc
 
 
+def article_version_hashes(db: Path, release_id: str) -> dict[str, str]:
+    """Return the corpus importer version hashes, which include article metadata."""
+    with connect(db) as conn:
+        return dict(
+            conn.execute(
+                'SELECT v.article_id,v.content_sha256 FROM corpus_release_articles l '
+                'JOIN article_versions v USING (version_id) WHERE l.release_id=? AND v.deleted=0',
+                (release_id,),
+            )
+        )
+
+
 def release_by_id(db: Path, profile: str, release_id: str) -> CorpusRelease:
     with connect(db) as conn:
         conn.execute('BEGIN')

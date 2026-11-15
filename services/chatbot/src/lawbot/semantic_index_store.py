@@ -4,14 +4,17 @@ from lawbot.cache_store import now, read_control, valid
 from lawbot.db.connection import connect, transaction
 from lawbot.exact_cache import canonical, digest
 
+SUPPLEMENT_EXPRESSION = 'reviewed_supplement'
 
-def index_questions(conn, snapshot, event):
+
+def index_questions(conn, snapshot, event, *, parents=None):
     control = read_control(conn)
     if (control.namespace_id, control.activation_event) != (snapshot.namespace.id, event):
         raise ValueError('cache approval does not belong to the current corpus activation')
     rows = conn.execute(
         'SELECT q.query_revision_id,q.query_id,q.question,q.question_sha256,b.valid_from,b.valid_until,'
-        'a.valid_from,a.valid_until,a.expires_at,x.valid_from,x.valid_until,x.expires_at '
+        'a.valid_from,a.valid_until,a.expires_at,x.valid_from,x.valid_until,x.expires_at,'
+        't.parent_chunk_id,t.parent_sha256 '
         'FROM atomic_questions q JOIN atoms t USING (atom_revision_id) '
         'JOIN atom_answer_bindings b USING (query_revision_id,atom_revision_id) '
         'JOIN cache_answers a ON a.answer_id=b.answer_id '
@@ -19,8 +22,22 @@ def index_questions(conn, snapshot, event):
         'WHERE b.namespace_id=? AND t.corpus_snapshot_id=? AND b.activation_event=? '
         "AND t.status='approved' AND q.status='approved' AND a.status='approved' "
         "AND x.status='approved' AND x.exact_enabled=1 AND b.carry_status='keep' "
-        'AND b.reviewed_at IS NOT NULL ORDER BY q.query_revision_id',
-        (snapshot.namespace.id, snapshot.release_id, event),
+        'AND b.reviewed_at IS NOT NULL '
+        'UNION ALL SELECT q.query_revision_id,q.query_id,q.question,q.question_sha256,'
+        'q.reviewed_at,NULL,t.reviewed_at,NULL,NULL,q.reviewed_at,NULL,NULL,t.parent_chunk_id,t.parent_sha256 '
+        'FROM atomic_questions q JOIN atoms t USING (atom_revision_id) '
+        'WHERE t.namespace_id=? AND t.corpus_snapshot_id=? AND q.expression_type=? '
+        "AND t.status='approved' AND q.status='approved' AND t.reviewed_at IS NOT NULL AND q.reviewed_at IS NOT NULL "
+        'AND NOT EXISTS(SELECT 1 FROM atom_answer_bindings b WHERE b.query_revision_id=q.query_revision_id) '
+        'ORDER BY 1',
+        (
+            snapshot.namespace.id,
+            snapshot.release_id,
+            event,
+            snapshot.namespace.id,
+            snapshot.release_id,
+            SUPPLEMENT_EXPRESSION,
+        ),
     )
     at = now()
     questions = {}
@@ -37,6 +54,8 @@ def index_questions(conn, snapshot, event):
         query_from,
         query_until,
         query_expires,
+        parent_id,
+        parent_hash,
     ) in rows:
         if not (
             valid(at, binding_from, binding_until, None)
@@ -44,6 +63,11 @@ def index_questions(conn, snapshot, event):
             and valid(at, query_from, query_until, query_expires)
         ):
             continue
+        article = snapshot.articles.get(parent_id)
+        if article is None or article.kind != '법률' or article.text_hash != parent_hash:
+            continue
+        if parents is not None:
+            parents[revision] = parent_id
         if digest(question) != checksum:
             raise ValueError('atomic question hash mismatch')
         questions[revision] = (source, question)

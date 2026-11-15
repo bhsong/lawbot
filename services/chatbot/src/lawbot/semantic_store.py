@@ -105,6 +105,39 @@ class SemanticStore:
             raise ShadowMiss(reason)
         return control, allowed
 
+    def calibration_candidates(self, manifest, event, held):
+        """Read approved evidence for offline calibration without activating the exact cache."""
+        with translate_sqlite_errors(), connect(self.path, timeout=READ_TIMEOUT) as conn:
+            conn.execute('BEGIN')
+            namespace = self.snapshot.namespace.id
+            control = read_control(conn)
+            if (control.namespace_id, control.activation_event) != (namespace, event):
+                raise ShadowMiss('not_released')
+            if manifest_row(conn, self.index_revision) != manifest:
+                raise ShadowMiss('stale_index')
+            conn.row_factory = sqlite3.Row
+            current = now()
+            keys = {
+                row['query_revision_id']
+                for row in conn.execute(
+                    f'SELECT {ELIGIBILITY_COLUMNS} {CATALOG_SQL} {INDEXED_QUERIES}',
+                    (namespace, self.snapshot.release_id, manifest[3]),
+                )
+                if row['query_revision_id'] not in held and binding_reason(row, event, current) is None
+            }
+            candidates = self.read_candidates(conn, namespace, event, sorted(keys))
+            groups = dict(
+                conn.execute(
+                    'SELECT b.binding_id,a.atom_id FROM atom_answer_bindings b JOIN atoms a USING(atom_revision_id) '
+                    'WHERE b.namespace_id=? AND a.corpus_snapshot_id=?',
+                    (namespace, self.snapshot.release_id),
+                )
+            )
+        by_query: dict[str, list[Candidate]] = defaultdict(list)
+        for candidate in candidates:
+            by_query[candidate.question_revision].append(candidate)
+        return by_query, groups
+
     def candidates(self, manifest: tuple, query_ids: list[str], event: int, before: Control) -> list[Candidate]:
         namespace = self.snapshot.namespace.id
         with translate_sqlite_errors(), connect(self.path, timeout=READ_TIMEOUT) as conn:

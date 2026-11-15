@@ -16,7 +16,7 @@ from lawbot import deploy, envfile, security
 from lawbot.api_client import ModelServerClient, ModelServerError, request_timeout
 from lawbot.cache_seed import load_protection
 from lawbot.cache_store import translate_sqlite_errors
-from lawbot.corpus_store import active_release, active_token
+from lawbot.corpus_store import active_release, active_token, article_version_hashes
 from lawbot.db.connection import check_db_path, repo_path
 from lawbot.exact_cache import PROFILE, Snapshot, canonical
 from lawbot.feedback import check_private
@@ -25,6 +25,7 @@ from lawbot.semantic_handoff import read_deferred, read_pass
 from lawbot.semantic_import_store import import_seed
 from lawbot.semantic_index_store import read_questions
 from lawbot.semantic_index_tools import IndexContract, build_index, select_questions
+from lawbot.semantic_supplement import SHA256, import_supplement, read_supplement
 from lawbot.semantic_val import build_val, read_holdout, read_v6_training
 from lawbot.service import cache_snapshot
 from lawbot_common.model_revision import fingerprint
@@ -115,7 +116,7 @@ class ServerEmbedding:
 def parser():
     cli = argparse.ArgumentParser(description=__doc__)
     sub = cli.add_subparsers(dest='command', required=True)
-    for command in ('import', 'val', 'index'):
+    for command in ('import', 'supplement', 'val', 'index'):
         item = sub.add_parser(command)
         item.add_argument('--corpus-db', required=True)
         if command != 'val':
@@ -215,6 +216,13 @@ def run(args):
     ctx = corpus_context(corpus)
     if args.command == 'index':
         return run_index(args, cache, ctx)
+    if args.command == 'supplement':
+        rows = read_supplement(development_path(args.bundle))
+        protection = development_protection(corpus, args.protected_csv)
+        hashes = article_version_hashes(corpus, ctx.snapshot.release_id)
+        return import_supplement(
+            cache, rows, SHA256, ctx.snapshot, ctx.event, protection, version_hashes=hashes, check_snapshot=ctx.check
+        )
     seed = read_pass(development_path(args.bundle))
     protection = development_protection(corpus, args.protected_csv)
     if args.command == 'val':
