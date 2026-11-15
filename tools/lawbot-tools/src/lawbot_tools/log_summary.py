@@ -56,7 +56,7 @@ def summarize(d):
         out.append('오류 유형: ' + ' · '.join(f'{k} {v}' for k, v in err['error_type'].value_counts().items()))
     if 'cache_mode' in d:
         for mode, rows in d.groupby('cache_mode'):
-            hits = ((rows['response_source'] == 'exact_cache') & (rows['status'] == 'ok')).sum()
+            hits = (rows['response_source'].isin(('exact_cache', 'cache')) & (rows['status'] == 'ok')).sum()
             shadow = rows['would_hit'].eq(True).sum()
             out.append(
                 f'[정확 일치 {mode}] 요청 {len(rows)}건 · 반환 {hits}건 ({hits / len(rows):.1%}) · shadow 후보 {shadow}건'

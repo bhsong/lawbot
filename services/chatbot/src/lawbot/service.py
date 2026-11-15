@@ -25,6 +25,7 @@ from lawbot.api_client import (
     ModelServerClient,
     ModelServerError,
     ModelServerTimeout,
+    embedding_revision,
     request_timeout,
     wait_ready,
 )
@@ -36,6 +37,7 @@ from lawbot.llm import LLM
 from lawbot.paths import ROOT
 from lawbot.reranker import Reranker
 from lawbot.retriever import Retriever
+from lawbot.suggestions import Suggestions
 from lawbot_common.logs import logger
 
 log = logger('lawbot', 'lawbot')
@@ -93,6 +95,7 @@ class LawbotApp:
     articles_sha256: str | None = None
     exact_cache: object = None
     calculator_dependencies: dict[str, tuple[str, ...]] | None = None
+    suggestions: Suggestions | None = None
 
 
 def uses_decrees(app, model_key):
@@ -232,9 +235,7 @@ def load_app(settings=None):
             + ', '.join(f'{kind} {mid}' for kind, mid in missing)
             + ' (모델 서버 .env의 LAWBOT_SERVE_*와 웹앱의 LAWBOT_*_MODEL을 맞추세요)'
         )
-    revision = next(
-        (m.get('revision') for m in available if m['id'] == p.emb_model and m.get('type') == 'embedding'), None
-    )
+    revision = embedding_revision(available, p.emb_model)
     t0 = time.perf_counter()
     retriever = Retriever(
         Embedder(client, p.emb_model, query_timeout=limit),
@@ -277,6 +278,20 @@ def load_app(settings=None):
     if cfg.exact_cache_db is not None:
         exact_cache, (level, message) = inspect_exact_cache(cfg.exact_cache_db, cfg.db, p, release, dc)
         (log.warning if level == 'WARN' else log.info)('정확 일치 캐시: %s', message)
+    suggestions = None
+    if exact_cache is not None and cfg.suggestions_tau is not None and revision:
+        suggestions = Suggestions(
+            exact_cache,
+            p.emb_model,
+            revision,
+            cfg.suggestions_tau,
+            lambda: embedding_revision(client.models(timeout=0.3), p.emb_model),
+        )
+        try:
+            _, candidates, missing_vectors = suggestions.refresh()
+            log.info('검토 질문 추천 후보 %d개 · 일치하는 벡터 없음 %d개', len(candidates), missing_vectors)
+        except OSError, RuntimeError, ValueError:
+            log.warning('검토 질문 추천 후보를 읽지 못했습니다.')
     return LawbotApp(
         p,
         retriever,
@@ -292,6 +307,7 @@ def load_app(settings=None):
         articles_sha256=getattr(retriever, 'articles_sha256', None),
         exact_cache=exact_cache,
         calculator_dependencies=calculator_compatibility(release.combined.data if release else p.articles),
+        suggestions=suggestions,
     )
 
 
@@ -325,11 +341,18 @@ def retrieve(app, question, k, st: Timing, model_key=None) -> tuple[list[Hit], l
     st['_stage'] = 'search'
     t0 = time.perf_counter()
     count_call(st, 'embedding', 'search')
+    options = {}
+    if st.get('_capture_query'):
+
+        def capture(vector):
+            st['_query_vector'] = vector
+
+        options['capture'] = capture
     if app.reranker is None:
-        hits = app.retriever.search(question, k=k)
+        hits = app.retriever.search(question, k=k, **options)
         st['search'] = time.perf_counter() - t0
         return hits, []
-    candidates = app.retriever.search(question, k=app.reranker.candidates)
+    candidates = app.retriever.search(question, k=app.reranker.candidates, **options)
     st['search'] = time.perf_counter() - t0
     st['_stage'] = 'rerank'
     t1 = time.perf_counter()
@@ -514,6 +537,7 @@ def ask(
     cache_metrics=None,
     report=None,
     calculation_candidate=False,
+    capture_query=False,
 ):
     """질문 하나: (단계, 검색 조문, 답변 원문, 측정값)을 차례로 돌려준다
     단계 'load'(모델 전환 대기) → 'generate'(토큰마다) → 'done'. 조문은 생성 전에 정해짐
@@ -525,6 +549,8 @@ def ask(
     중간에 멈춤 cancelled (정지 버튼 등으로 생성기를 닫음)"""
     t0 = time.perf_counter()
     st: Timing = {'model': model_key, 'load': None, 'request_id': request_id or uuid.uuid4().hex[:12]}
+    if capture_query:
+        st['_capture_query'] = True
     if cache_metrics is not None:
         st['cache_metrics'] = cache_metrics
         st['call_counts'] = dict.fromkeys(('embedding', 'search', 'rerank', 'llm'), 0)

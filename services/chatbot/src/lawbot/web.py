@@ -29,6 +29,7 @@ from lawbot import auth as auth_logic
 from lawbot.answer_format import answer_citations, render
 from lawbot.calc_gate import is_calculation_question
 from lawbot.decree import is_decree
+from lawbot.exact_cache import MAX_QUESTION
 from lawbot.hits import Timing
 from lawbot.paths import ROOT
 from lawbot.service import AskError, ask, load_app, log_request
@@ -61,7 +62,6 @@ MAX_SESSIONS = 200
 LOGIN_FAIL_DELAY = 1.0  # 초. 비밀번호 대입을 느리게
 LOGIN_ATTEMPT_CAPACITY = 1024
 JSON_BODY_LIMIT = ADMIN_BODY_LIMIT = 64 * 1024
-MAX_QUESTION = 2000  # 글자. 모델 서버에 보내는 입력 길이 상한
 CHAT_BUSY = '앞 질문을 처리 중입니다. 잠시 뒤 다시 질문해 주세요.'
 WAITING = '⏳ 앞 질문을 기다리는 중…'
 CONFIG_ERROR = '웹앱 설정 오류로 답하지 못했습니다. 서버 로그를 확인하세요.'
@@ -152,12 +152,12 @@ def sources_data(hits, cited=None, refused=False):
     }
 
 
-def cached_events(app, question, model_key, fmt, remember, decision, request_id, started):
+def cached_events(app, question, model_key, fmt, remember, decision, request_id, started, *, from_suggestion=False):
     match = decision.match
     namespace = app.exact_cache.snapshot.namespace
     metadata = {
         'request_id': request_id,
-        'response_source': 'exact_cache',
+        'response_source': 'cache' if from_suggestion else 'exact_cache',
         'cache_answer_id': match.answer_id,
         'corpus_version': namespace.corpus_version,
         'answer_policy_version': namespace.answer_policy_version,
@@ -174,6 +174,10 @@ def cached_events(app, question, model_key, fmt, remember, decision, request_id,
         'cache_metrics': decision.metrics() | metadata,
         'call_counts': dict.fromkeys(('embedding', 'search', 'rerank', 'llm'), 0),
     }
+    if from_suggestion:
+        st['cache_metrics'].update(
+            suggestion_click=True, suggestion_count=0, suggestion_top_score=None, suggestion_ms=None
+        )
     status = 'cancelled'
     try:
         yield 'sources', sources
@@ -181,23 +185,27 @@ def cached_events(app, question, model_key, fmt, remember, decision, request_id,
         yield 'answer', {'text': match.text}
         tid = None
         if remember is not None:
-            record = {
-                'question': question,
-                'answer_shown': match.text,
-                'answer_raw': None,
-                'hits': [{k: v for k, v in h.items() if k != 'score'} for h in hits],
-                'citations': [dict(law=h['law'], article_id=h['article_id'], verdict='ok') for h in hits],
-                'model': model_key,
-                'fmt': fmt,
-                'refused': False,
-                'n_cited': len(hits),
-                'profile': app.profile.name,
-                'dataset_version': app.dataset_version,
-                'corpus_release_id': app.corpus_release_id,
-                'articles_sha256': app.articles_sha256,
-                'commit': feedback.commit(),
-                'instance': security.instance_name(),
-            } | metadata
+            record = (
+                {
+                    'question': question,
+                    'answer_shown': match.text,
+                    'answer_raw': None,
+                    'hits': [{k: v for k, v in h.items() if k != 'score'} for h in hits],
+                    'citations': [dict(law=h['law'], article_id=h['article_id'], verdict='ok') for h in hits],
+                    'model': model_key,
+                    'fmt': fmt,
+                    'refused': False,
+                    'n_cited': len(hits),
+                    'profile': app.profile.name,
+                    'dataset_version': app.dataset_version,
+                    'corpus_release_id': app.corpus_release_id,
+                    'articles_sha256': app.articles_sha256,
+                    'commit': feedback.commit(),
+                    'instance': security.instance_name(),
+                }
+                | metadata
+                | {'response_source': 'exact_cache'}
+            )
             try:
                 tid = remember(record)
             except (OSError, ValueError, RuntimeError) as exc:
@@ -233,7 +241,7 @@ def answer_verdict(raw, st: Timing, used, unknown, refused, *, calculated):
     return 'shown'
 
 
-def chat_events(app, question, model_key, fmt, remember=None, *, started=None):
+def chat_events(app, question, model_key, fmt, remember=None, *, started=None, from_suggestion=False):
     """질문 하나 → (이벤트, 데이터)를 차례로. remember(턴 기록) → turn_id (피드백이 꺼져 있으면 None)
     이벤트: status → sources(모두 펼침) → answer·stats… → sources(인용/검색만 구분) → stats → done, 실패하면 error
     생성 단계에서 화면 글이 그대로면(간결형의 근거·설명 토큰) TICK을 낸다: 받는 쪽이 토큰마다 연결 끊김을 확인하게"""
@@ -247,6 +255,7 @@ def chat_events(app, question, model_key, fmt, remember=None, *, started=None):
         outcomes.append((st, status, error))
 
     ask_options = {}
+    suggestions = None
     calculation_candidate = is_calculation_question(question)
     if calculation_candidate:
         request_id = secrets.token_hex(6)
@@ -267,10 +276,24 @@ def chat_events(app, question, model_key, fmt, remember=None, *, started=None):
         decision = cache.lookup(question, model_key, fmt)
         request_id = secrets.token_hex(6)
         if decision.mode == 'on' and decision.match is not None:
-            yield from cached_events(app, question, model_key, fmt, remember, decision, request_id, started)
+            yield from cached_events(
+                app,
+                question,
+                model_key,
+                fmt,
+                remember,
+                decision,
+                request_id,
+                started,
+                from_suggestion=from_suggestion,
+            )
             return
         metadata = {'request_id': request_id, 'response_source': 'rag'}
         ask_options = {'request_id': request_id, 'cache_metrics': decision.metrics() | metadata}
+        if decision.mode == 'on' and decision.eligible:
+            suggestions = getattr(app, 'suggestions', None)
+            if suggestions is not None:
+                ask_options['capture_query'] = True
     spec = app.models.specs[model_key]
     yield 'status', {'text': view.searching_stats(app, model_key)}
     sent_sources, last = False, {}
@@ -329,6 +352,17 @@ def chat_events(app, question, model_key, fmt, remember=None, *, started=None):
             final = {'text': text, 'finish': st.get('finish'), 'turn_id': tid} | metadata
             if notice:
                 final['notice'] = notice
+            if suggestions is not None and verdict == 'shown' and (vector := st.get('_query_vector')) is not None:
+                start_suggestions = time.perf_counter()
+                ranked = suggestions.recommend(question, vector)
+                if ranked:
+                    st['cache_metrics'].update(
+                        suggestion_count=len(ranked),
+                        suggestion_top_score=ranked[0][1],
+                        suggestion_click=from_suggestion,
+                        suggestion_ms=round((time.perf_counter() - start_suggestions) * 1000, 3),
+                    )
+                    yield 'suggestions', {'questions': [row.question for row, _ in ranked]}
             yield 'done', final
             sent_done = True
     except AskError as err:  # 유형(kind)은 요청 로그의 error_type과 같음. 원래 예외는 __cause__
@@ -342,6 +376,11 @@ def chat_events(app, question, model_key, fmt, remember=None, *, started=None):
             if status == 'ok' and not sent_done:
                 status = 'cancelled'
             metrics = timing.setdefault('cache_metrics', {})
+            if from_suggestion:
+                metrics['suggestion_click'] = True
+                metrics.setdefault('suggestion_count', 0)
+                metrics.setdefault('suggestion_top_score', None)
+                metrics.setdefault('suggestion_ms', None)
             metrics['request_to_first_answer_ms'] = first_ms
             metrics['request_to_complete_ms'] = round((time.perf_counter() - started) * 1000, 3)
             log_request(app, timing, fmt, status, error)
@@ -582,9 +621,13 @@ def create_app(
     @api.post('/api/chat', dependencies=[Depends(require_json)])
     async def chat(request: Request, who: Who):
         started = time.perf_counter()
-        question, model_key, fmt = valid_chat(app, await read_json(request))
+        body = await read_json(request)
+        question, model_key, fmt = valid_chat(app, body)
+        from_suggestion = body.get('from_suggestion', False)
+        if not isinstance(from_suggestion, bool):
+            raise HTTPException(400, '추천 선택 여부가 올바르지 않습니다.')
         remember = partial(fb.remember_turn, who[1]) if fb is not None else None
-        events = chat_events(app, question, model_key, fmt, remember, started=started)
+        events = chat_events(app, question, model_key, fmt, remember, started=started, from_suggestion=from_suggestion)
         return ChatResponse(stream(events))
 
     class ChatResponse(StreamingResponse):

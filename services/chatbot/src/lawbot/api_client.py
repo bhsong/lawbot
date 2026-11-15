@@ -178,6 +178,10 @@ class Embedder:
         return self.client.embed(self.model, texts, input_type, max_seq_length, timeout)
 
 
+def embedding_revision(models, model):
+    return next((row.get('revision') for row in models if row['id'] == model and row.get('type') == 'embedding'), None)
+
+
 WAIT_INTERVAL = 1.0  # 준비 확인 간격 (초)
 
 

@@ -56,11 +56,11 @@ def test_namespace_changes_with_scope_and_policy():
 
 def test_new_cache_is_off_and_independently_versioned(tmp_path):
     path = tmp_path / 'private' / 'cache.db'
-    assert init(path) == 2
+    assert init(path) == 3
     store = Store(path)
     assert store.control().mode == 'off'
     assert store.control().namespace_id is None
-    assert migrate(path) == 2
+    assert migrate(path) == 3
 
 
 @pytest.fixture
@@ -106,7 +106,7 @@ def test_v2_uses_original_migration_and_preserves_serving_history(catalog):
         history = conn.execute('SELECT version,name,checksum FROM schema_migrations ORDER BY version').fetchall()
         assert history[0] == (1, '0001_exact_cache.sql', original_checksum)
     assert cache.deployment_status()[0] == 'OK'
-    assert migrate(path) == 2
+    assert migrate(path) == 3
     after = cache.lookup(draft.question, 'pro', 'concise')
     assert (after.match, after.reason) == (before.match, before.reason)
     with connect(path) as conn:
@@ -336,7 +336,7 @@ def test_deployment_status_reports_disabled_and_stale_cache(catalog, tmp_path):
     store, snapshot, draft = catalog
     cache = cache_runtime.ExactCache(store, store.path, snapshot)
     level, message = cache.deployment_status()
-    assert level == 'OK' and 'off' in message and '스키마 2' in message
+    assert level == 'OK' and 'off' in message and '스키마 3' in message
     store.stage(snapshot.namespace, [draft], 'tester', 'draft')
     activate(store, snapshot, draft)
     level, message = cache.deployment_status()

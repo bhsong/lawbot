@@ -14,7 +14,7 @@ from lawbot.db.connection import connect, transaction
 from lawbot.exact_cache import Namespace, canonical, digest, normalize
 
 MIGRATIONS = files('lawbot.db') / 'cache_migrations'
-SCHEMA = 2
+SCHEMA = 3
 READ_TIMEOUT = 0.01
 CALCULATION_EXCLUDED = '계산 질문은 정확 일치 캐시에 저장하거나 승인할 수 없습니다.'
 REVIEW_EVIDENCE_CONFLICT = 'review_evidence_conflict'
@@ -217,6 +217,61 @@ class Store:
 
     def check_schema(self) -> int:
         return migrations.check_schema(self.path, directory=MIGRATIONS)
+
+    def rebaseline_protection(self, snapshot, event, protection_hash, actor, reason, check):
+        namespace = snapshot.namespace.id
+        with connect(self.path, write=True) as conn, transaction(conn):
+            control = read_control(conn)
+            if control.mode != 'off':
+                raise ValueError('보호 지문 변경 전에 캐시 모드를 off로 전환하세요.')
+            if (control.namespace_id, control.activation_event) not in ((None, None), (namespace, event)):
+                raise ValueError('보호 지문은 현재 활성 코퍼스의 캐시 범위에서만 변경할 수 있습니다.')
+            check()
+            if control.protection_hash == protection_hash:
+                return 0
+            conn.execute(
+                'INSERT INTO cache_namespaces VALUES (?,?,?) ON CONFLICT DO NOTHING',
+                (namespace, snapshot.namespace.serialize(), now()),
+            )
+            affected = conn.execute(
+                "SELECT DISTINCT answer_id FROM cache_queries WHERE namespace_id=? AND status='approved' "
+                'AND exact_enabled=1',
+                (namespace,),
+            ).fetchall()
+            count = conn.execute(
+                "UPDATE cache_queries SET status='draft',exact_enabled=0 WHERE namespace_id=? "
+                "AND status='approved' AND exact_enabled=1",
+                (namespace,),
+            ).rowcount
+            for (answer_id,) in affected:
+                conn.execute(
+                    "UPDATE cache_answers SET status='draft' WHERE answer_id=? AND status='approved'", (answer_id,)
+                )
+                conn.execute(
+                    "INSERT INTO cache_release_decisions VALUES (?,?,?,?,?,'pending','protection_changed','[]') "
+                    "ON CONFLICT (activation_event,answer_id) DO UPDATE SET verdict='pending',reason='protection_changed'",
+                    (event, answer_id, answer_id, snapshot.release_id, snapshot.release_id),
+                )
+            conn.execute(
+                'UPDATE cache_control SET namespace_id=?,activation_event=?,protection_hash=?,approval_id=NULL,'
+                'generation=generation+1 WHERE singleton=1',
+                (namespace, event, protection_hash),
+            )
+            check()
+            audit(
+                conn,
+                'rebaseline_protection',
+                namespace,
+                actor,
+                reason,
+                {
+                    'previous_protection_hash': control.protection_hash,
+                    'previous_approval_id': control.approval_id,
+                    'protection_hash': protection_hash,
+                    'pending_questions': count,
+                },
+            )
+            return count
 
     def calculation_exclusions(self) -> list[CalculationExclusion]:
         with connect(self.path) as conn:

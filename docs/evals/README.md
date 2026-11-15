@@ -4,6 +4,8 @@
 
 ## 기록 목록
 
+- **검토된 비슷한 질문 추천 사전 검증 (2026-11-16)** — 기본 pytest 2,043개, 추천 클릭 캐시 적중 및 추가 임베딩 0회 대역 검증. 실제 모델용 요청 수 사전 산정 → [기록](2026-11-16-reviewed-question-suggestions-preflight.md)
+
 - **검수 근거 해시 충돌 이월 (2026-11-16)** — 기본 pytest 2,036개, 충돌 답변 격리와 QA 변경 후 DB 적재·P07 재승인 순서 대조 → [기록](2026-11-16-review-evidence-conflict.md)
 
 - **검수된 캐시 DB 전송 (2026-11-16)** — 기본 pytest 2,034개, 원본 스키마 2에서 개발 ZIP → DB → DB 및 재실행 확인 → [기록](2026-11-16-reviewed-cache-db-transfer.md)

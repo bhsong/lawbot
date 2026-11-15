@@ -22,7 +22,7 @@ export function useChatStream({ onUnauthorized }: { onUnauthorized: () => void }
   }, [])
 
   const send = useCallback(
-    async (question: string, model: string, format: string) => {
+    async (question: string, model: string, format: string, fromSuggestion = false) => {
       if (abort.current) return
       const turn = newTurn(question, model, format)
       const ctrl = new AbortController()
@@ -30,7 +30,7 @@ export function useChatStream({ onUnauthorized }: { onUnauthorized: () => void }
       setTurns((all) => [...all, turn])
       setBusy(true)
       try {
-        await api.chat({ question, model, format }, ctrl.signal, (e, d) => {
+        await api.chat({ question, model, format, ...(fromSuggestion ? { from_suggestion: true } : {}) }, ctrl.signal, (e, d) => {
           if (!ctrl.signal.aborted) update(turn.id, (t) => applyEvent(t, e, d))
         })
         ctrl.signal.throwIfAborted()
@@ -38,7 +38,7 @@ export function useChatStream({ onUnauthorized }: { onUnauthorized: () => void }
       } catch (err) {
         if (abort.current !== ctrl) return
         if (ctrl.signal.aborted) {
-          update(turn.id, (t) => (t.done ? t : { ...t, done: true, stopped: true, status: undefined }))
+          update(turn.id, (t) => (t.done ? t : { ...t, done: true, stopped: true, status: undefined, suggestions: undefined }))
         } else if (err instanceof ApiError && err.status === 401) {
           setTurns((all) => all.filter((t) => t.id !== turn.id))
           onUnauthorized()

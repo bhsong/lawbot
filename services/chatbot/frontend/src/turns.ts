@@ -25,6 +25,8 @@ export function applyEvent(turn: Turn, event: string, data: unknown): Turn {
       return { ...turn, text: d.text as string, draft: d.draft === true, status: undefined }
     case 'stats':
       return { ...turn, stats: d.text as string }
+    case 'suggestions':
+      return { ...turn, suggestions: d.questions as string[] }
     case 'done':
       return {
         ...turn,
@@ -36,7 +38,7 @@ export function applyEvent(turn: Turn, event: string, data: unknown): Turn {
         turnId: (d.turn_id as string) ?? null,
       }
     case 'error':
-      return { ...turn, status: undefined, done: true, error: d.message as string }
+      return { ...turn, status: undefined, done: true, suggestions: undefined, error: d.message as string }
     default:
       return turn
   }

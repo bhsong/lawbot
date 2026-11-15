@@ -293,12 +293,7 @@ def check_seed_import(conn, namespace, event, receipt, protection, action):
     if previous is not None and previous['protection_hash'] != protection.fingerprint:
         raise ValueError('protected split changed since import')
     if control.protection_hash not in (None, protection.fingerprint):
-        active = conn.execute(
-            "SELECT 1 FROM cache_queries WHERE namespace_id=? AND status='approved' AND exact_enabled=1 LIMIT 1",
-            (control.namespace_id,),
-        ).fetchone()
-        if action == ACTION or active is not None or previous is not None:
-            raise ValueError('기존 exact 보호 지문과 seed 보호 지문이 다릅니다.')
+        raise ValueError('기존 exact 보호 지문과 seed 보호 지문이 다릅니다.')
     if previous is not None:
         return control, previous['counts']
     if control.mode != 'off' or (control.namespace_id, control.activation_event) not in (

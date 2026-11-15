@@ -47,6 +47,7 @@ def reviewable_query(query, protection, mode, state):
         and not is_calculation_question(query[2])
         and (state == 'draft' or mode == 'off' or query[9] is not None)
         and allowed_question(protection, query[1], query[2])
+        and protection.match(query[2]) is None
     )
 
 

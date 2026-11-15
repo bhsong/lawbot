@@ -558,6 +558,36 @@ def test_web_noncalculation_prompt_and_calls_unchanged(env, real_server, capsys)
     assert posts == ['/v1/embeddings', '/v1/rerank', '/v1/chat/completions']
 
 
+@pytest.mark.parametrize('refused', [False, True])
+def test_suggestions_use_the_same_embedding_request(env, real_server, capsys, refused):
+    from lawbot import web
+    from lawbot.cache_runtime import Decision
+
+    env.setenv('LAWBOT_RERANKER_ENABLED', '1')
+    app = service.load_app()
+    app.exact_cache = types.SimpleNamespace(lookup=lambda *a: Decision('on', 'no_match', 0, True))
+    captured = []
+
+    def recommend(question, vector):
+        captured.append(vector)
+        return [(types.SimpleNamespace(question='검토된 질문'), 0.9)]
+
+    app.suggestions = types.SimpleNamespace(recommend=recommend)
+    if refused:
+        env.setattr(web, 'answer_citations', lambda *a: ([], [], True))
+    capsys.readouterr()
+    stream = list(web.chat_events(app, '해고 예고 절차를 알려 주세요.', 'pro', 'concise'))
+    if refused:
+        assert 'suggestions' not in [event for event, _ in stream]
+        assert not captured
+    else:
+        assert [event for event, _ in stream][-2:] == ['suggestions', 'done']
+        assert stream[-2][1] == {'questions': ['검토된 질문']}
+        assert len(captured) == 1 and captured[0].shape == (64,)
+    posts = [line.split()[2] for line in capsys.readouterr().out.splitlines() if ' POST ' in line]
+    assert posts == ['/v1/embeddings', '/v1/rerank', '/v1/chat/completions']
+
+
 def test_gated_lookup_uses_identical_rag_messages_and_no_calculation_event(env, real_server, tmp_path, capsys):
     from lawbot import web
     from lawbot.calc_gate import is_calculation_question

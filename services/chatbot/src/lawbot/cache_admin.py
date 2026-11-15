@@ -21,6 +21,7 @@ from lawbot.db.connection import db_path, repo_path
 from lawbot.exact_cache import PROFILE, Snapshot, digest
 from lawbot.feedback import check_private
 from lawbot.paths import ROOT
+from lawbot.question_vectors import generate_vectors
 from lawbot.service import cache_snapshot
 
 
@@ -223,17 +224,33 @@ def parser():
         'backup',
         'exclude-calculations',
         'import-db',
+        'rebaseline-protection',
+        'generate-question-vectors',
     ):
         cmd = sub.add_parser(name)
         cmd.add_argument('--db', required=name != 'inspect')
         if name in ('inspect', 'seed', 'approve', 'replace'):
             cmd.add_argument('--bundle', type=Path, required=True)
-        if name in ('inspect', 'seed', 'approve', 'replace', 'set-mode', 'import-db'):
+        if name in (
+            'inspect',
+            'seed',
+            'approve',
+            'replace',
+            'set-mode',
+            'import-db',
+            'rebaseline-protection',
+            'generate-question-vectors',
+        ):
             cmd.add_argument('--protected-csv', type=Path, action='append', default=[])
+        if name in ('import-db', 'rebaseline-protection', 'generate-question-vectors'):
+            cmd.add_argument('--corpus-db', required=True)
+        if name == 'generate-question-vectors':
+            cmd.add_argument('--dry-run', action='store_true')
+            cmd.add_argument('--approved-requests', type=int)
+            cmd.add_argument('--max-runtime-seconds', type=int)
         if name == 'import-db':
             cmd.add_argument('--from', dest='source_db', required=True)
-            cmd.add_argument('--corpus-db', required=True)
-        if name in ('seed', 'approve', 'replace', 'set-mode', 'revoke'):
+        if name in ('seed', 'approve', 'replace', 'set-mode', 'revoke', 'rebaseline-protection'):
             cmd.add_argument('--reason', required=name != 'seed')
         if name in ('inspect', 'seed'):
             cmd.add_argument('--report-dir', type=Path)
@@ -316,6 +333,28 @@ def run(args):
             source_db_sha256=checksum,
         )
     store = Store(path)
+    if command == 'generate-question-vectors':
+        corpus = db_path(args.corpus_db)
+        if same_file(corpus, path):
+            raise ValueError('코퍼스와 캐시에는 서로 다른 DB 파일을 지정하세요.')
+        cfg = settings.load()
+        return generate_vectors(path, corpus_context(corpus, args.protected_csv, config=cfg), cfg, args)
+    if command == 'rebaseline-protection':
+        if not reason.strip():
+            raise ValueError('변경 사유가 필요합니다.')
+        corpus = db_path(args.corpus_db)
+        if same_file(corpus, path):
+            raise ValueError('코퍼스와 캐시에는 서로 다른 DB 파일을 지정하세요.')
+        ctx = corpus_context(corpus, args.protected_csv)
+        count = store.rebaseline_protection(
+            ctx.snapshot,
+            ctx.event,
+            ctx.protection.fingerprint,
+            actor,
+            reason,
+            ctx.check_import,
+        )
+        return {'pending_questions': count, 'protection_hash': ctx.protection.fingerprint}
     if command == 'exclude-calculations':
         if args.apply and not reason.strip():
             raise ValueError('--apply에는 변경 사유가 필요합니다.')
