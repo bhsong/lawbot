@@ -91,8 +91,8 @@
 
 | 개발 트리 경로 | 존재 여부 (2026-11-15 KST) | SHA-256 |
 | --- | --- | --- |
-| `data/db/semantic/pass-handoff.zip` | 없음 | 확인 불가 |
-| `data/db/semantic/deferred-handoff.zip` | 없음 | 확인 불가 |
+| `data/db/semantic/pass-handoff.zip` | 있음 | `2da4c96ed8541c7c13fdc948db1f3c39e9e19d42c55972842851c0f77a75166f` |
+| `data/db/semantic/deferred-handoff.zip` | 있음 | `41dd33d4c1e7eae01bdfc95bb18793eeb1f11a24d0fc7b5b917d799955183862` |
 
 ## 4. 사용자 확인 필요
 
