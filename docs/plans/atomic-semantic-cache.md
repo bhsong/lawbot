@@ -23,6 +23,13 @@
 - **Group B(사용자 질문 ↔ 원자 질문을 리랭커로 비교)는 명세대로 쓴다.** 리랭커(Qwen3-Reranker)는 레포에서 학습시킨 적이 없는 기본 모델이고, 질문↔질문 관계 판단에 쓰는 것도 괜찮다고 사용자가 판단했다(2026-11-15). B의 instruction 문구와 threshold는 val에서 고르고, 리랭커 점수가 조건 검사를 뒤집지 못한다는 명세 규칙은 유지한다.
 - 보호 test에는 명세 §7.2대로 v1 시절 test 650을 포함해 `docs/evals/README.md` "평가 데이터 사용 제한"의 모든 test 문항이 들어간다.
 
+### PR 2 초기 seed 승인 범위 (사용자 결정 2026-11-15)
+
+- 사용자가 전수 검수한 통과 ZIP의 답변을 캐시 답변으로 쓰고, 통과 질문을 exact 질문과 원자 질문으로 등록한다. 원자는 주 조문과 `review_unit_id`의 조합이다. 별도 내용 재검수, 모델을 통한 질문·명제 생성, val 재라벨링은 생략한다.
+- import 시 승인 근거를 `actor=import`, `사용자 전수 검수 승인 2026-11-15`, 통과 ZIP SHA-256으로 기록한다. 명세의 pending 정책은 운영 반영 이후 자동 생성되는 답변에 적용한다. 초기 seed의 전수 검수 승인에는 적용하지 않는다.
+- 현행 근거 조문이 다르거나 없으면 해당 답변·질문을 미승인으로 남기고 binding의 `carry_status`를 `off`로 기록한다. 계산 질문은 exact·원자 질문에서 제외한다. 규칙으로 재사용 의도·조건을 확정할 수 없으면 답변과 exact만 승인한다. 보호 val/test와 겹치는 질문은 seed와 새 val에서 제외한다.
+- 승인 여부와 활성 모드는 독립이다. exact는 기존 `set-mode`로 바꾸고, 시맨틱은 calibration과 후속 출시 조건을 따른다. import와 인덱스 교체는 캐시 모드를 유지한다.
+
 ## 2. 미리 확인한 사실 (2026-11-15, `b65cec5`)
 
 - 캐시 분기는 `services/chatbot/src/lawbot/web.py` `chat_events`에 있다: 계산 질문 → bypass, 아니면 `ExactCache.lookup` → `on`이고 match면 `cached_events`로 끝, 아니면 RAG. 시맨틱은 이 exact miss 뒤에 들어간다.
@@ -39,7 +46,7 @@
 | PR | 브랜치(예) | 범위(명세 단계) | 완료 기준 | 실제 모델 |
 | --- | --- | --- | --- | --- |
 | 1 | `feat/semantic-cache-core` | A 사전 탐색 기록, B 스키마(0003 migration, revision·binding·정책·index manifest, **binding별 carry 상태와 판정 이력 칸**), D 결정적 조건 검사·A/B 페어 매핑·`linked_parent_score`, E dispatcher(계산 게이트 → exact → semantic `off/shadow`) | V2-01~12, 19, 20, 28(exact 부분), 31, 37 Green. 기본값 `off`에서 기존 응답·SSE·로그가 바이트 단위로 같음 | 없음(가짜 모델) |
-| 2 | `feat/atomic-index-tools` | C 원자·질문 구축 도구(오프라인), 인덱스 generation·manifest·원자적 교체, 통과 ZIP import(V2-35), val 세트(재사용 가능 / 불가 / 불확실, hard-negative 포함)와 누수 검사 | V2-20, 30, 35, 36 Green. A안 범위 manifest 확정. 생성한 원자·질문 수, val 구성 수 보고 | 원자·질문 생성에 모델이 필요하면 **요청 수·시간 추정 후 승인** |
+| 2 | `feat/atomic-index-tools` | C 통과 ZIP import, 인덱스 generation·manifest·원자적 교체, 규칙 기반 val 세트와 누수 검사 | V2-20, 30, 35, 36 Green. import·승인·예외·P07 연결 및 val 구성 집계 | **PR 생성 뒤 질문 임베딩만 승인 요청** |
 | 3 | `feat/semantic-union-rag` | F 미스 합집합 RAG(D_base ∪ D_atomic, 점수 재사용 조건), H shadow 평가 도구와 계측 필드 | V2-13~18, 32, 38 Green. shadow 평가(val)로 A/B threshold·margin·후보 예산 선택, miss 추가 지연 p50/p95, 합집합 vs 기존 검색 recall 비교 → `docs/evals/` 기록 | **val shadow 평가 승인**(요청 수·시간 먼저 제시) |
 | 4 | `feat/semantic-admin-pending` | G 어드민 검수 화면 최소 확장, 정상 완료 후보만 pending, 승인·배포·철회, 동시성(조건부 기록) | V2-21~27, 29, 33 Green. 대역 E2E 390px·1280px. `AUTO_STAGE_PENDING` 기본 off | 출시 판단용 실제 모델 평가(V2-33·34)는 **별도 승인** |
 | 5 | `feat/semantic-carry-forward` | §1 #7 binding별 유지·검토 대기·끔: DB 모드 `lawbot-articles-update`에서 활성화 직후·웹 재시작 전에 판정, 갱신 보고서에 판정 수, 유지 binding의 벡터를 새 index generation으로 이전, 어드민 캐시 탭에 binding별 판정·바뀐 조문(전후 원문)·재승인 | 유지/검토 대기/끔/판정 실패(fail closed)/롤백 각각 통합 테스트, V2-24 Green, 대역 E2E로 어드민 판정 화면 | 없음(가짜 모델) |
@@ -80,6 +87,13 @@
 3. P3에서 카탈로그 자격 판정에 필요한 열을 읽고 임베딩 후 Top-K만 구성한다. SSE와 요청 로그 회귀 검사는 이벤트와 필드를 비교한다.
 
 가짜 모델로 회귀 테스트를 먼저 실패시키고, 전체 pytest·정적 검사·프론트 빌드가 통과하면 기존 PR을 갱신한다. [리뷰 요약](https://github.com/bhsong/lawbot/pull/151#issuecomment-6887095214)
+
+### PR 2 실행 계획
+
+1. 지정 해시와 ZIP의 참조를 검증한다. 정규화와 근접 비교에는 기존 QA 보호 규칙을 쓴다. 보호 질문 원문은 비교 과정에서만 읽는다. 질문, 답변, 복수 표시·검토 근거와 출처는 개발용 캐시 사본에 보존한다.
+2. 승인과 감사는 캐시 DB의 한 트랜잭션에 묶는다. 모드·기존 P07 승인 및 원문을 보존한다. 원문 위치는 주 조문에 포함되는 검토 근거 구절로 찾고, 일치하는 구절이 없으면 주 조문 전체를 기록한다. 재사용 정책은 결정적 의도 패턴과 검수된 원문 표현으로 제한한다.
+3. 질문·후보 답변 ID 쌍과 라벨을 공개 가능한 val 산출물로 만든다. ID는 원문을 포함하지 않는 안정적 식별자로 만든다. 답변당 해시 순으로 대표 검증 질문 하나를 고르고, 평가용 generation에서 빼도 나머지 질문이 남도록 확인한다. 전체 질문을 쓰는 generation과 구분한다.
+4. 질문 임베딩과 manifest를 준비하고 검증한 다음 활성 포인터를 원자적으로 바꾼다. 길이·차원·유한값·모델 revision과 snapshot이 일치할 때만 교체한다. 테스트와 PR 전 개발 검증에는 대역 임베딩만 쓰고, 실제 요청 수는 PR 이후 승인받는다.
 
 ## 데이터 ZIP 위치
 
