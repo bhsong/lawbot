@@ -1,6 +1,6 @@
 # 원자 시맨틱 캐시 PR 1 개발 검증
 
-2026-11-15 KST. 개발 기준 `3acba50`, 브랜치 `feat/semantic-cache-core`. 합성 데이터와 가짜 모델을 사용했다. [계획서](../plans/atomic-semantic-cache.md)
+2026-11-15 KST. 개발 기준 `3acba50`, 브랜치 `feat/semantic-cache-core`. 합성 데이터와 가짜 모델을 사용했다. [계획서](../archives/atomic-semantic-cache.md)
 
 ## Red → Green
 
