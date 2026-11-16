@@ -255,7 +255,10 @@ class Monitor:
                 for name, item in details['collectors'].items()
                 if item['status'] != 'ok'
             }
-            return RunSummary(run_id, 'normal', failed=failed, line=f'collectors resumed={run_id}')
+            line = f'collectors resumed={run_id}'
+            if count := details.get('baselines_added'):
+                line += f' · 기준점 추가 {count}개'
+            return RunSummary(run_id, 'normal', failed=failed, line=line)
         for collector in chosen:
             if collector.name == 'legalize_law' and isinstance(collector, LegalizeGitCollector):
                 assert isinstance(collector.matcher, LawMatcher)
@@ -331,6 +334,13 @@ class Monitor:
                 f'collectors={len(per)} ok={len(summary.ok)} failed={len(summary.failed)}{failed} '
                 f'events={len(summary.events)}'
             )
+            baselines_added = sum(result.baselines_added for result in results.values())
+            details = {'collectors': per, 'events': len(events)}
+            if managed_id:
+                details['managed'] = True
+            if baselines_added:
+                summary.line += f' · 기준점 추가 {baselines_added}개'
+                details['baselines_added'] = baselines_added
             status = 'ok' if not summary.failed else ('partial' if summary.ok else 'failed')
             finished = self.now().isoformat(timespec='seconds')
             self.state.apply(
@@ -346,10 +356,7 @@ class Monitor:
                     run_id,
                     finished,
                     status,
-                    json.dumps(
-                        {'collectors': per, 'events': len(events)} | ({'managed': True} if managed_id else {}),
-                        ensure_ascii=False,
-                    ),
+                    json.dumps(details, ensure_ascii=False),
                 ),
             )
             log.info('%s %s', mode, summary.line)

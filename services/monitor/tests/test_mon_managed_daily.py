@@ -8,7 +8,7 @@ from law_monitor.app import Monitor
 from law_monitor.collectors.base import CollectResult
 from law_monitor.config import load
 from law_monitor.paths import Paths
-from mon_helpers import FakeLawGo, SourceRepo, law_md, make_config, make_monitor
+from mon_helpers import LAW_PATH, FakeLawGo, SourceRepo, git, law_md, make_config, make_monitor
 
 
 @pytest.mark.parametrize('articles_enabled', [True, False], ids=['law-not-due', 'law-disabled'])
@@ -102,6 +102,40 @@ def test_managed_scope_excludes_disabled_law_and_recovers_it_on_reenable(tmp_pat
     assert [event['target']['item_id'] for event in summary.events] == [disabled, disabled, disabled]
     assert [event['context']['commit']['sha'] for event in summary.events] == [first, second, third]
     assert not monitor.collect_managed('daily-04', ['legalize_law'], [enabled, disabled]).events
+
+
+def test_managed_scope_expansion_records_baseline_then_collects_real_amendment(tmp_path):
+    repo = SourceRepo(tmp_path / 'source')
+    decree = 'kr/근로기준법/시행령.md'
+    creation = 'kr/근로기준법/시행규칙.md'
+    original = law_md('근로기준법 시행령', {'제1조': '기존 조문'})
+    repo.commit({LAW_PATH: law_md('근로기준법', {'제1조': '법률'}), decree: original}, 'baseline')
+    monitor = make_monitor(tmp_path, make_config(repo), lawgo=FakeLawGo({}).client())
+    collector = monitor.collectors[0]
+    collector.matcher.selected_paths = frozenset({LAW_PATH})
+    monitor.bootstrap(only='legalize_law')
+    collector.enricher = None
+    monitor.collect_managed('daily-initial', ['legalize_law'], [LAW_PATH])
+    assert set(monitor.state.items('legalize_law')) == {LAW_PATH}
+
+    expanded = [LAW_PATH, decree]
+    result = monitor.collect_managed('daily-expanded', ['legalize_law'], expanded)
+    assert result.ok == ['legalize_law'] and result.events == []
+    assert '기준점 추가 1개' in result.line
+    resumed = monitor.collect_managed('daily-expanded', ['legalize_law'], expanded)
+    assert '기준점 추가 1개' in resumed.line
+    assert not list(monitor.paths.events.glob('**/*.json'))
+    baseline = monitor.state.items('legalize_law')[decree]
+    assert baseline.version_key == git(repo.path, 'rev-parse', f'HEAD:{decree}')
+    assert (monitor.paths.files / f'{baseline.version_key}.md').read_text(encoding='utf-8') == original
+
+    sha = repo.commit({decree: law_md('근로기준법 시행령', {'제1조': '개정 조문'})}, 'amend')
+    new_sha = repo.commit({creation: law_md('근로기준법 시행규칙', {'제1조': '새 규칙'})}, 'enact')
+    result = monitor.collect_managed('daily-next', ['legalize_law'], [*expanded, creation])
+    amended, new = result.events
+    assert (amended['change_type'], amended['context']['commit']['sha']) == ('law_amended', sha)
+    assert amended['old']['version_key'] == baseline.version_key
+    assert (new['change_type'], new['context']['commit']['sha'], new['old']) == ('law_new', new_sha, None)
 
 
 def test_managed_plan_cannot_select_the_git_collector_with_article_input_off(tmp_path):

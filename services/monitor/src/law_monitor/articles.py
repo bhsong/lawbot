@@ -5,21 +5,27 @@
 
 import difflib
 import re
+from datetime import date
 
 ARTICLE = re.compile(r'^#{5}\s*(제\d+조(?:의\d+)*)')
 ADDENDA_HEADING = re.compile(r'^##\s*부칙\s*$')
 ADDENDUM_BLOCK = re.compile(r'^부칙\s*<[^>]*>')
+BORROWED_ADDENDUM_BLOCK = re.compile(r'^부칙\s*\([^)]+\)\s*<[^>]*>')
+EFFECTIVE_CLAUSE = re.compile(
+    r'(?:제1조\s*\(시행일\)\s*)?이 (?:법|영|규칙)은 '
+    r'(?:(?P<year>\d{4})년 (?P<month>\d{1,2})월 (?P<day>\d{1,2})일|공포한 날)부터 시행한다\.'
+)
 HEAD = '머리'  # 첫 조문 앞 (제목·편장절 제목)
 
 
-def split_chunks(body: str) -> dict[str, str]:
+def split_chunks(body: str, *, include_borrowed: bool = False) -> dict[str, str]:
     chunks: dict[str, list[str]] = {HEAD: []}
     key, in_addenda = HEAD, False
     for line in body.splitlines():
         new_key = None
         if not in_addenda and ADDENDA_HEADING.match(line):
             in_addenda, new_key = True, '부칙'
-        elif in_addenda and ADDENDUM_BLOCK.match(line):
+        elif in_addenda and (ADDENDUM_BLOCK.match(line) or (include_borrowed and BORROWED_ADDENDUM_BLOCK.match(line))):
             new_key = line.strip()
         elif not in_addenda and (m := ARTICLE.match(line)):
             new_key = m.group(1)
@@ -53,3 +59,23 @@ def added_addenda(old_body: str, new_body: str) -> list[str]:
     """새로 생긴 부칙 블록 원문 (시행일·경과조치가 들어 있음)."""
     old = split_chunks(old_body)
     return [text for key, text in split_chunks(new_body).items() if ADDENDUM_BLOCK.match(key) and key not in old]
+
+
+def preview_effective_dates(old_body: str, new_body: str, promulgated: str) -> list[str]:
+    """Preview standalone dates from added addenda, including those of amending laws."""
+    old = split_chunks(old_body, include_borrowed=True)
+    dates = []
+    for heading, text in split_chunks(new_body, include_borrowed=True).items():
+        if heading in old or not (ADDENDUM_BLOCK.match(heading) or BORROWED_ADDENDUM_BLOCK.match(heading)):
+            continue
+        first_section = re.split(r'\n제(?:[2-9]|[1-9]\d+)조', text.partition('\n')[2], maxsplit=1)[0]
+        if match := EFFECTIVE_CLAUSE.fullmatch(' '.join(first_section.split())):
+            try:
+                if match['year']:
+                    day = date(int(match['year']), int(match['month']), int(match['day']))
+                else:
+                    day = date.fromisoformat(promulgated)
+            except ValueError:
+                continue
+            dates.append(day.isoformat())
+    return sorted(set(dates))

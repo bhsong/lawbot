@@ -9,13 +9,19 @@
 import difflib
 import json
 import logging
+import sqlite3
+from collections.abc import Callable, Collection
+from contextlib import closing
 from dataclasses import asdict, dataclass, field
+from datetime import datetime
+from pathlib import Path
 
 from law_monitor import articles, frontmatter
 from law_monitor.collectors.base import CollectResult, RunContext
 from law_monitor.config import Config
-from law_monitor.events import make_event_id
+from law_monitor.events import EventStore, make_event_id
 from law_monitor.gitrepo import ZERO, CommitInfo, GitError, GitRepo
+from law_monitor.paths import Paths
 from law_monitor.state import ItemState, State
 
 log = logging.getLogger('law_monitor.legalize_git')
@@ -148,7 +154,7 @@ class LegalizeGitCollector:
         rescan = scope is not None and scope != previous and (scope != '*' or previous is not None)
         if cursor == head and not rescan and not paused:
             return CollectResult(cursors={self.repo_key: head})
-        build = _Builder(self, ctx, repo, ctx.state.items(self.name))
+        build = _Builder(self, ctx.paths, ctx.now, repo, ctx.state.items(self.name))
         on_history = bool(cursor and (cursor == head or repo.is_ancestor(cursor, head)))
         if cursor and recovered:
             build.backfill(recovered, cursor if on_history else head)
@@ -163,7 +169,7 @@ class LegalizeGitCollector:
             )
             build.compare_with_head(head)
         if rescan and on_history:
-            build.compare_with_head(head)
+            build.compare_with_head(head, baseline_new_except=recovered.keys())
         result = build.result()
         result.cursors = {self.repo_key: head}
         if rescan and scope is not None:
@@ -182,15 +188,66 @@ class LegalizeGitCollector:
         """
         repo = self._repo(ctx)
         since_sha, until_sha = repo.resolve(since), repo.resolve(until)
-        build = _Builder(self, ctx, repo, {}, replay=True)
+        build = _Builder(self, ctx.paths, ctx.now, repo, {}, replay=True)
         for sha in repo.rev_list(since_sha, until_sha, self.matcher.pathspecs()):
             build.commit(sha)
         result = build.result()
         result.items, result.removed = [], []
         return result, since_sha, until_sha
 
+    def replay_amendment(
+        self,
+        paths: Paths,
+        repo_path: Path | None,
+        path: str,
+        commit: str,
+        now: Callable[[], datetime],
+        *,
+        dry_run: bool,
+    ) -> dict | str:
+        """Replay a single amendment from local Git objects without advancing monitor state."""
+        if not self.matcher.prefilter(path):
+            raise ValueError('설정에 포함된 법령 파일 경로를 지정하세요')
+        repo = GitRepo(repo_path or paths.repos / self.repo_key, local_only=True)
+        sha = repo.resolve(commit)
+        parent = repo.resolve(f'{sha}^')
+        changes = repo.changes(sha, [f':(literal){path}'])
+        build = _Builder(self, paths, now, repo, {}, replay=True)
+        if len(changes) != 1 or changes[0].old_path != path or changes[0].new_path != path:
+            raise ValueError('지정한 커밋에서 기존 파일의 개정을 찾을 수 없습니다')
+        change = changes[0]
+        old, new = build.version(path, change.old_blob), build.version(path, change.new_blob)
+        if old is None or new is None or self.matcher.change_type(old, new) != 'law_amended':
+            raise ValueError('지정한 커밋에서 기존 파일의 개정을 찾을 수 없습니다')
+        if dry_run:
+            return {
+                'articles': [
+                    chunk['article']
+                    for chunk in articles.chunk_diffs(old.body, new.body)
+                    if articles.ARTICLE.fullmatch(f'##### {chunk["article"]}')
+                ],
+                'addenda_effective_dates': articles.preview_effective_dates(
+                    old.body, new.body, str(new.meta.get('공포일자') or '')
+                ),
+            }
+        event_id = make_event_id(self.name, path, new.blob)
+        registered = _registered_change_type(paths, event_id)
+        if registered and registered != 'law_new':
+            raise ValueError('이미 수집한 개정입니다. 기존 이벤트 JSON을 사용하세요')
+        replay_id = make_event_id(self.name, path, f'amendment:{old.blob}:{new.blob}') if registered else event_id
+        store = EventStore(paths.home, paths.replay / 'amendments' / f'{parent[:8]}_{sha[:8]}', dated=False)
+        saved = store.base / f'{replay_id}.json'
+        if saved.is_file():
+            return paths.rel(saved)
+        build.emit(path, old, new, repo.info(sha))
+        if not build.events:
+            raise ValueError('지정한 커밋에서 내용 변경을 찾을 수 없습니다')
+        event = build.events[event_id]
+        event['event_id'] = replay_id
+        return paths.rel(store.write(event, build.diffs.get(event_id)))
+
     def _baseline(self, ctx: RunContext, repo: GitRepo, head: str) -> CollectResult:
-        build = _Builder(self, ctx, repo, {})
+        build = _Builder(self, ctx.paths, ctx.now, repo, {})
         found = build.scan(head)
         for v in found.values():
             build.save(v)
@@ -207,13 +264,15 @@ class LegalizeGitCollector:
 @dataclass
 class _Builder:
     collector: LegalizeGitCollector
-    ctx: RunContext
+    paths: Paths
+    now: Callable[[], datetime]
     repo: GitRepo
     current: dict[str, ItemState]
     replay: bool = False
     events: dict[str, dict] = field(default_factory=dict)
     diffs: dict[str, str] = field(default_factory=dict)
     touched: set[str] = field(default_factory=set)
+    baselines_added: int = 0
 
     @property
     def m(self):
@@ -228,14 +287,14 @@ class _Builder:
 
     def save(self, v: Version) -> str:
         """파일 내용 사본 data/files/<blob>.md (강제 푸시 뒤 비교·이벤트 old/new 파일)."""
-        path = self.ctx.paths.files / f'{v.blob}.md'
+        path = self.paths.files / f'{v.blob}.md'
         if not path.exists():
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text(v.text, encoding='utf-8')
-        return self.ctx.paths.rel(path)
+        return self.paths.rel(path)
 
     def from_item(self, item: ItemState) -> Version | None:
-        snapshot = self.ctx.paths.files / f'{item.version_key}.md'
+        snapshot = self.paths.files / f'{item.version_key}.md'
         try:
             text = snapshot.read_text(encoding='utf-8') if snapshot.exists() else self.repo.blob(item.version_key)
         except GitError:
@@ -295,11 +354,17 @@ class _Builder:
             for key, (old, new) in groups.items():
                 self.emit(key, old, new, info)
 
-    def compare_with_head(self, head: str, paths: set[str] | None = None) -> None:
+    def compare_with_head(
+        self, head: str, paths: set[str] | None = None, *, baseline_new_except: Collection[str] | None = None
+    ) -> None:
+        """Seed untracked files during a scope rescan, except paths recovered from a pause."""
         found = self.scan(head, paths)
         for key, new in found.items():
             item = self.current.get(key)
-            if item is None or item.version_key != new.blob:
+            if item is None and baseline_new_except is not None and key not in baseline_new_except:
+                self._track(key, new)
+                self.baselines_added += 1
+            elif item is None or item.version_key != new.blob:
                 self.emit(key, None, new, None)
         missing = [
             key
@@ -338,7 +403,7 @@ class _Builder:
         )
         event = {
             'event_id': event_id,
-            'detected_at': self.ctx.now().isoformat(timespec='seconds'),
+            'detected_at': self.now().isoformat(timespec='seconds'),
             'category': cats[0] if cats else None,
             'categories': cats,
             'source': self.collector.name,
@@ -365,7 +430,7 @@ class _Builder:
             event['replay'] = True
         extra = []
         if self.collector.enricher is not None:  # 법제처 원문·별표서식 (실패하면 예외 → 수집기 실패, 커서 그대로)
-            extra = self.collector.enricher.enrich(self.m.kind, event, old, new, self.ctx.paths)
+            extra = self.collector.enricher.enrich(self.m.kind, event, old, new, self.paths)
         self.events[event_id] = event
         if diff_text:
             self.diffs[event_id] = diff_text
@@ -397,6 +462,7 @@ class _Builder:
             diffs=self.diffs,
             items=[self.current[k] for k in sorted(self.touched) if k in self.current],
             removed=[(name, k) for k in sorted(self.touched) if k not in self.current],
+            baselines_added=self.baselines_added,
         )
 
 
@@ -404,6 +470,15 @@ def _attachments(old: Version | None, new: Version | None) -> dict:
     return frontmatter.attachment_changes(
         old.meta.get('첨부파일') if old else [], new.meta.get('첨부파일') if new else []
     )
+
+
+def _registered_change_type(paths: Paths, event_id: str) -> str | None:
+    if not paths.state_db.is_file():
+        return None
+    uri = paths.state_db.resolve().as_uri() + '?mode=ro'
+    with closing(sqlite3.connect(uri, uri=True)) as conn:
+        row = conn.execute('SELECT change_type FROM events WHERE event_id=?', (event_id,)).fetchone()
+    return row[0] if row else None
 
 
 def default_collectors(config: Config, enricher=None) -> list[LegalizeGitCollector]:

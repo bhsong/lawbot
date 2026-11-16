@@ -7,13 +7,16 @@ import argparse
 import json
 import logging
 import re
+import sqlite3
 import sys
 from dataclasses import dataclass, field, replace
+from datetime import datetime
 from pathlib import Path
 
 from law_monitor import secrets
-from law_monitor.app import AlreadyBootstrapped, BootstrapRequired, MissingSecret, Monitor
+from law_monitor.app import KST, AlreadyBootstrapped, BootstrapRequired, MissingSecret, Monitor
 from law_monitor.assembly import SOURCES, AssemblyClient
+from law_monitor.collectors.legalize_git import LawMatcher, LegalizeGitCollector
 from law_monitor.config import CONFIG_FILE, REPOS, ConfigError, load
 from law_monitor.gitrepo import GitError
 from law_monitor.lawgo import LawGoClient
@@ -41,6 +44,12 @@ def build_parser() -> argparse.ArgumentParser:
     r.add_argument('--repo', required=True, choices=REPOS)
     r.add_argument('--from', dest='since', required=True, help='시작 커밋 (이 커밋 다음부터)')
     r.add_argument('--to', dest='until', required=True, help='끝 커밋 (포함)')
+
+    a = sub.add_parser('replay-amendment', help='로컬 Legalize 파일의 단일 개정을 다시 만듦')
+    a.add_argument('--path', required=True, help='저장소 내 법령 파일 경로 (kr/법령명/파일.md)')
+    a.add_argument('--commit', required=True, help='개정 커밋 (부모와 비교)')
+    a.add_argument('--repo-path', type=Path, help='기존 로컬 클론 (기본: monitor home의 Legalize 클론)')
+    a.add_argument('--dry-run', action='store_true', help='변경 조문과 부칙 시행일만 출력')
 
     s = sub.add_parser('summarize', help='대기 이벤트를 모델로 요약 → data/summaries/YYYY-MM-DD.md')
     s.add_argument(
@@ -173,6 +182,8 @@ def main(argv: list[str] | None = None) -> int:
     root.addHandler(console)
     paths = Paths(args.home or default_home())
     try:
+        if args.command == 'replay-amendment' and args.dry_run:
+            return _replay_amendment(args, paths)
         with run_lock(paths):  # 같은 home의 다른 실행(launchd daily·수동)과 겹치지 않게
             return _run(args, paths)
     except (
@@ -184,6 +195,7 @@ def main(argv: list[str] | None = None) -> int:
         ValueError,
         GitError,
         OSError,
+        sqlite3.Error,
     ) as e:
         print(f'law-monitor: {e}', file=sys.stderr)
         if isinstance(e, AlreadyRunning) and getattr(args, 'source_plan', None):
@@ -193,7 +205,19 @@ def main(argv: list[str] | None = None) -> int:
         root.removeHandler(console)
 
 
+def _replay_amendment(args: argparse.Namespace, paths: Paths) -> int:
+    config = load(args.config)
+    collector = LegalizeGitCollector('legalize_law', 'legalize-kr', LawMatcher(config))
+    result = collector.replay_amendment(
+        paths, args.repo_path, args.path, args.commit, lambda: datetime.now(KST), dry_run=args.dry_run
+    )
+    print(json.dumps(result, ensure_ascii=False) if args.dry_run else result)
+    return 0
+
+
 def _run(args, paths: Paths) -> int:
+    if args.command == 'replay-amendment':
+        return _replay_amendment(args, paths)
     source_plan = getattr(args, 'source_plan', None)
     if getattr(args, 'only', None) and source_plan:
         raise ValueError('--only와 --source-plan은 함께 사용할 수 없습니다')

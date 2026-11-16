@@ -36,6 +36,20 @@ uv run law-monitor daily                  # launchd가 매일 실행: collect �
 - 마지막 줄이 실행 요약입니다: `collectors=2 ok=2 failed=0 events=1`. 같은 줄이 `logs/collector-YYYYMMDD.log` 끝에도 남습니다.
 - 종료 코드: 0 성공, 1 수집기 일부 실패(나머지는 저장됨), 2 실행 전 거부(설정 오류, bootstrap 전 collect, `LAW_OC` 없음, 다른 실행 중 등).
 - 같은 home(`data/`)으로 두 실행이 겹치지 않게 `data/.lock`에 잠금을 겁니다. launchd의 `daily`가 도는 동안 수동으로 실행하면 "다른 law-monitor 실행 중"으로 바로 끝납니다(종료 코드 2). 프로세스가 죽으면 잠금은 저절로 풀립니다.
+
+### 감시 기준점과 단일 개정 재생성
+
+감시 범위를 늘리면 커서 이후 커밋 이력을 처리하고, 범위 재탐색에서 처음 발견한 파일의 현재 blob을 `items`에 기록합니다. 실행 요약의 `기준점 추가 N개`에서 건수를 확인할 수 있습니다.
+
+`MONITOR_HOME`에는 실행 데이터 위치, `LAW_PATH`에는 Legalize 저장소 안의 `kr/법령명/파일.md` 경로, `COMMIT`에는 개정 커밋을 지정합니다. 부모와 해당 커밋 양쪽에 있는 같은 파일을 비교합니다.
+
+```sh
+uv run law-monitor --home "$MONITOR_HOME" replay-amendment --path "$LAW_PATH" --commit "$COMMIT" --dry-run
+```
+
+미리보기는 변경 조문과 추가 부칙에서 확인한 단일 절대 날짜·공포일 시행을 JSON으로 출력합니다. 해당 방식으로 확인할 수 없는 시행일은 날짜 목록을 비워 둡니다. 기존 로컬 Legalize 클론의 Git 객체를 사용하므로 다른 클론을 쓸 때는 `--repo-path`로 지정합니다. 필요한 객체가 없으면 오류로 종료합니다.
+
+이벤트 파일을 만들 때는 같은 명령에서 `--dry-run`을 뺍니다. 명령이 출력한 home 상대 경로의 JSON을 캘린더에서 명시적으로 import합니다. 기존 `law_new`와 새 blob이 겹치면 개정에 별도 ID를 부여하므로 기존 이벤트의 검토 결정이 유지됩니다. 운영에서 이벤트 생성과 import를 실행하려면 별도 사용자 승인이 필요합니다. [캘린더 import 절차](../law-calendar/README.md#저장된-모니터링-결과와-공개-검토)
 - `LAW_OC`는 환경변수가 먼저이고, 없으면 `services/monitor/.env`에서 읽습니다. `bootstrap`은 법제처를 부르지 않아 키 없이도 됩니다. 로그·이벤트·오류 메시지에는 `OC=***`로만 남습니다.
 - 법제처 호출이 실패하면(재시도 3회 뒤) 그 수집기가 실패로 끝나고 커서가 그대로라, 다음 실행에서 같은 변경을 다시 처리합니다. 원문이 빠진 이벤트는 저장하지 않습니다.
 - 한 수집기가 3번 연속 실패하면 `collector_failing` 이벤트가 한 번 생깁니다.

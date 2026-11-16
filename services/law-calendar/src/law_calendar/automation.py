@@ -25,8 +25,9 @@ from law_calendar.effective_scope import ARTICLE
 from law_calendar.source_addenda import borrowed_clause, earlier_own_addenda, own_addendum_matches
 from law_calendar.validation import civil_date, official_url
 
-RULE_VERSION = 'effective-date-v7'
+RULE_VERSION = 'effective-date-v8'
 REASONS = {
+    'new_document': '이전 조문 원문이 없어 신설 여부와 시행일을 검토해야 합니다.',
     'delegated': '대통령령 등 별도로 정하는 시행일을 확인해야 합니다.',
     'complex': '부칙의 예외·적용례·경과조치를 추가 확인해야 합니다.',
     'partial': '항·호별 시행일과 실제 변경 범위를 함께 확인해야 합니다.',
@@ -229,6 +230,8 @@ def resolve_changes(
     evidence: DateEvidence,
     new_document: str,
 ) -> list[DatedChange]:
+    if before is None:
+        return [DatedChange(article, before, after, None, 'new_document')]
     if evidence == (None, 'missing') and new_document:
         copied = borrowed_clause(new_document, raw['target']['law_name'], article, raw['dates']['promulgation'])
         if copied:
@@ -237,7 +240,7 @@ def resolve_changes(
     day, basis = resolve_date(raw, article, article_order, evidence)
     note = _note(schedule, article)
     whole = DatedChange(article, before, after, day, basis, note)
-    if basis != 'partial' or not schedule or before is None or after is None:
+    if basis != 'partial' or not schedule or after is None:
         return [whole]
 
     scopes = schedule.scopes_for(article)

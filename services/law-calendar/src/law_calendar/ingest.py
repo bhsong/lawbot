@@ -15,7 +15,7 @@ from law_calendar.db import write_database
 from law_calendar.import_failures import ImportInputError, import_failure
 from law_calendar.validation import civil_date, timestamp
 
-PARSER_VERSION = 'monitor-law-v7'
+PARSER_VERSION = 'monitor-law-v8'
 ARTICLE = re.compile(r'^#####\s*(제\d+조(?:의\d+)*)', re.MULTILINE)
 
 
