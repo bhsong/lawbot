@@ -39,7 +39,7 @@ export const api = {
   feedback: (turn_id: string, label: string, reason?: string) => post('/api/feedback', { turn_id, label, reason }),
 
   /** Stream one question; calls onEvent for each server event until the response ends. */
-  async chat(body: { question: string; model: string; format: string }, signal: AbortSignal, onEvent: (e: string, d: unknown) => void) {
+  async chat(body: { question: string; model: string; format: string; from_suggestion?: boolean }, signal: AbortSignal, onEvent: (e: string, d: unknown) => void) {
     const res = await post('/api/chat', body, signal)
     if (!res.body) return
     const parser = sseParser(onEvent)

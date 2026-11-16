@@ -524,7 +524,11 @@ uv run python -m lawbot.cache_admin set-mode on --db "$cache_db" --approval "$ap
 
 승인 사유를 비우면 감사에 `표시본 확인 승인`이 남습니다. 모드 전환과 철회에는 사유가 필요합니다. 추가 보호 CSV를 쓰는 환경에서는 `import-db`와 `set-mode`의 `--protected-csv`에 같은 파일을 지정합니다. 이전 정정 리비전의 원문을 확인할 수 없으면 재승인을 보류합니다.
 
-릴리스 판정은 마지막 승인 보호 지문을 유지합니다. 적재 대상의 보호 지문이 바뀌면 `off`에서 이월 판정과 현재 활성 질문을 확인합니다. 현재 namespace에 승인·활성 질문이 없을 때 `import-db`가 현재 보호 지문으로 새 질문을 승인할 수 있습니다. 추가 보호 CSV를 사용했다면 적재·모드 전환 때 `--protected-csv`로 포함합니다.
+QA 재적재로 보호 지문이 달라지면 캐시를 `off`로 두고 다음 명령을 실행합니다. 현재 namespace의 승인·활성 질문은 검토 대기로 이동하고, 새 보호 지문을 기록하며 이전 승인 ID를 비웁니다. 같은 지문에서 다시 실행하면 변경 건수는 0개입니다. 추가 보호 CSV는 보호 지문 변경·적재·모드 전환에 같은 파일을 지정합니다.
+
+```zsh
+uv run python -m lawbot.cache_admin rebaseline-protection --db "$cache_db" --corpus-db "$corpus_db" --reason "$reason"
+```
 
 한 번도 승인되지 않은 초안은 이전 namespace에 보존됩니다. 개발에서 새 릴리스의 검토를 재현할 때는 해당 개발 코퍼스로 `cache_admin seed`를 다시 실행합니다. 운영에서는 DB 적재 후 관리자 화면에서 신규 초안과 검토 대기 답변을 검수합니다. `on`에서 승인하면 보호 분할을 통과한 연결 질문에 즉시 반환됩니다.
 
@@ -559,6 +563,19 @@ uv run python -m lawbot.cache_admin import-db --from "$source_db" --db "$cache_d
 ```
 
 대상 코퍼스의 조문 해시, 계산 질문, 보호 분할과 리비전 충돌을 다시 확인합니다. 원천 DB와 원래 검수 ZIP의 SHA-256, 승인·제외 집계는 대상 DB 감사에 남습니다. 승인 범위가 늘어나면 이전 ID와 적재 영수증에서 새 승인 ID를 발급합니다. 같은 원천 백업·활성 코퍼스·보호 분할에서 재실행하면 저장된 집계가 반환됩니다. 운영에서는 관리자 화면의 검수·승인을 마친 뒤 최종 승인 ID로 `set-mode`를 실행합니다.
+
+### 검토된 비슷한 질문
+
+P07 재승인 후 다음 명령으로 생성할 질문 벡터와 임베딩 요청 수를 확인합니다. 벡터는 승인 질문을 정규화해 만들며, 모델 revision·질문 해시·최대 인코딩 길이가 맞는 벡터는 재사용합니다. 개발 val과 벡터 생성은 같은 사용자의 worktree 공용 잠금을 사용합니다.
+
+```zsh
+uv run python -m lawbot.cache_admin generate-question-vectors --db "$cache_db" --corpus-db "$corpus_db" --dry-run
+uv run python -m lawbot.cache_admin generate-question-vectors --db "$cache_db" --corpus-db "$corpus_db" --approved-requests "$requests" --max-runtime-seconds "$seconds"
+```
+
+둘째 명령은 표시된 요청 수를 승인받은 뒤 실행합니다. 배치 상한은 16이며 한 번에 한 요청씩 실행합니다. 개발 웹앱 시험과 운영 반영 승인을 거친 뒤, `set-mode on` 단계에서 운영 웹앱 `.env`에 `LAWBOT_SUGGESTIONS_TAU=0.80`(초기값)을 설정하고 최종 승인 ID로 캐시를 켭니다. 웹앱 시작 로그에서 승인 후보와 벡터 누락 수를 확인합니다. 운영 요청 로그의 추천 수와 `suggestion_click`을 보고 τ를 조정합니다.
+
+개발에서는 `python -m lawbot_tools.eval_suggestions --help`로 고정 val 도구의 인자를 확인합니다. `--dry-run`은 전체와 v6 학습 문장 제외 집합의 질의·요청 수를 출력합니다. 승인 실행에서 `--save-vectors`는 질의 ID별 벡터와 메타데이터를 저장하고 `--out`은 두 집합의 τ별 표를 씁니다. 새 출력 파일을 개발 `results/suggestions-val/` 같은 `results/` 아래에 지정합니다. `--load-vectors`와 새 `--out`으로 다시 실행하면 모델 revision과 저장 정보를 대조하고 임베딩 없이 곡선을 계산합니다. 운영 명령은 SQLite 백업과 현재 코퍼스를 사용합니다.
 
 ### CSV·JSONL 이관과 대조
 

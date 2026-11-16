@@ -49,7 +49,7 @@ def read_records(archive: ZipFile, name: str, fields):
 
 
 @contextmanager
-def verified_zip(path: Path, expected: str):
+def verified_zip(path: Path, expected: str, kind='pass'):
     with path.open('rb') as stream:
         if file_digest(stream, 'sha256').hexdigest() != expected:
             raise ValueError('handoff ZIP SHA-256 mismatch')
@@ -61,15 +61,17 @@ def verified_zip(path: Path, expected: str):
         with archive:
             manifest = require_record(
                 json.loads(archive_member(archive, 'manifest.json')),
-                ('package_kind', 'approval_status', 'exact_enabled', 'question_pairs', 'answer_units_used_by_pairs'),
+                ('package_kind', 'approval_status', 'exact_enabled', 'question_pairs'),
             )
             if (
-                manifest['package_kind'] != 'pass'
+                manifest['package_kind'] != kind
                 or manifest['approval_status'] != 'not_approved'
                 or manifest['exact_enabled'] is not False
                 or len(archive.namelist()) != len(set(archive.namelist()))
             ):
                 raise ValueError('invalid handoff manifest')
+            if kind == 'pass':
+                required_value(manifest, 'answer_units_used_by_pairs')
             yield archive, manifest
 
 

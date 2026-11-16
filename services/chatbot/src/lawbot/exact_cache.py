@@ -16,6 +16,7 @@ MODEL = 'pro'
 FORMAT = 'concise'
 PROFILE = 'v5'
 DISPLAY_VERSION = 'exact-display-v2'
+MAX_QUESTION = 2000
 
 
 def normalize(question: str) -> str:
