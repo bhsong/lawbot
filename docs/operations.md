@@ -575,7 +575,7 @@ uv run python -m lawbot.cache_admin generate-question-vectors --db "$cache_db" -
 
 둘째 명령은 표시된 요청 수를 승인받은 뒤 실행합니다. 배치 상한은 16이며 한 번에 한 요청씩 실행합니다. 검증셋에서 선택한 `LAWBOT_SUGGESTIONS_TAU`를 설정하고 최종 승인 ID로 `set-mode on`을 실행하면 추천을 표시합니다. 웹앱의 시작 로그에서 벡터가 있는 승인 후보 수와 벡터가 없는 수를 확인합니다.
 
-개발에서는 `python -m lawbot_tools.eval_suggestions --help`로 고정 val 도구의 인자를 확인합니다. `--dry-run`은 전체와 v6 학습 문장 제외 집합의 질의·요청 수를 출력합니다. 승인 후 `--out`에 두 집합의 τ별 집계 표를 작성하며 학습 문장 제외 표에서 τ를 고릅니다. 운영 명령은 SQLite 백업과 현재 코퍼스를 사용합니다.
+개발에서는 `python -m lawbot_tools.eval_suggestions --help`로 고정 val 도구의 인자를 확인합니다. `--dry-run`은 전체와 v6 학습 문장 제외 집합의 질의·요청 수를 출력합니다. 승인 실행에서 `--save-vectors`는 질의 ID별 벡터와 메타데이터를 저장하고 `--out`은 두 집합의 τ별 표를 씁니다. 새 출력 파일을 개발 `results/suggestions-val/` 같은 `results/` 아래에 지정합니다. `--load-vectors`와 새 `--out`으로 다시 실행하면 모델 revision과 저장 정보를 대조하고 임베딩 없이 곡선을 계산합니다. 운영 명령은 SQLite 백업과 현재 코퍼스를 사용합니다.
 
 ### CSV·JSONL 이관과 대조
 

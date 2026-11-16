@@ -3,6 +3,10 @@
 import argparse
 import hashlib
 from collections import Counter, defaultdict
+from contextlib import nullcontext
+from zipfile import BadZipFile
+
+import numpy as np
 
 from lawbot import envfile, settings
 from lawbot.api_client import ModelServerClient
@@ -14,7 +18,7 @@ from lawbot.cache_store import translate_sqlite_errors
 from lawbot.calc_gate import is_calculation_question
 from lawbot.db.connection import check_db_path
 from lawbot.exact_cache import canonical, digest, normalize
-from lawbot.paths import DATA
+from lawbot.paths import DATA, RESULTS
 from lawbot.question_vectors import (
     current_revision,
     embedding_budget,
@@ -163,6 +167,49 @@ def write_curve(path, summary, curves, chosen):
             stream.write('\n')
 
 
+def result_path(value, *, reading=False):
+    path = development_path(value)
+    if not path.is_relative_to(RESULTS) or path == RESULTS:
+        raise ValueError('val 벡터와 곡선은 개발 results/ 아래에 지정하세요.')
+    if reading:
+        if not path.is_file():
+            raise ValueError('읽을 val 벡터 파일이 없습니다.')
+    elif path.exists() or not path.parent.is_dir():
+        raise ValueError('기존 results/ 디렉터리 아래에 새 파일 이름을 지정하세요.')
+    return path
+
+
+def save_val_vectors(path, queries, vectors, metadata):
+    with path.open('xb') as stream:
+        np.savez(stream, query_ids=np.asarray(list(queries)), vectors=np.stack(vectors), **metadata)
+
+
+def load_val_vectors(path, queries, metadata):
+    archive = np.load(path, allow_pickle=False)
+    if not isinstance(archive, np.lib.npyio.NpzFile):
+        raise ValueError('저장한 val 벡터 파일의 형식이 올바르지 않습니다.')
+    with archive:
+        if any(
+            key not in archive or archive[key].shape != () or archive[key].item() != value
+            for key, value in metadata.items()
+        ):
+            raise ValueError('저장한 val 벡터의 모델·revision·인코딩 길이 또는 라벨 SHA-256이 일치하지 않습니다.')
+        if 'query_ids' not in archive or 'vectors' not in archive:
+            raise ValueError('저장한 val 벡터 파일에 ID 또는 벡터가 없습니다.')
+        ids, vectors = archive['query_ids'], archive['vectors']
+    if ids.shape != (len(queries),) or ids.dtype.kind != 'U' or set(ids) != queries.keys():
+        raise ValueError('저장한 val 벡터와 현재 질의 ID 집합이 일치하지 않습니다.')
+    if (
+        vectors.ndim != 2
+        or vectors.shape[0] != len(ids)
+        or vectors.dtype != np.float32
+        or not np.isfinite(vectors).all()
+    ):
+        raise ValueError('저장한 val 벡터 배열의 크기 또는 값이 올바르지 않습니다.')
+    by_id = dict(zip(ids, vectors, strict=True))
+    return [by_id[uid] for uid in queries]
+
+
 def run(args):
     corpus = check_db_path(development_path(args.corpus_db))
     cache = check_db_path(development_path(args.cache_db))
@@ -170,9 +217,11 @@ def run(args):
         raise ValueError('코퍼스와 캐시에는 별도 개발 DB 사본을 지정하세요.')
     if not args.dry_run and not args.out:
         raise ValueError('결과를 기록할 새 --out 경로가 필요합니다.')
-    output = development_path(args.out) if args.out else None
-    if output is not None and output.exists():
-        raise ValueError('결과를 기록할 새 --out 경로가 필요합니다.')
+    output = result_path(args.out) if args.out else None
+    save_path = result_path(args.save_vectors) if args.save_vectors else None
+    load_path = result_path(args.load_vectors, reading=True) if args.load_vectors else None
+    if save_path is not None and save_path == output:
+        raise ValueError('val 벡터와 곡선에는 서로 다른 파일 이름을 지정하세요.')
     taus = sorted(set(args.tau or [i / 100 for i in range(-100, 101)]))
     if any(not -1 <= tau <= 1 for tau in taus):
         raise ValueError('τ는 -1~1 사이여야 합니다.')
@@ -184,14 +233,14 @@ def run(args):
         read_deferred(development_path(args.deferred_bundle)),
         ctx.protection,
     )
-    requests = request_count(len(queries))
+    requests = 0 if load_path else request_count(len(queries))
     upper = maximum_labeled(subset, labels, negative, set(answers.values()))
     summary = {
         'val_queries': len(queries),
         'excluded_queries': excluded,
         'embedding_requests': requests,
         'without_same_text_queries': len(subset),
-        'without_same_text_requests_if_run_alone': request_count(len(subset)),
+        'without_same_text_requests_if_run_alone': 0 if load_path else request_count(len(subset)),
         'without_same_text_max_labeled': upper,
         'minimum_labeled': MIN_LABELED,
         'can_meet_minimum_labeled': upper >= MIN_LABELED,
@@ -204,8 +253,18 @@ def run(args):
     model = cfg.profile.emb_model
     client = ModelServerClient(cfg.model_server, cfg.model_token)
     try:
-        with embedding_budget(requests, args.approved_requests, args.max_runtime_seconds) as deadline:
-            revision = current_revision(client, model, min(5, seconds_remaining(deadline)))
+        with (
+            nullcontext() if load_path else embedding_budget(requests, args.approved_requests, args.max_runtime_seconds)
+        ) as deadline:
+            revision = current_revision(client, model, 5 if deadline is None else min(5, seconds_remaining(deadline)))
+            metadata = {
+                'embedding_model': model,
+                'model_revision': revision,
+                'max_seq_length': cfg.profile.max_seq,
+                'labels_sha256': LABELS_SHA256,
+            }
+            if load_path:
+                vectors = load_val_vectors(load_path, queries, metadata)
             control, approved, stored = question_catalog(
                 cache, ctx.snapshot, model, revision, cfg.profile.max_seq, timeout=5
             )
@@ -223,9 +282,12 @@ def run(args):
                     f'현재 승인 후보의 확정 라벨 상한이 {upper}건입니다. 최소 {MIN_LABELED}건이 필요합니다.'
                 )
             candidates = candidates_with_vectors(approved, stored)
-            vectors = encode_questions(client, cfg, queries.values(), deadline)
-            if current_revision(client, model, min(5, seconds_remaining(deadline))) != revision:
-                raise ValueError('val 도중 임베딩 모델 revision이 바뀌었습니다.')
+            if not load_path:
+                vectors = encode_questions(client, cfg, queries.values(), deadline)
+                if current_revision(client, model, min(5, seconds_remaining(deadline))) != revision:
+                    raise ValueError('val 도중 임베딩 모델 revision이 바뀌었습니다.')
+                if save_path:
+                    save_val_vectors(save_path, queries, vectors, metadata)
         ctx.check_import()
         scored = {}
         for (uid, question), vector in zip(queries.items(), vectors, strict=True):
@@ -251,6 +313,9 @@ def main(argv=None):
         parser.add_argument(f'--{flag}', required=True)
     parser.add_argument('--labels', default=DATA / 'v5' / 'suggestion_val_ids.jsonl')
     parser.add_argument('--out')
+    vector_files = parser.add_mutually_exclusive_group()
+    vector_files.add_argument('--save-vectors', help='Save query vectors to a new file under development results/.')
+    vector_files.add_argument('--load-vectors', help='Recompute curves from saved vectors without embedding requests.')
     parser.add_argument('--dry-run', action='store_true')
     parser.add_argument('--tau', type=float, action='append')
     parser.add_argument('--approved-requests', type=int)
@@ -260,7 +325,7 @@ def main(argv=None):
         envfile.load()
         with translate_sqlite_errors():
             result = run(args)
-    except (ValueError, OSError, RuntimeError) as exc:
+    except (ValueError, OSError, RuntimeError, BadZipFile) as exc:
         parser.exit(2, f'추천 val 실패: {exc}\n')
     print(canonical(result))
 
