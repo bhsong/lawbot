@@ -80,7 +80,7 @@ def test_import_auto_publishes_dates_but_holds_unresolved_articles(workflow):
         assert change['comparable'] is False
         assert change['status'] == '시행일 자동 확인 · 비교 미확인'
         held = client.get('/api/law-holds').json()
-        assert {item['article'] for item in held['items']} == {'제2조', '제3조'}
+        assert {item['article'] for item in held['items']} == {'제2조'}
         assert set(held['items'][0]) == {'id', 'lawName', 'article', 'reason', 'sourceUrl', 'collectedAt'}
         assert client.get('/api/law-calendar?month=2026-10').json()['days'] == []
         assert client.post('/api/law-holds', json={}).status_code == 405
@@ -90,28 +90,24 @@ def test_import_auto_publishes_dates_but_holds_unresolved_articles(workflow):
     assert import_files(db, home, [path])['unchanged'] == 1
 
 
-def test_new_law_articles_wait_for_human_review_even_with_clear_addendum(workflow):
+@pytest.mark.parametrize('change_type', ['law_new', 'law_amended'])
+def test_articles_without_before_are_auto_published_with_clear_addendum(workflow, change_type):
     db, home, path, event = workflow
-    event['change_type'] = 'law_new'
-    event['old'] = None
+    event['change_type'] = change_type
+    if change_type == 'law_new':
+        event['old'] = None
     event['diff']['chunks'] = [{'article': '제1조'}, {'article': '제3조'}]
     event['context']['lawgo'] = {}
     event['context']['addenda_added'] = ['제1조(시행일) 이 법은 2026년 11월 5일부터 시행한다.']
     path.write_text(json.dumps(event), encoding='utf-8')
-    event_id = import_one(workflow)
+    import_one(workflow)
     with sqlite3.connect(db) as conn:
-        assert conn.execute('SELECT review_state FROM change_events').fetchone() == ('pending',)
-        assert conn.execute('SELECT DISTINCT reason,rule_version FROM held_changes').fetchall() == [
-            ('new_document', automation.RULE_VERSION)
-        ]
+        assert conn.execute('SELECT review_state FROM change_events').fetchone() == ('approved',)
+        assert conn.execute("SELECT before_text FROM article_changes WHERE article='제3조'").fetchone() == (None,)
     with TestClient(create_app(db)) as client:
-        assert client.get('/api/law-events?month=2026-11').json()['total'] == 0
-        held = client.get('/api/law-holds').json()['items']
-        assert {item['article'] for item in held} == {'제1조', '제3조'}
-        assert {item['reason'] for item in held} == {automation.REASONS['new_document']}
-
-        review(db, approval(db, event_id), reviewer='fixture')
-        assert client.get('/api/law-events?month=2026-11').json()['total'] == 2
+        visible = client.get('/api/law-events?date=2026-11-05').json()['items']
+        assert {item['article'] for item in visible} == {'제1조', '제3조'}
+        assert not client.get('/api/law-holds').json()['items']
 
 
 def test_holds_are_independent_of_calendar_dates_and_hide_private_or_withdrawn_records(workflow):
@@ -171,8 +167,8 @@ def test_source_reclassification_moves_between_calendar_and_holds(workflow):
         event['context']['addenda_added'] = ['제1조(시행일) 이 법은 2026년 11월 5일부터 시행한다.']
         path.write_text(json.dumps(event), encoding='utf-8')
         import_files(db, home, [path])
-        assert client.get('/api/law-holds').json()['total'] == 1
-        assert client.get('/api/law-events?month=2026-11').json()['total'] == 2
+        assert client.get('/api/law-holds').json()['total'] == 0
+        assert client.get('/api/law-events?month=2026-11').json()['total'] == 3
         event['context']['addenda_added'] = ['제1조(시행일) 이 법은 대통령령으로 정하는 날부터 시행한다.']
         path.write_text(json.dumps(event), encoding='utf-8')
         import_files(db, home, [path])
@@ -247,8 +243,8 @@ def test_rule_upgrade_rechecks_automatic_decisions(workflow, monkeypatch):
     assert import_files(db, home, [path]) == {'imported': 1, 'unchanged': 0, 'failed': 0}
     assert import_files(db, home, [path]) == {'imported': 0, 'unchanged': 1, 'failed': 0}
     with TestClient(create_app(db)) as client:
-        assert client.get('/api/law-events?date=2026-11-05').json()['total'] == 2
-        assert client.get('/api/law-holds').json()['total'] == 1
+        assert client.get('/api/law-events?date=2026-11-05').json()['total'] == 3
+        assert client.get('/api/law-holds').json()['total'] == 0
 
 
 @pytest.mark.parametrize('decision', ['approve', 'reject', 'withdraw'])

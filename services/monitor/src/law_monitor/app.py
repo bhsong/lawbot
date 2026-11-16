@@ -34,6 +34,10 @@ FAILING_AFTER = 3
 log = logging.getLogger('law_monitor')
 
 
+def _baseline_suffix(count: int) -> str:
+    return f' · 기준점 추가 {count}개' if count else ''
+
+
 class BootstrapRequired(RuntimeError):
     pass
 
@@ -255,9 +259,7 @@ class Monitor:
                 for name, item in details['collectors'].items()
                 if item['status'] != 'ok'
             }
-            line = f'collectors resumed={run_id}'
-            if count := details.get('baselines_added'):
-                line += f' · 기준점 추가 {count}개'
+            line = f'collectors resumed={run_id}' + _baseline_suffix(details.get('baselines_added', 0))
             return RunSummary(run_id, 'normal', failed=failed, line=line)
         for collector in chosen:
             if collector.name == 'legalize_law' and isinstance(collector, LegalizeGitCollector):
@@ -339,8 +341,8 @@ class Monitor:
             if managed_id:
                 details['managed'] = True
             if baselines_added:
-                summary.line += f' · 기준점 추가 {baselines_added}개'
                 details['baselines_added'] = baselines_added
+            summary.line += _baseline_suffix(baselines_added)
             status = 'ok' if not summary.failed else ('partial' if summary.ok else 'failed')
             finished = self.now().isoformat(timespec='seconds')
             self.state.apply(

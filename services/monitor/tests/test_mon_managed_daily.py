@@ -138,6 +138,33 @@ def test_managed_scope_expansion_records_baseline_then_collects_real_amendment(t
     assert (new['change_type'], new['context']['commit']['sha'], new['old']) == ('law_new', new_sha, None)
 
 
+def test_managed_scope_expansion_seeds_only_new_paths_after_force_push(tmp_path):
+    repo = SourceRepo(tmp_path / 'source')
+    decree = 'kr/근로기준법/시행령.md'
+    tracked_rule = 'kr/근로기준법/시행규칙.md'
+    original = law_md('근로기준법', {'제1조': '기존 조문'})
+    repo.commit({LAW_PATH: original, decree: law_md('근로기준법 시행령', {'제1조': '기존 시행령'})}, 'base')
+    monitor = make_monitor(tmp_path, make_config(repo))
+    previous = [LAW_PATH, tracked_rule]
+    monitor.collectors[0].matcher.selected_paths = frozenset(previous)
+    monitor.bootstrap(only='legalize_law')
+    monitor.collect_managed('daily-before', ['legalize_law'], previous)
+    repo.commit(
+        {LAW_PATH: law_md('근로기준법', {'제1조': '개정'}), tracked_rule: law_md('시행규칙', {'제1조': '제정'})},
+        'change',
+    )
+    repo.rewrite_history()
+
+    result = monitor.collect_managed('daily-rewritten', ['legalize_law'], [*previous, decree])
+    assert '기준점 추가 1개' in result.line
+    assert {event['target']['item_id']: event['change_type'] for event in result.events} == {
+        LAW_PATH: 'law_amended',
+        tracked_rule: 'law_new',
+    }
+    assert all(event['context']['fallback'] == 'content_compare' for event in result.events)
+    assert monitor.state.items('legalize_law')[decree].version_key == git(repo.path, 'rev-parse', f'HEAD:{decree}')
+
+
 def test_managed_plan_cannot_select_the_git_collector_with_article_input_off(tmp_path):
     plan = tmp_path / 'plan.json'
     plan.write_text(

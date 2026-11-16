@@ -5,6 +5,7 @@ import json
 import re
 import sqlite3
 import uuid
+from collections.abc import Iterator
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -15,7 +16,7 @@ from law_calendar.db import write_database
 from law_calendar.import_failures import ImportInputError, import_failure
 from law_calendar.validation import civil_date, timestamp
 
-PARSER_VERSION = 'monitor-law-v8'
+PARSER_VERSION = 'monitor-law-v7'
 ARTICLE = re.compile(r'^#####\s*(제\d+조(?:의\d+)*)', re.MULTILINE)
 
 
@@ -85,21 +86,16 @@ def article_texts(text: str) -> dict[str, str]:
     return result
 
 
-def load_event(home: Path, path: Path):
-    raw = inside(home, path).read_bytes().decode('utf-8')
-    event = MonitorEvent.model_validate_json(raw)
+def validate_event(event: MonitorEvent) -> None:
     if event.source != 'legalize_law' or event.change_type not in {'law_new', 'law_amended', 'law_repealed'}:
         raise ImportInputError('Unsupported monitor event; not a law article candidate')
     timestamp(event.detected_at)
     if not event.target.law_id.strip() or not event.target.law_name.strip():
         raise ImportInputError('A stable law ID and name are required')
-    texts = {}
-    articles = {}
-    for side in ('old', 'new'):
-        ref = getattr(event, side)
-        if ref is not None:
-            texts[side] = inside(home, home / ref.file).read_bytes().decode('utf-8')
-            articles[side] = article_texts(texts[side])
+
+
+def changed_articles(event: MonitorEvent, texts: dict[str, str]) -> tuple[dict[str, dict[str, str]], list[str]]:
+    articles = {side: article_texts(text) for side, text in texts.items()}
     labels = [c.article for c in event.diff.chunks if ARTICLE.fullmatch('##### ' + c.article)]
     labels = list(dict.fromkeys(labels))
     if not labels or not any(texts.values()):
@@ -108,6 +104,19 @@ def load_event(home: Path, path: Path):
         if not any(label in part for part in articles.values()):
             raise ImportInputError('Changed article absent from saved versions')
     labels = [label for label in labels if articles.get('old', {}).get(label) != articles.get('new', {}).get(label)]
+    return articles, labels
+
+
+def load_event(home: Path, path: Path):
+    raw = inside(home, path).read_bytes().decode('utf-8')
+    event = MonitorEvent.model_validate_json(raw)
+    validate_event(event)
+    texts = {
+        side: inside(home, home / ref.file).read_bytes().decode('utf-8')
+        for side, ref in (('old', event.old), ('new', event.new))
+        if ref is not None
+    }
+    articles, labels = changed_articles(event, texts)
     files_json = json.dumps(texts, ensure_ascii=False, sort_keys=True)
     snapshot_id = digest(PARSER_VERSION + raw + files_json)
     return event, raw, texts, articles, labels, files_json, snapshot_id
@@ -122,6 +131,39 @@ def pending_backfill_cutoff(raw: dict) -> tuple[str, set[str]]:
     if not isinstance(as_of, str) or not isinstance(candidates, dict):
         return '', set()
     return civil_date(as_of), set(candidates)
+
+
+def dated_articles(
+    raw: dict, new_document: str, articles: dict[str, dict[str, str]], labels: list[str]
+) -> Iterator[tuple[str, DatedChange]]:
+    article_order = tuple(articles.get('new', {}))
+    evidence = read_schedule(raw, article_order, new_document=new_document)
+    cutoff, pending_labels = pending_backfill_cutoff(raw)
+    for label in labels:
+        before, after = (articles.get(side, {}).get(label) for side in ('old', 'new'))
+        dated = resolve_changes(raw, label, before, after, article_order, evidence, new_document)
+        if label in pending_labels:
+            dated = [change for change in dated if change.day is None or change.day > cutoff]
+            if not dated:
+                dated = [DatedChange(label, before, after, None, 'conflict')]
+        for change in dated:
+            yield label, change
+
+
+def preview_changes(raw: dict, texts: dict[str, str]) -> list[dict]:
+    """Preview the automatic decisions the importer would apply to this source."""
+    event = MonitorEvent.model_validate(raw)
+    validate_event(event)
+    articles, labels = changed_articles(event, texts)
+    return [
+        {
+            'article': change.article,
+            'effective_on': change.day,
+            'decision': 'auto_publish' if change.day else 'hold',
+            'basis': change.basis,
+        }
+        for _, change in dated_articles(raw, texts.get('new', ''), articles, labels)
+    ]
 
 
 def import_event(database: Path, home: Path, path: Path) -> tuple[bool, str]:
@@ -203,39 +245,29 @@ def import_event(database: Path, home: Path, path: Path) -> tuple[bool, str]:
                 )
                 version_ids[side, label] = article_id
         raw_event = json.loads(raw)
-        article_order = tuple(articles.get('new', {}))
-        evidence = read_schedule(raw_event, article_order, new_document=texts.get('new', ''))
-        cutoff, pending_labels = pending_backfill_cutoff(raw_event)
         changes = {}
-        for label in labels:
-            before, after = (articles.get(side, {}).get(label) for side in ('old', 'new'))
-            dated = resolve_changes(raw_event, label, before, after, article_order, evidence, texts.get('new', ''))
-            if label in pending_labels:
-                dated = [change for change in dated if change.day is None or change.day > cutoff]
-                if not dated:
-                    dated = [DatedChange(label, before, after, None, 'conflict')]
-            for change in dated:
-                change_id = digest(event_id + ':' + change.article)
-                changes[change_id] = change
-                conn.execute(
-                    """INSERT INTO article_changes(id,event_id,article,summary,before_text,after_text)
-                    VALUES (?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET effective_on=NULL,summary=excluded.summary,
-                    before_text=excluded.before_text,after_text=excluded.after_text,comparable=0,
-                    review_state='pending',verified_at=NULL""",
-                    (
-                        change_id,
-                        event_id,
-                        change.article,
-                        f'{change.article} 변경 후보 · 원문·시행일 확인 필요',
-                        change.before,
-                        change.after,
-                    ),
-                )
-                conn.execute(
-                    'INSERT INTO change_versions VALUES (?,?,?,?) ON CONFLICT(change_id) DO UPDATE SET '
-                    'snapshot_id=excluded.snapshot_id,before_version_id=excluded.before_version_id,after_version_id=excluded.after_version_id',
-                    (change_id, snapshot_id, version_ids.get(('old', label)), version_ids.get(('new', label))),
-                )
+        for label, change in dated_articles(raw_event, texts.get('new', ''), articles, labels):
+            change_id = digest(event_id + ':' + change.article)
+            changes[change_id] = change
+            conn.execute(
+                """INSERT INTO article_changes(id,event_id,article,summary,before_text,after_text)
+                VALUES (?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET effective_on=NULL,summary=excluded.summary,
+                before_text=excluded.before_text,after_text=excluded.after_text,comparable=0,
+                review_state='pending',verified_at=NULL""",
+                (
+                    change_id,
+                    event_id,
+                    change.article,
+                    f'{change.article} 변경 후보 · 원문·시행일 확인 필요',
+                    change.before,
+                    change.after,
+                ),
+            )
+            conn.execute(
+                'INSERT INTO change_versions VALUES (?,?,?,?) ON CONFLICT(change_id) DO UPDATE SET '
+                'snapshot_id=excluded.snapshot_id,before_version_id=excluded.before_version_id,after_version_id=excluded.after_version_id',
+                (change_id, snapshot_id, version_ids.get(('old', label)), version_ids.get(('new', label))),
+            )
         if identity and identity['review_state'] in ('rejected', 'withdrawn'):
             conn.execute('UPDATE change_events SET review_state=? WHERE id=?', (identity['review_state'], event_id))
             conn.execute(

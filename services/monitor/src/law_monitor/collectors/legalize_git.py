@@ -9,9 +9,7 @@
 import difflib
 import json
 import logging
-import sqlite3
 from collections.abc import Callable, Collection
-from contextlib import closing
 from dataclasses import asdict, dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -167,9 +165,11 @@ class LegalizeGitCollector:
                 self.repo_key,
                 (cursor or '')[:12],
             )
-            build.compare_with_head(head)
-        if rescan and on_history:
-            build.compare_with_head(head, baseline_new_except=recovered.keys())
+        if rescan or not on_history:
+            baseline_exclusions = None
+            if rescan and previous != '*':
+                baseline_exclusions = set((previous or '').splitlines()) | recovered.keys()
+            build.compare_with_head(head, baseline_new_except=baseline_exclusions)
         result = build.result()
         result.cursors = {self.repo_key: head}
         if rescan and scope is not None:
@@ -204,7 +204,7 @@ class LegalizeGitCollector:
         now: Callable[[], datetime],
         *,
         dry_run: bool,
-    ) -> dict | str:
+    ) -> str | tuple[dict, dict[str, str]]:
         """Replay a single amendment from local Git objects without advancing monitor state."""
         if not self.matcher.prefilter(path):
             raise ValueError('설정에 포함된 법령 파일 경로를 지정하세요')
@@ -212,39 +212,26 @@ class LegalizeGitCollector:
         sha = repo.resolve(commit)
         parent = repo.resolve(f'{sha}^')
         changes = repo.changes(sha, [f':(literal){path}'])
-        build = _Builder(self, paths, now, repo, {}, replay=True)
+        build = _Builder(self, paths, now, repo, {}, replay=True, persist_files=not dry_run)
         if len(changes) != 1 or changes[0].old_path != path or changes[0].new_path != path:
             raise ValueError('지정한 커밋에서 기존 파일의 개정을 찾을 수 없습니다')
         change = changes[0]
         old, new = build.version(path, change.old_blob), build.version(path, change.new_blob)
         if old is None or new is None or self.matcher.change_type(old, new) != 'law_amended':
             raise ValueError('지정한 커밋에서 기존 파일의 개정을 찾을 수 없습니다')
-        if dry_run:
-            return {
-                'articles': [
-                    chunk['article']
-                    for chunk in articles.chunk_diffs(old.body, new.body)
-                    if articles.ARTICLE.fullmatch(f'##### {chunk["article"]}')
-                ],
-                'addenda_effective_dates': articles.preview_effective_dates(
-                    old.body, new.body, str(new.meta.get('공포일자') or '')
-                ),
-            }
-        event_id = make_event_id(self.name, path, new.blob)
-        registered = _registered_change_type(paths, event_id)
-        if registered and registered != 'law_new':
-            raise ValueError('이미 수집한 개정입니다. 기존 이벤트 JSON을 사용하세요')
-        replay_id = make_event_id(self.name, path, f'amendment:{old.blob}:{new.blob}') if registered else event_id
+        replay_id = make_event_id(self.name, path, f'amendment:{old.blob}:{new.blob}')
         store = EventStore(paths.home, paths.replay / 'amendments' / f'{parent[:8]}_{sha[:8]}', dated=False)
         saved = store.base / f'{replay_id}.json'
+        texts = {'old': old.text, 'new': new.text}
         if saved.is_file():
-            return paths.rel(saved)
-        build.emit(path, old, new, repo.info(sha))
-        if not build.events:
+            return (json.loads(saved.read_text(encoding='utf-8')), texts) if dry_run else paths.rel(saved)
+        build.emit(path, old, new, repo.info(sha), event_id=replay_id)
+        event = build.events.get(replay_id)
+        if event is None:
             raise ValueError('지정한 커밋에서 내용 변경을 찾을 수 없습니다')
-        event = build.events[event_id]
-        event['event_id'] = replay_id
-        return paths.rel(store.write(event, build.diffs.get(event_id)))
+        if dry_run:
+            return event, texts
+        return paths.rel(store.write(event, build.diffs.get(replay_id)))
 
     def _baseline(self, ctx: RunContext, repo: GitRepo, head: str) -> CollectResult:
         build = _Builder(self, ctx.paths, ctx.now, repo, {})
@@ -269,6 +256,7 @@ class _Builder:
     repo: GitRepo
     current: dict[str, ItemState]
     replay: bool = False
+    persist_files: bool = True
     events: dict[str, dict] = field(default_factory=dict)
     diffs: dict[str, str] = field(default_factory=dict)
     touched: set[str] = field(default_factory=set)
@@ -288,7 +276,7 @@ class _Builder:
     def save(self, v: Version) -> str:
         """파일 내용 사본 data/files/<blob>.md (강제 푸시 뒤 비교·이벤트 old/new 파일)."""
         path = self.paths.files / f'{v.blob}.md'
-        if not path.exists():
+        if self.persist_files and not path.exists():
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text(v.text, encoding='utf-8')
         return self.paths.rel(path)
@@ -374,7 +362,15 @@ class _Builder:
         for key in missing:
             self.emit(key, None, None, None)
 
-    def emit(self, key: str, old: Version | None, new: Version | None, commit: CommitInfo | None) -> None:
+    def emit(
+        self,
+        key: str,
+        old: Version | None,
+        new: Version | None,
+        commit: CommitInfo | None,
+        *,
+        event_id: str | None = None,
+    ) -> None:
         if old is None and key in self.current:
             old = self.from_item(self.current[key])
         if old is None and new is None:
@@ -390,7 +386,7 @@ class _Builder:
         assert ref is not None  # 둘 다 None이면 위에서 끝남 (new가 없으면 ref는 old)
         cats = self.m.categories(ref)
         version_key = new.blob if new else f'removed:{ref.blob}'
-        event_id = make_event_id(self.collector.name, key, version_key)
+        event_id = event_id or make_event_id(self.collector.name, key, version_key)
         old_body, new_body = (old.body if old else ''), (new.body if new else '')
         diff_text = '\n'.join(
             difflib.unified_diff(
@@ -430,7 +426,7 @@ class _Builder:
             event['replay'] = True
         extra = []
         if self.collector.enricher is not None:  # 법제처 원문·별표서식 (실패하면 예외 → 수집기 실패, 커서 그대로)
-            extra = self.collector.enricher.enrich(self.m.kind, event, old, new, self.paths)
+            extra = self.collector.enricher.enrich(self.m.kind, event, old, new, self.paths, persist=self.persist_files)
         self.events[event_id] = event
         if diff_text:
             self.diffs[event_id] = diff_text
@@ -470,15 +466,6 @@ def _attachments(old: Version | None, new: Version | None) -> dict:
     return frontmatter.attachment_changes(
         old.meta.get('첨부파일') if old else [], new.meta.get('첨부파일') if new else []
     )
-
-
-def _registered_change_type(paths: Paths, event_id: str) -> str | None:
-    if not paths.state_db.is_file():
-        return None
-    uri = paths.state_db.resolve().as_uri() + '?mode=ro'
-    with closing(sqlite3.connect(uri, uri=True)) as conn:
-        row = conn.execute('SELECT change_type FROM events WHERE event_id=?', (event_id,)).fetchone()
-    return row[0] if row else None
 
 
 def default_collectors(config: Config, enricher=None) -> list[LegalizeGitCollector]:
