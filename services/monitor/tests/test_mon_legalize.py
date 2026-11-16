@@ -345,16 +345,24 @@ def test_force_push_falls_back_to_content_compare(tmp_path, legalize, admrule, c
     assert len(first) == 1
 
     # 저장소 재구성: 모든 커밋 해시가 바뀜. 그 사이 최저임금법이 새로 바뀜
-    legalize.commit({WAGE_PATH: law_md('최저임금법', {'제1조 (목적)': '최저임금 개정'})}, '개정 2')
+    decree = 'kr/최저임금법/시행령.md'
+    legalize.commit(
+        {
+            WAGE_PATH: law_md('최저임금법', {'제1조 (목적)': '최저임금 개정'}),
+            decree: law_md('최저임금법 시행령', {'제1조': '시행령 제정'}),
+        },
+        '개정과 제정',
+    )
     legalize.rewrite_history()
     # The previously tracked Civil Act is outside the new scope, not a repeal.
     mon = make_monitor(tmp_path, config)
     with caplog.at_level(logging.WARNING, logger='law_monitor'):
         summary = mon.collect()
     events = _law_events(summary)
-    assert [(e['target']['item_id'], e['change_type']) for e in events] == [(WAGE_PATH, 'law_amended')]
-    assert events[0]['context']['commit'] is None and events[0]['context']['fallback'] == 'content_compare'
-    assert '+최저임금 개정' in (mon.paths.home / events[0]['diff']['path']).read_text(encoding='utf-8')
+    assert {e['target']['item_id']: e['change_type'] for e in events} == {WAGE_PATH: 'law_amended', decree: 'law_new'}
+    assert all(e['context']['commit'] is None and e['context']['fallback'] == 'content_compare' for e in events)
+    amended = next(e for e in events if e['change_type'] == 'law_amended')
+    assert '+최저임금 개정' in (mon.paths.home / amended['diff']['path']).read_text(encoding='utf-8')
     assert any('커서' in r.message for r in caplog.records)
     assert mon.state.cursor('legalize-kr') == legalize.head()
     assert _law_events(mon.collect()) == []

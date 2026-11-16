@@ -34,6 +34,10 @@ FAILING_AFTER = 3
 log = logging.getLogger('law_monitor')
 
 
+def _baseline_suffix(count: int) -> str:
+    return f' · 기준점 추가 {count}개' if count else ''
+
+
 class BootstrapRequired(RuntimeError):
     pass
 
@@ -255,7 +259,8 @@ class Monitor:
                 for name, item in details['collectors'].items()
                 if item['status'] != 'ok'
             }
-            return RunSummary(run_id, 'normal', failed=failed, line=f'collectors resumed={run_id}')
+            line = f'collectors resumed={run_id}' + _baseline_suffix(details.get('baselines_added', 0))
+            return RunSummary(run_id, 'normal', failed=failed, line=line)
         for collector in chosen:
             if collector.name == 'legalize_law' and isinstance(collector, LegalizeGitCollector):
                 assert isinstance(collector.matcher, LawMatcher)
@@ -331,6 +336,13 @@ class Monitor:
                 f'collectors={len(per)} ok={len(summary.ok)} failed={len(summary.failed)}{failed} '
                 f'events={len(summary.events)}'
             )
+            baselines_added = sum(result.baselines_added for result in results.values())
+            details = {'collectors': per, 'events': len(events)}
+            if managed_id:
+                details['managed'] = True
+            if baselines_added:
+                details['baselines_added'] = baselines_added
+            summary.line += _baseline_suffix(baselines_added)
             status = 'ok' if not summary.failed else ('partial' if summary.ok else 'failed')
             finished = self.now().isoformat(timespec='seconds')
             self.state.apply(
@@ -346,10 +358,7 @@ class Monitor:
                     run_id,
                     finished,
                     status,
-                    json.dumps(
-                        {'collectors': per, 'events': len(events)} | ({'managed': True} if managed_id else {}),
-                        ensure_ascii=False,
-                    ),
+                    json.dumps(details, ensure_ascii=False),
                 ),
             )
             log.info('%s %s', mode, summary.line)

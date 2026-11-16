@@ -9,13 +9,17 @@
 import difflib
 import json
 import logging
+from collections.abc import Callable, Collection
 from dataclasses import asdict, dataclass, field
+from datetime import datetime
+from pathlib import Path
 
 from law_monitor import articles, frontmatter
 from law_monitor.collectors.base import CollectResult, RunContext
 from law_monitor.config import Config
-from law_monitor.events import make_event_id
+from law_monitor.events import EventStore, make_event_id
 from law_monitor.gitrepo import ZERO, CommitInfo, GitError, GitRepo
+from law_monitor.paths import Paths
 from law_monitor.state import ItemState, State
 
 log = logging.getLogger('law_monitor.legalize_git')
@@ -148,7 +152,7 @@ class LegalizeGitCollector:
         rescan = scope is not None and scope != previous and (scope != '*' or previous is not None)
         if cursor == head and not rescan and not paused:
             return CollectResult(cursors={self.repo_key: head})
-        build = _Builder(self, ctx, repo, ctx.state.items(self.name))
+        build = _Builder(self, ctx.paths, ctx.now, repo, ctx.state.items(self.name))
         on_history = bool(cursor and (cursor == head or repo.is_ancestor(cursor, head)))
         if cursor and recovered:
             build.backfill(recovered, cursor if on_history else head)
@@ -161,9 +165,11 @@ class LegalizeGitCollector:
                 self.repo_key,
                 (cursor or '')[:12],
             )
-            build.compare_with_head(head)
-        if rescan and on_history:
-            build.compare_with_head(head)
+        if rescan or not on_history:
+            baseline_exclusions = None
+            if rescan and previous != '*':
+                baseline_exclusions = set((previous or '').splitlines()) | recovered.keys()
+            build.compare_with_head(head, baseline_new_except=baseline_exclusions)
         result = build.result()
         result.cursors = {self.repo_key: head}
         if rescan and scope is not None:
@@ -182,15 +188,57 @@ class LegalizeGitCollector:
         """
         repo = self._repo(ctx)
         since_sha, until_sha = repo.resolve(since), repo.resolve(until)
-        build = _Builder(self, ctx, repo, {}, replay=True)
+        build = _Builder(self, ctx.paths, ctx.now, repo, {}, replay=True)
         for sha in repo.rev_list(since_sha, until_sha, self.matcher.pathspecs()):
             build.commit(sha)
         result = build.result()
         result.items, result.removed = [], []
         return result, since_sha, until_sha
 
+    def replay_amendment(
+        self,
+        paths: Paths,
+        repo_path: Path | None,
+        path: str,
+        commit: str,
+        now: Callable[[], datetime],
+        *,
+        output_dir: Path | None = None,
+    ) -> Path:
+        """Replay a single amendment from local Git objects without advancing monitor state."""
+        if not self.matcher.prefilter(path):
+            raise ValueError('설정에 포함된 법령 파일 경로를 지정하세요')
+        repo = GitRepo(repo_path or paths.repos / self.repo_key, local_only=True)
+        sha = repo.resolve(commit)
+        parent = repo.resolve(f'{sha}^')
+        output_paths = Paths(output_dir) if output_dir is not None else paths
+        replay_dir = output_paths.replay / 'amendments' / f'{parent[:8]}_{sha[:8]}'
+        if output_dir is not None:
+            output_paths = Paths(replay_dir)
+            monitor_data = paths.data.resolve()
+            if any(folder.resolve().is_relative_to(monitor_data) for folder in (replay_dir, output_paths.files)):
+                raise ValueError('monitor 데이터 밖의 별도 임시 폴더를 지정하세요')
+        changes = repo.changes(sha, [f':(literal){path}'])
+        build = _Builder(self, output_paths, now, repo, {}, replay=True)
+        if len(changes) != 1 or changes[0].old_path != path or changes[0].new_path != path:
+            raise ValueError('지정한 커밋에서 기존 파일의 개정을 찾을 수 없습니다')
+        change = changes[0]
+        old, new = build.version(path, change.old_blob), build.version(path, change.new_blob)
+        if old is None or new is None or self.matcher.change_type(old, new) != 'law_amended':
+            raise ValueError('지정한 커밋에서 기존 파일의 개정을 찾을 수 없습니다')
+        replay_id = make_event_id(self.name, path, f'amendment:{old.blob}:{new.blob}')
+        store = EventStore(output_paths.home, replay_dir, dated=False)
+        saved = replay_dir / f'{replay_id}.json'
+        if saved.is_file():
+            return saved
+        build.emit(path, old, new, repo.info(sha), event_id=replay_id)
+        event = build.events.get(replay_id)
+        if event is None:
+            raise ValueError('지정한 커밋에서 내용 변경을 찾을 수 없습니다')
+        return store.write(event, build.diffs.get(replay_id))
+
     def _baseline(self, ctx: RunContext, repo: GitRepo, head: str) -> CollectResult:
-        build = _Builder(self, ctx, repo, {})
+        build = _Builder(self, ctx.paths, ctx.now, repo, {})
         found = build.scan(head)
         for v in found.values():
             build.save(v)
@@ -207,13 +255,15 @@ class LegalizeGitCollector:
 @dataclass
 class _Builder:
     collector: LegalizeGitCollector
-    ctx: RunContext
+    paths: Paths
+    now: Callable[[], datetime]
     repo: GitRepo
     current: dict[str, ItemState]
     replay: bool = False
     events: dict[str, dict] = field(default_factory=dict)
     diffs: dict[str, str] = field(default_factory=dict)
     touched: set[str] = field(default_factory=set)
+    baselines_added: int = 0
 
     @property
     def m(self):
@@ -228,14 +278,14 @@ class _Builder:
 
     def save(self, v: Version) -> str:
         """파일 내용 사본 data/files/<blob>.md (강제 푸시 뒤 비교·이벤트 old/new 파일)."""
-        path = self.ctx.paths.files / f'{v.blob}.md'
+        path = self.paths.files / f'{v.blob}.md'
         if not path.exists():
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text(v.text, encoding='utf-8')
-        return self.ctx.paths.rel(path)
+        return self.paths.rel(path)
 
     def from_item(self, item: ItemState) -> Version | None:
-        snapshot = self.ctx.paths.files / f'{item.version_key}.md'
+        snapshot = self.paths.files / f'{item.version_key}.md'
         try:
             text = snapshot.read_text(encoding='utf-8') if snapshot.exists() else self.repo.blob(item.version_key)
         except GitError:
@@ -295,11 +345,17 @@ class _Builder:
             for key, (old, new) in groups.items():
                 self.emit(key, old, new, info)
 
-    def compare_with_head(self, head: str, paths: set[str] | None = None) -> None:
+    def compare_with_head(
+        self, head: str, paths: set[str] | None = None, *, baseline_new_except: Collection[str] | None = None
+    ) -> None:
+        """Seed untracked files during a scope rescan, except paths recovered from a pause."""
         found = self.scan(head, paths)
         for key, new in found.items():
             item = self.current.get(key)
-            if item is None or item.version_key != new.blob:
+            if item is None and baseline_new_except is not None and key not in baseline_new_except:
+                self._track(key, new)
+                self.baselines_added += 1
+            elif item is None or item.version_key != new.blob:
                 self.emit(key, None, new, None)
         missing = [
             key
@@ -309,7 +365,15 @@ class _Builder:
         for key in missing:
             self.emit(key, None, None, None)
 
-    def emit(self, key: str, old: Version | None, new: Version | None, commit: CommitInfo | None) -> None:
+    def emit(
+        self,
+        key: str,
+        old: Version | None,
+        new: Version | None,
+        commit: CommitInfo | None,
+        *,
+        event_id: str | None = None,
+    ) -> None:
         if old is None and key in self.current:
             old = self.from_item(self.current[key])
         if old is None and new is None:
@@ -325,7 +389,7 @@ class _Builder:
         assert ref is not None  # 둘 다 None이면 위에서 끝남 (new가 없으면 ref는 old)
         cats = self.m.categories(ref)
         version_key = new.blob if new else f'removed:{ref.blob}'
-        event_id = make_event_id(self.collector.name, key, version_key)
+        event_id = event_id or make_event_id(self.collector.name, key, version_key)
         old_body, new_body = (old.body if old else ''), (new.body if new else '')
         diff_text = '\n'.join(
             difflib.unified_diff(
@@ -338,7 +402,7 @@ class _Builder:
         )
         event = {
             'event_id': event_id,
-            'detected_at': self.ctx.now().isoformat(timespec='seconds'),
+            'detected_at': self.now().isoformat(timespec='seconds'),
             'category': cats[0] if cats else None,
             'categories': cats,
             'source': self.collector.name,
@@ -365,7 +429,7 @@ class _Builder:
             event['replay'] = True
         extra = []
         if self.collector.enricher is not None:  # 법제처 원문·별표서식 (실패하면 예외 → 수집기 실패, 커서 그대로)
-            extra = self.collector.enricher.enrich(self.m.kind, event, old, new, self.ctx.paths)
+            extra = self.collector.enricher.enrich(self.m.kind, event, old, new, self.paths)
         self.events[event_id] = event
         if diff_text:
             self.diffs[event_id] = diff_text
@@ -397,6 +461,7 @@ class _Builder:
             diffs=self.diffs,
             items=[self.current[k] for k in sorted(self.touched) if k in self.current],
             removed=[(name, k) for k in sorted(self.touched) if k not in self.current],
+            baselines_added=self.baselines_added,
         )
 
 

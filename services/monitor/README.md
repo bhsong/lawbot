@@ -36,6 +36,28 @@ uv run law-monitor daily                  # launchd가 매일 실행: collect �
 - 마지막 줄이 실행 요약입니다: `collectors=2 ok=2 failed=0 events=1`. 같은 줄이 `logs/collector-YYYYMMDD.log` 끝에도 남습니다.
 - 종료 코드: 0 성공, 1 수집기 일부 실패(나머지는 저장됨), 2 실행 전 거부(설정 오류, bootstrap 전 collect, `LAW_OC` 없음, 다른 실행 중 등).
 - 같은 home(`data/`)으로 두 실행이 겹치지 않게 `data/.lock`에 잠금을 겁니다. launchd의 `daily`가 도는 동안 수동으로 실행하면 "다른 law-monitor 실행 중"으로 바로 끝납니다(종료 코드 2). 프로세스가 죽으면 잠금은 저절로 풀립니다.
+
+### 감시 기준점과 단일 개정 재생성
+
+감시 범위를 늘리면 커서 이후 커밋 이력을 처리하고, 범위 재탐색에서 처음 발견한 파일의 현재 blob을 `items`에 기록합니다. 커서가 강제 푸시로 사라져 내용 비교를 하는 실행에도 새 감시 경로에 이 규칙을 적용합니다. 실행 요약의 `기준점 추가 N개`에서 건수를 확인할 수 있습니다.
+
+`MONITOR_HOME`에는 실행 데이터 위치, `LAW_PATH`에는 Legalize 저장소 안의 `kr/법령명/파일.md` 경로, `COMMIT`에는 개정 커밋을 지정합니다. 부모와 해당 커밋 양쪽에 있는 같은 파일을 비교합니다.
+
+```sh
+PREVIEW_DIR="$(mktemp -d)"
+uv run law-monitor --home "$MONITOR_HOME" replay-amendment --path "$LAW_PATH" --commit "$COMMIT" \
+  --dry-run --output-dir "$PREVIEW_DIR"
+```
+
+monitor는 임시 폴더의 `data/replay/amendments/<부모>_<커밋>/`에 이벤트 JSON과 신·구 원문을 저장합니다. 출력 JSON의 `event_path`를 `EVENT_JSON`에 지정합니다. `lawgo_requests`는 일일 수집과 같은 법제처 보강에서 재시도·리디렉션을 포함해 보낸 요청 수입니다. 기존 로컬 Legalize 클론과 `LAW_OC`를 사용하며, 다른 클론은 `--repo-path`로 지정합니다.
+
+```sh
+uv run --project services/law-calendar --locked python -m law_calendar.manage preview "$EVENT_JSON"
+```
+
+캘린더는 저장된 원천을 읽어 import와 같은 규칙으로 조문별 시행일·자동 공개 또는 보류·근거를 출력합니다. 미리보기에는 캘린더 DB가 필요 없습니다.
+
+실제 재생성은 첫 명령에서 `--dry-run`과 `--output-dir`을 빼고 실행합니다. 명령이 출력한 home 상대 경로의 JSON을 캘린더에서 명시적으로 import합니다. 개정 ID는 이전·이후 blob으로 정해 기존에 철회·거절된 `law_new`와 구분합니다. 이미 캘린더에 같은 실제 개정이 있는 경우 이벤트를 가져오기 전에 확인합니다. 운영에서 이벤트 생성과 import를 실행하려면 별도 사용자 승인이 필요합니다. [캘린더 import 절차](../law-calendar/README.md#저장된-모니터링-결과와-공개-검토)
 - `LAW_OC`는 환경변수가 먼저이고, 없으면 `services/monitor/.env`에서 읽습니다. `bootstrap`은 법제처를 부르지 않아 키 없이도 됩니다. 로그·이벤트·오류 메시지에는 `OC=***`로만 남습니다.
 - 법제처 호출이 실패하면(재시도 3회 뒤) 그 수집기가 실패로 끝나고 커서가 그대로라, 다음 실행에서 같은 변경을 다시 처리합니다. 원문이 빠진 이벤트는 저장하지 않습니다.
 - 한 수집기가 3번 연속 실패하면 `collector_failing` 이벤트가 한 번 생깁니다.

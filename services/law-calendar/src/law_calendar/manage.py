@@ -7,18 +7,21 @@ from pathlib import Path
 
 from law_calendar.assembly_ingest import inspect_assembly, list_assembly, review_assembly
 from law_calendar.db import read_database
-from law_calendar.ingest import import_files
+from law_calendar.ingest import import_files, preview_changes, read_event
 from law_calendar.notice_content import MAX_NOTICES, refresh_notice_content
 from law_calendar.review import inspect_event, review, review_template
 
 
 def main():
     parser = argparse.ArgumentParser(description='Local calendar import, review and notice content')
-    parser.add_argument('--database', type=Path, required=True)
+    parser.add_argument('--database', type=Path)
     sub = parser.add_subparsers(dest='command', required=True)
     importer = sub.add_parser('import')
     importer.add_argument('--monitor-home', type=Path, required=True)
     importer.add_argument('files', type=Path, nargs='+', help='Explicit saved monitor event JSON files')
+    preview = sub.add_parser('preview', help='Preview automatic decisions without using a database')
+    preview.add_argument('file', type=Path, help='Exported monitor event JSON')
+    preview.add_argument('--monitor-home', type=Path, help='Base of saved source paths (default: event directory)')
     sub.add_parser('list')
     sub.add_parser('runs')
     show = sub.add_parser('show')
@@ -41,9 +44,15 @@ def main():
     notice_content.add_argument('--refresh', action='store_true')
     notice_content.add_argument('--after-snapshot', help='Continue --refresh after its previous nextAfterSnapshot')
     args = parser.parse_args()
+    if args.command != 'preview' and args.database is None:
+        parser.error('--database is required for this command')
     failed = False
     try:
-        if args.command == 'import':
+        if args.command == 'preview':
+            path = args.file.resolve()
+            _, raw, texts = read_event(args.monitor_home or path.parent, path)
+            result = preview_changes(json.loads(raw), texts)
+        elif args.command == 'import':
             result = import_files(args.database, args.monitor_home, args.files)
             failed = result['failed'] > 0
         elif args.command in ('list', 'runs'):

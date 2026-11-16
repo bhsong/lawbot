@@ -33,12 +33,15 @@ class CommitInfo:
 
 
 class GitRepo:
-    def __init__(self, path: Path):
+    def __init__(self, path: Path, *, local_only: bool = False):
         self.path = path
+        self.local_only = local_only
         self._blobs: dict[str, str] = {}
 
     def run(self, *args: str, cwd: Path | None = None) -> str:
         env = {**os.environ, 'GIT_TERMINAL_PROMPT': '0', 'LC_ALL': 'C'}
+        if self.local_only:
+            env.update(GIT_NO_LAZY_FETCH='1', GIT_ALLOW_PROTOCOL='')
         out = subprocess.run(['git', *args], cwd=cwd or self.path, env=env, capture_output=True, check=False)
         if out.returncode != 0:
             raise GitError(
@@ -59,7 +62,7 @@ class GitRepo:
         return self.run('rev-parse', 'HEAD').strip()
 
     def resolve(self, rev: str) -> str:
-        return self.run('rev-parse', '--verify', '--quiet', f'{rev}^{{commit}}').strip()
+        return self.run('rev-parse', '--verify', '--quiet', '--end-of-options', f'{rev}^{{commit}}').strip()
 
     def has_commit(self, sha: str) -> bool:
         try:

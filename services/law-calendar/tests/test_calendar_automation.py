@@ -80,7 +80,7 @@ def test_import_auto_publishes_dates_but_holds_unresolved_articles(workflow):
         assert change['comparable'] is False
         assert change['status'] == '시행일 자동 확인 · 비교 미확인'
         held = client.get('/api/law-holds').json()
-        assert held['total'] == 1 and held['items'][0]['article'] == '제2조'
+        assert {item['article'] for item in held['items']} == {'제2조'}
         assert set(held['items'][0]) == {'id', 'lawName', 'article', 'reason', 'sourceUrl', 'collectedAt'}
         assert client.get('/api/law-calendar?month=2026-10').json()['days'] == []
         assert client.post('/api/law-holds', json={}).status_code == 405
@@ -88,6 +88,26 @@ def test_import_auto_publishes_dates_but_holds_unresolved_articles(workflow):
     with sqlite3.connect(db) as conn:
         assert conn.execute("SELECT COUNT(*) FROM review_audit WHERE decision='auto_publish'").fetchone()[0] == 1
     assert import_files(db, home, [path])['unchanged'] == 1
+
+
+@pytest.mark.parametrize('change_type', ['law_new', 'law_amended'])
+def test_articles_without_before_are_auto_published_with_clear_addendum(workflow, change_type):
+    db, home, path, event = workflow
+    event['change_type'] = change_type
+    if change_type == 'law_new':
+        event['old'] = None
+    event['diff']['chunks'] = [{'article': '제1조'}, {'article': '제3조'}]
+    event['context']['lawgo'] = {}
+    event['context']['addenda_added'] = ['제1조(시행일) 이 법은 2026년 11월 5일부터 시행한다.']
+    path.write_text(json.dumps(event), encoding='utf-8')
+    import_one(workflow)
+    with sqlite3.connect(db) as conn:
+        assert conn.execute('SELECT review_state FROM change_events').fetchone() == ('approved',)
+        assert conn.execute("SELECT before_text FROM article_changes WHERE article='제3조'").fetchone() == (None,)
+    with TestClient(create_app(db)) as client:
+        visible = client.get('/api/law-events?date=2026-11-05').json()['items']
+        assert {item['article'] for item in visible} == {'제1조', '제3조'}
+        assert not client.get('/api/law-holds').json()['items']
 
 
 def test_holds_are_independent_of_calendar_dates_and_hide_private_or_withdrawn_records(workflow):
@@ -118,15 +138,21 @@ def test_generic_pending_rows_do_not_become_public_holds(dataset):
         assert client.get('/api/law-holds').json()['items'] == []
 
 
-@pytest.mark.parametrize('state', ['rejected', 'withdrawn'])
-def test_explicit_rejection_survives_source_corrections(workflow, state):
+@pytest.mark.parametrize(('decision', 'state'), [('reject', 'rejected'), ('withdraw', 'withdrawn')])
+def test_explicit_rejection_survives_source_corrections(workflow, decision, state):
     db, home, path, event = workflow
     event_id = import_one(workflow)
-    with sqlite3.connect(db) as conn:
-        conn.execute('UPDATE change_events SET review_state=? WHERE id=?', (state, event_id))
+    payload = approval(db, event_id)
+    if decision == 'withdraw':
+        review(db, payload, reviewer='fixture')
+    review(db, {**payload, 'decision': decision, 'changes': []}, reviewer='fixture')
+    assert import_files(db, home, [path])['unchanged'] == 1
     event['context']['lawgo']['article_effective'] = '20261105:제1조'
     path.write_text(json.dumps(event), encoding='utf-8')
     assert import_files(db, home, [path])['imported'] == 1
+    with sqlite3.connect(db) as conn:
+        assert conn.execute('SELECT review_state FROM change_events').fetchone() == (state,)
+        assert conn.execute('SELECT DISTINCT review_state FROM article_changes').fetchall() == [(state,)]
     with TestClient(create_app(db)) as client:
         assert client.get('/api/law-events?month=2026-11').json()['total'] == 0
         assert client.get('/api/law-holds').json()['total'] == 0

@@ -48,6 +48,7 @@ class HttpClient:
         self.retries, self.min_interval, self.backoff = retries, min_interval, backoff
         self.sleep, self.clock = sleep, clock
         self._last = None
+        self.requests_sent = 0
 
     def _wait_turn(self) -> None:
         if self._last is not None:
@@ -70,6 +71,7 @@ class HttpClient:
         for _ in range(self.client.max_redirects + 1):
             validate_url(request.url)
             self._wait_turn()
+            self.requests_sent += 1
             response = self.client.send(request, follow_redirects=False)
             if response.next_request is None:
                 return response
@@ -92,6 +94,7 @@ class HttpClient:
             try:
                 if validate_url is None:
                     self._wait_turn()
+                    self.requests_sent += 1
                     resp = self.client.request(method, url, params=params, json=json, headers=headers)
                 else:
                     request = self.client.build_request(method, url, params=params, json=json, headers=headers)

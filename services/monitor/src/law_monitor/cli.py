@@ -8,15 +8,19 @@ import json
 import logging
 import re
 import sys
+from contextlib import nullcontext
 from dataclasses import dataclass, field, replace
+from datetime import datetime
 from pathlib import Path
 
 from law_monitor import secrets
-from law_monitor.app import AlreadyBootstrapped, BootstrapRequired, MissingSecret, Monitor
+from law_monitor.app import KST, AlreadyBootstrapped, BootstrapRequired, MissingSecret, Monitor
 from law_monitor.assembly import SOURCES, AssemblyClient
+from law_monitor.collectors.legalize_git import default_collectors
 from law_monitor.config import CONFIG_FILE, REPOS, ConfigError, load
+from law_monitor.enrich import LawGoEnricher
 from law_monitor.gitrepo import GitError
-from law_monitor.lawgo import LawGoClient
+from law_monitor.lawgo import LawGoClient, LawGoError
 from law_monitor.llm import ChatClient, load_config
 from law_monitor.lock import AlreadyRunning, run_lock
 from law_monitor.paths import Paths, default_home
@@ -41,6 +45,13 @@ def build_parser() -> argparse.ArgumentParser:
     r.add_argument('--repo', required=True, choices=REPOS)
     r.add_argument('--from', dest='since', required=True, help='시작 커밋 (이 커밋 다음부터)')
     r.add_argument('--to', dest='until', required=True, help='끝 커밋 (포함)')
+
+    a = sub.add_parser('replay-amendment', help='로컬 Legalize 파일의 단일 개정을 다시 만듦')
+    a.add_argument('--path', required=True, help='저장소 내 법령 파일 경로 (kr/법령명/파일.md)')
+    a.add_argument('--commit', required=True, help='개정 커밋 (부모와 비교)')
+    a.add_argument('--repo-path', type=Path, help='기존 로컬 클론 (기본: monitor home의 Legalize 클론)')
+    a.add_argument('--dry-run', action='store_true', help='임시 폴더에 미리보기 원천을 저장')
+    a.add_argument('--output-dir', type=Path, help='미리보기 원천을 둘 임시 폴더 (--dry-run과 함께 지정)')
 
     s = sub.add_parser('summarize', help='대기 이벤트를 모델로 요약 → data/summaries/YYYY-MM-DD.md')
     s.add_argument(
@@ -173,6 +184,11 @@ def main(argv: list[str] | None = None) -> int:
     root.addHandler(console)
     paths = Paths(args.home or default_home())
     try:
+        if args.command == 'replay-amendment':
+            if args.dry_run != (args.output_dir is not None):
+                raise ValueError('--dry-run과 --output-dir은 함께 지정하세요')
+            with nullcontext() if args.dry_run else run_lock(paths):
+                return _replay_amendment(args, paths)
         with run_lock(paths):  # 같은 home의 다른 실행(launchd daily·수동)과 겹치지 않게
             return _run(args, paths)
     except (
@@ -183,6 +199,7 @@ def main(argv: list[str] | None = None) -> int:
         MissingSecret,
         ValueError,
         GitError,
+        LawGoError,
         OSError,
     ) as e:
         print(f'law-monitor: {e}', file=sys.stderr)
@@ -191,6 +208,24 @@ def main(argv: list[str] | None = None) -> int:
         return 2
     finally:
         root.removeHandler(console)
+
+
+def _replay_amendment(args: argparse.Namespace, paths: Paths) -> int:
+    config = load(args.config)
+    oc = secrets.law_oc()
+    if not oc:
+        raise MissingSecret('법제처 인증키 LAW_OC가 없습니다 (legalize_law)')
+    lawgo = LawGoClient(oc)
+    collector = next(c for c in default_collectors(config, LawGoEnricher(lawgo, config)) if c.name == 'legalize_law')
+    saved = collector.replay_amendment(
+        paths, args.repo_path, args.path, args.commit, lambda: datetime.now(KST), output_dir=args.output_dir
+    )
+    if args.dry_run:
+        export = {'event_path': str(saved.resolve()), 'lawgo_requests': lawgo.http.requests_sent}
+        print(json.dumps(export, ensure_ascii=False))
+    else:
+        print(paths.rel(saved))
+    return 0
 
 
 def _run(args, paths: Paths) -> int:
