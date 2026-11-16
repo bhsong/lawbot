@@ -13,7 +13,6 @@ from dataclasses import dataclass, field, replace
 from datetime import datetime
 from pathlib import Path
 
-from law_calendar.ingest import preview_changes
 from law_monitor import secrets
 from law_monitor.app import KST, AlreadyBootstrapped, BootstrapRequired, MissingSecret, Monitor
 from law_monitor.assembly import SOURCES, AssemblyClient
@@ -51,7 +50,8 @@ def build_parser() -> argparse.ArgumentParser:
     a.add_argument('--path', required=True, help='저장소 내 법령 파일 경로 (kr/법령명/파일.md)')
     a.add_argument('--commit', required=True, help='개정 커밋 (부모와 비교)')
     a.add_argument('--repo-path', type=Path, help='기존 로컬 클론 (기본: monitor home의 Legalize 클론)')
-    a.add_argument('--dry-run', action='store_true', help='조문별 시행일·공개 판정과 법제처 요청 수 출력')
+    a.add_argument('--dry-run', action='store_true', help='임시 폴더에 미리보기 원천을 저장')
+    a.add_argument('--output-dir', type=Path, help='미리보기 원천을 둘 임시 폴더 (--dry-run과 함께 지정)')
 
     s = sub.add_parser('summarize', help='대기 이벤트를 모델로 요약 → data/summaries/YYYY-MM-DD.md')
     s.add_argument(
@@ -185,6 +185,8 @@ def main(argv: list[str] | None = None) -> int:
     paths = Paths(args.home or default_home())
     try:
         if args.command == 'replay-amendment':
+            if args.dry_run != (args.output_dir is not None):
+                raise ValueError('--dry-run과 --output-dir은 함께 지정하세요')
             with nullcontext() if args.dry_run else run_lock(paths):
                 return _replay_amendment(args, paths)
         with run_lock(paths):  # 같은 home의 다른 실행(launchd daily·수동)과 겹치지 않게
@@ -215,15 +217,14 @@ def _replay_amendment(args: argparse.Namespace, paths: Paths) -> int:
         raise MissingSecret('법제처 인증키 LAW_OC가 없습니다 (legalize_law)')
     lawgo = LawGoClient(oc)
     collector = next(c for c in default_collectors(config, LawGoEnricher(lawgo, config)) if c.name == 'legalize_law')
-    result = collector.replay_amendment(
-        paths, args.repo_path, args.path, args.commit, lambda: datetime.now(KST), dry_run=args.dry_run
+    saved = collector.replay_amendment(
+        paths, args.repo_path, args.path, args.commit, lambda: datetime.now(KST), output_dir=args.output_dir
     )
-    if isinstance(result, str):
-        print(result)
+    if args.dry_run:
+        export = {'event_path': str(saved.resolve()), 'lawgo_requests': lawgo.http.requests_sent}
+        print(json.dumps(export, ensure_ascii=False))
     else:
-        event, texts = result
-        preview = {'articles': preview_changes(event, texts), 'lawgo_requests': lawgo.http.requests_sent}
-        print(json.dumps(preview, ensure_ascii=False))
+        print(paths.rel(saved))
     return 0
 
 

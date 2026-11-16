@@ -107,7 +107,7 @@ def changed_articles(event: MonitorEvent, texts: dict[str, str]) -> tuple[dict[s
     return articles, labels
 
 
-def load_event(home: Path, path: Path):
+def read_event(home: Path, path: Path) -> tuple[MonitorEvent, str, dict[str, str]]:
     raw = inside(home, path).read_bytes().decode('utf-8')
     event = MonitorEvent.model_validate_json(raw)
     validate_event(event)
@@ -116,6 +116,11 @@ def load_event(home: Path, path: Path):
         for side, ref in (('old', event.old), ('new', event.new))
         if ref is not None
     }
+    return event, raw, texts
+
+
+def load_event(home: Path, path: Path):
+    event, raw, texts = read_event(home, path)
     articles, labels = changed_articles(event, texts)
     files_json = json.dumps(texts, ensure_ascii=False, sort_keys=True)
     snapshot_id = digest(PARSER_VERSION + raw + files_json)

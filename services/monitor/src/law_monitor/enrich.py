@@ -24,14 +24,13 @@ class _Version(Protocol):
 class FileStore:
     """data/files/<sha256>.<ext>: 같은 내용은 한 번만 저장."""
 
-    def __init__(self, paths: Paths, *, persist: bool = True):
+    def __init__(self, paths: Paths):
         self.paths = paths
-        self.persist = persist
 
     def put(self, data: bytes, ext: str) -> tuple[str, str]:
         sha = hashlib.sha256(data).hexdigest()
         path = self.paths.files / f'{sha}.{ext}'
-        if self.persist and not path.exists():
+        if not path.exists():
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_bytes(data)
         return sha, self.paths.rel(path)
@@ -44,14 +43,11 @@ class LawGoEnricher:
     def __init__(self, client: LawGoClient, config: Config):
         self.client, self.config = client, config
 
-    def enrich(
-        self, kind: str, event: dict, old: _Version | None, new: _Version | None, paths: Paths, *, persist: bool = True
-    ) -> list:
+    def enrich(self, kind: str, event: dict, old: _Version | None, new: _Version | None, paths: Paths) -> list:
         """event의 context를 채우고, 별표서식 이벤트 [(event, diff_text)]를 돌려준다."""
-        files = FileStore(paths, persist=persist)
         if kind == 'law':
-            return self._law(event, old, new, files)
-        return self._admrule(event, old, new, files)
+            return self._law(event, old, new, FileStore(paths))
+        return self._admrule(event, old, new, FileStore(paths))
 
     # ---- 법령 ----
 

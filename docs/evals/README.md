@@ -4,6 +4,8 @@
 
 ## 기록 목록
 
+- **PR #158 미리보기 서비스 경계 (2026-11-16)** — monitor 내보내기와 독립 캘린더 preview 분리, 실제 조문 5개 기존 PR 표와 일치, 기본 pytest 2,071개 통과 → [기록](2026-11-16-amendment-preview-service-boundary.md)
+
 - **PR #158 리뷰 반영 (2026-11-16)** — 기존 자동 승인 정책 복귀, 강제 푸시와 범위 확장 동시 재현, 시행령 2건의 조문별 dry-run, 기본 pytest 2,070개 통과 → [기록](2026-11-16-scope-expansion-baseline-review.md)
 
 - **법령 감시 범위 확장과 개정 재생성 (2026-11-16)** — 감시 기준점·신설 조문 보류·철회 유지, 11월 10일 개정 두 건 오프라인 dry-run, 기본 pytest 2,064개 통과 → [기록](2026-11-16-scope-expansion-baseline.md)

@@ -290,29 +290,11 @@ wheels = [
 ]
 
 [[package]]
-name = "law-calendar"
-version = "0.1.0"
-source = { editable = "services/law-calendar" }
-dependencies = [
-    { name = "fastapi" },
-    { name = "lawbot-common" },
-    { name = "uvicorn" },
-]
-
-[package.metadata]
-requires-dist = [
-    { name = "fastapi", specifier = "==0.143.3" },
-    { name = "lawbot-common", editable = "packages/lawbot-common" },
-    { name = "uvicorn", specifier = "==0.54.0" },
-]
-
-[[package]]
 name = "law-monitor"
 version = "0.1.0"
 source = { editable = "services/monitor" }
 dependencies = [
     { name = "httpx" },
-    { name = "law-calendar" },
     { name = "lawbot-common" },
     { name = "pyyaml" },
     { name = "tenacity" },
@@ -321,7 +303,6 @@ dependencies = [
 [package.metadata]
 requires-dist = [
     { name = "httpx", specifier = ">=0.28.1" },
-    { name = "law-calendar", editable = "services/law-calendar" },
     { name = "lawbot-common", editable = "packages/lawbot-common" },
     { name = "pyyaml", specifier = ">=6.0.3" },
     { name = "tenacity", specifier = ">=9.2.1" },

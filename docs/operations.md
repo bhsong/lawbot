@@ -42,6 +42,24 @@ uv sync
 
 새 백업을 검증하기 전 복구가 필요하면 제한된 위치의 이전 백업을 사용합니다. 복구 전에 자동 다운로드와 이미지 공개가 재개되는지 확인합니다.
 
+## 법령 개정 재생성 미리보기
+
+작업 트리의 루트에서 `MONITOR_HOME`에 monitor home, `LAW_PATH`에 로컬 Legalize 저장소 안의 파일 경로, `COMMIT`에 개정 커밋을 지정합니다. monitor는 기존 법제처 보강을 적용하고 미리보기 원천을 실행별 임시 폴더에 저장합니다. 다른 로컬 클론을 쓸 때는 `--repo-path`를 지정합니다.
+
+```sh
+PREVIEW_DIR="$(mktemp -d)"
+uv run law-monitor --home "$MONITOR_HOME" replay-amendment --path "$LAW_PATH" --commit "$COMMIT" \
+  --dry-run --output-dir "$PREVIEW_DIR"
+```
+
+출력 JSON의 `event_path`를 `EVENT_JSON`에 지정합니다. `lawgo_requests`에서 실제 법제처 요청 수를 확인합니다. 캘린더는 별도 환경에서 이벤트 JSON과 그 폴더의 `data/files/` 원문을 읽어 조문별 시행일과 공개 판정을 출력하므로 미리보기에 DB 경로가 필요 없습니다.
+
+```sh
+uv run --project services/law-calendar --locked python -m law_calendar.manage preview "$EVENT_JSON"
+```
+
+운영 코드 반영과 운영 이벤트 재생성·import는 각각 사용자 승인 후 진행합니다. [실제 재생성 및 import](../services/monitor/README.md#감시-기준점과-단일-개정-재생성)
+
 ## 모델 준비
 
 학습된 모델은 용량이 커서 저장소에 포함하지 않습니다. `.env.example`은 **v5** 조문과 v5b 임베딩, 기존 리랭커와 Pro 27B를 선택합니다. 조문·매니페스트와 프롬프트는 저장소에 있으며 모델 파일은 아래 경로에 둡니다. 모델 경로가 다르면 `LAWBOT_SERVE_*`로 지정합니다.

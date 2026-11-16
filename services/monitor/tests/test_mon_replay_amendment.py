@@ -1,11 +1,12 @@
+import hashlib
 import json
 import sqlite3
+import subprocess
+import sys
+from pathlib import Path
 
 import pytest
 
-from law_calendar.db import migrate
-from law_calendar.ingest import digest, import_files
-from law_calendar.review import inspect_event, review
 from law_monitor import cli
 from law_monitor.events import make_event_id
 from law_monitor.state import State
@@ -16,6 +17,14 @@ ADDENDUM = (
     '부칙(개정령) <제4호,2026.11.10>\n\n제1조(시행일) 이 법은 공포한 날부터 시행한다.\n\n'
     '제2조(다른 법률의 개정)\n① 최저임금법 일부를 다음과 같이 개정한다.\n제1조를 다음과 같이 한다.'
 )
+
+
+def calendar(*args):
+    return json.loads(calendar_command('law_calendar.manage', *args).stdout)
+
+
+def calendar_command(module, *args):
+    return subprocess.run([sys.executable, '-m', module, *map(str, args)], capture_output=True, text=True, check=True)
 
 
 @pytest.fixture(autouse=True)
@@ -41,25 +50,40 @@ def amendments(tmp_path):
 
 
 def test_replay_amendment_dry_run_matches_borrowed_addendum_import(tmp_path, amendments, capsys):
-    home, args, _, _, sha = amendments
-    assert cli.main([*args, sha, '--dry-run']) == 0
+    home, args, original, amended, sha = amendments
+    live_source = home / 'data/files/existing.md'
+    live_source.parent.mkdir(parents=True)
+    live_source.write_text('existing source', encoding='utf-8')
+    state = State(home / 'data/state.db')
+    state.conn.close()
+    existing_files = {path: path.read_bytes() for path in home.rglob('*') if path.is_file()}
+    output_dir = tmp_path / 'preview'
+    preview_args = [*args, sha, '--dry-run', '--output-dir', str(output_dir)]
+    assert cli.main(preview_args) == 0
     output = capsys.readouterr()
-    preview = json.loads(output.out)
-    assert preview['lawgo_requests'] == 1
-    assert preview['articles'] == [
+    export = json.loads(output.out)
+    event_path = Path(export['event_path'])
+    assert export == {'event_path': str(event_path), 'lawgo_requests': 1}
+    assert event_path.is_relative_to(output_dir / 'data/replay/amendments')
+    event = json.loads(event_path.read_text(encoding='utf-8'))
+    assert (event_path.parent / event['old']['file']).read_text(encoding='utf-8') == original
+    assert (event_path.parent / event['new']['file']).read_text(encoding='utf-8') == amended
+    assert {path: path.read_bytes() for path in home.rglob('*') if path.is_file()} == existing_files
+    database = tmp_path / 'calendar.db'
+    preview = calendar('preview', event_path)
+    assert preview == [
         {'article': '제1조', 'effective_on': '2026-11-10', 'decision': 'auto_publish', 'basis': 'borrowed_addendum'}
     ]
     assert output.err == ''
-    assert not home.exists()
+    assert not database.exists()
     assert cli.main([*args, sha]) == 0
     saved = home / capsys.readouterr().out.strip()
-    database = tmp_path / 'calendar.db'
-    migrate(database)
-    assert import_files(database, home, [saved])['imported'] == 1
+    calendar_command('law_calendar.db', database)
+    assert calendar('--database', database, 'import', '--monitor-home', home, saved)['imported'] == 1
     with sqlite3.connect(database) as conn:
         assert conn.execute('SELECT article,event_on FROM public_changes').fetchall() == [('제1조', '2026-11-10')]
-    assert cli.main([*args, sha, '--dry-run']) == 0
-    assert json.loads(capsys.readouterr().out) == {**preview, 'lawgo_requests': 0}
+    assert cli.main(preview_args) == 0
+    assert json.loads(capsys.readouterr().out) == {**export, 'lawgo_requests': 0}
 
 
 def test_replay_dry_run_reports_invalid_addendum_date(amendments, tmp_path, capsys):
@@ -71,25 +95,26 @@ def test_replay_dry_run_reports_invalid_addendum_date(amendments, tmp_path, caps
         {WAGE_PATH: law_md(WAGE_NAME, {'제1조': '이후 조문'}, promulgated='2026-11-10', addenda=[added])}, 'amend'
     )
     args[args.index('--repo-path') + 1] = str(repo.path)
-    assert cli.main([*args, sha, '--dry-run']) == 0
-    assert json.loads(capsys.readouterr().out)['articles'] == [
+    assert cli.main([*args, sha, '--dry-run', '--output-dir', str(tmp_path / 'preview')]) == 0
+    event_path = json.loads(capsys.readouterr().out)['event_path']
+    assert calendar('preview', event_path) == [
         {'article': '제1조', 'effective_on': None, 'decision': 'hold', 'basis': 'conflict'}
     ]
     assert not home.exists()
     assert cli.main([*args, sha]) == 0
     saved = home / capsys.readouterr().out.strip()
     database = tmp_path / 'calendar.db'
-    migrate(database)
-    assert import_files(database, home, [saved])['imported'] == 1
+    calendar_command('law_calendar.db', database)
+    assert calendar('--database', database, 'import', '--monitor-home', home, saved)['imported'] == 1
     with sqlite3.connect(database) as conn:
         assert conn.execute('SELECT reason FROM held_changes').fetchall() == [('conflict',)]
         assert not conn.execute('SELECT 1 FROM public_changes').fetchall()
 
 
-def test_preview_counts_lawgo_retry_attempts(amendments, lawgo, capsys):
+def test_preview_counts_lawgo_retry_attempts(tmp_path, amendments, lawgo, capsys):
     _, args, _, _, sha = amendments
     lawgo.fail = 1
-    assert cli.main([*args, sha, '--dry-run']) == 0
+    assert cli.main([*args, sha, '--dry-run', '--output-dir', str(tmp_path / 'preview')]) == 0
     assert json.loads(capsys.readouterr().out)['lawgo_requests'] == len(lawgo.requests) == 2
 
 
@@ -106,8 +131,12 @@ def test_replay_amendment_writes_one_importable_event_without_registering_it(tmp
     assert not (home / 'data' / 'state.db').exists()
     assert not (home / 'data' / 'events').exists()
     database = tmp_path / 'calendar.db'
-    migrate(database)
-    assert import_files(database, home, [saved]) == {'imported': 1, 'unchanged': 0, 'failed': 0}
+    calendar_command('law_calendar.db', database)
+    assert calendar('--database', database, 'import', '--monitor-home', home, saved) == {
+        'imported': 1,
+        'unchanged': 0,
+        'failed': 0,
+    }
 
 
 @pytest.mark.parametrize('has_state', [False, True], ids=['different-home-without-state', 'registered-scope-event'])
@@ -134,20 +163,23 @@ def test_replay_amendment_import_keeps_rejected_scope_event_separate(tmp_path, a
     scope_path.write_text(json.dumps(scope_event), encoding='utf-8')
     assert (home / replay['new']['file']).read_text(encoding='utf-8') == amended
     database = tmp_path / 'calendar.db'
-    migrate(database)
-    assert import_files(database, home, [scope_path])['imported'] == 1
-    rejected_id = digest(f'legalize_law:{original_id}')
-    snapshot_id = inspect_event(database, rejected_id)['snapshot_id']
-    review(
-        database,
-        {'event_id': rejected_id, 'snapshot_id': snapshot_id, 'decision': 'reject', 'note': 'scope expansion'},
-        reviewer='fixture',
+    calendar_command('law_calendar.db', database)
+    assert calendar('--database', database, 'import', '--monitor-home', home, scope_path)['imported'] == 1
+    rejected_id = hashlib.sha256(f'legalize_law:{original_id}'.encode()).hexdigest()
+    snapshot_id = calendar('--database', database, 'show', rejected_id)['snapshot_id']
+    manifest = tmp_path / 'reject.json'
+    manifest.write_text(
+        json.dumps(
+            {'event_id': rejected_id, 'snapshot_id': snapshot_id, 'decision': 'reject', 'note': 'scope expansion'}
+        ),
+        encoding='utf-8',
     )
-    assert import_files(database, home, [saved])['imported'] == 1
-    assert inspect_event(database, rejected_id)['review_state'] == 'rejected'
+    calendar('--database', database, 'review', manifest, '--reviewer', 'fixture')
+    assert calendar('--database', database, 'import', '--monitor-home', home, saved)['imported'] == 1
+    assert calendar('--database', database, 'show', rejected_id)['review_state'] == 'rejected'
     assert cli.main([*args, sha]) == 0
     assert home / capsys.readouterr().out.strip() == saved
-    assert import_files(database, home, [saved])['unchanged'] == 1
+    assert calendar('--database', database, 'import', '--monitor-home', home, saved)['unchanged'] == 1
 
 
 def test_replay_amendment_has_same_lawgo_context_as_daily(tmp_path, amendments, lawgo, capsys):
@@ -172,7 +204,14 @@ def test_replay_amendment_refuses_a_creation_commit(tmp_path, amendments, capsys
     repo.commit({LAW_PATH: law_md('근로기준법', {'제2조': '기존 조문'})}, 'base')
     sha = repo.commit({WAGE_PATH: law_md(WAGE_NAME, {'제1조': '새 법률'})}, 'enact')
     args[args.index('--repo-path') + 1] = str(repo.path)
-    assert cli.main([*args, sha, '--dry-run']) == 2
+    assert cli.main([*args, sha, '--dry-run', '--output-dir', str(tmp_path / 'preview')]) == 2
     output = capsys.readouterr()
     assert output.out == '' and '기존 파일의 개정' in output.err
+    assert not home.exists()
+
+
+def test_dry_run_refuses_monitor_home_as_output(amendments, capsys):
+    home, args, _, _, sha = amendments
+    assert cli.main([*args, sha, '--dry-run', '--output-dir', str(home)]) == 2
+    assert '별도' in capsys.readouterr().err
     assert not home.exists()

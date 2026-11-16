@@ -203,16 +203,23 @@ class LegalizeGitCollector:
         commit: str,
         now: Callable[[], datetime],
         *,
-        dry_run: bool,
-    ) -> str | tuple[dict, dict[str, str]]:
+        output_dir: Path | None = None,
+    ) -> Path:
         """Replay a single amendment from local Git objects without advancing monitor state."""
         if not self.matcher.prefilter(path):
             raise ValueError('설정에 포함된 법령 파일 경로를 지정하세요')
         repo = GitRepo(repo_path or paths.repos / self.repo_key, local_only=True)
         sha = repo.resolve(commit)
         parent = repo.resolve(f'{sha}^')
+        output_paths = Paths(output_dir) if output_dir is not None else paths
+        replay_dir = output_paths.replay / 'amendments' / f'{parent[:8]}_{sha[:8]}'
+        if output_dir is not None:
+            output_paths = Paths(replay_dir)
+            monitor_data = paths.data.resolve()
+            if any(folder.resolve().is_relative_to(monitor_data) for folder in (replay_dir, output_paths.files)):
+                raise ValueError('monitor 데이터 밖의 별도 임시 폴더를 지정하세요')
         changes = repo.changes(sha, [f':(literal){path}'])
-        build = _Builder(self, paths, now, repo, {}, replay=True, persist_files=not dry_run)
+        build = _Builder(self, output_paths, now, repo, {}, replay=True)
         if len(changes) != 1 or changes[0].old_path != path or changes[0].new_path != path:
             raise ValueError('지정한 커밋에서 기존 파일의 개정을 찾을 수 없습니다')
         change = changes[0]
@@ -220,18 +227,15 @@ class LegalizeGitCollector:
         if old is None or new is None or self.matcher.change_type(old, new) != 'law_amended':
             raise ValueError('지정한 커밋에서 기존 파일의 개정을 찾을 수 없습니다')
         replay_id = make_event_id(self.name, path, f'amendment:{old.blob}:{new.blob}')
-        store = EventStore(paths.home, paths.replay / 'amendments' / f'{parent[:8]}_{sha[:8]}', dated=False)
-        saved = store.base / f'{replay_id}.json'
-        texts = {'old': old.text, 'new': new.text}
+        store = EventStore(output_paths.home, replay_dir, dated=False)
+        saved = replay_dir / f'{replay_id}.json'
         if saved.is_file():
-            return (json.loads(saved.read_text(encoding='utf-8')), texts) if dry_run else paths.rel(saved)
+            return saved
         build.emit(path, old, new, repo.info(sha), event_id=replay_id)
         event = build.events.get(replay_id)
         if event is None:
             raise ValueError('지정한 커밋에서 내용 변경을 찾을 수 없습니다')
-        if dry_run:
-            return event, texts
-        return paths.rel(store.write(event, build.diffs.get(replay_id)))
+        return store.write(event, build.diffs.get(replay_id))
 
     def _baseline(self, ctx: RunContext, repo: GitRepo, head: str) -> CollectResult:
         build = _Builder(self, ctx.paths, ctx.now, repo, {})
@@ -256,7 +260,6 @@ class _Builder:
     repo: GitRepo
     current: dict[str, ItemState]
     replay: bool = False
-    persist_files: bool = True
     events: dict[str, dict] = field(default_factory=dict)
     diffs: dict[str, str] = field(default_factory=dict)
     touched: set[str] = field(default_factory=set)
@@ -276,7 +279,7 @@ class _Builder:
     def save(self, v: Version) -> str:
         """파일 내용 사본 data/files/<blob>.md (강제 푸시 뒤 비교·이벤트 old/new 파일)."""
         path = self.paths.files / f'{v.blob}.md'
-        if self.persist_files and not path.exists():
+        if not path.exists():
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text(v.text, encoding='utf-8')
         return self.paths.rel(path)
@@ -426,7 +429,7 @@ class _Builder:
             event['replay'] = True
         extra = []
         if self.collector.enricher is not None:  # 법제처 원문·별표서식 (실패하면 예외 → 수집기 실패, 커서 그대로)
-            extra = self.collector.enricher.enrich(self.m.kind, event, old, new, self.paths, persist=self.persist_files)
+            extra = self.collector.enricher.enrich(self.m.kind, event, old, new, self.paths)
         self.events[event_id] = event
         if diff_text:
             self.diffs[event_id] = diff_text
