@@ -84,11 +84,11 @@ class NewsSnapshot(BaseModel):
 
 
 def latest(items: list[NewsItem], per_board: int = BOARD_ITEM_LIMIT) -> list[NewsItem]:
-    """Return the newest items of each board, keeping the given (listing) order for equal or missing dates."""
+    """Return the newest items of each board, once per link within a board, keeping listing order for ties."""
     ordered = sorted(items, key=lambda item: item.publishedOn or date.min, reverse=True)
-    unique: dict[str, NewsItem] = {}
+    unique: dict[tuple[str, str], NewsItem] = {}
     for item in ordered:
-        unique.setdefault(item.officialUrl, item)
+        unique.setdefault((item.board, item.officialUrl), item)
     counts: Counter[str] = Counter()
     result = []
     for item in unique.values():

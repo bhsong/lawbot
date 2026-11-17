@@ -52,3 +52,13 @@ def test_snapshot_allows_ten_items_for_each_board_but_not_eleven():
     eleven = [item('notice', n, None).model_dump(mode='json') for n in range(11)]
     with pytest.raises(ValidationError, match='10'):
         NewsSnapshot.model_validate(snapshot(eleven))
+
+
+def test_same_link_is_shown_once_per_board_but_in_every_board():
+    shared = item('guide', 1, None)
+    other = shared.model_copy(update={'id': 'summary-1', 'board': 'summary'})
+    twice = shared.model_copy(update={'id': 'guide-copy'})
+
+    result = latest([shared, twice, other])
+
+    assert [(entry.id, entry.board) for entry in result] == [('guide-1', 'guide'), ('summary-1', 'summary')]
