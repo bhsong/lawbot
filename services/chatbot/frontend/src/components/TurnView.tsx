@@ -23,11 +23,10 @@ type Props = {
   retryDisabled?: boolean
   onFeedback: (fb: Feedback) => void
   onShowSources: () => void
-  onSuggestion?: (question: string) => void
 }
 
 /** One question and its answer. Clicking the answer shows its articles in the side panel. */
-export function TurnView({ turn, selected, reasons, onSelect, onRetry, retryDisabled, onFeedback, onShowSources, onSuggestion }: Props) {
+export function TurnView({ turn, selected, reasons, onSelect, onRetry, retryDisabled, onFeedback, onShowSources }: Props) {
   const n = countSources(turn.sources)
   return (
     <article className={`turn${selected ? ' selected' : ''}`}>
@@ -61,17 +60,6 @@ export function TurnView({ turn, selected, reasons, onSelect, onRetry, retryDisa
           <p className="stats" data-testid="lawbot-stats">
             {turn.stats}
           </p>
-        )}
-        {turn.done && !turn.error && !turn.stopped && onSuggestion && !!turn.suggestions?.length && (
-          <div className="suggestions" role="group" aria-label="검토된 비슷한 질문" onClick={(e) => e.stopPropagation()}>
-            <span>검토된 비슷한 질문</span>
-            {turn.suggestions.map((question) => (
-              <button key={question} type="button" className="chip" data-testid="reviewed-question"
-                onClick={() => onSuggestion(question)} disabled={retryDisabled}>
-                {question}
-              </button>
-            ))}
-          </div>
         )}
         {turn.done && (
           <div className="actions" onClick={(e) => e.stopPropagation()}>

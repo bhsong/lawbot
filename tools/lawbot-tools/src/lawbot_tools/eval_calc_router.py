@@ -306,7 +306,7 @@ def _quality(routes):
 def _live(groups, samples, output, post_limit):
     _time_guard()
     envfile.load()
-    env = {k: v for k, v in os.environ.items() if k not in ('LAWBOT_DB', 'LAWBOT_EXACT_CACHE_DB')}
+    env = {k: v for k, v in os.environ.items() if k != 'LAWBOT_DB'}
     cfg = settings.load(env | {'LAWBOT_CORPUS': 'csv', 'LAWBOT_REQUEST_LOG': '', 'LAWBOT_EMBED_CACHE': '0'})
     if cfg.profile.name != 'v5' or cfg.llm_external or [m.key for m in cfg.profile.models] != ['pro']:
         raise SystemExit('개발 CSV v5 프로필과 공유 서버의 Pro 모델을 사용하세요.')

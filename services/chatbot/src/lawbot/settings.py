@@ -39,8 +39,6 @@ class Settings:
     calendar_api_url: str | None = None
     calendar_admin_token: str | None = field(default=None, repr=False)
     corpus: str = 'csv'
-    exact_cache_db: Path | None = None
-    suggestions_tau: float | None = None
 
 
 MISSING_SERVER = (
@@ -67,28 +65,6 @@ def corpus_mode(env):
     if mode == 'db' and not (env.get('LAWBOT_DB') or '').strip():
         raise ValueError('LAWBOT_CORPUS=db에는 LAWBOT_DB가 필요합니다.')
     return mode
-
-
-def exact_cache_path(value: str, corpus_db: Path | None) -> Path:
-    from lawbot.db.connection import db_path
-
-    path = db_path(value)
-    if path == corpus_db:
-        raise ValueError('정확 일치 캐시는 별도 SQLite 파일을 사용해야 합니다.')
-    return path
-
-
-def suggestions_tau(env):
-    raw = env.get('LAWBOT_SUGGESTIONS_TAU', '').strip()
-    if not raw:
-        return None
-    try:
-        value = float(raw)
-    except ValueError:
-        raise ValueError('LAWBOT_SUGGESTIONS_TAU는 -1~1 사이의 수여야 합니다.') from None
-    if not -1 <= value <= 1:
-        raise ValueError('LAWBOT_SUGGESTIONS_TAU는 -1~1 사이의 수여야 합니다.')
-    return value
 
 
 def load(env=None, web=False):
@@ -141,9 +117,6 @@ def load(env=None, web=False):
         take('instance', lambda: security.instance_name(env))
         take('chat_concurrency', lambda: view.chat_concurrency(env))
         take('feedback', lambda: feedback.from_env(env, db=got.get('db')))
-        if cache := (env.get('LAWBOT_EXACT_CACHE_DB') or '').strip():
-            take('exact_cache_db', lambda: exact_cache_path(cache, got.get('db')))
-        take('suggestions_tau', lambda: suggestions_tau(env))
     if errors:
         raise SettingsError(f'설정 오류 {len(errors)}개:\n' + '\n'.join(f'- {e}' for e in errors))
     fields = Settings.__dataclass_fields__

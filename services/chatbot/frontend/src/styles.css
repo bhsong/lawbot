@@ -529,23 +529,6 @@ button {
   cursor: pointer;
 }
 
-.suggestions {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-  margin-top: 12px;
-}
-
-.suggestions > span {
-  width: 100%;
-  font-size: 13px;
-}
-
-.suggestions .chip {
-  margin-left: 0;
-  text-align: left;
-}
-
 /* ---- composer ---- */
 .composer {
   padding: 8px 20px calc(14px + env(safe-area-inset-bottom));
