@@ -1,5 +1,6 @@
 """The file contract between the private collector and the public calendar."""
 
+from collections import Counter
 from datetime import date
 from typing import Literal
 from urllib.parse import urlsplit
@@ -9,6 +10,7 @@ from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, model_validato
 Agency = Literal['lawgo', 'moel', 'mofe', 'nts', 'hometax']
 AGENCIES = ('lawgo', 'moel', 'mofe', 'nts', 'hometax')
 SNAPSHOT_MAX_BYTES = 1_048_576
+BOARD_ITEM_LIMIT = 10
 NEWS_HOSTS = {
     'lawgo': {'www.law.go.kr', 'law.go.kr'},
     'moel': {'www.moel.go.kr'},
@@ -53,7 +55,14 @@ class NewsAgencySnapshot(BaseModel):
     model_config = ConfigDict(extra='forbid')
 
     boards: list[NewsBoard] = Field(max_length=200)
-    items: list[NewsItem] = Field(max_length=10)
+    items: list[NewsItem] = Field(max_length=2000)
+
+    @model_validator(mode='after')
+    def validate_board_limit(self):
+        counts = Counter(item.board for item in self.items)
+        if counts and max(counts.values()) > BOARD_ITEM_LIMIT:
+            raise ValueError(f'Each board may publish at most {BOARD_ITEM_LIMIT} items')
+        return self
 
 
 class NewsSnapshot(BaseModel):
@@ -74,9 +83,16 @@ class NewsSnapshot(BaseModel):
         return self
 
 
-def latest(items: list[NewsItem]) -> list[NewsItem]:
-    ordered = sorted(items, key=lambda item: (item.publishedOn or date.min, item.id), reverse=True)
+def latest(items: list[NewsItem], per_board: int = BOARD_ITEM_LIMIT) -> list[NewsItem]:
+    """Return the newest items of each board, keeping the given (listing) order for equal or missing dates."""
+    ordered = sorted(items, key=lambda item: item.publishedOn or date.min, reverse=True)
     unique: dict[str, NewsItem] = {}
     for item in ordered:
         unique.setdefault(item.officialUrl, item)
-    return list(unique.values())[:10]
+    counts: Counter[str] = Counter()
+    result = []
+    for item in unique.values():
+        counts[item.board] += 1
+        if counts[item.board] <= per_board:
+            result.append(item)
+    return result

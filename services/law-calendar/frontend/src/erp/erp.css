@@ -50,6 +50,7 @@
 }
 .erp-news-panel > header { display: flex; justify-content: space-between; gap: 8px; align-items: center; }
 .erp-news-panel h2 { font-size: 17px; margin: 0; }
+.erp-news-board h3 { font-size: 14px; margin: 14px 0 2px; }
 .erp-news-items, .erp-news-status ul { list-style: none; margin: 0; padding: 0; }
 .erp-news-items li, .erp-news-status li { padding: 9px 0; border-bottom: 1px solid var(--line); }
 .erp-news-items li a { display: inline-block; margin-top: 3px; }

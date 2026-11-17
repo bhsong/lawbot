@@ -266,6 +266,7 @@ def publication(registry: Registry, database: Path, out: Path) -> dict:
 
 
 def approved(database: Path, sources: dict[str, dict]) -> dict[str, list[tuple[str, dict]]]:
+    """Return approved current revisions per source in board listing order (newest observation run first)."""
     if not database.exists():
         return {}
     with closing(sqlite3.connect(database.resolve().as_uri() + '?mode=ro', uri=True, timeout=5)) as conn:
@@ -274,13 +275,29 @@ def approved(database: Path, sources: dict[str, dict]) -> dict[str, list[tuple[s
         has_reviews = conn.execute("SELECT 1 FROM sqlite_schema WHERE name='news_reviews'").fetchone()
         query = current_revisions(conn, sources, bool(has_reviews))
         rows = conn.execute(
-            f"SELECT source_id,upstream_id,metadata,revision,event_type FROM ({query}) WHERE status='approved'",
+            f"""SELECT q.source_id,q.upstream_id,q.metadata,q.revision,q.event_type FROM ({query}) q
+                JOIN documents d ON d.source_id=q.source_id AND d.upstream_id=q.upstream_id
+                WHERE q.status='approved'
+                ORDER BY d.first_seen_at DESC,
+                    (SELECT MIN(rowid) FROM revisions WHERE source_id=q.source_id AND upstream_id=q.upstream_id)""",
             (json.dumps(list(sources)),),
         ).fetchall()
     result: dict[str, list[tuple[str, dict]]] = {}
     for source, upstream, metadata, revision, event in rows:
         result.setdefault(source, []).append((upstream, json.loads(metadata) | {'revision': revision, 'event': event}))
     return result
+
+
+PRIMARY_TAGS = {'고시', '법령', '행정규칙'}
+GENERAL_TAGS = {'공지', '보도자료'}
+
+
+def board_rank(source: dict) -> int:
+    """Show rule, notice and law boards first and general notices or press releases last."""
+    tags = set(source.get('category_tags', ()))
+    if tags & PRIMARY_TAGS:
+        return 0
+    return 2 if tags & GENERAL_TAGS else 1
 
 
 def build(
@@ -296,7 +313,7 @@ def build(
     records = approved(database, review_sources_from_plan(plan)) if records is None else records
     agencies = {agency: {'boards': [], 'items': []} for agency in AGENCIES}
     laws: list[str] = []
-    for source in sources:
+    for source in sorted(sources, key=board_rank):
         agency = cast(Agency, source['agency'])
         if agency not in agencies or (agency == 'lawgo' and source['source_id'] != 'legalize_law'):
             continue

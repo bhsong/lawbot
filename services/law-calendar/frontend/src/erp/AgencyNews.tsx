@@ -43,22 +43,29 @@ function NewsContent({ agency }: { agency: Agency }) {
   if (result.state === 'missing') return <p role="status">기관 소식 스냅샷이 아직 준비되지 않았습니다.</p>
 
   const items = result.items ?? []
+  const order = [...(result.boards ?? []).map((board) => board.name), ...items.map((item) => item.board)]
+  const groups = [...new Set(order)]
+    .map((board) => ({ board, entries: items.filter((item) => item.board === board) }))
+    .filter((group) => group.entries.length > 0)
   return <>
-    {result.state === 'ok' && <p className="lc-caption">공개 소식 최대 10건 · 등록된 수집 범위 기준</p>}
+    {result.state === 'ok' && <p className="lc-caption">게시판별 최신 최대 10건 · 등록된 수집 범위 기준</p>}
     {result.generatedAt && <p className="lc-caption">스냅샷 {kstMinute(result.generatedAt)} KST</p>}
     {result.state === 'ok' && items.length === 0 && <p role="status">공개된 소식이 없습니다.</p>}
-    {items.length > 0 && <ul className="erp-news-items">
-      {items.map((item) => <li key={item.id}>
-        <strong>{item.title}</strong>
-        <div className="lc-caption">
-          {item.board} · {agency === 'lawgo' ? '공포일' : '게시일'} {item.publishedOn ?? '미확인'}
-          {item.effectiveOn && ' · 시행일 ' + item.effectiveOn}
-        </div>
-        <a href={item.officialUrl} target="_blank" rel="noopener noreferrer" aria-label={item.title + ' 원문 열기'}>
-          원문 열기 ↗
-        </a>
-      </li>)}
-    </ul>}
+    {groups.map(({ board, entries }) => <section key={board} className="erp-news-board" aria-label={board + ' 소식'}>
+      <h3>{board}</h3>
+      <ul className="erp-news-items">
+        {entries.map((item) => <li key={item.id}>
+          <strong>{item.title}</strong>
+          <div className="lc-caption">
+            {agency === 'lawgo' ? '공포일' : '게시일'} {item.publishedOn ?? '미확인'}
+            {item.effectiveOn && ' · 시행일 ' + item.effectiveOn}
+          </div>
+          <a href={item.officialUrl} target="_blank" rel="noopener noreferrer" aria-label={item.title + ' 원문 열기'}>
+            원문 열기 ↗
+          </a>
+        </li>)}
+      </ul>
+    </section>)}
     {(result.boards?.length ?? 0) > 0 && <details className="erp-news-status" open>
       <summary>게시판별 수집 상태</summary>
       <ul>{result.boards?.map((board, index) => <li key={index}>
