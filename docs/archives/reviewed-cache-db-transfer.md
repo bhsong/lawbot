@@ -1,6 +1,6 @@
 # 계획 — #156 DB 전송과 승인·근거 리뷰 반영
 
-- 2026-11-16 KST. #156의 작업 브랜치 `refactor/remove-semantic-cache`를 이어서 [상위 계획](../plans/reviewed-question-suggestions.md)의 운영 ZIP 금지 결정을 구현했다.
+- 2026-11-16 KST. #156의 작업 브랜치 `refactor/remove-semantic-cache`를 이어서 [상위 계획](reviewed-question-suggestions.md)의 운영 ZIP 금지 결정을 구현했다.
 - Red에서 이전 P07 승인 ID의 모드 전환 거부, 기존 리비전의 검수 근거 이월, 스키마 2 DB의 DB 간 적재와 ZIP 접근 금지를 재현한다.
 - DB 간 적재는 검증된 원천 DB의 승인 자료를 읽기 전용으로 검증한 뒤, 대상의 현행 조문·보호 분할과 충돌을 같은 seed 규칙으로 검사한다. 대상 DB 감사에 원천 DB·ZIP 해시와 집계를 기록하고 재실행을 멱등 처리한다.
 - 새 승인마다 이전 ID와 적재 영수증에서 새 승인 ID를 만든다. 기존 리비전은 불변으로 유지하면서 검수 근거의 해시를 기록해 이월과 DB 전송에서 읽는다. 기존 0001의 원본 바이트를 복원하고 공용 코퍼스 확인을 사용한다.

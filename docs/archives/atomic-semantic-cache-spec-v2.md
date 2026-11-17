@@ -1,6 +1,6 @@
 [작업 지시서 v2] Lawbot 원자 단위 질문 검색·시맨틱 캐싱 및 어드민 승인 연동
 
-> **취소 (2026-11-15).** 원자 질문 RAG는 같은 후보 수의 base와 차이가 유의하지 않았고, 시맨틱 캐시는 오적중 0건을 지키는 재사용 설정이 없었다. 후속 계획: [검토된 비슷한 질문 추천](../plans/reviewed-question-suggestions.md). 근거: [PR 3 val 기록](../evals/2026-11-15-semantic-union-rag.md)
+> **취소 (2026-11-15).** 원자 질문 RAG는 같은 후보 수의 base와 차이가 유의하지 않았고, 시맨틱 캐시는 오적중 0건을 지키는 재사용 설정이 없었다. 후속 계획: [검토된 비슷한 질문 추천](reviewed-question-suggestions.md). 근거: [PR 3 val 기록](../evals/2026-11-15-semantic-union-rag.md)
 
 • 문서 ID: atomic-semantic-admin-spec-2.0
 • 작성일: 2026-11-11

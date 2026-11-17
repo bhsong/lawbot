@@ -1,0 +1,272 @@
+# 계획: 기능 정리와 답변 모델(qwen3.8-27b) 분리
+
+- 작성: 2026-11-18 KST. 기준 `main` `dc5bf32`, 운영 `706026f`(v6.2.1).
+- 통합 브랜치: `refactor/slim-and-split-model`. 단계별 작업 브랜치를 이 브랜치에서 만들고, PR의 대상도 이 브랜치로 해서 병합한다. 모든 단계가 끝나면 통합 브랜치를 main에 병합하고 운영에 반영한다.
+- 문서만 바꾸는 단계는 PR 없이, 사용자 승인 뒤 통합 브랜치에 바로 푸시한다.
+- 구현은 `omp -p`(기본 모델 `openai-codex/gpt-6.1-sol:medium`)에 프롬프트를 전달해 수행한다. Claude는 프롬프트 작성, 판단, 테스트 실행, git·PR 작업, 운영 반영을 맡는다.
+
+## 1. 사용자 결정 (2026-11-18)
+
+1. 정확 일치 캐시와 검토된 비슷한 질문 추천의 코드·문서·데이터를 모두 제거한다. 남은 할 일(캐시 초안 2개 재승인, τ 0.80 결정)도 함께 없앤다.
+2. 국회 입법예고와 국회 법률안의 수집·표시·검토 코드와 데이터를 모두 제거한다. 캘린더 DB의 해당 테이블도 삭제한다. 고용노동부·재정경제부의 '입법·행정예고' 게시판은 유지한다.
+3. 기관 소식
+   - 국세청은 지금처럼 모든 게시판을 수집한다.
+   - 고용노동부·재정경제부는 아래 표의 게시판만 남긴다.
+   - 홈택스 링크와 국가법령정보센터는 그대로 둔다.
+4. qwen3.8-27b를 lawbot에서 분리해 단독 서비스로 운영한다.
+   - 맥 미니 안의 다른 앱도 호출할 수 있게 한다. 무선망에는 열지 않는다.
+   - git 없는 `~/Services/qwen27b/`에서 `mlx_lm.server`로 실행한다. 요청은 먼저 온 순서대로 처리한다.
+   - lawbot 모델 서버는 임베딩과 리랭커만 맡는다.
+5. 삭제 후보는 Claude가 판단한다(§6).
+6. `docs/`의 과거 기록(`docs/evals`, `docs/archives`)은 남긴다. 운영 문서(`docs/operations.md`, 서비스 README, 루트 README)의 설명만 지운다.
+
+## 2. 단계와 PR
+
+| 단계 | 작업 브랜치 | 내용 | 버전 영향 |
+| --- | --- | --- | --- |
+| 0 | (통합 브랜치에 직접) | 이 계획서. 끝난 계획 `reviewed-question-suggestions.md`를 보관 폴더로 옮긴다 | 없음 |
+| 1 | `refactor/remove-exact-cache` | 정확 일치 캐시와 추천 질문 제거(§3) | Y |
+| 2 | `refactor/remove-assembly` | 국회 법률안·입법예고 제거, 캘린더 DB 마이그레이션(§4) | Y(스키마) |
+| 3 | `refactor/trim-agency-boards` | 고용노동부·재정경제부 게시판 정리(§5) | Z |
+| 4 | `refactor/remove-unused-tools` | 삭제 후보 정리(§6) | Z |
+| 5 | `refactor/split-chat-model` | 답변 모델 분리(§7) | Y |
+| 6 | `refactor/review-followups` | 전체 코드 리뷰와 리팩터링(§8) | Z |
+| 7 | 통합 → main | 최종 PR, 병합, 운영 반영 v6.3.0(§9) | 가장 높은 자리 Y 하나 → v6.3.0 |
+
+단계 1~4는 서로 독립이라 순서를 바꿔도 된다. 단계 5는 단계 1 이후에 한다(추천 질문의 질의 벡터 코드가 사라진 상태에서 모델 연결을 바꿔야 충돌이 적다).
+
+각 단계는 다음 순서로 진행한다.
+
+1. 통합 브랜치에서 작업 브랜치를 만든다.
+2. Claude가 omp 프롬프트를 작성해 전달한다. 프롬프트에는 범위, 금지 사항, TDD 순서, 완료 기준을 넣는다.
+3. 결과 diff를 Claude가 검토한다.
+4. 기본 테스트 전체와 린트·타입 검사를 실행한다.
+5. 통합 브랜치를 대상으로 PR을 만들고, CI가 통과하면 병합한다.
+
+## 3. 단계 1: 정확 일치 캐시·추천 질문 제거
+
+**지울 것**
+
+- 챗봇 모듈
+  - `exact_cache.py`, `cache_runtime.py`, `cache_store.py`, `cache_question_store.py`
+  - `cache_admin.py`, `cache_review_store.py`, `cache_release_store.py`, `cache_carry.py`
+  - `cache_seed.py`, `cache_seed_store.py`, `cache_seed_pass.py`, `cache_seed_db_store.py`, `cache_eval.py`
+  - `suggestions.py`, `question_vectors.py`
+- 평가 도구 `eval_suggestions.py`
+- 관리자 캐시 탭(`CachePanel.tsx`)과 채팅 화면의 캐시 표시·추천 칩
+- 관련 테스트와 테스트 데이터
+- 설정 `LAWBOT_EXACT_CACHE_DB`, `LAWBOT_SUGGESTIONS_TAU`와 `.env.example`·`.env.dev.example`의 해당 줄
+
+**함께 고칠 곳**
+
+| 위치 | 지금 | 바꿀 것 |
+| --- | --- | --- |
+| `tools/.../articles_update.py` | 06:30 조문 갱신 때 `cache_carry.transition()` 호출 | 호출과 요약 줄 제거. 06:30 실행 결과가 같은지 테스트로 확인 |
+| `calc_corpus.py` | `exact_cache.digest` import | 함수를 사용하는 곳으로 옮김 |
+| `calc_gate.py` | 계산 판정과 캐시 대상 판정을 같이 함 | 계산 판정만 남김 |
+| `feedback_store.py` | 캐시 답변 피드백의 승격 거부 | 분기 제거 |
+| `check_deploy.py`, `admin.py`, `web.py`, `service.py`, `settings.py` | 캐시·추천 연결 | 제거 |
+| `log_summary.py`, `feedback_export.py` | `cache_*`·`suggestion_*` 필드 집계 | 집계 제거. 지난 로그에 필드가 있어도 오류 없이 읽음 |
+| `docs/operations.md`, README | 캐시·추천 절 | 삭제 |
+
+**완료 기준**
+
+- 코드에 `exact_cache`, `cache_`(임베딩 캐시 `embed_cache` 제외), `suggestion`의 참조가 남지 않는다.
+- 웹앱은 캐시 설정 없이 시작한다. 운영 `.env`에 옛 설정 줄이 남아 있어도 시작한다(반영 순서 안전).
+- 계산 질문, 일반 질문, 피드백, 관리자 피드백 화면의 단위·통합·대역 E2E가 통과한다.
+
+## 4. 단계 2: 국회 법률안·입법예고 제거
+
+**지울 것**
+
+- monitor
+  - `collectors/assembly.py`, `assembly.py`
+  - `config/targets.yaml`의 국회 대상
+  - 요약(`summarize.py`)의 국회 절
+  - CLI·설정의 국회 항목
+- 캘린더
+  - `assembly_ingest.py`, `notice_content.py`, `notice_source.py`
+  - `sync.py`의 국회 가져오기
+  - `manage.py`의 `assembly-*`, `notice-content` 명령
+  - `server.py`·`models.py`·`admin.py`·`import_failures.py`의 국회 응답·검토
+- 공통
+  - `lawbot_common/assembly.py`
+  - `erp_rules.py`의 `proposalLinks`
+  - `lawbot-ui`(`ChangeView`, `EventList`, `types`)의 국회 표시
+- 화면
+  - 캘린더(`ChangeDialog`, `HoldDialog`, `api-types`)와 챗봇 관리자 `CalendarPanel`의 국회 검토
+- source-hub
+  - `sources.yaml`의 `assembly_bill`, `assembly_notice`
+  - `daily.py`·`config.py`의 국회 처리
+- 관련 테스트와 fixture
+- 운영 문서와 README의 국회 절
+
+**캘린더 DB 마이그레이션 (스키마 v9)**
+
+- 지울 테이블
+  - `assembly_snapshots`, `assembly_entries`, `assembly_dates`, `assembly_date_index`
+  - `assembly_review_audit`, `assembly_collection_status`
+  - `assembly_notice_content`, `assembly_notice_attempts`
+  - 뷰 `public_assembly`
+- 국회 이벤트를 가리키는 다른 테이블의 행이 있으면 함께 정리한다(구현 때 외래 키를 확인한다).
+- 기존 `law_calendar.db` 마이그레이션 방식을 따른다. 시작 전 백업 `.pre-v9.backup`을 만들고, 마이그레이션 뒤 `quick_check`와 `foreign_key_check`를 실행한다.
+- 확인 기준: 법령 변경 공개 수(현재 70)와 보류·감사 기록은 그대로다.
+
+**운영 데이터 (반영 때, §9)**
+
+- monitor의 국회 상태 행과 이벤트 파일
+- source-hub 등록부의 국회 설정·실행 기록
+- 입법예고 원문·PDF 저장 파일
+
+어느 경로를 지울지는 구현 결과로 목록을 만들어 반영 전에 보여 준다.
+
+**완료 기준**
+
+- 코드에 `assembly` 참조가 남지 않는다.
+- 06:30 실행 순서(수집 → 캘린더 sync → 조문 점검 → 요약 → ERP 발행)가 국회 없이 끝난다.
+- v8 DB 사본에서 마이그레이션 시험이 통과한다(공개 법령 변경 수 불변).
+- 캘린더 화면의 대역 E2E가 통과한다.
+
+## 5. 단계 3: 고용노동부·재정경제부 게시판 정리
+
+| 기관 | 남김 | 등록 삭제 |
+| --- | --- | --- |
+| 고용노동부 | `moel-rss-lawinfo` 입법·행정예고 RSS, `moel-rules` 고시·훈령·예규, `moel-interpretations` 행정해석·질의회시 | `moel-rss-notice` 공지사항 RSS, `moel-rss-policy` 정책자료 RSS, `moel-policy` 정책자료(비활성), `moel-publications` 주요 발간물·업무편람, `moel-press` 보도자료 |
+| 재정경제부 | `mofe-tax-reform` 입법·행정예고, `mofe-laws` 법령자료실, `mofe-notice` 고시·공고·지침, `mofe-publications` 간추린 개정세법, `mofe-qa` 세제 문답자료(비활성, 후보 아님) | `mofe-rss` 공식 RSS 채널(비활성), `mofe-rss-press` 보도·참고자료, `mofe-rss-explanation` 설명·반박자료, `mofe-rss-notice` 공지, `mofe-rss-policy` 정책게시판, `mofe-rss-economy` 최근경제동향, `mofe-press` 보도·설명자료(비활성) |
+| 국세청 | 모든 게시판 | 없음 |
+
+- 쓰는 곳이 없어지는 수집 코드를 지운다. 예상 대상은 재정경제부 RSS 처리이고, 보도자료 전용 파싱이 있으면 그것도 지운다.
+- 고용노동부 RSS는 입법·행정예고에서 계속 쓴다.
+- `sources.yaml`의 YAML 앵커(`&moel`이 공지사항 RSS 행에 걸려 있음)는 남는 행으로 옮긴다.
+- 게시판 순서 규칙(고시·법령·행정규칙 → 기타 → 공지·보도자료)은 그대로 둔다.
+- 등록부 DB의 설정이 지운 출처를 가리키면 시작이 실패할 수 있다. 구현 때 동작을 확인하고, 필요하면 반영 단계에서 설정 행을 정리한다.
+- 지운 게시판의 운영 기록(수집 자료 DB `materials.db`의 행, 등록부의 설정·실행 기록)은 반영 단계에서 삭제한다(사용자 결정 2026-11-18). 대상 행 수를 먼저 보여 준다.
+
+**완료 기준**
+
+- source-hub `daily`가 남은 출처만 수집하고, ERP 파일에 지운 게시판이 나오지 않는다.
+- 남은 게시판의 순서와 10개 상한이 유지된다.
+
+## 6. 단계 4: 삭제 후보
+
+| 후보 | 결정 | 이유 |
+| --- | --- | --- |
+| `cache_seed*` | 단계 1에서 삭제 | 캐시 일부 |
+| `services/monitor/deploy/com.lawbot.monitor.plist.example` | 삭제. `docs/plans/monitor-collector.md`의 언급을 고친다 | 운영 launchd는 source-hub 구성(`services/source-hub/deploy`) |
+| `law-calendar/demo.ts` | **유지** | 캘린더 화면 테스트가 `?demo=true` 데이터로 돈다. 지우면 테스트 데이터를 새로 만들어야 하고 얻는 게 적다 |
+| `smoke_decree.py`, `diff_answers.py`와 각 테스트 | 삭제 | 다른 코드가 쓰지 않는 수동 도구 |
+| `score_answers.py`, `refusal.py` | 유지 | 기본 평가 `eval_v4.py`가 씀 |
+
+## 7. 단계 5: 답변 모델 분리
+
+### 구성
+
+| 구분 | 지금 | 바꾼 뒤 |
+| --- | --- | --- |
+| 답변 생성(qwen3.8-27b) | lawbot 모델 서버(`chat.py`, BatchGenerator) | 단독 서비스 `mlx_lm.server`(lawbot 밖) |
+| 임베딩·리랭커 | lawbot 모델 서버 | lawbot 모델 서버(그대로) |
+| 가중치 | `lawbot-prod/models/v4/qwen_27b_mlx_4bit` | `~/Models/qwen3.8-27b-4bit` |
+| 호출하는 곳 | 웹앱 답변, 계산 라우터, 하위법령 판단, monitor 아침 요약 | 같은 곳 + 맥 미니 안의 다른 앱 |
+
+### 단독 서비스 (git 밖, 운영 반영 때 Claude가 만든다)
+
+- 실행 폴더 `~/Services/qwen27b/`
+  - uv 프로젝트 하나. `mlx-lm` 버전은 `uv.lock`으로 고정한다(지금 lawbot과 같은 0.32.2에서 시작).
+  - `.env`(포트)와 실행 스크립트를 둔다.
+- 실행
+  - `mlx_lm.server --model ~/Models/qwen3.8-27b-4bit --host 127.0.0.1 --port <.env> --decode-concurrency 1 --prompt-concurrency 1`
+  - 생각 끄기는 `--chat-template-args '{"enable_thinking": false}'`를 기본으로 한다. 요청별 지정이 되는지는 구현 때 확인한다.
+  - 프롬프트 캐시 메모리 상한(`--prompt-cache-bytes`)을 둔다.
+- 상시 실행
+  - `~/Library/LaunchAgents/` 아래 plist. 레이블은 lawbot과 겹치지 않게 `local.qwen27b`로 한다.
+  - 로그는 `~/Library/Logs/qwen27b/`에 둔다.
+- 운영 문서: `docs/operations.md`에 외부 의존 서비스로 주소 설정, 상태 확인, 재시작, 가중치 위치를 적는다. 포트와 토큰은 적지 않는다.
+
+### lawbot 변경 (omp 구현)
+
+- 모델 서버
+  - `chat.py`와 chat 등록, 대기열·동시 실행 수, chat 경로를 제거한다.
+  - 임베딩·리랭크 API와 토큰 인증, revision 보고는 유지한다.
+- 웹앱·계산 라우터·하위법령 판단
+  - chat 호출을 새 설정 `LAWBOT_CHAT_SERVER`(주소)로 보낸다.
+  - 임베딩·리랭크는 기존 `LAWBOT_MODEL_SERVER`로 보낸다.
+  - 모델 id는 `.env.example`에서 읽는다.
+- `mlx_lm.server` 응답에 맞출 것: 스트리밍 SSE 형식, 오류 응답, 첫 토큰·완료 측정. 이 서버에는 대기열 한도가 없어 `model_server_busy` 오류가 사라지는데, 다음으로 바꾼다.
+  - 연결 실패는 `model_server`로 안내한다.
+  - 응답 조각 사이 시간 초과는 `model_server_timeout`으로 안내한다.
+  - 생각 블록이 나오면 지금처럼 숨긴다.
+- monitor 아침 요약: chat 주소를 새 설정으로 바꾼다.
+- `check_deploy`와 시작 시 점검: chat 서버의 `/v1/models`에 필요한 모델 id가 있는지 확인한다.
+- 실행 구성 기록(AGENTS.md 실제 모델 검증): chat 모델 revision은 `lawbot_common.model_revision`으로 가중치 폴더의 지문을 만들어 남기고, `mlx-lm` 버전을 함께 적는다.
+- 테스트
+  - 계약 테스트와 대역 E2E에 `mlx_lm.server`의 응답 형식을 흉내 내는 가짜 chat 서버를 둔다(CI에서 실제 MLX는 쓰지 않는다).
+  - 임베딩·리랭크는 지금처럼 실제 모델 서버 앱과 가짜 모델로 시험한다.
+- 문서: AGENTS.md의 공유 모델 서버·테스트 구성 절, `docs/operations.md`, `.env.example`, `.env.dev.example`
+
+### 검증
+
+- 기본 테스트 전체
+- 실제 모델 검증(승인 후, 맥 미니): 반영 직후에 실행한다.
+  - 모델 스모크: chat 1회, 임베딩 1회, 리랭크 1회
+  - `e2e_live` 3시나리오
+  - 실행 전에 요청 수와 시간을 다시 알리고 승인받는다.
+
+**완료 기준**
+
+- lawbot 저장소에 chat 생성 코드가 남지 않는다.
+- 웹앱·계산 라우터·아침 요약이 새 chat 주소로 동작한다.
+- 대역 E2E와 계약 테스트가 통과한다. 실제 모델 E2E는 반영 단계에서 통과한다.
+
+## 8. 단계 6: 전체 코드 리뷰와 리팩터링
+
+1. 단계 1~5가 통합 브랜치에 병합된 뒤 리뷰를 실행한다.
+   - 명령: `omp -p --model openai-codex/gpt-6-astra --thinking high`
+   - 범위: 코드베이스 전체. 특히 이번에 지운 기능의 잔재, 죽은 코드, 단순화 여지, 오류 처리, 테스트 공백을 본다.
+   - 결과는 `results/` 아래 임시 파일로 받는다.
+2. Claude가 항목별로 근거를 확인해 타당한 것만 고른다. 고른 것과 버린 것(이유 포함)을 사용자에게 보고한다.
+3. 타당한 항목을 omp 기본 모델로 리팩터링한다. PR은 통합 브랜치 대상으로 만든다.
+
+리뷰 문서는 `docs/reviews`에 저장하지 않는다(요청 시에만).
+
+## 9. 단계 7: main 병합과 운영 반영 (v6.3.0)
+
+1. 통합 브랜치 → main PR을 만든다.
+   - 검증 표: 단위, 계약, 통합, 대역 E2E, 실제 모델 E2E(반영 후 채움), 모델 스모크, 품질 평가(실행 안 함).
+   - CI 통과와 리뷰 확인 뒤 병합한다(merge commit).
+2. 운영 반영은 06:20–06:50을 피한다. 모델 서버를 재시작하는 몇 분 동안 휴대폰 답변이 멈춘다.
+   1. 운영 트리 HEAD와 미커밋 변경을 확인하고, `706026f` → 병합 커밋의 diff를 확인한다.
+   2. 백업
+      - 캘린더 DB `.pre-v6.3.0.backup`
+      - source-hub 등록부
+      - 운영 `.env` 사본(git 밖, 권한 600)
+   3. 단독 서비스를 준비한다.
+      - 가중치를 `~/Models/qwen3.8-27b-4bit`로 이동(같은 디스크라 즉시)
+      - `~/Services/qwen27b/` 생성과 launchd 등록
+      - 서버가 뜨고 `/v1/models`가 응답하는지 확인
+   4. 운영 트리를 병합 커밋으로 옮긴다(detached).
+      - 운영 `.env`에 `LAWBOT_CHAT_SERVER`를 추가한다.
+      - 캐시·추천 설정 줄과 `LAWBOT_SERVE_CHAT`를 제거한다.
+   5. 캘린더 DB 마이그레이션 v9를 실행하고 무결성을 검사한다.
+   6. 재시작: 모델 서버(임베딩·리랭커만), 웹앱, 캘린더. source-hub는 다음 06:30에 새 코드로 돈다.
+   7. 상태 확인: `check_deploy`, 웹 `/`, 캘린더 `/`·상태 API, ERP API, `holds-check`
+   8. 실제 모델 검증(승인 후): 모델 스모크, `e2e_live` 3시나리오
+   9. 운영 데이터 삭제. 대상 목록을 보여 주고 승인받은 뒤 지운다.
+      - 캐시 DB
+      - 국회 수집 상태·이벤트·원문 파일
+      - 지운 게시판의 등록부 설정·실행 기록과 수집 자료 행
+   10. 태그 `v6.3.0`을 붙이고 `docs/evals/2026-11-18-deploy-v6.3.0.md`에 기록한다. 다음 날 06:41 점검 cron을 예약한다.
+3. 되돌리기
+   - 운영 트리를 `706026f`로 되돌리고 `.env` 사본과 캘린더 DB 백업을 복구한다.
+   - 가중치를 원래 경로로 옮기고 이전 모델 서버 설정으로 재시작한다.
+   - 단독 서비스는 launchd에서 내린다.
+   - 운영 데이터 삭제(9번)는 확인이 끝난 뒤에만 하므로, 되돌리기 전에는 원본이 남아 있다.
+
+## 10. 위험
+
+| 위험 | 대응 |
+| --- | --- |
+| 06:30 실행이 지운 기능을 부름 | 단계마다 `daily` 순서 테스트. 반영 다음 날 06:41 점검 |
+| `mlx_lm.server`의 생각 끄기·스트리밍 형식이 다름 | 개발 중에는 27B를 한 번 더 올릴 메모리가 없으므로, 설치된 `mlx_lm/server.py` 소스로 형식을 확인해 가짜 서버를 맞춘다. 실제 확인은 반영 단계의 모델 스모크에서 한다(실패하면 되돌리기) |
+| 메모리 | 총량은 같다(27B 한 번만 로드). 프롬프트 캐시 상한을 두고, 반영 뒤 메모리와 첫 토큰 시간을 기록한다 |
+| 다른 앱이 생성을 오래 점유 | 먼저 온 순서대로 처리하기로 결정함. 웹앱의 응답 대기 상한 안내가 나올 수 있음 |
+| 캘린더 스키마 v9 | 사본 시험, 백업, 무결성 검사 |
