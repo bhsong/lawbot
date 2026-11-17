@@ -11,7 +11,7 @@ import './erp.css'
 import AgencyNews from './AgencyNews'
 import RuleCard from './RuleCard'
 
-const KINDS: CalendarChange['kind'][] = ['notice', 'effective', 'bill']
+const KINDS: CalendarChange['kind'][] = ['notice', 'effective']
 const NOTICES = {
   missing: 'ERP 자료가 아직 준비되지 않았습니다.',
   invalid: 'ERP 자료 파일을 확인하지 못했습니다. 법령 캘린더는 그대로 이용할 수 있습니다.',
@@ -54,7 +54,7 @@ function ItemCard({ item, reference = false }: { item: ErpItem; reference?: bool
 function RuleSections({ rules, items, available }: { rules: ErpRule[]; items: ErpItem[]; available: boolean }) {
   const documentKeys = new Set(items.map((item) => item.sourceKey))
   const cards = rules.filter((rule) =>
-    rule.scopes.length > 0 || rule.proposalLinks.length > 0 || !documentKeys.has(rule.sourceKey))
+    rule.scopes.length > 0 || !documentKeys.has(rule.sourceKey))
   const keys = new Set(cards.map((rule) => rule.sourceKey))
   const current = cards.filter((rule) => rule.scopes.some((scope) => scope.currentVersion))
   const upcoming = cards.filter((rule) =>

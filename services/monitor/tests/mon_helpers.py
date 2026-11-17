@@ -186,7 +186,6 @@ def make_config(
                 {'agency': '국세청', 'keywords': ['원천징수', '지급명세서'], 'category': 3},
             ],
         },
-        'prelegislation': {'keywords': ['근로기준법']},
     }
     return from_dict(data)
 

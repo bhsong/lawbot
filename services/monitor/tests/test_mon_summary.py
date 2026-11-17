@@ -79,6 +79,32 @@ def monitor_with_events(tmp_path, legalize, llm=None):
     return mon
 
 
+def test_summary_does_not_restore_removed_legislature_section(tmp_path):
+    event = {
+        'event_id': 'stored-before-removal',
+        'source': 'assembly_notice',
+        'change_type': 'notice_opened',
+        'target': {'law_name': '과거 수집 이벤트'},
+        'context': {'status': '진행', 'source_url': 'https://example.invalid/old'},
+        'dates': {},
+    }
+    output = tmp_path / 'summary.md'
+    result, done = summarize.write_summary(
+        [event],
+        {},
+        home=tmp_path,
+        client=FakeLLM().client(),
+        out_path=output,
+        title_date='2026-11-18',
+        run_line=None,
+        ran_at='2026-11-18T06:30:00+09:00',
+    )
+    markdown = output.read_text(encoding='utf-8')
+    assert '## 국회 법률안·입법예고' not in markdown
+    assert '국회 원문' not in markdown
+    assert result.failed is None and done == [event['event_id']]
+
+
 def test_one_call_per_amendment_and_md(tmp_path, legalize):
     llm = FakeLLM()
     mon = monitor_with_events(tmp_path, legalize, llm.client())

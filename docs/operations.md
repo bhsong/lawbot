@@ -20,27 +20,13 @@ uv sync
 
 화면 코드(`services/chatbot/frontend`)가 바뀌면 다시 빌드합니다. 빌드가 없거나 지금 소스와 다르면 `lawbot-app`이 시작을 거부합니다(`dist/build.json`의 소스 지문 비교).
 
-## 국회 입법예고 캘린더 DB v4 반영
+## 캘린더 DB v9 반영
 
-운영 반영 승인 후 등록된 캘린더 DB 경로와 서비스 실행 환경을 확인합니다. 같은 경로를 쓰는 sync와 검토 쓰기가 없는 배포 창을 잡고, 기존 코드와 DB 버전을 기록합니다. 복사본에서 `python -m law_calendar.db "$CALENDAR_DB"`를 먼저 실행해 `PRAGMA quick_check`, `PRAGMA foreign_key_check`, 공개 일정과 검토 기록을 대조합니다.
+운영 반영 승인 후 등록된 캘린더 DB 경로와 쓰기 작업을 확인합니다. 같은 DB를 사용하는 sync와 검토 쓰기가 없는 배포 창을 잡고, 먼저 SQLite 사본에서 `uv run --project services/law-calendar --locked python -m law_calendar.db "$CALENDAR_DB"`를 실행합니다.
 
-검증된 명령을 운영 DB에 적용하면 v3의 SQLite backup 사본이 `.pre-v4.backup`으로 생깁니다. 백업 이름이 이미 사용 중이면 원인을 확인하고 보존 위치를 정한 뒤 다시 진행합니다. v4 마이그레이션과 새 API 상태 확인이 끝나면 [Monitor 국회 기준선과 활성화 절차](../services/monitor/README.md#국회-법률안과-입법예고)를 따릅니다.
+v8에서 올리면 `.pre-v9.backup`이 생성됩니다. 마이그레이션은 제거된 수집원의 테이블과 공개 뷰를 한 트랜잭션에서 정리합니다. 새 DB는 v9로 초기화합니다. `PRAGMA user_version`, `PRAGMA quick_check`, `PRAGMA foreign_key_check`와 공개 법령 변경 수, 보류·감사 기록의 보존을 확인합니다. 양쪽 화면을 빌드한 뒤 공개 캘린더와 관리자 보류 검토를 확인합니다.
 
-복구가 필요한 경우 새 쓰기를 먼저 멈추고, v4 DB와 WAL을 보존합니다. v3 백업을 별도 복구 경로에 복사해 정합성과 버전을 확인한 뒤 승인된 이전 코드와 그 DB 경로로 되돌립니다. 반영 뒤 새로 기록된 검토가 있으면 별도로 보존해 확인합니다.
-
-## 국회 입법예고 자동 공개용 캘린더 DB v7
-
-승인된 운영 반영 시 위 절차에 따라 DB 사본을 먼저 마이그레이션합니다. `PRAGMA quick_check`, `PRAGMA foreign_key_check`, 기존 예고 일정과 검토 이력, `assembly_notice_content`의 본문과 `assembly_notice_pages`의 이미지 수를 확인합니다. v6에서 올리면 `.pre-v7.backup`이 생성됩니다. 국회 수집을 활성화한 환경에서는 다음 06:30 캘린더 sync가 일치한 예고를 자동 공개합니다. 점검 결과에 남은 검토 대기, PDF 재시도, PDF 처리 한도 초과 건수를 확인합니다. [샘플 검토 방법](../services/law-calendar/README.md#국회-이벤트-공개-검토)
-
-## 국회 입법예고 대비표 이미지 정리용 캘린더 DB v8
-
-운영 반영 승인 후 등록된 캘린더 DB와 쓰기 작업을 확인합니다. 먼저 SQLite 사본에서 `uv run --project services/law-calendar --locked python -m law_calendar.db "$CALENDAR_DB"`를 실행합니다. v7에서 올리면 권한이 제한된 `.pre-v8.backup`이 생성됩니다. 이 백업에는 이전 이미지가 포함되므로 접근과 보존 기간을 정합니다.
-
-마이그레이션은 `secure_delete`를 켜고 대비표 이미지 테이블과 PDF 처리 상태를 한 트랜잭션에서 제거합니다. 운영 DB에 쓰기가 없는 배포 창에서 적용한 뒤, 다른 연결이 이전 WAL을 읽고 있지 않은 상태에서 `PRAGMA wal_checkpoint(TRUNCATE)`가 성공하는지 확인합니다. 스키마 버전, 이미지 테이블 부재, `quick_check`, `foreign_key_check`와 기존 일정·본문·공식 PDF 링크·승인 이력을 대조합니다. 양쪽 화면을 빌드한 뒤 공개 캘린더와 웹앱 관리자에서 상세 링크와 이전 이미지 경로의 404를 확인합니다.
-
-정리한 운영 DB에서 별도 파일로 `VACUUM INTO`를 실행해 이미지가 없는 새 백업을 만듭니다. 파일 권한을 `600`으로 제한하고 스키마 버전, 이미지 테이블 부재, `quick_check`, `foreign_key_check` 및 보존 대상 데이터 일치를 확인합니다. 새 백업을 검증한 뒤, 이미지가 든 이전 백업과 해당 WAL·SHM 파일의 경로를 대조해 삭제 대상으로 확정합니다.
-
-새 백업을 검증하기 전 복구가 필요하면 제한된 위치의 이전 백업을 사용합니다. 복구 전에 자동 다운로드와 이미지 공개가 재개되는지 확인합니다.
+백업에는 제거 전 자료가 포함되므로 접근 권한과 보존 기간을 정합니다. 복구가 필요하면 새 쓰기를 멈추고 현재 DB와 WAL을 보존한 뒤, 백업 사본의 정합성과 버전을 확인해 승인된 이전 코드와 DB 경로로 되돌립니다.
 
 ## 캘린더 매일 점검
 

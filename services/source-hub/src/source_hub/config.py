@@ -11,7 +11,6 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 CONFIG_PATH = Path(__file__).with_name('sources.yaml')
 HOSTS = {
     'lawgo': {'www.law.go.kr', 'open.law.go.kr', 'github.com'},
-    'assembly': {'www.assembly.go.kr', 'open.assembly.go.kr'},
     'moel': {'www.moel.go.kr'},
     'mofe': {'mofe.go.kr', 'www.mofe.go.kr'},
     'nts': {'www.nts.go.kr'},
@@ -60,7 +59,7 @@ class Source(BaseModel):
             raise ValueError('기관·수집 모드·어댑터 조합을 확인하세요')
         if self.adapter not in {self.agency, 'legacy', 'local'}:
             raise ValueError('기관에 등록된 어댑터를 사용하세요')
-        if self.adapter in {'legacy', 'local'} and self.agency not in {'lawgo', 'assembly'}:
+        if self.adapter in {'legacy', 'local'} and self.agency != 'lawgo':
             raise ValueError('기존 수집 어댑터의 기관을 확인하세요')
         if self.law_scope and (self.group != 'law' or self.agency != 'lawgo'):
             raise ValueError('개별 법령 설정은 법령 범위 수집원에서만 지원합니다')

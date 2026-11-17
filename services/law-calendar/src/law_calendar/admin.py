@@ -3,44 +3,15 @@
 import hmac
 import os
 from pathlib import Path
-from typing import Annotated, Literal
+from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
-from pydantic import BaseModel, ConfigDict, ValidationError
+from pydantic import ValidationError
 
-from law_calendar.assembly_ingest import review_assembly
 from law_calendar.db import read_database
 from law_calendar.import_failures import list_import_failures
 from law_calendar.review import held_review_template, review
 from law_calendar.validation import StaleSnapshotError
-
-
-class AssemblyReview(BaseModel):
-    model_config = ConfigDict(extra='forbid', strict=True)
-    snapshot_id: str
-    decision: str
-    note: str
-
-
-def _notice_template(database: Path, snapshot_id: str) -> dict | None:
-    with read_database(database) as conn:
-        row = conn.execute(
-            'SELECT s.title,s.source_url,s.bill_no FROM assembly_entries e '
-            'JOIN assembly_snapshots s ON s.id=e.snapshot_id '
-            "WHERE s.id=? AND e.source='assembly_notice' AND e.review_state='pending'",
-            (snapshot_id,),
-        ).fetchone()
-        if row is None:
-            return None
-        dates = conn.execute(
-            'SELECT role,event_on AS date FROM assembly_dates WHERE snapshot_id=? ORDER BY event_on,role DESC',
-            (snapshot_id,),
-        ).fetchall()
-    return {
-        'template': {'snapshot_id': snapshot_id, 'decision': 'approve', 'note': ''},
-        **dict(row),
-        'dates': [dict(date) for date in dates],
-    }
 
 
 def _validation_detail(exc: ValidationError) -> str:
@@ -69,19 +40,6 @@ def _review_effective(database: Path, change_id: str, payload: dict, reviewer: s
     review(database, payload, reviewer=reviewer, idempotent=True)
 
 
-def _review_notice(database: Path, snapshot_id: str, payload: dict, reviewer: str) -> None:
-    decision = AssemblyReview.model_validate(payload)
-    if decision.snapshot_id != snapshot_id:
-        raise HTTPException(422, 'snapshot_id: Review snapshot does not match the held notice')
-    with read_database(database) as conn:
-        snapshot = conn.execute(
-            "SELECT 1 FROM assembly_snapshots WHERE id=? AND source='assembly_notice'", (snapshot_id,)
-        )
-        if snapshot.fetchone() is None:
-            raise HTTPException(404, 'Assembly notice not found')
-    review_assembly(database, snapshot_id, decision.decision, reviewer=reviewer, note=decision.note, idempotent=True)
-
-
 def router(database: Path) -> APIRouter:
     token = os.environ.get('LAWBOT_CALENDAR_ADMIN_TOKEN', '').strip()
     expected = f'Bearer {token}'.encode()
@@ -103,24 +61,21 @@ def router(database: Path) -> APIRouter:
             raise HTTPException(422, 'Review body must be a JSON object')
         return payload
 
-    @api.get('/law-holds/{kind}/{hold_id}')
-    def template(kind: Literal['effective', 'notice'], hold_id: str):
-        result = held_review_template(database, hold_id) if kind == 'effective' else _notice_template(database, hold_id)
+    @api.get('/law-holds/effective/{hold_id}')
+    def template(hold_id: str):
+        result = held_review_template(database, hold_id)
         if result is None:
             raise HTTPException(404, 'Current hold not found')
         return result
 
-    @api.post('/law-holds/{kind}/{hold_id}')
-    def decide(kind: Literal['effective', 'notice'], hold_id: str, body: Annotated[dict, Depends(read_review_payload)]):
+    @api.post('/law-holds/effective/{hold_id}')
+    def decide(hold_id: str, body: Annotated[dict, Depends(read_review_payload)]):
         payload = body.copy()
         reviewer = payload.pop('reviewer', None)
         if not isinstance(reviewer, str):
             raise HTTPException(422, 'reviewer: Reviewer is required')
         try:
-            if kind == 'effective':
-                _review_effective(database, hold_id, payload, reviewer)
-            else:
-                _review_notice(database, hold_id, payload, reviewer)
+            _review_effective(database, hold_id, payload, reviewer)
         except StaleSnapshotError as exc:
             raise HTTPException(409, str(exc)) from exc
         except ValidationError as exc:

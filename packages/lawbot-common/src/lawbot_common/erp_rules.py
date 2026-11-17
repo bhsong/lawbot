@@ -19,18 +19,16 @@ Applicability = Literal[
 ]
 FinalEvidence = Literal['promulgated_law', 'final_notice', 'final_specification']
 CONFIRMATION_HOSTS = NEWS_HOSTS['lawgo'] | NEWS_HOSTS['moel'] | NEWS_HOSTS['mofe'] | NEWS_HOSTS['nts']
-PROPOSAL_HOSTS = CONFIRMATION_HOSTS | {'pal.assembly.go.kr', 'likms.assembly.go.kr'}
 
 
-def official_link(url: str, *, proposal: bool = False) -> bool:
+def official_link(url: str) -> bool:
     if any(char.isspace() or ord(char) < 32 or char in '\\\x7f' for char in url):
         return False
     try:
         link = urlsplit(url)
     except ValueError:
         return False
-    hosts = PROPOSAL_HOSTS if proposal else CONFIRMATION_HOSTS
-    return link.scheme == 'https' and link.netloc in hosts and link.path not in ('', '/')
+    return link.scheme == 'https' and link.netloc in CONFIRMATION_HOSTS and link.path not in ('', '/')
 
 
 def target_date(day: date, applicability: Applicability) -> date:
@@ -62,17 +60,6 @@ class ErpRuleVersion(Contract):
             raise ValueError('Use a confirmed official source URL')
         if self.appliesUntil and self.appliesUntil < self.appliesFrom:
             raise ValueError('Application end precedes application start')
-        return self
-
-
-class ErpRuleProposal(Contract):
-    ruleVersionId: Identifier
-    evidenceUrl: OfficialUrl
-
-    @model_validator(mode='after')
-    def validate_evidence(self):
-        if not official_link(self.evidenceUrl, proposal=True):
-            raise ValueError('Use an official proposal URL')
         return self
 
 
@@ -125,7 +112,6 @@ class RuleIdentity(Contract):
 
 class RuleSnapshotItem(RuleIdentity):
     scopes: list[RuleSnapshotScope]
-    proposalLinks: list[ErpRuleProposal]
 
 
 class RuleSnapshot(Contract):
@@ -156,7 +142,6 @@ class ErpRuleScope(RuleScope):
 
 class ErpRule(RuleIdentity):
     scopes: list[ErpRuleScope]
-    proposalLinks: list[ErpRuleProposal]
 
 
 class ErpRules(Contract):

@@ -80,7 +80,7 @@ Source Hub가 내보낸 공개 파일을 `LAWBOT_CALENDAR_NEWS_FEED` 또는 `law
 
 ## ERP 적용 기준 v2
 
-`erp-updates export-rules`로 만든 공개 파일을 `LAWBOT_CALENDAR_ERP_RULES_FEED` 또는 `law-calendar --erp-rules-feed`로 지정합니다. 기존 `GET /api/erp-updates`는 계속 v1 자료와 이력을 읽습니다. `GET /api/erp-updates/v2`는 업무 항목의 적용 범위별 현행판, 확정 예정판과 별도의 검토 중 링크를 반환합니다.
+`erp-updates export-rules`로 만든 공개 파일을 `LAWBOT_CALENDAR_ERP_RULES_FEED` 또는 `law-calendar --erp-rules-feed`로 지정합니다. 기존 `GET /api/erp-updates`는 계속 v1 자료와 이력을 읽습니다. `GET /api/erp-updates/v2`는 업무 항목의 적용 범위별 현행판과 확정 예정판을 반환합니다.
 
 선택 매개변수 `asOf`는 한국 표준시 기준일, `targetOn`은 지급·귀속·보험료 등에 적용할 업무 대상일입니다. 둘 다 `YYYY-MM-DD` 형식입니다. `asOf`를 생략하면 오늘, `targetOn`을 생략하면 기준일을 사용합니다. 철회된 내용은 공개 응답에서 빠지고 기존 결정은 ERP 내부 이력에서 조회할 수 있습니다. [검토 및 내보내기](../erp-updates/README.md#적용-기준-버전과-피드-v2)
 
@@ -92,13 +92,13 @@ ERP 탭은 v2가 설정되면 항목마다 한 카드에서 적용 범위별 현
 
 ## 저장된 모니터링 결과와 공개 검토
 
-기존 monitor의 `legalize_law` 이벤트 JSON과 원문 사본을 오프라인으로 가져온다. DB 초기화 명령은 새 DB와 기존 v1~v6 DB를 v7로 준비한다. v6에서 올릴 때는 SQLite backup으로 `.pre-v7.backup` 사본을 만든다. 이전 버전의 백업 규칙도 유지한다. v4~v6에서 기존 일정 조회와 검토를 지원한다. 최신 수집 코드의 예고 자동 공개와 첨부 처리 상태 저장은 v7이 필요하다. [v7 반영 절차](../../docs/operations.md#국회-입법예고-자동-공개용-캘린더-db-v7)
+기존 monitor의 `legalize_law` 이벤트 JSON과 원문 사본을 오프라인으로 가져온다. DB 초기화 명령은 새 DB를 v9로 만들고 기존 DB를 순차 마이그레이션한다. v8에서 올릴 때는 SQLite backup으로 `.pre-v9.backup` 사본을 만든다. 이전 버전의 백업 규칙도 유지한다. [v9 반영 절차](../../docs/operations.md#캘린더-db-v9-반영)
 
 import는 명확한 최신 부칙의 절대 날짜·공포일 시행 또는 조문 전체의 구조화 시행 메타데이터를 자동 판정한다. 날짜가 확정되면 규칙 기반 요약과 함께 달력에 표시한다. 위임 표현·복잡한 부칙·부분 시행·상충·근거 부족은 보류한다. 자동 확인은 시행일에 한정되며 Git 구판·신판의 법적 효력 비교는 미검증으로 표시한다.
 
 공개 화면의 **보류 목록**은 날짜와 무관한 보류 조문·사유·공식 원문 링크를 표시한다. 보류는 달력 건수에 포함되지 않는다. 조회 API는 `/api/law-holds?page=1&page_size=20`이다.
 
-웹앱의 **피드백 & 법령 관리 → 법령 캘린더 → 보류 목록**에서는 저장 원문과 공식 근거를 대조하고 시행일 보류를 승인할 수 있다. 같은 이벤트에 저장된 공포일이 있으면 다음 조문의 검토 양식에 그 값을 채운다. 시행일 이벤트 전체의 반려·철회는 아래 CLI에서 처리한다. 입법예고 검토 대기에서는 승인·반려·철회를 저장할 수 있다.
+웹앱의 **피드백 & 법령 관리 → 법령 캘린더 → 보류 목록**에서는 저장 원문과 공식 근거를 대조하고 시행일 보류를 승인할 수 있다. 같은 이벤트에 저장된 공포일이 있으면 다음 조문의 검토 양식에 그 값을 채운다. 시행일 이벤트 전체의 반려·철회는 아래 CLI에서 처리한다.
 
 관리자 검토와 실패 조회를 사용하려면 웹앱의 레포 최상위 `.env`와 `services/law-calendar/.env` 두 곳의 `LAWBOT_CALENDAR_ADMIN_TOKEN`에 사용자가 같은 값을 직접 입력한다. 두 파일은 소유자만 읽고 쓸 수 있게 한다. 캘린더 서버는 `law-calendar` 실행 파일을 직접 호출해도 서비스 폴더의 `.env`를 시작할 때 읽는다. 프로세스 환경에 같은 변수가 있으면 그 값을 우선 사용한다.
 
@@ -132,38 +132,7 @@ uv run --project services/law-calendar python -m law_calendar.db $CALENDAR_DB
 uv run --project services/law-calendar --frozen --no-sync python -m law_calendar.sync --monitor-home $MONITOR_HOME --database $CALENDAR_DB
 ```
 
-sync는 monitor state.db의 최신 수집 결과를 읽고, 캘린더에 기록된 이벤트 ID는 JSON을 열기 전에 건너뛴다. 미등록 이벤트는 공통 법령 범위의 Legalize KR 폴더나 국회 제목 키워드를 대조해 가져온다. 기존 일정과 스냅숏을 보존하며 명시적으로 지정한 이벤트의 오프라인 import도 지원한다. [공통 법령 범위](../../packages/lawbot-common/src/lawbot_common/law_scope.json)
+sync는 monitor state.db의 최신 수집 결과를 읽고, 캘린더에 기록된 이벤트 ID는 JSON을 열기 전에 건너뛴다. 미등록 이벤트는 공통 법령 범위의 Legalize KR 폴더를 대조해 가져온다. 기존 일정과 스냅숏을 보존하며 명시적으로 지정한 이벤트의 오프라인 import도 지원한다. [공통 법령 범위](../../packages/lawbot-common/src/lawbot_common/law_scope.json)
 
-법령·의안·예고 출처별로 검증하고 변경이 0건인 정상 실행도 각 마지막 수집 시각을 기록한다. 실패한 출처는 시각과 기존 데이터를 보존하고 다른 출처의 입력은 진행한다. 다음 실행에서 실패한 이벤트를 재시도하며 웹앱 관리자 캘린더의 **가져오기 실패**에서 실패 기록을 확인할 수 있다. 입력 실패는 종료 코드 2, 입법예고 검토 대기나 본문 조회 실패는 종료 코드 1로 점검 결과에 표시된다.
+법령 수집을 검증하고 변경이 0건인 정상 실행도 마지막 수집 시각을 기록한다. 수집 실패 시 시각과 기존 데이터를 보존한다. 다음 실행에서 실패한 이벤트를 재시도하며 웹앱 관리자 캘린더의 **가져오기 실패**에서 실패 기록을 확인할 수 있다. 입력 실패는 종료 코드 2로 점검 결과에 표시된다.
 
-### 국회 이벤트 공개 검토
-
-국회 입법예고는 수집이 성공한 정기 sync에서 공식 상세의 의안번호와 예고 시작·종료일이 일치하면 자동 공개한다. 기간이 비어 있거나 불일치하면 검토 대기로 남는다. 법률안은 공식 의안 API `TVBPMBILL11`의 식별자·상태·발의 또는 의결 날짜와 공식 상세 링크를 확인해 자동 공개한다. 이미 저장된 법률안도 정상 수집 후 같은 기준으로 확인한다. 수동 반려·철회 상태는 정정이 들어와도 유지된다.
-
-캘린더의 **보류 목록 → 입법예고 검토 대기**에서 건수, 의안번호, 대기 사유와 공식 원문을 확인할 수 있다. 이 목록은 공개 승인 전 확인용으로 날짜별 캘린더 집계와 분리된다.
-
-`assembly-list --notice-sample 5`로 최근 자동 공개 예고 최대 5건을 골라 의안번호와 검토 근거를 확인할 수 있다. `assembly-show`로 각 공식 링크와 날짜 근거를 확인한다. 전체 목록은 `--notice-sample`을 생략한다.
-
-```bash
-uv run --project services/law-calendar python -m law_calendar.manage --database "$CALENDAR_DB" assembly-list
-uv run --project services/law-calendar python -m law_calendar.manage --database "$CALENDAR_DB" assembly-show "$SNAPSHOT_ID"
-uv run --project services/law-calendar python -m law_calendar.manage --database "$CALENDAR_DB" assembly-review "$SNAPSHOT_ID" approve --reviewer "$REVIEWER_ID" --note '공식 원문과 날짜 확인'
-```
-
-같은 명령에서 `reject` 또는 `withdraw`로 반려·철회한다. 공개 화면은 공식 예고 시작·종료일과 법률안 발의·의결일을 구분하며, 같은 예고의 시작과 종료가 같은 날이면 한 건으로 집계한다.
-
-### 입법예고 주요 변경 내용과 공식 원문
-
-정기 sync는 한 번에 최대 24건의 공식 상세를 대조해 본문과 확인된 PDF 링크를 저장한다. 이미 공개한 자료를 별도로 보강하려면 캘린더 DB를 v8로 올린 뒤 다음 명령을 실행한다.
-
-```bash
-uv sync --project services/law-calendar --locked
-uv run --project services/law-calendar python -m law_calendar.db "$CALENDAR_DB"
-uv run --project services/law-calendar python -m law_calendar.manage --database "$CALENDAR_DB" notice-content
-```
-
-명령은 국회 상세의 의안번호·예고기간과 저장된 현재 snapshot을 대조한다. 주요내용을 평문으로 저장하고, 국회가 제안이유와 주요내용을 한 문단으로 제공하면 그 문단을 보존한다. 사용자는 상세창에서 공식 상세 페이지나 확인된 PDF 링크를 직접 열 수 있다.
-
-수동 명령은 현재 승인 snapshot 중 본문 확인이 필요한 자료를 최대 150건 읽으며, `--limit`으로 배치 크기를 줄일 수 있다. 이미 보강한 자료를 다시 대조할 때는 `--refresh`를 사용한다. 재조회에 실패하면 기존 본문과 링크를 보존한다.
-
-`--refresh` 출력에 `nextAfterSnapshot` 값이 있으면 다음 실행에 `--refresh --after-snapshot "$NEXT_SNAPSHOT"`을 넣어 이어서 처리한다. 값이 `null`이면 마지막 배치까지 도달한 것이다. 실패한 항목은 각 배치의 `failed`에 기록된다.

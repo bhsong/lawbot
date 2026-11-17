@@ -59,7 +59,7 @@ def list_import_failures(database: Path, page: int, page_size: int) -> dict:
         FROM import_runs r
         JOIN json_each(CASE WHEN json_valid(r.errors_json) THEN r.errors_json ELSE '[]' END) e
         WHERE r.failed > 0 AND json_extract(r.errors_json,e.fullkey || '.source')
-            IN ('legalize_law','assembly_bill','assembly_notice')
+            = 'legalize_law'
     """
     with read_database(database) as conn:
         conn.execute('BEGIN')

@@ -1,4 +1,4 @@
-# 법령과 제목 키워드는 lawbot_common의 law_scope.json에서 읽는다.
+# 법령 범위는 lawbot_common의 law_scope.json에서 읽는다.
 # 이 파일은 수집 설정, 행정규칙, 별표·서식, 점검 명령을 관리한다.
 
 repos:   # 수집할 git 저장소 (legalize-kr: 법령, admrule-kr: 행정규칙)
@@ -22,9 +22,6 @@ admrules:  # 3, 5, 7번: admrule-kr 행정규칙. agency는 머리말 소관부�
     - { agency: 국세청,     keywords: [전산매체, 제출요령, 레이아웃], category: 5 }
     - { agency: 고용노동부, keywords: [퇴직연금, 최저임금, 산재보험료율, 사업종류별], category: 7 }
     - { agency: 보건복지부, keywords: [기준소득월액, 보험료 상한, 보험료 하한, 보수월액], category: 7 }
-
-prelegislation:  # 4번: 국회 법안·입법예고 수집 설정
-  assembly: {enabled: false, age: 22}
 
 checks:  # daily가 collect 다음에 부르는 점검 명령 (law_monitor.checks). 종료 코드 0 이상 없음 · 1 확인 필요 · 그 밖 실패
   # 자리표시: {bin}(law-monitor와 같은 venv의 bin), {home}, {data}, {repos}. 결과 줄(마지막 출력 줄)이 요약 md '점검' 절에 들어감

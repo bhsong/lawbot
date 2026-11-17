@@ -151,6 +151,8 @@ def test_nonpublic_data_is_absent_from_every_endpoint(dataset, table, field, val
         '/api/law-events',
         '/api/law-events?month=2026-11&date=2026-11-05',
         '/api/law-events?month=2026-11&type=other',
+        '/api/law-events?month=2026-11&type=bill',
+        '/api/law-holds?type=notice',
         '/api/law-events?month=2026-11&page_size=101',
     ],
 )
@@ -191,3 +193,29 @@ def test_migration_preserves_foreign_database_and_backs_up_existing_empty_file(t
         result = client.get('/api/law-events?month=2026-11')
         assert result.json()['total'] == 0 and result.headers['cache-control'] == 'no-store'
         assert client.get('/api/law-calendar/status').json()['delayed'] is True
+
+
+def test_v9_public_contract_keeps_law_notices_without_retired_fields(dataset):
+    with TestClient(create_app(dataset)) as client:
+        notice = client.get('/api/law-events?month=2026-11&type=notice').json()['items'][0]
+        assert notice['kind'] == 'notice'
+        assert 'assembly' not in notice
+        detail = client.get('/api/law-changes/' + notice['id']).json()
+        assert 'noticeContent' not in detail
+        assert set(client.get('/api/law-calendar/status').json()) == {
+            'collectedAt',
+            'verifiedAt',
+            'delayed',
+            'timezone',
+        }
+        assert client.get('/api/admin/law-holds/notice/missing').status_code == 404
+
+
+def test_v9_reads_refuse_an_unmigrated_v8_database_without_modification(tmp_path):
+    database = tmp_path / 'old.db'
+    with sqlite3.connect(database) as conn:
+        conn.executescript('CREATE TABLE original(value TEXT); PRAGMA user_version=8;')
+    before = database.read_bytes()
+    with TestClient(create_app(database)) as client:
+        assert client.get('/api/law-calendar/status').status_code == 503
+    assert database.read_bytes() == before

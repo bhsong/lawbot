@@ -9,14 +9,9 @@ import pytest
 from playwright.sync_api import expect
 
 import calendar_ui_support as support
-from law_calendar.assembly_ingest import import_assembly
-from law_calendar.sync import synchronize
 from lawbot_common.erp_daily import replace_file, seal
 from lawbot_common.tax_schedule import NTS_HOST, year_path
 from test_calendar_api import dataset as dataset
-from test_calendar_assembly import register
-from test_calendar_notice_content import PDF_URL, detail_html
-from test_calendar_sync import scheduled as scheduled
 from test_calendar_workflow import approval, import_one
 from test_calendar_workflow import workflow as workflow
 
@@ -213,46 +208,6 @@ def test_database_to_public_calendar_and_comparison(dataset, tmp_path, calendar_
         expect(page.get_by_role('region', name='시행 조문 1건')).to_be_visible()
 
 
-@pytest.mark.parametrize('width', [390, 1280])
-def test_assembly_notice_and_bill_dates_remain_separate(scheduled, tmp_path, calendar_page, width, monkeypatch):
-    (database, home, _, _), state = scheduled
-    register(home, state)
-    register(home, state, source='assembly_bill', date='2026-11-05')
-    html = detail_html('2200012', '2026-11-04~2026-11-05', '정식 적용 범위를 확대하는 안입니다.')
-    monkeypatch.setattr('law_calendar.notice_content.fetch_official', lambda _url: html.encode())
-    assert synchronize(database, home)['notice_auto_published'] == 1
-    page = calendar_page
-    page.set_viewport_size({'width': width, 'height': 900})
-    page.clock.install(time=datetime.datetime(2026, 11, 5, tzinfo=datetime.UTC))
-    with support.serve(tmp_path, development=False, database=database) as (url, _):
-        pdf_requests = []
-        page.on('request', lambda request: pdf_requests.append(request.url) if request.url == PDF_URL else None)
-        page.goto(url)
-        notice_panel = page.get_by_role('region', name='입법예고 1건')
-        expect(notice_panel.get_by_text('예고 종료일', exact=False)).to_be_visible()
-        bill_panel = page.get_by_role('region', name='법률안 1건')
-        expect(bill_panel.get_by_role('button')).to_contain_text('발의·제안일')
-        notice_panel.get_by_role('button').click()
-        dialog = page.get_by_role('dialog')
-        expect(dialog.get_by_text('소관위원회', exact=True)).to_be_visible()
-        expect(dialog.get_by_role('heading', name='주요 변경 내용')).to_be_visible()
-        expect(dialog.get_by_text('정식 적용 범위를 확대하는 안입니다.')).to_be_visible()
-        expect(dialog.get_by_role('img')).to_have_count(0)
-        expect(dialog.get_by_role('link', name='법률안 PDF 원문 (새 창)')).to_have_attribute('href', PDF_URL)
-        assert dialog.evaluate('(element) => element.scrollWidth <= element.clientWidth')
-        expect(dialog.get_by_role('link', name='공식 원문 확인', exact=False)).to_have_attribute(
-            'href', 'https://pal.assembly.go.kr/napal/lgsltpa/lgsltpaOngoing/view.do?lgsltPaId=PRC_NOTICE'
-        )
-        assert pdf_requests == []
-        page.keyboard.press('Escape')
-        expect(notice_panel.get_by_role('button')).to_be_focused()
-
-        page.get_by_role('button', pressed=True).focus()
-        page.keyboard.press('ArrowLeft')
-        expect(notice_panel.get_by_text('예고 시작일', exact=False)).to_be_visible()
-        expect(bill_panel).to_have_count(0)
-
-
 def test_review_cli_controls_public_browser_visibility(workflow, tmp_path, calendar_page):
     db = workflow[0]
     event_id = import_one(workflow)
@@ -296,15 +251,11 @@ def test_review_cli_controls_public_browser_visibility(workflow, tmp_path, calen
 
 
 @pytest.mark.parametrize('width', [390, 1280])
-def test_public_holds_dialog_is_undated_read_only_and_keyboard_accessible(scheduled, tmp_path, calendar_page, width):
-    workflow, state = scheduled
+def test_public_holds_dialog_is_undated_read_only_and_keyboard_accessible(workflow, tmp_path, calendar_page, width):
     db, home, path, event = workflow
     event['context']['addenda_added'] = ['제1조(시행일) 이 법은 대통령령으로 정하는 날부터 시행한다.']
     path.write_text(json.dumps(event), encoding='utf-8')
     import_one(workflow)
-    notice = register(home, state, start=None)
-    snapshot = json.loads((home / f'{notice}.json').read_text())
-    import_assembly(db, 'assembly_notice', snapshot['detected_at'], [snapshot])
     page = calendar_page
     page.set_viewport_size({'width': width, 'height': 844})
     page.clock.install(time=datetime.datetime(2026, 11, 5, tzinfo=datetime.UTC))
@@ -325,16 +276,6 @@ def test_public_holds_dialog_is_undated_read_only_and_keyboard_accessible(schedu
         assert dialog.evaluate('(el) => el.contains(document.activeElement)')
         page.keyboard.press('Tab')
         expect(dialog.get_by_role('button', name='보류 목록 닫기')).to_be_focused()
-        dialog.get_by_role('button', name='입법예고 검토 대기').click()
-        expect(dialog.get_by_text('총 1건', exact=False)).to_be_visible()
-        expect(dialog.get_by_text('의안번호 2200012')).to_be_visible()
-        expect(dialog.get_by_text('예고 시작일 또는 종료일 확인 필요')).to_be_visible()
-        expect(dialog.get_by_role('link', name='공식 원문 확인 (새 창)')).to_have_attribute(
-            'href', snapshot['context']['source_url']
-        )
-        assert dialog.evaluate('(el) => el.scrollWidth <= el.clientWidth')
-        dialog.get_by_role('button', name='시행일 보류').click()
-        expect(dialog.get_by_text('총 3건', exact=False)).to_be_visible()
         page.keyboard.press('Escape')
         expect(dialog).not_to_be_visible()
         expect(opener).to_be_focused()
