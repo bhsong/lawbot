@@ -1,6 +1,6 @@
 # ERP 기관 소식 게시판별 최신 10개 (2026-11-17)
 
-[계획](../plans/erp-news-per-board.md)
+[계획](../archives/erp-news-per-board.md)
 
 ## 검증
 
