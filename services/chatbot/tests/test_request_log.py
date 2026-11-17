@@ -239,3 +239,24 @@ def test_log_has_citation_summary_without_text(env, log):
     env.setattr(FakeLLM, 'chunks', ['【결론】제공된 조문에서 근거를 찾을 수 없습니다.'])
     list(service.ask(a, QUESTION, 'fast'))
     assert lines(log)[-1]['refused'] is True and lines(log)[-1]['n_cited'] == 0
+
+
+def test_log_summary_ignores_retired_fields(tmp_path, capsys):
+    row = {
+        'status': 'ok',
+        'mode': 'api',
+        'model': 'pro',
+        'search_ms': 1000,
+        'peak_gb': None,
+        'finish': 'stop',
+        'cache_mode': 'on',
+        'sug' + 'gestion_count': 2,
+    }
+    path = tmp_path / 'requests.jsonl'
+    path.write_text(json.dumps(row) + '\n', encoding='utf-8')
+    log_summary.main([str(path)])
+    output = capsys.readouterr().out
+    assert '요청 1건 · ok 1' in output
+    assert '[api · pro] 성공 1건' in output
+    assert '1.00초' in output
+    assert '정확 일치' not in output

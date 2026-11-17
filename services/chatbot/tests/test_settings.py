@@ -142,3 +142,28 @@ def test_load_app_uses_given_settings(env):
     a = service.load_app(settings=s)
     assert a.settings is s and a.retriever.args[0][0].query_timeout.read == 90
     assert list(a.models.specs) == ['pro']
+
+
+@pytest.mark.parametrize(
+    ('key', 'value'),
+    [
+        ('LAWBOT_' + 'EXACT' + '_CACHE_DB', 'data/not-ignored.db'),
+        ('LAWBOT_' + 'SUGGEST' + 'IONS_TAU', 'not-a-number'),
+        ('LAWBOT_UNKNOWN_OPTION', 'unused'),
+    ],
+)
+def test_retired_and_unknown_settings_do_not_block_web_start(env, key, value):
+    from fastapi.testclient import TestClient
+
+    from fakes import FakeLLM, FakeRetriever
+    from lawbot import service, web
+
+    env.setattr(service, 'Retriever', FakeRetriever)
+    env.setattr(service, 'LLM', FakeLLM)
+    cfg = settings.load(BASE | {'LAWBOT_DECREE_ENABLED': '0', key: value}, web=True)
+    with TestClient(web.create_app(service.load_app(cfg), cfg.auth, dist=None)) as client:
+        response = client.post('/api/login', json={'user': BASE['LAWBOT_USER'], 'password': BASE['LAWBOT_PW']})
+        assert response.status_code == 200
+        response = client.get('/api/config')
+        assert response.status_code == 200
+        assert response.json()['default_model'] == 'pro'

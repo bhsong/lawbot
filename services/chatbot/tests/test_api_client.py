@@ -479,11 +479,6 @@ def test_calculation_router_through_real_server_app(env, real_server, tmp_path, 
     app.settings = None
     app.calculator_dependencies = {MEDICAL: ()}
 
-    class ForbiddenCache:
-        def lookup(self, *args):
-            raise AssertionError('calculation question must skip cache lookup')
-
-    app.exact_cache = ForbiddenCache()
     capsys.readouterr()
     events = list(web.chat_events(app, question, 'pro', 'concise'))
     event_names = [event for event, _ in events]
@@ -497,7 +492,6 @@ def test_calculation_router_through_real_server_app(env, real_server, tmp_path, 
     assert dict(events)['calculation']['results'][0]['value'] == 75_000
     assert dict(events)['calculation_check'] == {'status': check}
     record = json.loads(path.read_text(encoding='utf-8'))
-    assert record['cache_reason'] == 'calculation_question'
     assert record['calculator'] == MEDICAL
     assert record['calculation_status'] == 'calculated'
     assert record['router_reason'] == 'selected' and record['router_ms'] >= 0
@@ -558,61 +552,6 @@ def test_web_noncalculation_prompt_and_calls_unchanged(env, real_server, capsys)
     assert posts == ['/v1/embeddings', '/v1/rerank', '/v1/chat/completions']
 
 
-@pytest.mark.parametrize('outcome', ['shown', 'refused', 'empty', 'db_timeout'])
-def test_suggestions_use_the_same_embedding_request(env, real_server, capsys, tmp_path, outcome):
-    from lawbot import web
-    from lawbot.cache_runtime import Decision
-    from lawbot.cache_store import CacheDatabaseError
-    from lawbot.suggestions import Recommendation, Suggestions
-
-    env.setenv('LAWBOT_RERANKER_ENABLED', '1')
-    request_log = tmp_path / 'requests.jsonl'
-    env.setenv('LAWBOT_REQUEST_LOG', str(request_log))
-    app = service.load_app()
-    app.exact_cache = types.SimpleNamespace(lookup=lambda *a: Decision('on', 'no_match', 0, True))
-    captured = []
-
-    def recommend(question, vector):
-        captured.append(vector)
-        return Recommendation([(types.SimpleNamespace(question='검토된 질문'), 0.9)] if outcome == 'shown' else [])
-
-    app.suggestions = types.SimpleNamespace(recommend=recommend)
-    if outcome == 'db_timeout':
-
-        def broken_refresh():
-            raise CacheDatabaseError('db_timeout', 'synthetic private content')
-
-        app.suggestions = Suggestions(app.exact_cache, 'embed', 'rev', 0, 1024)
-        env.setattr(app.suggestions, 'refresh', broken_refresh)
-        warnings = []
-        env.setattr(service.log, 'warning', lambda fmt, *args: warnings.append(fmt % args))
-    if outcome == 'refused':
-        env.setattr(web, 'answer_citations', lambda *a: ([], [], True))
-    capsys.readouterr()
-    stream = list(web.chat_events(app, '해고 예고 절차를 알려 주세요.', 'pro', 'concise'))
-    if outcome != 'shown':
-        assert 'suggestions' not in [event for event, _ in stream]
-    else:
-        assert [event for event, _ in stream][-2:] == ['suggestions', 'done']
-        assert stream[-2][1] == {'questions': ['검토된 질문']}
-        assert len(captured) == 1 and captured[0].shape == (64,)
-    lines = capsys.readouterr().out.splitlines()
-    posts = [line.split()[2] for line in lines if ' POST ' in line]
-    assert posts == ['/v1/embeddings', '/v1/rerank', '/v1/chat/completions']
-    assert sum(' GET /v1/models' in line for line in lines) == 1
-    row = json.loads(request_log.read_text(encoding='utf-8'))
-    assert row['status'] == 'ok' and stream[-1][0] == 'done'
-    if outcome == 'refused':
-        assert 'suggestion_ms' not in row and not captured
-    else:
-        assert row['suggestion_count'] == int(outcome == 'shown')
-        assert 0 <= row['suggestion_ms'] <= row['request_to_complete_ms']
-        assert row['suggestion_error'] == ('db_timeout' if outcome == 'db_timeout' else None)
-    if outcome == 'db_timeout':
-        assert warnings == ['검토 질문 추천 실패 · catalog · db_timeout']
-        assert 'synthetic private content' not in request_log.read_text(encoding='utf-8')
-
-
 def test_gated_lookup_uses_identical_rag_messages_and_no_calculation_event(env, real_server, tmp_path, capsys):
     from lawbot import web
     from lawbot.calc_gate import is_calculation_question
@@ -637,10 +576,6 @@ def test_gated_lookup_uses_identical_rag_messages_and_no_calculation_event(env, 
     chat = real_server.chat[app.models.specs['pro'].model]
     [(baseline, baseline_kwargs)] = chat.calls
 
-    def unexpected_lookup(*args):
-        pytest.fail('cache gate must also apply to router lookups')
-
-    app.exact_cache = types.SimpleNamespace(lookup=unexpected_lookup)
     capsys.readouterr()
     events = list(web.chat_events(app, question, 'pro', 'concise'))
     assert 'done' in dict(events)
@@ -652,7 +587,6 @@ def test_gated_lookup_uses_identical_rag_messages_and_no_calculation_event(env, 
     posts = [line.split()[2] for line in capsys.readouterr().out.splitlines() if ' POST ' in line]
     assert posts == ['/v1/chat/completions', '/v1/embeddings', '/v1/rerank', '/v1/chat/completions']
     row = json.loads(path.read_text(encoding='utf-8').splitlines()[-1])
-    assert row['cache_reason'] == 'calculation_question' and row['exact_lookup_ms'] is None
     assert row['router_reason'] == 'lookup_question' and row['calculation_status'] == 'none'
 
 
@@ -680,7 +614,6 @@ def test_router_queue_full_shows_temporary_guidance_and_continues_rag(env, real_
     assert events['calculation']['status'] == 'none'
     assert events['calculation']['message'].startswith('계산 판정을 일시적으로 하지 못했습니다.')
     assert diagnostic not in events['calculation']['message']
-    assert events['done']['response_source'] == 'rag'
     assert events['done']['text'].startswith('예고해야 합니다.')
     assert 'error' not in events
     assert chat_tokens == [SELECT_MAX_TOKENS, 1024]

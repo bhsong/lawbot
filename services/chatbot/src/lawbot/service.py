@@ -29,7 +29,6 @@ from lawbot.api_client import (
     request_timeout,
     wait_ready,
 )
-from lawbot.cache_store import CacheDatabaseError
 from lawbot.calc_corpus import calculator_compatibility, database_calculator_compatibility
 from lawbot.calc_router import check_conclusion, prompt_suffix, route_calculation
 from lawbot.embed_cache import EmbedCache, cache_key, embedding_metadata
@@ -38,7 +37,6 @@ from lawbot.llm import LLM
 from lawbot.paths import ROOT
 from lawbot.reranker import Reranker
 from lawbot.retriever import Retriever
-from lawbot.suggestions import Suggestions, error_kind
 from lawbot_common.logs import logger
 
 log = logger('lawbot', 'lawbot')
@@ -94,9 +92,7 @@ class LawbotApp:
     corpus_release_id: str | None = None
     corpus_manifest: dict | None = None
     articles_sha256: str | None = None
-    exact_cache: object = None
     calculator_dependencies: dict[str, tuple[str, ...]] | None = None
-    suggestions: Suggestions | None = None
 
 
 def uses_decrees(app, model_key):
@@ -108,39 +104,6 @@ def uses_decrees(app, model_key):
 def system_text(profile, spec):
     """모델별 system 파일 → 프로필 system 파일 순서"""
     return (spec.system_file or profile.system_file).read_text(encoding='utf-8').strip()
-
-
-def cache_snapshot(profile, release, decree):
-    """Build the cache namespace from the same settings and release used by the web app."""
-    from lawbot.exact_cache import MODEL, PROFILE, Snapshot
-
-    if profile.name != PROFILE or release is None:
-        return None
-    spec = next((model for model in profile.models if model.key == MODEL), None)
-    if spec is None:
-        return None
-    return Snapshot.load(
-        release,
-        system=system_text(profile, spec),
-        combined=decree is not None,
-        attach_decrees=decree is not None and MODEL in decree.models,
-    )
-
-
-def inspect_exact_cache(path, corpus_db, profile, release, decree):
-    from lawbot.cache_runtime import ExactCache
-    from lawbot.cache_store import Store
-
-    if corpus_db is None or release is None:
-        return None, ('WARN', '사용 안 함 (활성 DB 코퍼스 필요)')
-    try:
-        snapshot = cache_snapshot(profile, release, decree)
-    except OSError, ValueError, KeyError:
-        return None, ('WARN', '사용 안 함 (답변 정책 또는 조문 스냅샷 확인 실패)')
-    if snapshot is None:
-        return None, ('WARN', '사용 안 함 (v5 Pro 프로필 필요)')
-    cache = ExactCache(Store(path), corpus_db, snapshot)
-    return cache, cache.deployment_status()
 
 
 def check_profile_files(p, corpus=None):
@@ -265,18 +228,8 @@ def load_app(settings=None):
     def factory(spec):  # system 파일이 없으면 FileNotFoundError (화면에서 오류 안내)
         return LLM(spec.model, client=oa, system=system_text(p, spec))
 
-    suggestions = None
-
     def loaded():
-        try:
-            states = client.models()
-        except (ModelServerError, ConnectionError, ModelLoadError, ModelServerTimeout, ValueError) as exc:
-            if suggestions is not None:
-                suggestions.model_status_error(exc)
-            raise
-        if suggestions is not None:
-            suggestions.observe_revision(embedding_revision(states, p.emb_model))
-        return {m['id'] for m in states if m.get('loaded')}
+        return {m['id'] for m in client.models() if m.get('loaded')}
 
     models = ChatModels(p.models, factory, None if external else loaded)
     log.info(
@@ -285,23 +238,6 @@ def load_app(settings=None):
         f'({", ".join(s.model for s in p.models)})'
     )
     full = p.system_file.read_text(encoding='utf-8').strip()
-    exact_cache = None
-    if cfg.exact_cache_db is not None:
-        exact_cache, (level, message) = inspect_exact_cache(cfg.exact_cache_db, cfg.db, p, release, dc)
-        (log.warning if level == 'WARN' else log.info)('정확 일치 캐시: %s', message)
-    if exact_cache is not None and cfg.suggestions_tau is not None and revision:
-        suggestions = Suggestions(
-            exact_cache,
-            p.emb_model,
-            revision,
-            cfg.suggestions_tau,
-            p.max_seq,
-        )
-        try:
-            _, candidates, missing_vectors = suggestions.refresh()
-            log.info('검토 질문 추천 후보 %d개 · 일치하는 벡터 없음 %d개', len(candidates), missing_vectors)
-        except (CacheDatabaseError, OSError) as exc:
-            log.warning('검토 질문 추천 후보를 읽지 못했습니다. (%s)', error_kind(exc))
     return LawbotApp(
         p,
         retriever,
@@ -315,9 +251,7 @@ def load_app(settings=None):
         corpus_release_id=release.release_id if release else None,
         corpus_manifest=metadata if release else None,
         articles_sha256=getattr(retriever, 'articles_sha256', None),
-        exact_cache=exact_cache,
         calculator_dependencies=calculator_compatibility(release.combined.data if release else p.articles),
-        suggestions=suggestions,
     )
 
 
@@ -351,18 +285,11 @@ def retrieve(app, question, k, st: Timing, model_key=None) -> tuple[list[Hit], l
     st['_stage'] = 'search'
     t0 = time.perf_counter()
     count_call(st, 'embedding', 'search')
-    options = {}
-    if st.get('_capture_query'):
-
-        def capture(vector):
-            st['_query_vector'] = vector
-
-        options['capture'] = capture
     if app.reranker is None:
-        hits = app.retriever.search(question, k=k, **options)
+        hits = app.retriever.search(question, k=k)
         st['search'] = time.perf_counter() - t0
         return hits, []
-    candidates = app.retriever.search(question, k=app.reranker.candidates, **options)
+    candidates = app.retriever.search(question, k=app.reranker.candidates)
     st['search'] = time.perf_counter() - t0
     st['_stage'] = 'rerank'
     t1 = time.perf_counter()
@@ -477,7 +404,6 @@ def request_record(app, st, fmt, status, error):
     rec |= {k: st.get(k) for k in ('refused', 'n_cited', *CITE_FIELDS)}
     if 'answer_verdict' in st:
         rec['answer_verdict'] = st['answer_verdict']
-    rec |= st.get('cache_metrics', {})
     rec |= st.get('calculation_metrics', {})
     if 'call_counts' in st:
         rec['call_counts'] = st['call_counts']
@@ -544,10 +470,8 @@ def ask(
     fmt=None,
     *,
     request_id=None,
-    cache_metrics=None,
     report=None,
     calculation_candidate=False,
-    capture_query=False,
 ):
     """질문 하나: (단계, 검색 조문, 답변 원문, 측정값)을 차례로 돌려준다
     단계 'load'(모델 전환 대기) → 'generate'(토큰마다) → 'done'. 조문은 생성 전에 정해짐
@@ -558,12 +482,12 @@ def ask(
     질문마다 요청 로그 한 줄 (log_request): 성공 ok / 오류 error(AskError로 감싸 올림: kind는 요청 로그 error_type과 같고 화면 안내에 씀) /
     중간에 멈춤 cancelled (정지 버튼 등으로 생성기를 닫음)"""
     t0 = time.perf_counter()
-    st: Timing = {'model': model_key, 'load': None, 'request_id': request_id or uuid.uuid4().hex[:12]}
-    if capture_query:
-        st['_capture_query'] = True
-    if cache_metrics is not None:
-        st['cache_metrics'] = cache_metrics
-        st['call_counts'] = dict.fromkeys(('embedding', 'search', 'rerank', 'llm'), 0)
+    st: Timing = {
+        'model': model_key,
+        'load': None,
+        'request_id': request_id or uuid.uuid4().hex[:12],
+        'call_counts': dict.fromkeys(('embedding', 'search', 'rerank', 'llm'), 0),
+    }
 
     def record(status, error=None):
         if report is None:

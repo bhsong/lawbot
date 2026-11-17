@@ -1,4 +1,4 @@
-"""One deterministic eligibility rule for calculation routing and all caches."""
+"""Determine whether a question needs calculation routing."""
 
 import re
 import unicodedata

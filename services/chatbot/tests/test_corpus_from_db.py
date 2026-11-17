@@ -11,11 +11,9 @@ from lawbot import (
     feedback,
     manifest,
     service,
-    settings,
     view,
 )
 from lawbot.admin import Corpus
-from lawbot.cache_store import init as init_cache
 from lawbot.db import cli
 from lawbot.db.connection import connect, transaction
 from lawbot.db.csv_import import sha256
@@ -229,35 +227,6 @@ def test_embedding_revision_is_optional_if_lookup_has_no_match(corpus_db, env, m
     assert service.load_app().corpus_release_id == RELEASE
     with connect(corpus_db) as conn:
         assert conn.execute('SELECT model_revision FROM embedding_sets').fetchall() == [(None,)]
-
-
-def test_check_deploy_reports_configured_exact_cache(corpus_db, env, tmp_path):
-    configure(env, corpus_db)
-    path = tmp_path / 'private' / 'cache.db'
-    env.setenv('LAWBOT_EXACT_CACHE_DB', str(path))
-    checks = check_deploy.run()
-    assert ('WARN', '정확 일치 캐시: 사용 안 함 (DB 파일 없음)') in checks
-    init_cache(path)
-    checks = check_deploy.run()
-    assert any(
-        level == 'OK' and '정확 일치 캐시:' in text and '스키마 3 · 모드 off · namespace ' in text
-        for level, text in checks
-    )
-    assert ('OK', '계산기 medical_expense_credit 켜짐 (근거 조문 본문 일치)') in checks
-    assert ('INFO', '계산 질문 캐시 제외 0개 · 초안 0 · 승인 0') in checks
-
-
-def test_exact_cache_status_does_not_depend_on_a_p07_zip(corpus_db, env, tmp_path, model_server, caplog):
-    from conftest import set_auth
-
-    configure(env, corpus_db)
-    set_auth(env)
-    cache = tmp_path / 'private' / 'cache.db'
-    init_cache(cache)
-    env.setenv('LAWBOT_EXACT_CACHE_DB', str(cache))
-    assert not any('P07' in message or 'BUNDLE' in message for _, message in check_deploy.run())
-    assert service.load_app(settings.load(web=True)).corpus_release_id == RELEASE
-    assert not any('BUNDLE' in message for message in caplog.messages)
 
 
 def test_check_deploy_checks_db_bytes(corpus_db, env, tmp_path):
