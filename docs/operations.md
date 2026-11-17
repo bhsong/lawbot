@@ -42,6 +42,16 @@ uv sync
 
 새 백업을 검증하기 전 복구가 필요하면 제한된 위치의 이전 백업을 사용합니다. 복구 전에 자동 다운로드와 이미지 공개가 재개되는지 확인합니다.
 
+## 캘린더 매일 점검
+
+06:41 KST에 캘린더 수집 결과를 확인할 때 등록된 캘린더 DB 경로를 `CALENDAR_DB`에 지정하고 다음 읽기 전용 점검을 실행합니다.
+
+```sh
+uv run --project services/law-calendar --locked python -m law_calendar.manage --database "$CALENDAR_DB" holds-check
+```
+
+`pending_outside_snapshot`은 현재 수집본 밖에 있는 `pending` 조문 수이고, `hidden_pending_holds`는 보류 행이 있으나 관리자 보류 목록에 나오지 않는 `pending` 조문 수입니다. 한쪽이라도 0보다 크면 종료 코드는 1입니다.
+
 ## 법령 개정 재생성 미리보기
 
 작업 트리의 루트에서 `MONITOR_HOME`에 monitor home, `LAW_PATH`에 로컬 Legalize 저장소 안의 파일 경로, `COMMIT`에 개정 커밋을 지정합니다. monitor는 기존 법제처 보강을 적용하고 미리보기 원천을 실행별 임시 폴더에 저장합니다. 다른 로컬 클론을 쓸 때는 `--repo-path`를 지정합니다.
