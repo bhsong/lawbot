@@ -2,6 +2,7 @@
 
 import json
 import sqlite3
+from collections import Counter
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
@@ -92,7 +93,7 @@ def response(
 
 
 def current_news(entry: dict, limit: int, *, now: datetime | None = None) -> dict:
-    """Derive request-time freshness without changing stored news or exposing its deadlines."""
+    """Derive request-time freshness and apply the per-board limit without changing stored news."""
     now = now or datetime.now(KST)
     boards = []
     for source in entry.get('boards', []):
@@ -101,7 +102,13 @@ def current_news(entry: dict, limit: int, *, now: datetime | None = None) -> dic
         if cutoff and board['status'] == 'ok' and datetime.fromisoformat(cutoff) < now:
             board['status'] = 'delayed'
         boards.append(board)
-    return entry | {'boards': boards, 'items': entry.get('items', [])[:limit]}
+    shown: Counter[str] = Counter()
+    items = []
+    for item in entry.get('items', []):
+        shown[item['board']] += 1
+        if shown[item['board']] <= limit:
+            items.append(item)
+    return entry | {'boards': boards, 'items': items}
 
 
 def from_snapshot(
@@ -148,5 +155,5 @@ def from_snapshot(
         'state': 'ok',
         'generatedAt': snapshot.generatedAt.astimezone(KST).isoformat(),
         'boards': boards,
-        'items': [item.model_dump(mode='json') for item in latest(items)[:limit]],
+        'items': [item.model_dump(mode='json') for item in latest(items, limit)],
     }

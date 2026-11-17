@@ -317,3 +317,44 @@ def test_agency_news_overlays_erp_and_supports_mouse_keyboard_and_touch(dataset,
             expect(home).to_have_count(0)
         finally:
             support.keep_on_failure(request, log, page)
+
+
+def test_agency_news_groups_items_by_board_in_snapshot_order(dataset, tmp_path, calendar_pages, request):
+    page = calendar_pages(viewport={'width': 1280, 'height': 850})
+    news_feed = tmp_path / 'agency-news.json'
+    news = snapshot()
+    news['agencies']['nts'] = {
+        'boards': [
+            {'name': '국세청 고시', 'status': 'ok', 'lastSuccessAt': None},
+            {'name': '공지사항', 'status': 'ok', 'lastSuccessAt': None},
+        ],
+        'items': [
+            {
+                'id': f'news-{index}',
+                'title': title,
+                'board': board,
+                'publishedOn': published,
+                'officialUrl': f'https://www.nts.go.kr/nts/na/ntt/selectNttInfo.do?nttSn={index}',
+            }
+            for index, (title, board, published) in enumerate(
+                [
+                    ('새 공지', '공지사항', '2026-11-13'),
+                    ('지난 공지', '공지사항', '2026-11-01'),
+                    ('고시 개정', '국세청 고시', None),
+                ]
+            )
+        ],
+    }
+    news_feed.write_text(json.dumps(news))
+    with support.serve(tmp_path, development=False, database=dataset, news_feed=news_feed) as (url, log):
+        try:
+            page.goto(url + '/#erp')
+            page.get_by_role('button', name='국세청', exact=True).click()
+            panel = page.get_by_role('dialog', name='국세청 최신 소식')
+            expect(panel.get_by_role('heading', level=3)).to_have_text(['국세청 고시', '공지사항'])
+            notices = panel.get_by_role('region', name='공지사항 소식')
+            expect(notices.get_by_role('listitem').locator('strong')).to_have_text(['새 공지', '지난 공지'])
+            expect(panel.get_by_role('region', name='국세청 고시 소식').get_by_text('게시일 미확인')).to_be_visible()
+            expect(panel.get_by_text('게시판별 최신 최대 10건', exact=False)).to_be_visible()
+        finally:
+            support.keep_on_failure(request, log, page)

@@ -117,6 +117,35 @@ def test_latest_news_orders_metadata_and_limits_results(dataset, tmp_path):
         assert client.get('/api/erp-news/latest?agency=other').status_code == 422
 
 
+def test_latest_news_limit_applies_to_each_board(dataset, tmp_path):
+    file = tmp_path / 'news.json'
+    payload = snapshot()
+    payload['agencies']['mofe'] = {
+        'boards': [
+            {'name': '고시', 'status': 'ok', 'lastSuccessAt': NOW.isoformat()},
+            {'name': '보도', 'status': 'ok', 'lastSuccessAt': NOW.isoformat()},
+        ],
+        'items': [
+            {
+                'id': f'{board}-{index}',
+                'title': f'{board} {index}',
+                'board': board,
+                'publishedOn': f'2026-11-{index:02}' if board == 'press' else None,
+                'officialUrl': f'https://mofe.go.kr/view.do?board={board}&id={index}',
+            }
+            for board, count in (('press', 10), ('rules', 3))
+            for index in range(1, count + 1)
+        ],
+    }
+    for entry in payload['agencies']['mofe']['items']:
+        entry['board'] = '보도' if entry['board'] == 'press' else '고시'
+    file.write_text(json.dumps(payload))
+    with TestClient(create_app(dataset, news_feed=file)) as client:
+        items = client.get('/api/erp-news/latest?agency=mofe&limit=2').json()['items']
+        assert [item['id'] for item in items] == ['press-10', 'press-9', 'rules-1', 'rules-2']
+        assert len(client.get('/api/erp-news/latest?agency=mofe').json()['items']) == 13
+
+
 def test_law_news_only_uses_approved_promulgations_and_hometax_is_link_only(dataset, tmp_path):
     file = tmp_path / 'news.json'
     payload = snapshot()
