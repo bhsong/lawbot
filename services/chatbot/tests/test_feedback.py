@@ -530,6 +530,42 @@ def test_export(env, tmp_path):
         feedback_export.export(out, tmp_path / 'out', articles=arts)
 
 
+@pytest.mark.parametrize(
+    'missing, null',
+    [('system', 'answer_raw')]
+    + [(key, None) for key in ('question', 'label', 'reason', 'hits', 'model', 'fmt', 'system', 'answer_raw')]
+    + [(None, key) for key in ('question', 'label', 'hits', 'model', 'fmt', 'system', 'answer_raw')],
+)
+def test_export_skips_records_without_training_fields(tmp_path, capsys, missing, null):
+    valid = fb_row('valid', '정상 질문')
+    legacy = fb_row('legacy', '과거 질문')
+    if missing is not None:
+        del legacy[missing]
+    if null is not None:
+        legacy[null] = None
+    review = tmp_path / 'review.csv'
+    pd.DataFrame(
+        [
+            dict(feedback_id=fid, h_ok='맞음', h_gold='근로기준법 제26조', h_scope='', h_note='')
+            for fid in ('legacy', 'valid')
+        ]
+    ).to_csv(review, index=False, encoding='utf-8-sig')
+    feedback_review.companion(review).write_text(
+        '\n'.join(json.dumps(r, ensure_ascii=False) for r in (legacy, valid)), encoding='utf-8'
+    )
+
+    out = tmp_path / 'out'
+    feedback_export.main([str(review), '--out', str(out)])
+
+    assert "학습 필수 필드가 없어 뺌 1: ['legacy']" in capsys.readouterr().out.splitlines()
+    for name in ('fb_questions', 'fb_emb_pairs', 'fb_sft', 'fb_kto'):
+        exported = pd.read_csv(out / f'{name}.csv', encoding='utf-8-sig')
+        assert exported.feedback_id.tolist() == ['valid']
+        if name in ('fb_sft', 'fb_kto'):
+            assert exported.system.tolist() == [valid['system']]
+            assert exported.completion.tolist() == [valid['answer_raw']]
+
+
 def test_split_is_deterministic():
     ids = [f'id{i}' for i in range(50)]
     s = feedback_export.assign_split(ids)
