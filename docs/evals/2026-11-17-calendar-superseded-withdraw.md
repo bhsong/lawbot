@@ -1,6 +1,6 @@
 # 캘린더 숨은 보류 조문 20개 철회 (2026-11-17)
 
-[계획](../plans/calendar-superseded-changes.md)
+[계획](../archives/calendar-superseded-changes.md)
 
 ## 발견
 

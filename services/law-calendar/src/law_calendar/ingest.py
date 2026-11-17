@@ -14,6 +14,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from law_calendar.automation import DatedChange, apply_automation, read_schedule, resolve_changes
 from law_calendar.db import write_database
 from law_calendar.import_failures import ImportInputError, import_failure
+from law_calendar.superseded import SUPERSEDED_NOTE_PREFIX, find_superseded_changes, withdraw_superseded_changes
 from law_calendar.validation import civil_date, timestamp
 
 PARSER_VERSION = 'monitor-law-v7'
@@ -190,8 +191,9 @@ def import_event(database: Path, home: Path, path: Path) -> tuple[bool, str]:
                 same_source
                 and conn.execute(
                     'SELECT 1 FROM review_audit a JOIN review_details d ON d.audit_id=a.id '
-                    "WHERE a.event_id=? AND d.snapshot_id=? AND a.decision IN ('approve','reject','withdraw') LIMIT 1",
-                    (event_id, prior['id']),
+                    "WHERE a.event_id=? AND d.snapshot_id=? AND a.decision IN ('approve','reject','withdraw') "
+                    "AND NOT (a.decision='withdraw' AND a.reviewer='import-adapter' AND a.note=? || d.snapshot_id) LIMIT 1",
+                    (event_id, prior['id'], SUPERSEDED_NOTE_PREFIX),
                 ).fetchone()
             )
         ):
@@ -216,9 +218,6 @@ def import_event(database: Path, home: Path, path: Path) -> tuple[bool, str]:
             conn.execute(
                 'INSERT INTO review_details VALUES (?,?,?)',
                 (audit.lastrowid, prior['id'], json.dumps({'next_snapshot': snapshot_id})),
-            )
-            conn.execute(
-                "UPDATE article_changes SET review_state='pending',verified_at=NULL WHERE event_id=?", (event_id,)
             )
         conn.execute(
             """INSERT INTO change_events(id,law_id,kind,status,collected_at,source_url)
@@ -273,10 +272,12 @@ def import_event(database: Path, home: Path, path: Path) -> tuple[bool, str]:
                 'snapshot_id=excluded.snapshot_id,before_version_id=excluded.before_version_id,after_version_id=excluded.after_version_id',
                 (change_id, snapshot_id, version_ids.get(('old', label)), version_ids.get(('new', label))),
             )
+        withdraw_superseded_changes(conn, find_superseded_changes(conn, event_id=event_id))
         if identity and identity['review_state'] in ('rejected', 'withdrawn'):
             conn.execute('UPDATE change_events SET review_state=? WHERE id=?', (identity['review_state'], event_id))
-            conn.execute(
-                'UPDATE article_changes SET review_state=? WHERE event_id=?', (identity['review_state'], event_id)
+            conn.executemany(
+                'UPDATE article_changes SET review_state=? WHERE id=?',
+                ((identity['review_state'], change_id) for change_id in changes),
             )
         else:
             apply_automation(conn, event_id, snapshot_id, raw_event, changes)

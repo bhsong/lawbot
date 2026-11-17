@@ -6,10 +6,11 @@ import sqlite3
 from pathlib import Path
 
 from law_calendar.assembly_ingest import inspect_assembly, list_assembly, review_assembly
-from law_calendar.db import read_database
+from law_calendar.db import read_database, write_database
 from law_calendar.ingest import import_files, preview_changes, read_event
 from law_calendar.notice_content import MAX_NOTICES, refresh_notice_content
 from law_calendar.review import inspect_event, review, review_template
+from law_calendar.superseded import count_hidden_holds, find_superseded_changes, withdraw_superseded_changes
 
 
 def main():
@@ -24,6 +25,9 @@ def main():
     preview.add_argument('--monitor-home', type=Path, help='Base of saved source paths (default: event directory)')
     sub.add_parser('list')
     sub.add_parser('runs')
+    supersede = sub.add_parser('supersede-stale', help='List changes outside the current source snapshot')
+    supersede.add_argument('--apply', action='store_true', help='Withdraw the listed changes in one transaction')
+    sub.add_parser('holds-check', help='Count pending changes missing from the current snapshot or holds list')
     show = sub.add_parser('show')
     show.add_argument('event_id')
     show.add_argument('--template', action='store_true')
@@ -64,6 +68,16 @@ def main():
                     else 'SELECT * FROM import_runs ORDER BY started_at DESC LIMIT 50'
                 )
                 result = [dict(r) for r in conn.execute(query)]
+        elif args.command == 'supersede-stale':
+            open_database = write_database if args.apply else read_database
+            with open_database(args.database) as conn:
+                result = find_superseded_changes(conn)
+                if args.apply:
+                    withdraw_superseded_changes(conn, result)
+        elif args.command == 'holds-check':
+            with read_database(args.database) as conn:
+                result = count_hidden_holds(conn)
+            failed = any(result.values())
         elif args.command == 'show':
             result = inspect_event(args.database, args.event_id)
             if args.template:
