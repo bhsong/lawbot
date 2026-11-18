@@ -55,7 +55,7 @@ def _expired(*_):
 
 
 @pytest.mark.parametrize('pattern', list(_patterns()))
-@pytest.mark.parametrize('size', [200, 2000])
+@pytest.mark.parametrize('size', [200, 2000, 8000])
 def test_calculator_patterns_bound_whitespace_search(pattern, size):
     previous = signal.signal(signal.SIGALRM, _expired)
     try:
@@ -70,6 +70,22 @@ def test_calculator_patterns_bound_whitespace_search(pattern, size):
     finally:
         signal.setitimer(signal.ITIMER_REAL, 0)
         signal.signal(signal.SIGALRM, previous)
+
+
+@pytest.mark.parametrize('sign', ['', '-', '−'])
+def test_money_sign_preserves_quantity_offsets(sign):
+    from lawbot.calc_numbers import _QUANTITY_PATTERNS, amount_spans, quantity_excerpt
+
+    prefix = '금액 \t'
+    quantity = f'{sign} \t123원' if sign else '123원'
+    text = prefix + quantity
+    match = _QUANTITY_PATTERNS['money'].search(text)
+    assert match is not None
+    assert match.span() == (len(prefix), len(text))
+    assert match['sign'] == (f'{sign} \t' if sign else '')
+    assert match.start('sign') == len(prefix)
+    assert quantity_excerpt(text, 'money') == quantity
+    assert list(amount_spans(text)) == [(quantity, -123 if sign else 123)]
 
 
 @pytest.mark.parametrize('label', ['연장', '야간'])

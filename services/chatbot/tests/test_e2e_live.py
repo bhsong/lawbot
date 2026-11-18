@@ -104,6 +104,8 @@ class Live:
             reasons.append(f'생성 모델 없음: {self.chat_model}')
         elif not generation_models[self.chat_model].get('revision'):
             reasons.append(f'생성 모델 revision 없음: {self.chat_model}')
+        elif not generation_models[self.chat_model].get('mlx_lm_version'):
+            reasons.append(f'생성 서버 mlx_lm_version 없음: {self.chat_model}')
         else:
             try:
                 generation_model(generation_models.values(), self.chat_model)
@@ -117,6 +119,10 @@ class Live:
         external = endpoint(self.env)[2]
         generation_models = [] if external else self.get('/models', generation=True)['data']
         chat_model = {} if external else generation_model(generation_models, self.chat_model)
+        if not external and not chat_model.get('revision'):
+            raise ValueError('Generation model revision is required')
+        if not external and not chat_model.get('mlx_lm_version'):
+            raise ValueError('Generation server mlx_lm_version is required')
         profile = deploy.get_profile(self.env)
         rr, dc = deploy.reranker(profile, self.env), deploy.decree(profile, self.env)
         m = manifest.load(profile.articles) or {}
@@ -124,8 +130,7 @@ class Live:
             'webapp_commit': revision.git_commit(ROOT),
             'model_server_commit': health.get('commit'),
             'server_max_concurrent': chat_model.get('max_concurrent'),
-            'generation_server_mlx_lm_version': None,
-            'generation_server_mlx_lm_version_note': 'Confirm manually at the generation server management location.',
+            'generation_server_mlx_lm_version': chat_model.get('mlx_lm_version'),
             'generation_models': [
                 {key: model.get(key) for key in ('id', 'object', 'revision')} for model in generation_models
             ],

@@ -845,7 +845,9 @@ def test_summary_attach_rate_by_number_of_attachments(tmp_path, monkeypatch):
 
 
 @pytest.mark.parametrize('external', [False, True])
-def test_run_metadata_reads_generation_revision_from_separate_server(monkeypatch, external):
+@pytest.mark.parametrize('mlx_lm_version', ['0.31.2', None])
+@pytest.mark.parametrize('revision', ['generation-rev', None])
+def test_run_metadata_reads_generation_revision_from_separate_server(monkeypatch, external, mlx_lm_version, revision):
     app = fake_app()
     app.llm_mode = 'external' if external else 'api'
     generation_client = object()
@@ -857,7 +859,7 @@ def test_run_metadata_reads_generation_revision_from_separate_server(monkeypatch
     def generation_models(client):
         assert client is generation_client
         calls.append(client)
-        return [{'id': app.models.specs['pro'].model, 'revision': 'generation-rev'}]
+        return [{'id': app.models.specs['pro'].model, 'revision': revision, 'mlx_lm_version': mlx_lm_version}]
 
     monkeypatch.setattr(service, 'generation_models', generation_models)
     monkeypatch.setattr(ev, 'git_state', lambda: ('commit', False))
@@ -865,7 +867,22 @@ def test_run_metadata_reads_generation_revision_from_separate_server(monkeypatch
     assert metadata['info'] == {'models': retrieval_models}
     assert metadata['generation'] == {
         'id': app.models.specs['pro'].model,
-        'revision': None if external else 'generation-rev',
+        'revision': None if external else revision,
     }
-    assert metadata['generation_server_mlx_lm_version'] is None
+    assert metadata['generation_server_mlx_lm_version'] == (None if external else mlx_lm_version)
     assert len(calls) == (0 if external else 1)
+
+
+def test_run_metadata_records_generation_discovery_failure(monkeypatch):
+    app = fake_app()
+    app.llm_mode = 'api'
+    monkeypatch.setattr(Bot, 'client', object(), raising=False)
+
+    def generation_models(client):
+        raise ValueError('Invalid model metadata')
+
+    monkeypatch.setattr(service, 'generation_models', generation_models)
+    monkeypatch.setattr(ev, 'git_state', lambda: ('commit', False))
+    metadata = ev.run_meta(app, 'pro', 'concise', 'val', 1, ['answers'])
+    assert metadata['generation'] == {'error': 'ValueError'}
+    assert metadata['generation_server_mlx_lm_version'] is None

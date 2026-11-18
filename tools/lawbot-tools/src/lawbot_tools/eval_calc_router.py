@@ -146,11 +146,13 @@ def _configuration(cfg, client):
     chat_model = {} if cfg.llm_external else generation_model(chat, pro.model)
     if not cfg.llm_external and not chat_model.get('revision'):
         raise SystemExit('생성 모델 revision을 확인하세요.')
+    if not cfg.llm_external and not chat_model.get('mlx_lm_version'):
+        raise SystemExit('생성 서버 mlx_lm_version을 확인하세요.')
     return {
         'webapp_commit': subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=ROOT, text=True).strip(),
         'model_server_commit': health.get('commit'),
         'server_max_concurrent': chat_model.get('max_concurrent'),
-        'generation_server_mlx_lm_version': None,
+        'generation_server_mlx_lm_version': chat_model.get('mlx_lm_version'),
         'profile': cfg.profile.name,
         'dataset_version': (manifest.load(cfg.profile.articles) or {}).get('dataset_version'),
         'articles_sha256': manifest.sha256(cfg.profile.articles),
@@ -413,20 +415,21 @@ def _webapp_commit():
 
 def _heldout_configuration(client, model, fixture_sha256, articles_sha256, *, external=False):
     try:
-        revision = concurrent = None
+        revision = concurrent = mlx_lm_version = None
         if not external:
             cards = service.generation_models(client)
             pro = next((card for card in cards if card['id'] == model), None)
-            if pro is None or not pro.get('revision'):
+            if pro is None or not pro.get('revision') or not pro.get('mlx_lm_version'):
                 raise _HeldoutStop('pro_not_ready')
             concurrent = generation_model(cards, model)['max_concurrent']
             revision = pro['revision']
+            mlx_lm_version = pro['mlx_lm_version']
         webapp_commit = _webapp_commit()
     except ModelServerError, httpx.HTTPError, OSError, ValueError, subprocess.SubprocessError:
         raise _HeldoutStop('configuration_probe_failed') from None
     return {
         'webapp_commit': webapp_commit,
-        'generation_server_mlx_lm_version': None,
+        'generation_server_mlx_lm_version': mlx_lm_version,
         'model': {'id': model, 'revision': revision},
         'server_max_concurrent': concurrent,
         'fixture_sha256': fixture_sha256,

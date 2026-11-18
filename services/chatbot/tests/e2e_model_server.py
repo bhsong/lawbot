@@ -127,7 +127,12 @@ def create_chat_app(token, model, revision, mode, port):
 
     @app.get('/v1/models')
     async def models():
-        return {'object': 'list', 'data': [{'id': model, 'object': 'model', 'revision': revision}]}
+        return {
+            'object': 'list',
+            'data': [
+                {'id': model, 'object': 'model', 'revision': revision, 'mlx_lm_version': '0.31.2', 'max_concurrent': 1}
+            ],
+        }
 
     @app.post('/v1/chat/completions')
     async def completions(request: Request):

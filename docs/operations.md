@@ -250,13 +250,13 @@ Colab 실험(transformers fp16)과의 순위 일치는 리랭커 도입 때 val�
 
 ### 단독 생성 서버 (외부 의존 서비스)
 
-- 관리·재시작 위치는 저장소 밖 `~/Services/qwen27b`입니다. 이 저장소의 모델 서버 실행·재시작으로 생성 서버를 관리하지 않습니다. `mlx_lm.server` 0.32.2를 같은 프로세스 안에서 감싼 실행 스크립트를 사용합니다.
-- 웹앱과 monitor는 `LAWBOT_LLM_BASE_URL`·`LAWBOT_LLM_API_KEY`로 접속합니다. 상태 확인은 전용 Bearer 토큰을 붙인 `GET <LAWBOT_LLM_BASE_URL>/models`입니다. 허용 id `qwen3.8-27b-4bit`와 `revision`을 확인합니다(`type`·`loaded` 없음).
-- 모든 요청은 토큰을 검사하고, `Host`는 `127.0.0.1:<생성 서버 포트>` 또는 `localhost:<생성 서버 포트>`만 허용합니다. 토큰 누락·불일치는 OpenAI 오류 형식의 401이며 CORS 헤더는 보내지 않습니다.
-- 허용 모델 id 이외의 `model`, `adapters`·`draft_model`을 거부합니다. `HF_HUB_OFFLINE=1`로 실행합니다. 같은 서버를 쓰는 다른 앱도 전용 토큰과 허용 모델 id를 사용해야 합니다.
-- `POST <LAWBOT_LLM_BASE_URL>/chat/completions`는 스트리밍·usage·`chat_template_kwargs`·`max_tokens`·`temperature`를 지원하고 생각 내용은 별도 `reasoning` 필드로 보냅니다. 요청은 먼저 온 순서대로 처리하며 생성 대기열 한도 503은 없습니다.
-- 로컬 생성은 요청 로그 `mode=api`, 명시적으로 허용한 외부 https 생성 API는 `mode=external`입니다. 외부 생성 API는 chat 모델 존재 확인과 revision 조회를 생략합니다.
-- 생성 서버 mlx-lm 버전은 관리 위치에서 별도로 확인해 실제 모델 검증 기록에 적습니다. `/v1/models` 계약에는 버전 필드가 없으므로 lawbot에 설치된 버전으로 대신하지 않습니다.
+- 관리·재시작 위치는 저장소 밖 `~/Services/qwen27b`입니다. FastAPI·uvicorn과 `mlx-lm` 라이브러리로 구현하며 `mlx_lm.server` 래퍼가 아닙니다. `run.sh`로 실행하고 launchd 서비스 이름은 `local.qwen27b`입니다. 이 저장소의 모델 서버 실행·재시작으로 생성 서버를 관리하지 않습니다.
+- 바인딩은 `127.0.0.1`로 고정합니다. 모든 HTTP 경로(상태·존재하지 않는 경로 포함)에 전용 Bearer 토큰이 필요하며, 인증 실패는 OpenAI 오류 형식의 401입니다. `HF_HUB_OFFLINE=1`로 실행하고 설정한 단일 모델 id만 제공합니다.
+- 웹앱과 monitor는 `LAWBOT_LLM_BASE_URL`·`LAWBOT_LLM_API_KEY`로 접속합니다. 인증된 `GET <LAWBOT_LLM_BASE_URL>/models`는 `object: list`와 `data`의 `id`, `object: model`, `revision`, `max_concurrent`, `mlx_lm_version`을 제공합니다(`type`·`loaded` 없음). `mlx_lm_version`은 생성 서버가 시작할 때 한 번 확인한 설치 배포판 버전이며 요청마다 조회하지 않습니다.
+- 모델·엔진 준비 전이나 작업 스레드 종료 후에는 모델 목록·생성 요청에 503 `server_not_ready`를 반환합니다. `GET /health`는 인증 후 `ready`를 보고합니다. 실제 실행은 모델·엔진 초기화 후 리스너를 엽니다.
+- `POST <LAWBOT_LLM_BASE_URL>/chat/completions`는 스트리밍·usage·`chat_template_kwargs`·`max_tokens`·`temperature` 등을 지원합니다. 생각은 기본적으로 끄고 출력 맨 앞 생각 블록을 숨깁니다. `enable_thinking=true`이면 생각 텍스트를 그대로 내보내며 별도 `reasoning` 필드는 만들지 않습니다.
+- GPU 작업 스레드 하나가 생성·취소·종료를 담당합니다. 대기 요청은 FIFO로 배치에 투입하며, 제한된 대기열이 차면 503 `server_busy`를 반환합니다. 생성 중인 요청은 대기열 수에 포함하지 않습니다.
+- 로컬 생성은 요청 로그 `mode=api`, 명시적으로 허용한 외부 https 생성 API는 `mode=external`입니다. 외부 생성 API는 chat 모델 존재 확인과 revision 조회를 생략합니다. 실제 모델 검증 기록에는 로컬 생성 서버 `/v1/models`의 `revision`·`mlx_lm_version`을 적고 lawbot에 설치된 버전으로 대신하지 않습니다.
 
 ## 상시 운영과 개발 동시 실행
 

@@ -105,7 +105,15 @@ def test_generation_server_has_separate_protected_model_contract(stack):
     assert response.status_code == 200
     assert response.json() == {
         'object': 'list',
-        'data': [{'id': stack.chat_model, 'object': 'model', 'revision': e2e.STUB_MODEL_REVISION}],
+        'data': [
+            {
+                'id': stack.chat_model,
+                'object': 'model',
+                'revision': e2e.STUB_MODEL_REVISION,
+                'mlx_lm_version': '0.31.2',
+                'max_concurrent': 1,
+            }
+        ],
     }
     models = httpx.get(
         stack.ms_url + '/v1/models',

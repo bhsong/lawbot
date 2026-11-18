@@ -119,6 +119,8 @@ def snapshot(cfg, client, *, preflight=False):
     chat_model = {} if cfg.llm_external else generation_model(chat, spec.model)
     if not cfg.llm_external and not chat_model.get('revision'):
         raise RuntimeError('생성 모델 revision을 확인하세요.')
+    if not cfg.llm_external and not chat_model.get('mlx_lm_version'):
+        raise RuntimeError('생성 서버 mlx_lm_version을 확인하세요.')
     models.append({'id': spec.model, 'revision': chat_model.get('revision')})
     law, combined = deploy.article_paths('v5', {})
     data = manifest.load(combined)
@@ -129,7 +131,7 @@ def snapshot(cfg, client, *, preflight=False):
         'webapp_commit': subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=ROOT, text=True).strip(),
         'model_server_commit': health['commit'],
         'server_max_concurrent': chat_model.get('max_concurrent'),
-        'generation_server_mlx_lm_version': None,
+        'generation_server_mlx_lm_version': chat_model.get('mlx_lm_version'),
         'models': models,
         'dataset_version': data['dataset_version'],
         'sha256': {path.name: hashlib.sha256(path.read_bytes()).hexdigest() for path in files},

@@ -127,7 +127,8 @@ def test_answer_sample_compares_two_paths_on_same_question(monkeypatch):
 
 
 @pytest.mark.parametrize('concurrent', [1, 2, None, True, '1', 0])
-def test_live_configuration_checks_only_embedding_health_and_residency(monkeypatch, concurrent):
+@pytest.mark.parametrize('mlx_lm_version', ['0.31.2', None])
+def test_live_configuration_checks_only_embedding_health_and_residency(monkeypatch, concurrent, mlx_lm_version):
     from types import SimpleNamespace
 
     cfg = eval_calc_router.settings.load(
@@ -147,7 +148,9 @@ def test_live_configuration_checks_only_embedding_health_and_residency(monkeypat
         assert str(client.base_url) == 'http://127.0.0.1:19/v1/'
         assert client.api_key == 'generation-only-secret'
         calls.append('generation_models')
-        return [{'id': pro, 'revision': 'generation-rev', 'max_concurrent': concurrent}]
+        return [
+            {'id': pro, 'revision': 'generation-rev', 'max_concurrent': concurrent, 'mlx_lm_version': mlx_lm_version}
+        ]
 
     def health(request):
         assert request.url.path == '/health'
@@ -167,9 +170,13 @@ def test_live_configuration_checks_only_embedding_health_and_residency(monkeypat
             with pytest.raises(ValueError, match='max_concurrent'):
                 eval_calc_router._configuration(cfg, client)
             return
+        if not mlx_lm_version:
+            with pytest.raises(SystemExit, match='mlx_lm_version'):
+                eval_calc_router._configuration(cfg, client)
+            return
         configuration = eval_calc_router._configuration(cfg, client)
     assert configuration['models'][pro] == {'revision': 'generation-rev'}
     assert configuration['model_residency'] == {cfg.profile.emb_model: True}
-    assert configuration['generation_server_mlx_lm_version'] is None
+    assert configuration['generation_server_mlx_lm_version'] == '0.31.2'
     assert configuration['server_max_concurrent'] == concurrent
     assert calls == ['generation_models']
