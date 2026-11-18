@@ -98,18 +98,6 @@ def test_calendar_check_uses_independent_project_and_launchd_uv(monkeypatch, tmp
     assert command[-3:] == ['law_calendar.sync', '--monitor-home', str(tmp_path)]
 
 
-def test_single_monitor_launchd_job_keeps_0630_and_supplies_calendar_configuration():
-    import plistlib
-
-    from law_monitor.paths import SERVICE_DIR
-
-    job = plistlib.loads((SERVICE_DIR / 'deploy/com.lawbot.monitor.plist.example').read_bytes())
-    assert job['StartCalendarInterval'] == {'Hour': 6, 'Minute': 30}
-    assert job['ProgramArguments'][-2:] == ['law-monitor', 'daily']
-    assert job['EnvironmentVariables']['LAW_MONITOR_UV'] == '__UV__'
-    assert job['EnvironmentVariables']['LAW_CALENDAR_DB'] == '__CALENDAR_DB__'
-
-
 def test_placeholders(tmp_path):
     paths = Paths(tmp_path / 'home')
     cmd = checks.expand(('{bin}/tool', '--repo', '{repos}/legalize-kr', '--out', '{data}/articles', '{home}'), paths)

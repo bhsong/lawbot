@@ -82,8 +82,6 @@ tools/lawbot-tools/src/lawbot_tools/
 ├── eval_v4.py         # v4 웹앱 구성 평가 (lawbot-eval-v4)
 ├── score_answers.py   # 키워드 기반 채점기
 ├── refusal.py         # 거절 판정 (【결론】에 '확인할 수 없'), 범위 밖 답변 판정 (거절·안내·억지적용·미인용)
-├── diff_answers.py    # 두 평가 결과의 답변 원문 글자 단위 비교
-├── smoke_decree.py    # 하위법령 첨부 웹앱 경로 스모크 (실제 모델)
 ├── feedback_review.py # 피드백 → 검수 CSV (평가 데이터와 겹치는 질문 제외)
 ├── feedback_export.py # 검수 CSV → dev 질문·임베딩 쌍·SFT·KTO CSV
 ├── log_summary.py     # 요청 로그(logs/requests-YYYY-MM.jsonl) 요약
