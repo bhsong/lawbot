@@ -190,10 +190,19 @@
   - `.env`(포트)와 실행 스크립트를 둔다.
 - 실행
   - `mlx_lm.server --model ~/Models/qwen3.8-27b-4bit --host 127.0.0.1 --port <.env> --decode-concurrency 1 --prompt-concurrency 1`
-  - `mlx_lm.server`는 요청의 `model` 이름이 올린 모델과 다르면 지금 모델을 내리고 그 이름으로 다시 로드(필요하면 Hugging Face 다운로드)를 시도한다(설치된 0.32.2 소스로 확인). 다른 앱이 이름을 잘못 보내도 27B가 내려가지 않도록 아래 두 가지를 둔다.
-    - 허용한 모델 id(`qwen3.8-27b-4bit`)만 받고 나머지는 거부하는 작은 실행 스크립트(`mlx_lm.server`를 감싸 실행)
-    - 환경변수 `HF_HUB_OFFLINE=1`
-  - `/v1/models`는 모델 폴더의 절대 경로를 id로 돌려주므로, lawbot의 시작 점검은 허용 id와 실행 스크립트의 응답 기준으로 맞춘다.
+- 실행 스크립트 `qwen27b_server.py`(사용자 결정 2026-11-18)
+  - `mlx_lm.server.APIHandler`를 같은 프로세스 안에서 상속해 보호를 넣는다. 별도 중계 서버를 두지 않아 검사를 우회할 포트가 없다.
+  - 왜 필요한가(설치된 0.32.2 소스로 확인)
+    - 요청의 `model`·`adapters`·`draft_model`이 올린 모델과 다르면 지금 모델을 내리고 그 이름으로 다시 로드(필요하면 Hugging Face 다운로드)를 시도한다.
+    - 인증이 없고, CORS 기본값이 `*`이며, `Host`를 검사하지 않는다. 맥 미니의 다른 프로그램이나 악성 웹페이지(DNS 리바인딩)가 생성을 쓰거나 모델을 내리게 할 수 있다.
+    - `/v1/models`가 가중치 폴더 절대 경로를 id로 돌려주고 revision이 없다.
+  - 보호
+    - 토큰(`Authorization: Bearer`, 생성 서버 전용, lawbot은 `LAWBOT_LLM_API_KEY`), `Host` 검사(`127.0.0.1`·`localhost` + 포트), CORS 헤더 없음
+    - 허용 모델 id(`qwen3.8-27b-4bit`)만 받고 `adapters`·`draft_model` 거부, `/v1/models`는 허용 id와 가중치 지문(revision)만 응답
+    - `HF_HUB_OFFLINE=1`, `--trust-remote-code` 사용 안 함, 로그 INFO(DEBUG는 요청 본문을 남김)
+  - 내부 API 의존: `mlx_lm.server.run()`이 바꾼 핸들러를 넘기지 않아 `_run_http_server`를 직접 부른다. `mlx-lm`은 `uv.lock`으로 고정하고, 버전을 올릴 때 실행 스크립트 테스트로 먼저 확인한다.
+  - 구현과 테스트는 omp가 `~/Services/qwen27b/`에서 가짜 생성기로 한다(실제 27B는 운영 반영 때만 올린다).
+- lawbot 설정: 생성 서버 주소는 기존 `LAWBOT_LLM_BASE_URL`을 필수로 바꿔 쓰고 토큰은 `LAWBOT_LLM_API_KEY`로 받는다(아래 `LAWBOT_CHAT_SERVER`는 만들지 않는다. 같은 역할의 설정이 이미 있어서).
   - 생각 끄기는 `--chat-template-args '{"enable_thinking": false}'`를 기본으로 한다. 요청별 지정이 되는지는 구현 때 확인한다.
   - 프롬프트 캐시 메모리 상한(`--prompt-cache-bytes`)을 둔다.
 - 상시 실행
@@ -207,7 +216,7 @@
   - `chat.py`와 chat 등록, 대기열·동시 실행 수, chat 경로를 제거한다.
   - 임베딩·리랭크 API와 토큰 인증, revision 보고는 유지한다.
 - 웹앱·계산 라우터·하위법령 판단
-  - chat 호출을 새 설정 `LAWBOT_CHAT_SERVER`(주소)로 보낸다.
+  - chat 호출을 `LAWBOT_LLM_BASE_URL`(필수)과 `LAWBOT_LLM_API_KEY`로 보낸다.
   - 임베딩·리랭크는 기존 `LAWBOT_MODEL_SERVER`로 보낸다.
   - 모델 id는 `.env.example`에서 읽는다.
 - `mlx_lm.server` 응답에 맞출 것: 스트리밍 SSE 형식, 오류 응답, 첫 토큰·완료 측정. 이 서버에는 대기열 한도가 없어 `model_server_busy` 오류가 사라지는데, 다음으로 바꾼다.
@@ -263,7 +272,7 @@
       - `~/Services/qwen27b/` 생성과 launchd 등록
       - 서버가 뜨고 `/v1/models`가 응답하는지 확인
    4. 운영 트리를 병합 커밋으로 옮긴다(detached).
-      - 운영 `.env`에 `LAWBOT_CHAT_SERVER`를 추가한다.
+      - 운영 `.env`에 `LAWBOT_LLM_BASE_URL`·`LAWBOT_LLM_API_KEY`를 추가한다(생성 서버 토큰은 새로 만든다).
       - 캐시·추천 설정 줄과 `LAWBOT_SERVE_CHAT`를 제거한다.
    5. 데이터 정리(재시작 전, 새 코드가 옛 데이터로 실패하지 않게). 명령과 대상 행 수를 보여 주고 승인받은 뒤 실행한다.
       1. 지운 출처 14개의 행 삭제(§4 운영 데이터 표의 DB들, 한 DB마다 한 트랜잭션, 무결성 검사)
