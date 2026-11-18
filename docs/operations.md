@@ -203,7 +203,7 @@ v5 Pro는 간결형에 `data/v5/system_v5_concise.txt`를 쓰고, 화면에서 "
 
 ## 리랭커 (선택)
 
-켜면 검색 흐름이 `임베딩 상위 10개 → Qwen3-Reranker-4B(튜닝 없음) → 리랭킹 상위 3개 → 답변 모델`이 됩니다. Fast·Pro가 같은 리랭킹 결과를 참고하고, 리랭커는 모델 서버가 시작할 때 올려 상주합니다. 끄면(기본) 웹앱이 리랭커를 부르지 않고 이전과 같은 임베딩 상위 3개를 씁니다. 채점 방식(프롬프트, 최대 2,560토큰, yes/no 로짓)은 v4 리랭커 실험 노트북과 같고(`services/model-server/src/lawbot_model_server/rerank.py`), 작업 설명(instruction)과 정렬(동점은 임베딩 순위)은 웹앱이 정합니다(`services/chatbot/src/lawbot/reranker.py`).
+켜면 검색 흐름이 `임베딩 상위 10개 → Qwen3-Reranker-4B(튜닝 없음) → 리랭킹 상위 3개 → 답변 모델`이 됩니다. Fast·Pro가 같은 리랭킹 결과를 참고하고, 리랭커는 모델 서버가 시작할 때 올려 상주합니다. 끄면(기본) 웹앱이 리랭커를 부르지 않고 이전과 같은 임베딩 상위 3개를 씁니다. 채점 방식(프롬프트, 최대 2,560토큰, yes/no 로짓)은 v4 리랭커 실험 노트북과 같고(`services/model-server/src/lawbot_model_server/rerank.py`), 작업 설명(instruction)과 정렬(동점은 임베딩 순위)은 웹앱이 정합니다(`services/chatbot/src/lawbot/reranker.py`). 모델 서버는 리랭크 요청이 끝날 때마다 MLX 버퍼 캐시를 비워 캐시로 인한 메모리 증가를 막습니다.
 
 `.env.example`에는 켜져 있습니다(`LAWBOT_RERANKER_ENABLED=1`). 모델 준비는 위 "모델 준비"의 변환 명령을 씁니다.
 

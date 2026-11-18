@@ -60,8 +60,13 @@ class Reranker:
     def score(self, query, docs, instruction=None):
         """문서마다 P(yes). NaN·무한대는 정렬 결과를 믿을 수 없으므로 오류"""
         inst = instruction or DEFAULT_INSTRUCTION
-        scores = [yes_probability(self._no_yes_logits(self.encode(query, d, inst))) for d in docs]
-        bad = [i for i, s in enumerate(scores) if not 0.0 <= s <= 1.0]
-        if bad:
-            raise RuntimeError(f'리랭커 점수가 올바르지 않습니다 (문서 {bad}): {[scores[i] for i in bad]}')
-        return scores
+        try:
+            scores = [yes_probability(self._no_yes_logits(self.encode(query, d, inst))) for d in docs]
+            bad = [i for i, s in enumerate(scores) if not 0.0 <= s <= 1.0]
+            if bad:
+                raise RuntimeError(f'리랭커 점수가 올바르지 않습니다 (문서 {bad}): {[scores[i] for i in bad]}')
+            return scores
+        finally:
+            # Wait for MLX to return in-flight buffers to the cache.
+            mx.synchronize()
+            mx.clear_cache()
