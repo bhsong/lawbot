@@ -2,6 +2,7 @@
 
 import hashlib
 import json
+import logging
 from datetime import datetime, time
 from typing import NamedTuple
 
@@ -78,6 +79,9 @@ class Model:
             if not isinstance(raw, str) or len(raw) > 8_000:
                 return {}
             selected = json.loads(raw)
+        except httpx.HTTPStatusError as exc:
+            logging.getLogger(__name__).warning('ERP enrichment failed: HTTP %s', exc.response.status_code)
+            return {}
         except httpx.HTTPError, KeyError, IndexError, TypeError, ValueError:
             return {}
         finally:

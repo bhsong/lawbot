@@ -120,6 +120,8 @@ def error_message(kind, cause, spec):
     name = type(cause).__name__
     if kind == 'model_server_timeout':
         return f'모델 서버 응답이 없습니다 ({cause}). 잠시 뒤 다시 질문하세요.'
+    if kind == 'model_server_busy':
+        return '모델 서버가 바쁩니다 (대기 중인 질문이 많음). 잠시 뒤 다시 질문하세요.'
     if kind == 'model_server':  # Embedding/rerank or generation connection, authentication, or readiness failure.
         return (
             f'모델 서버가 준비되지 않았습니다 ({name}). 잠시 뒤 다시 질문하고, 계속되면 '

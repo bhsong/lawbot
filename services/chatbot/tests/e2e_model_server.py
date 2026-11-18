@@ -136,6 +136,12 @@ def create_chat_app(token, model, revision, mode, port):
                 {'error': {'message': 'Unauthorized', 'type': 'authentication_error', 'code': 'invalid_api_key'}},
                 status_code=401,
             )
+        if mode == 'busy':
+            print('e2e chat busy', flush=True)
+            return JSONResponse(
+                {'error': {'message': 'Synthetic queue full', 'type': 'server_busy', 'code': 'queue_full'}},
+                status_code=503,
+            )
         body = await request.json()
         if any(field in body for field in ('adapters', 'draft_model')):
             return JSONResponse(

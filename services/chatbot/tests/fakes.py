@@ -109,7 +109,7 @@ class FakeOpenAI:
         self.models = types.SimpleNamespace(list=self.list_models)
         self.closed = False
 
-    def list_models(self):
+    def list_models(self, **kwargs):
         from lawbot import deploy
 
         models = self.available

@@ -138,7 +138,7 @@ v5 Pro는 간결형에 `data/v5/system_v5_concise.txt`를 쓰고, 화면에서 "
 | --- | --- | --- |
 | Lawbot Pro | 단독 생성 서버에 상주하는 Qwen3.8-27B 4비트 (`qwen3.8-27b-4bit`), 간결형 system(`data/v5/system_v5_concise.txt`) | 간결: 결론 + `근거: 실제 인용 조문` |
 
-화면 아래 측정 줄에 검색·첫 토큰·첫 글자·생성 속도·완료 시간이 표시됩니다. 로컬 생성 서버 `/v1/models`에 설정한 모델 id가 없으면 웹앱이 시작을 거부합니다. 생성 서버는 모델 교체 요청을 받지 않습니다.
+화면 아래 측정 줄에 검색·첫 토큰·첫 글자·생성 속도·완료 시간이 표시됩니다. 시작 시 로컬 생성 서버의 연결 실패·503 `server_not_ready`는 `LAWBOT_MODEL_SERVER_WAIT` 한도 안에서 1초 간격으로 다시 확인합니다. 토큰 오류나 `/v1/models`의 필요한 모델 id 누락은 즉시 시작을 거부합니다. 외부 생성 API는 준비 확인을 생략하고, `check_deploy`는 한 번만 조회합니다. 생성 서버는 모델 교체 요청을 받지 않습니다.
 
 웹앱은 모델을 폴더가 아니라 모델 id로 고릅니다(`LAWBOT_*_MODEL`). 임베딩·리랭크 폴더는 모델 서버의 `LAWBOT_SERVE_*`, 생성 모델은 저장소 밖 생성 서버가 관리합니다. 아래 표가 전체 변수입니다(상대 경로는 저장소 최상위 기준).
 
@@ -154,7 +154,7 @@ v5 Pro는 간결형에 `data/v5/system_v5_concise.txt`를 쓰고, 화면에서 "
 | `LAWBOT_ADMIN_PW_HASH` | 관리자 사용 시 | `python -m lawbot.auth hash`가 출력한 scrypt 해시. `.env`에서 작은따옴표로 감쌈 |
 | `LAWBOT_MODEL_SERVER` | 예 | 모델 서버 주소 `http://127.0.0.1:<모델 서버 포트>` (이 맥만 허용) |
 | `LAWBOT_MODEL_TOKEN` | 예 | 모델 서버 토큰 (16자 이상, `openssl rand -hex 32`). 웹앱과 모델 서버가 같은 값 |
-| `LAWBOT_MODEL_SERVER_WAIT` | 아니요 | 시작할 때 모델 서버 준비를 기다리는 최대 초 (기본 `300`) |
+| `LAWBOT_MODEL_SERVER_WAIT` | 아니요 | 시작할 때 임베딩·리랭크 모델 서버와 로컬 생성 서버 각각의 준비를 기다리는 최대 초 (기본 `300`) |
 | `LAWBOT_MODEL_READ_TIMEOUT` | 아니요 | 질문 처리 중(질문 임베딩·리랭크·생성) 응답 조각 사이 최대 대기 초 (기본 `300`). 넘으면 "모델 서버 응답이 없습니다", 요청 로그 `model_server_timeout`. 시작할 때 조문 인덱스 인코딩에는 걸지 않음 |
 | `LAWBOT_PROFILE` | 아니요 | `v4` (생략 시 기본값) 또는 `v5` (노동·소득세법 전체와 세금·4대보험 선택 범위, Pro 전용) |
 | `LAWBOT_EMB_MODEL` | 아니요 | 검색 임베딩 모델 id (v4 기본 `lawbot-emb-v4`, v5 기본 `lawbot-emb-v6`. v6.0.0 전에는 `lawbot-emb-v5b`) |
@@ -412,7 +412,7 @@ uv run python -m lawbot_tools.log_summary                      # 상태별 건�
 uv run python -m lawbot_tools.log_summary --caller lawbot-app  # 평가 실행 제외
 ```
 
-오류 유형은 화면 안내와 같습니다. `model_server`(생성 서버 또는 임베딩·리랭크 서버 연결 실패·토큰 불일치·미준비)는 "모델 서버가 준비되지 않았습니다", `model_load`(모델 폴더·system 파일 오류)는 "모델을 불러오지 못했습니다"로 안내합니다. `model_server_timeout`(질문 처리 중 응답 조각 사이가 `LAWBOT_MODEL_READ_TIMEOUT`을 넘음)은 "모델 서버 응답이 없습니다"로 안내합니다. 생성 대기열 한도 오류 분류는 없습니다. 요청 로그의 `mode`는 `api`(로컬 단독 생성 서버) 또는 `external`(외부 생성 API)입니다. `search`·`rerank`·`generation` 오류는 각각 "조문을 검색하지 못했습니다"·"조문 순위를 매기지 못했습니다"·"답변을 생성하지 못했습니다"로 안내하고, 임베딩 순위로 되돌리지 않습니다.
+오류 유형은 화면 안내와 같습니다. `model_server`(생성 서버 또는 임베딩·리랭크 서버 연결 실패·토큰 불일치·미준비)는 "모델 서버가 준비되지 않았습니다", `model_load`(모델 폴더·system 파일 오류)는 "모델을 불러오지 못했습니다"로 안내합니다. `model_server_timeout`(질문 처리 중 응답 조각 사이가 `LAWBOT_MODEL_READ_TIMEOUT`을 넘음)은 "모델 서버 응답이 없습니다"로 안내합니다. `model_server_busy`(생성 서버 대기열 가득 참: HTTP `503`, `error.type=server_busy`)는 "모델 서버가 바쁩니다 (대기 중인 질문이 많음). 잠시 뒤 다시 질문하세요."로 안내합니다. 계산 라우터에서도 busy가 발생하면 추가 생성을 하지 않고 같은 오류로 안내하며, 생성 요청은 자동 재시도하지 않습니다. monitor 아침 요약은 실패와 대기 이벤트를 기록하고, ERP 메일 보강은 HTTP 실패를 경고 로그에 남긴 뒤 기존 원문 표시를 유지합니다. 요청 로그의 `mode`는 `api`(로컬 단독 생성 서버) 또는 `external`(외부 생성 API)입니다. `search`·`rerank`·`generation` 오류는 각각 "조문을 검색하지 못했습니다"·"조문 순위를 매기지 못했습니다"·"답변을 생성하지 못했습니다"로 안내하고, 임베딩 순위로 되돌리지 않습니다.
 
 생성 스트림의 종료 `finish_reason`이 없으면 `generation` 오류로 처리하며, 부분 답변을 정상 턴이나 피드백 대상으로 저장하지 않습니다.
 
