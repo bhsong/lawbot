@@ -34,7 +34,7 @@
 ### 포트 번호 규칙 (레포가 public이므로 중요)
 - **실제 포트 번호는 사용자가 자기 `.env`에만 적는다.** 커밋되는 어떤 파일에도 쓰지 않는다. 대상은 코드 기본값, `.env.example`, `.env.dev.example`, README, 이 계획 문서, 테스트, launchd 템플릿, 커밋 메시지, PR 본문이다. 문서와 예시에는 `<운영 포트>`, `<개발 포트>`, `<모델 서버 포트>` 같은 자리표시만 쓴다.
 - 운영 포트와 개발 포트는 서로 붙이지 않고 멀리 떨어뜨린다(사용자 요청). 모델 서버 포트도 두 웹앱 포트와 떨어진 값을 쓴다. 번호는 사용자가 정한다.
-- 이미 공개된 기존 기본값 7860은 하위 호환을 위해 `LAWBOT_PORT`가 없을 때만 쓴다. 문서에는 "운영에서는 `.env`에 `LAWBOT_PORT`를 따로 정하라"고 안내한다.
+- 이미 공개된 기존 기본 포트는 하위 호환을 위해 `LAWBOT_PORT`가 없을 때만 쓴다. 문서에는 "운영에서는 `.env`에 `LAWBOT_PORT`를 따로 정하라"고 안내한다.
 - 모델 서버 포트에는 **코드 기본값을 두지 않는다.** `LAWBOT_MODEL_SERVER_PORT`가 없으면 실행을 거부하고 ".env에 LAWBOT_MODEL_SERVER_PORT를 적으세요"라고 안내한다.
 - 테스트는 `free_port()`나 포트 0처럼 실행할 때 비어 있는 포트를 쓴다. 검증 테스트에 고정 숫자가 필요하면 의미 없는 값(1023, 65536 같은 범위 경계)만 쓴다.
 - 에이전트는 작업을 끝내고 **사용자에게 보내는 최종 보고**(PR 본문 아님)에서 이렇게 안내한다: "운영 `.env`에 `LAWBOT_PORT`, `LAWBOT_MODEL_SERVER_PORT`, `LAWBOT_MODEL_SERVER`, `LAWBOT_MODEL_TOKEN`을, 개발 `.env`에 `LAWBOT_PORT`, `LAWBOT_MODEL_SERVER`, `LAWBOT_MODEL_TOKEN`을 적으세요." 포트 번호를 제안하지는 않는다. 번호는 사용자가 이미 정해 두었다.
@@ -75,7 +75,7 @@
 
 | 위치 | 내용 | 이번 작업과의 관계 |
 | --- | --- | --- |
-| `security.py` | `SERVER_NAME='127.0.0.1'`, `SERVER_PORT=7860` 상수, `get_local_launch_config()` | 포트를 `LAWBOT_PORT`로 받게 바꾼다. 주소는 계속 고정 |
+| `security.py` | `SERVER_NAME='127.0.0.1'`, `SERVER_PORT=<포트>` 상수, `get_local_launch_config()` | 포트를 `LAWBOT_PORT`로 받게 바꾼다. 주소는 계속 고정 |
 | `envfile.py` | `.env`에서 `LAWBOT_*`와 `LLM_PATH`만 읽는다. 셸 변수가 우선. `LAWBOT_PW`가 있는데 파일 권한이 넓으면 경고 | 새 변수는 모두 `LAWBOT_` 접두사를 쓰므로 그대로 읽힌다. 경고 대상에 토큰을 추가 |
 | `service.py` | `load_app()`이 `Retriever`, `Reranker`(선택), `ModelManager`(LRU, `loader`로 `LLM` 생성)를 묶은 `LawbotApp`을 만든다. `ask()`는 검색 → (리랭킹) → `models.get` → `llm.stream` 순서로 진행한다 | 원격 모드에서는 같은 인터페이스를 가진 원격 객체로 교체 |
 | `service.py` 맨 위 | `from lawbot.retriever import Retriever`(torch, sentence_transformers), `from lawbot.llm import LLM, SYSTEM`(mlx_lm, 그리고 import 시 조문 CSV를 읽음), `from lawbot.reranker import Reranker`(mlx) | 원격 모드 웹앱이 무거운 라이브러리를 import하지 않도록 지연 import로 바꾼다 |
@@ -253,7 +253,7 @@
   - `tailscale serve`(운영 웹앱 포트만 노출, `funnel` 금지. 명령 예시도 `<운영 포트>` 자리표시)
   - 3장의 제약
   - 로컬 모드 전용 스크립트 목록
-- README의 기존 문장 "서버는 `127.0.0.1:7860`에서만 열리고 … 포트는 바꿀 수 없습니다"를 "주소는 127.0.0.1 고정, 포트는 `.env`의 `LAWBOT_PORT`(없으면 기존 기본값)"로 고친다. 한국어(283행 부근)와 영어(707행 부근) 모두. 새로 쓰는 문장에는 포트 숫자를 넣지 않는다.
+- README의 기존 문장 "서버는 `127.0.0.1:<포트>`에서만 열리고 … 포트는 바꿀 수 없습니다"를 "주소는 127.0.0.1 고정, 포트는 `.env`의 `LAWBOT_PORT`(없으면 기존 기본값)"로 고친다. 한국어(283행 부근)와 영어(707행 부근) 모두. 새로 쓰는 문장에는 포트 숫자를 넣지 않는다.
 - README 프로젝트 구조 목록에 `model_server.py`, `remote.py`, `prompts.py`, `deploy/launchd/`를 추가한다.
 
 ### 단계 7: PR
