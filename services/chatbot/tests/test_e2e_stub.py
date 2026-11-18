@@ -1,8 +1,7 @@
-# tests/test_e2e_stub.py  →  브라우저 E2E (대역): Playwright → 실제 웹앱(lawbot-app, 빌드한 화면) → 실제 모델 서버 앱 + 가짜 모델
-# 세 추론 호출(임베딩·리랭크·chat) 모두 가짜. 이 결과를 "실제 모델 E2E 통과"로 보고하지 않는다
+# Browser E2E: the real web app, a protected generation HTTP fake, and fake embedding/rerank models.
+# These tests never load real models and are not evidence of real-model E2E success.
 # 화면 요소는 역할·라벨·테스트 id로 찾는다 (e2e_support). 접속은 127.0.0.1만
 import json
-import threading
 import time
 
 import httpx
@@ -21,7 +20,7 @@ from test_migrate_csv_to_sqlite import run as migrate
 pytestmark = pytest.mark.e2e_stub
 
 QUESTION = '해고 예고 없이 갑자기 해고되면 어떻게 하나요?'
-FAKE_ANSWER = '가짜 모델 답변입니다.'  # e2e_model_server.answer_chunks
+FAKE_ANSWER = '가짜 모델 답변입니다.'
 READ_TIMEOUT_S = 2  # 웹앱 LAWBOT_MODEL_READ_TIMEOUT (slow 모드의 토큰 간격 5초보다 짧게)
 PHONE = {'viewport': {'width': 390, 'height': 844}, 'is_mobile': True, 'has_touch': True}
 
@@ -67,6 +66,179 @@ def fresh(stack, page, request):
 
 def new_log_rows(stack, before):
     return e2e.request_log(stack.request_log)[before:]
+
+
+def test_generation_server_has_separate_protected_model_contract(stack):
+    stack.ensure('normal')
+    assert stack.chat_url != stack.ms_url
+    for path in ('/v1/models', '/v1/chat/completions'):
+        assert httpx.get(stack.chat_url + path, trust_env=False).status_code == 401
+        assert (
+            httpx.get(
+                stack.chat_url + path,
+                headers={'Authorization': f'Bearer {stack.token}'},
+                trust_env=False,
+            ).status_code
+            == 401
+        )
+        assert (
+            httpx.get(
+                stack.chat_url + path,
+                params={'api_key': stack.chat_token},
+                trust_env=False,
+            ).status_code
+            == 401
+        )
+        assert (
+            httpx.get(
+                stack.chat_url + path,
+                headers={'Authorization': f'Basic {stack.chat_token}'},
+                trust_env=False,
+            ).status_code
+            == 401
+        )
+    response = httpx.get(
+        stack.chat_url + '/v1/models',
+        headers={'Authorization': f'Bearer {stack.chat_token}'},
+        trust_env=False,
+    )
+    assert response.status_code == 200
+    assert response.json() == {
+        'object': 'list',
+        'data': [{'id': stack.chat_model, 'object': 'model', 'revision': e2e.STUB_MODEL_REVISION}],
+    }
+    models = httpx.get(
+        stack.ms_url + '/v1/models',
+        headers={'Authorization': f'Bearer {stack.token}'},
+        trust_env=False,
+    ).json()['data']
+    assert {model['type'] for model in models} == {'embedding', 'rerank'}
+    assert all(model['id'] != stack.chat_model for model in models)
+
+
+def test_generation_stream_exposes_usage_and_separate_reasoning(stack):
+    stack.ensure('normal')
+    body = {'model': stack.chat_model, 'messages': [{'role': 'user', 'content': QUESTION}], 'stream': True}
+    assert httpx.post(stack.chat_url + '/v1/chat/completions', json=body, trust_env=False).status_code == 401
+    assert (
+        httpx.post(
+            stack.chat_url + '/v1/chat/completions',
+            json=body,
+            headers={'Authorization': f'Bearer {stack.token}'},
+            trust_env=False,
+        ).status_code
+        == 401
+    )
+    with httpx.stream(
+        'POST',
+        stack.chat_url + '/v1/chat/completions',
+        json=body | {'stream_options': {'include_usage': True}},
+        headers={'Authorization': f'Bearer {stack.chat_token}'},
+        trust_env=False,
+    ) as response:
+        assert response.status_code == 200
+        events = [line.removeprefix('data: ') for line in response.iter_lines() if line.startswith('data: ')]
+    assert events[-1] == '[DONE]'
+    chunks = [json.loads(event) for event in events[:-1]]
+    deltas = [choice['delta'] for chunk in chunks for choice in chunk['choices']]
+    assert any(delta.get('reasoning') == 'private synthetic reasoning' for delta in deltas)
+    assert 'private synthetic reasoning' not in ''.join(delta.get('content', '') for delta in deltas)
+    assert chunks[-1]['usage'] == {'prompt_tokens': 12, 'completion_tokens': 5, 'total_tokens': 17}
+
+
+def test_generation_nonstream_exposes_usage_without_mixing_reasoning(stack):
+    stack.ensure('normal')
+    response = httpx.post(
+        stack.chat_url + '/v1/chat/completions',
+        json={'model': stack.chat_model, 'messages': [{'role': 'user', 'content': QUESTION}]},
+        headers={'Authorization': f'Bearer {stack.chat_token}'},
+        trust_env=False,
+    )
+    assert response.status_code == 200
+    body = response.json()
+    message = body['choices'][0]['message']
+    assert FAKE_ANSWER in message['content']
+    assert message['reasoning'] == 'private synthetic reasoning'
+    assert message['reasoning'] not in message['content']
+    assert body['usage'] == {'prompt_tokens': 12, 'completion_tokens': 5, 'total_tokens': 17}
+
+
+@pytest.mark.parametrize('host', ['127.0.0.1', 'localhost', '127.0.0.1:1', 'localhost:1', 'example.com:80'])
+@pytest.mark.parametrize('method,path', [('GET', '/v1/models'), ('POST', '/v1/chat/completions')])
+def test_generation_rejects_foreign_host_and_port(stack, host, method, path):
+    stack.ensure('normal')
+    response = httpx.request(
+        method,
+        stack.chat_url + path,
+        json={'model': stack.chat_model, 'messages': [{'role': 'user', 'content': QUESTION}]},
+        headers={'Authorization': f'Bearer {stack.chat_token}', 'Host': host},
+        trust_env=False,
+    )
+    assert response.status_code == 400
+    assert response.json()['error']['code'] == 'invalid_host'
+
+
+@pytest.mark.parametrize('host', ['127.0.0.1', 'localhost'])
+def test_generation_accepts_only_configured_loopback_port(stack, host):
+    stack.ensure('normal')
+    response = httpx.get(
+        stack.chat_url + '/v1/models',
+        headers={'Authorization': f'Bearer {stack.chat_token}', 'Host': f'{host}:{stack.chat_port}'},
+        trust_env=False,
+    )
+    assert response.status_code == 200
+
+
+@pytest.mark.parametrize('field', ['adapters', 'draft_model'])
+@pytest.mark.parametrize('stream', [False, True])
+def test_generation_rejects_model_override_fields(stack, field, stream):
+    stack.ensure('normal')
+    response = httpx.post(
+        stack.chat_url + '/v1/chat/completions',
+        json={
+            'model': stack.chat_model,
+            'messages': [{'role': 'user', 'content': QUESTION}],
+            'stream': stream,
+            field: 'synthetic-override',
+        },
+        headers={'Authorization': f'Bearer {stack.chat_token}'},
+        trust_env=False,
+    )
+    assert response.status_code == 400
+    assert response.json()['error']['code'] == 'unsupported_parameter'
+
+
+@pytest.mark.parametrize('stream', [False, True])
+def test_generation_rejects_other_model_ids(stack, stream):
+    stack.ensure('normal')
+    response = httpx.post(
+        stack.chat_url + '/v1/chat/completions',
+        json={'model': 'other-model', 'messages': [{'role': 'user', 'content': QUESTION}], 'stream': stream},
+        headers={'Authorization': f'Bearer {stack.chat_token}'},
+        trust_env=False,
+    )
+    assert response.status_code == 404
+    assert response.json()['error']['code'] == 'model_not_found'
+
+
+def test_generation_has_no_private_health_endpoint(stack):
+    stack.ensure('normal')
+    response = httpx.get(
+        stack.chat_url + '/health',
+        headers={'Authorization': f'Bearer {stack.chat_token}'},
+        trust_env=False,
+    )
+    assert response.status_code == 404
+
+
+def test_reasoning_is_not_shown_and_usage_is_logged(stack, ui):
+    before = len(e2e.request_log(stack.request_log))
+    e2e.ask(ui, QUESTION)
+    e2e.wait_done(ui)
+    expect(e2e.answer(ui)).to_contain_text(FAKE_ANSWER)
+    expect(e2e.answer(ui)).not_to_contain_text('private synthetic reasoning')
+    (row,) = new_log_rows(stack, before)
+    assert row['prompt_tokens'] == 12 and row['gen_tokens'] == 5
 
 
 def test_feedback_button_saves_turn(stack, ui, feedback_db):
@@ -286,7 +458,7 @@ def test_request_log_api_mode(stack, ui):
 def test_leaving_a_running_answer_cancels_generation(stack, ui, action):
     stack.ensure('long')  # 결론 뒤 설명이 길다: 간결형은 그동안 화면 글이 바뀌지 않음
     before = len(e2e.request_log(stack.request_log))
-    ended_before = sum(line.startswith('e2e chat end') for line in stack.ms.output().splitlines())
+    ended_before = sum(line.startswith('e2e chat end') for line in stack.chat.output().splitlines())
     e2e.ask(ui, QUESTION)
     e2e.answer(ui).get_by_text('가짜 모델').wait_for(timeout=e2e.ANSWER_TIMEOUT)
     ui.get_by_role('button', name=action).click()
@@ -302,15 +474,15 @@ def test_leaving_a_running_answer_cancels_generation(stack, ui, action):
         assert time.monotonic() < deadline, '요청 로그가 남지 않음'
         ui.wait_for_timeout(100)
     assert [r['status'] for r in new_log_rows(stack, before)] == ['cancelled']
-    deadline = time.monotonic() + 15  # 모델 서버는 다음 스텝에서 취소를 알아챈다
+    deadline = time.monotonic() + 15
     while (
-        len(ends := [line for line in stack.ms.output().splitlines() if line.startswith('e2e chat end')])
+        len(ends := [line for line in stack.chat.output().splitlines() if line.startswith('e2e chat end')])
         <= ended_before
     ):
-        assert time.monotonic() < deadline, f'모델 서버의 생성이 끝나지 않음\n{stack.ms.output()}'
+        assert time.monotonic() < deadline, f'생성 서버의 응답이 끝나지 않음\n{stack.chat.output()}'
         ui.wait_for_timeout(100)
     sent, total = map(int, ends[-1].split()[-1].split('/'))
-    assert sent < total, ends  # 모델 서버도 끝까지 생성하지 않음 (끊김 → 모델 서버 취소)
+    assert sent < total, ends
 
 
 # ---- 휴대폰 ----
@@ -352,47 +524,19 @@ def test_error_generation(stack, ui):
 
 
 def test_error_server_down(stack, ui):
-    stack.stop_model_server()
+    stack.stop_chat_server()
     before = len(e2e.request_log(stack.request_log))
     e2e.ask(ui, QUESTION)
     alert(ui, '모델 서버가 준비되지 않았습니다')
     assert [r['error_type'] for r in new_log_rows(stack, before)] == ['model_server']
 
 
-def test_error_busy(stack, ui):
-    """동시 생성 1·대기 1: 첫 요청이 생성을 시작한 뒤 둘째가 대기 자리를 채우면, 화면 질문은 503 server_busy"""
-    stack.ensure('busy')
-    body = {'model': stack.serve['LAWBOT_SERVE_CHAT'].split('=')[0], 'messages': [{'role': 'user', 'content': 'x'}]}
-    codes, generating = [], threading.Event()
-
-    def occupy():
-        try:
-            with httpx.stream(
-                'POST',
-                stack.ms_url + '/v1/chat/completions',
-                json=body | {'stream': True},
-                headers={'Authorization': f'Bearer {stack.token}'},
-                timeout=60,
-            ) as r:
-                codes.append(r.status_code)
-                for _ in r.iter_bytes():
-                    generating.set()
-        except httpx.TransportError:  # 테스트 끝에 모델 서버를 내려 끊는 것은 예상한 동작
-            pass
-
-    threads = [threading.Thread(target=occupy, daemon=True) for _ in range(2)]
-    threads[0].start()
-    assert generating.wait(10), '첫 요청이 생성을 시작하지 않음'
-    threads[1].start()
-    ui.wait_for_timeout(1000)  # 둘째 요청이 대기 자리를 잡을 때까지
-    assert codes == [200], codes
+def test_error_generation_authentication(stack, ui):
+    stack.ensure('auth_error')
     before = len(e2e.request_log(stack.request_log))
     e2e.ask(ui, QUESTION)
-    alert(ui, '모델 서버가 바쁩니다')
-    assert [r['error_type'] for r in new_log_rows(stack, before)] == ['model_server_busy']
-    stack.stop_model_server()
-    for t in threads:
-        t.join(timeout=10)
+    alert(ui, '모델 서버가 준비되지 않았습니다')
+    assert [row['error_type'] for row in new_log_rows(stack, before)] == ['model_server']
 
 
 @pytest.fixture

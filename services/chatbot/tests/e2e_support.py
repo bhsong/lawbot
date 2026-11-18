@@ -12,7 +12,7 @@ from pathlib import Path
 import httpx
 import pytest
 
-from conftest import TEST_TOKEN, free_port
+from conftest import TEST_LLM_TOKEN, TEST_TOKEN, free_port
 from lawbot_common import envfile
 
 ROOT = Path(__file__).resolve().parents[3]
@@ -97,21 +97,27 @@ def start_web(log_dir, port, *, command=None, **env):
 
 
 class Stack:
-    """웹앱 1개 + 가짜 모델 서버 1개. 모델 서버는 같은 포트에서 모드만 바꿔 다시 띄운다 (웹앱은 그대로)
-    extra_env: 웹앱 환경 변수 추가"""
+    """A web app, a generation-only HTTP fake, and the real embedding/rerank app with fake models."""
 
     def __init__(self, tmp, read_timeout, example='.env.example', *, web_command=None, **extra_env):
-        self.tmp, self.ms, self.mode, self.n = tmp, None, None, 0
-        self.token = TEST_TOKEN  # 모델 서버에는 환경 변수로 넘김 (e2e_model_server를 이 프로세스에서 import하지 않음)
-        self.ms_port, self.web_port = free_port(), free_port()
+        self.tmp, self.ms, self.chat, self.mode, self.n = tmp, None, None, None, 0
+        self.token, self.chat_token = TEST_TOKEN, TEST_LLM_TOKEN
+        self.ms_port, self.chat_port, self.web_port = free_port(), free_port(), free_port()
         self.url = f'http://127.0.0.1:{self.web_port}'
         self.ms_url = f'http://127.0.0.1:{self.ms_port}'
+        self.chat_url = f'http://127.0.0.1:{self.chat_port}'
         self.request_log = tmp / 'requests.jsonl'
-        self.serve = {k: v for k, v in example_env().items() if k.startswith('LAWBOT_SERVE_')}
+        self.serve = {
+            key: value
+            for key, value in example_env().items()
+            if key in ('LAWBOT_SERVE_EMBEDDING', 'LAWBOT_SERVE_RERANK')
+        }
         web_env = {k: v for k, v in example_env(example).items() if not k.startswith('LAWBOT_SERVE_')}
         web_env.update(
             LAWBOT_MODEL_SERVER=self.ms_url,
             LAWBOT_MODEL_TOKEN=self.token,
+            LAWBOT_LLM_BASE_URL=self.chat_url + '/v1',
+            LAWBOT_LLM_API_KEY=self.chat_token,
             LAWBOT_EMBED_CACHE='0',
             LAWBOT_REQUEST_LOG=str(self.request_log),
             LAWBOT_FEEDBACK='0',
@@ -119,43 +125,70 @@ class Stack:
             LAWBOT_MODEL_SERVER_WAIT='30',
         )
         web_env.update(extra_env)
+        self.chat_model = web_env.get('LAWBOT_PRO_MODEL', 'qwen3.8-27b-4bit')
         self.web = None
         try:
+            self.ms = Proc(
+                'model-server',
+                [sys.executable, str(TESTS / 'e2e_model_server.py'), str(self.ms_port), 'models'],
+                clean_env(LAWBOT_MODEL_TOKEN=self.token, LAWBOT_TEST_MODEL_REVISION=STUB_MODEL_REVISION, **self.serve),
+                self.tmp,
+            )
+            self.ms.wait_http(
+                self.ms_url + '/health',
+                lambda response: response.status_code == 200 and response.json().get('ready'),
+                headers={'Authorization': f'Bearer {self.token}'},
+            )
             self.ensure('normal')
             self.web = start_web(tmp, self.web_port, command=web_command, **web_env)
         finally:
             if self.web is None:
-                self.stop_model_server()
+                self.stop()
 
     def ensure(self, mode):
-        """모델 서버가 mode로 떠 있게 한다 (이미 그 모드로 살아 있으면 그대로)"""
-        if self.ms is not None and self.ms.alive() and self.mode == mode:
+        """Restart only the generation fake when its response mode changes."""
+        if self.chat is not None and self.chat.alive() and self.mode == mode:
             return
-        self.stop_model_server()
+        self.stop_chat_server()
         self.n += 1
-        self.ms = Proc(
-            f'model-server-{self.n}-{mode}',
-            [sys.executable, str(TESTS / 'e2e_model_server.py'), str(self.ms_port), mode],
-            clean_env(LAWBOT_MODEL_TOKEN=self.token, LAWBOT_TEST_MODEL_REVISION=STUB_MODEL_REVISION, **self.serve),
+        self.chat = Proc(
+            f'chat-server-{self.n}-{mode}',
+            [sys.executable, str(TESTS / 'e2e_model_server.py'), str(self.chat_port), mode],
+            clean_env(
+                LAWBOT_LLM_API_KEY=self.chat_token,
+                LAWBOT_PRO_MODEL=self.chat_model,
+                LAWBOT_TEST_MODEL_REVISION=STUB_MODEL_REVISION,
+            ),
             self.tmp,
         )
         self.mode = mode
-        self.ms.wait_http(
-            self.ms_url + '/health',
-            lambda r: r.status_code == 200 and r.json().get('ready'),
-            headers={'Authorization': f'Bearer {self.token}'},  # /health도 토큰 필요
+        self.chat.wait_http(
+            self.chat_url + '/v1/models',
+            lambda response: (
+                response.status_code == 200
+                and any(model.get('id') == self.chat_model for model in response.json().get('data', []))
+            ),
+            headers={'Authorization': f'Bearer {self.chat_token}'},
         )
 
-    def stop_model_server(self):
-        if self.ms is not None:
-            self.ms.stop()
+    def stop_chat_server(self):
+        if self.chat is not None:
+            self.chat.stop()
 
     def logs(self):
-        return [self.web.log, self.request_log, *sorted(self.tmp.glob('model-server-*.log'))]
+        return [
+            self.request_log,
+            *([self.web.log] if self.web else []),
+            *([self.ms.log] if self.ms else []),
+            *sorted(self.tmp.glob('chat-server-*.log')),
+        ]
 
     def stop(self):
-        self.web.stop()
-        self.stop_model_server()
+        if self.web is not None:
+            self.web.stop()
+        self.stop_chat_server()
+        if self.ms is not None:
+            self.ms.stop()
 
 
 def request_log(path):

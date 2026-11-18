@@ -1,5 +1,4 @@
-# tests/test_api_client.py  →  모델 서버 클라이언트(api_client)·생성 API 주소 설정(security.llm_endpoint)과
-# 두 서비스 계약: 챗봇의 실제 클라이언트·openai SDK가 실제 모델 서버 앱(lawbot_model_server.api, 가짜 모델)과 통한다
+# Test model-server requests and dedicated generation API contracts.
 import base64
 import json
 import types
@@ -13,9 +12,9 @@ from openai import OpenAI
 import lawbot.api_client as ac
 import lawbot.service as service
 from chat_support import run
-from conftest import TEST_TOKEN
-from lawbot import security
+from conftest import TEST_LLM_TOKEN, TEST_TOKEN
 from lawbot.calc_extract import SELECT_MAX_TOKENS
+from lawbot_common.llm_endpoint import endpoint
 from lawbot_model_server import api as server_api
 from lawbot_model_server.config import ModelEntry
 from lawbot_model_server.registry import Registry
@@ -205,8 +204,8 @@ def test_malformed_server_response_is_model_server_error(path, body):
         (503, {'error': {'message': '불러오는 중', 'type': 'server_not_ready'}}, ac.ModelServerError, '불러오는 중'),
         (
             500,
-            {'error': {'message': '폴더 없음', 'type': 'model_load_error', 'code': 'FileNotFoundError'}},
-            ac.ModelLoadError,
+            {'error': {'message': '폴더 없음', 'type': 'server_error', 'code': 'FileNotFoundError'}},
+            ac.ModelServerError,
             '폴더 없음',
         ),
         (502, None, ac.ModelServerError, '502'),
@@ -263,36 +262,69 @@ def test_wait_ready(env):
 
 
 # ---- 생성 API 주소 ----
-SERVER = 'http://127.0.0.1:65535'
 
 
-def test_llm_endpoint_default_is_model_server(env):
-    assert security.llm_endpoint(SERVER) == (f'{SERVER}/v1', TEST_TOKEN, False)
+@pytest.mark.parametrize('value', [None, '', '   '])
+def test_llm_endpoint_requires_explicit_url(env, value):
+    if value is None:
+        env.delenv('LAWBOT_LLM_BASE_URL', raising=False)
+    else:
+        env.setenv('LAWBOT_LLM_BASE_URL', value)
+    with pytest.raises(RuntimeError, match='LAWBOT_LLM_BASE_URL'):
+        endpoint()
+
+
+@pytest.mark.parametrize('key', [None, '', '   ', 'short-secret'])
+def test_llm_endpoint_requires_dedicated_key(env, key):
+    env.setenv('LAWBOT_LLM_BASE_URL', 'http://127.0.0.1:65534/v1')
+    if key is None:
+        env.delenv('LAWBOT_LLM_API_KEY', raising=False)
+    else:
+        env.setenv('LAWBOT_LLM_API_KEY', key)
+    with pytest.raises(RuntimeError, match='LAWBOT_LLM_API_KEY') as exc:
+        endpoint()
+    assert TEST_TOKEN not in str(exc.value)
+    if key and key.strip():
+        assert key not in str(exc.value)
+
+
+def test_missing_models_uses_separate_generation_ids(env):
+    from lawbot import deploy
+
+    p = deploy.get_profile()
+    available = [{'id': p.emb_model, 'type': 'embedding'}]
+    chat = [{'id': spec.model, 'object': 'model', 'revision': 'chat-revision'} for spec in p.models]
+    assert service.missing_models(available, p, None, chat_available=chat) == []
+    assert service.missing_models(available, p, None, chat_available=chat[:1]) == [('chat', p.models[1].model)]
+    assert service.missing_models(available + chat, p, None, chat_available=[]) == [
+        ('chat', spec.model) for spec in p.models
+    ]
 
 
 def test_llm_endpoint_external_needs_opt_in(env):
     env.setenv('LAWBOT_LLM_BASE_URL', 'https://api.example.com/v1')
     with pytest.raises(ValueError, match='LAWBOT_LLM_ALLOW_EXTERNAL=1'):
-        security.llm_endpoint(SERVER)
+        endpoint()
     env.setenv('LAWBOT_LLM_ALLOW_EXTERNAL', '1')
+    env.delenv('LAWBOT_LLM_API_KEY')
     with pytest.raises(RuntimeError, match='LAWBOT_LLM_API_KEY'):
-        security.llm_endpoint(SERVER)  # 외부에 모델 서버 토큰을 보내지 않음
-    env.setenv('LAWBOT_LLM_API_KEY', 'sk-test-only')
-    assert security.llm_endpoint(SERVER) == ('https://api.example.com/v1', 'sk-test-only', True)
+        endpoint()
+    env.setenv('LAWBOT_LLM_API_KEY', TEST_LLM_TOKEN)
+    assert endpoint() == ('https://api.example.com/v1', TEST_LLM_TOKEN, True)
     env.setenv('LAWBOT_LLM_BASE_URL', 'http://api.example.com/v1')
     with pytest.raises(ValueError, match='https만'):
-        security.llm_endpoint(SERVER)
+        endpoint()
 
 
 def test_llm_endpoint_other_local_port(env):
     env.setenv('LAWBOT_LLM_BASE_URL', 'http://127.0.0.1:65534/v1/')
-    assert security.llm_endpoint(SERVER) == ('http://127.0.0.1:65534/v1', TEST_TOKEN, False)
+    assert endpoint() == ('http://127.0.0.1:65534/v1', TEST_LLM_TOKEN, False)
     env.setenv('LAWBOT_LLM_BASE_URL', 'https://127.0.0.1/v1')
     with pytest.raises(ValueError, match=r'http://127\.0\.0\.1:<포트>/v1'):
-        security.llm_endpoint(SERVER)
+        endpoint()
     env.setenv('LAWBOT_LLM_BASE_URL', 'https://user:pw@api.example.com/v1')
     with pytest.raises(ValueError, match='형식 오류'):
-        security.llm_endpoint(SERVER)
+        endpoint()
 
 
 def test_load_app_requires_model_server(env):
@@ -308,56 +340,27 @@ def test_external_llm_skips_server_chat_models(env, model_server):
     env.setattr(service, 'LLM', FakeLLM)
     env.setenv('LAWBOT_LLM_BASE_URL', 'https://api.example.com/v1')
     env.setenv('LAWBOT_LLM_ALLOW_EXTERNAL', '1')
-    env.setenv('LAWBOT_LLM_API_KEY', 'sk-test-only')
+    env.setenv('LAWBOT_LLM_API_KEY', TEST_LLM_TOKEN)
+
+    def unexpected_discovery(client):
+        raise AssertionError('External APIs must not be queried for chat models')
+
+    env.setattr(service, 'generation_models', unexpected_discovery)
     env.setenv('LAWBOT_PRO_MODEL', 'gpt-cloud')
     model_server.available = [{'id': 'lawbot-emb-v4', 'type': 'embedding'}]  # 서버에는 임베딩만
     a = service.load_app()
-    assert a.llm_mode == 'external' and a.models.is_loaded('pro')  # 외부 API는 '불러오는 중' 단계 없음
+    assert a.llm_mode == 'external'
     llm = a.models.get('pro')[0]
     assert llm.path == 'gpt-cloud' and llm.client.kw['base_url'] == 'https://api.example.com/v1'
-    assert llm.client.kw['api_key'] == 'sk-test-only' and llm.client.kw['http_client']._trust_env is True
+    assert llm.client.kw['api_key'] == TEST_LLM_TOKEN and llm.client.kw['http_client']._trust_env is True
 
 
-# ---- 두 서비스 계약: 챗봇 클라이언트 ↔ 실제 모델 서버 앱 (가짜 모델) ----
-class Engine:
-    """모델 서버 생성 엔진(BatchEngine)과 같은 인터페이스. 요청마다 Chat.stream을 한 토큰씩"""
-
-    def __init__(self, model):
-        self.model, self.items = model, {}
-
-    def __len__(self):
-        return len(self.items)
-
-    def tickets(self):
-        return list(self.items)
-
-    def add(self, ticket, messages, kw):
-        self.items[ticket] = self.model.stream(messages, **kw)
-
-    def step(self):
-        events = []
-        for t, it in list(self.items.items()):
-            r = next(it, None)
-            if r is None:
-                del self.items[t]
-                events.append((t, 'end', None))
-            else:
-                events.append((t, 'item', r))
-        return events
-
-    def remove(self, ticket):
-        self.items.pop(ticket, None)
-
-    def close(self):
-        self.items.clear()
+# Separate generation HTTP fake and the real embedding/rerank app with fake models.
 
 
 class Chat:
     def __init__(self, path):
         self.calls = []
-
-    def engine(self, max_concurrent):
-        return Engine(self)
 
     def stream(self, messages, **kw):
         self.calls.append((messages, kw))
@@ -370,7 +373,6 @@ class Chat:
                 generation_tokens=i + 1,
                 prompt_tps=500.0,
                 generation_tps=25.0,
-                peak_memory=3.25,
                 finish_reason='stop' if i else None,
             )
 
@@ -399,20 +401,108 @@ class Rr:
 
 @pytest.fixture
 def real_server(env):
-    """lawbot_model_server.api 앱 (v4 프로필이 쓰는 모델 id, 가짜 모델) + 챗봇이 이 앱으로 접속하게"""
+    """Exercise independent authenticated generation and embedding/rerank HTTP boundaries."""
+    from fastapi import FastAPI, Request
+    from fastapi.responses import JSONResponse, StreamingResponse
+
     entries = [
         ModelEntry('lawbot-emb-v4', 'embedding', None),
         ModelEntry('qwen3-reranker-4b', 'rerank', None),
-        ModelEntry('lawbot-fast-v4', 'chat', None),
-        ModelEntry('qwen3.8-27b-4bit', 'chat', None),
     ]
-    reg = Registry(entries, {'chat': Chat, 'embedding': Emb, 'rerank': Rr}, max_resident=1)
+    reg = Registry(entries, {'embedding': Emb, 'rerank': Rr})
     reg.load_fixed()
+    reg.chat = {model: Chat(None) for model in ('lawbot-fast-v4', 'qwen3.8-27b-4bit')}
+    reg.generation_requests = []
+    generation = FastAPI()
+
+    @generation.middleware('http')
+    async def authenticate(request, call_next):
+        if request.headers.get('authorization') != f'Bearer {TEST_LLM_TOKEN}':
+            return JSONResponse(
+                {'error': {'message': 'Unauthorized', 'type': 'authentication_error', 'code': 'invalid_api_key'}},
+                status_code=401,
+            )
+        reg.generation_requests.append((request.url.path, request.headers.get('x-request-id')))
+        return await call_next(request)
+
+    @generation.get('/v1/models')
+    async def models():
+        return {
+            'object': 'list',
+            'data': [{'id': model, 'object': 'model', 'revision': 'synthetic-e2e'} for model in reg.chat],
+        }
+
+    @generation.post('/v1/chat/completions')
+    async def completions(request: Request):
+        body = await request.json()
+        model = body['model']
+        if model not in reg.chat:
+            return JSONResponse(
+                {'error': {'message': 'Unknown model', 'type': 'invalid_request_error', 'code': 'model_not_found'}},
+                status_code=404,
+            )
+        options = {
+            'max_tokens': body.get('max_tokens', 1024),
+            'temperature': body.get('temperature', 0),
+            'top_p': body.get('top_p'),
+            'enable_thinking': body.get('chat_template_kwargs', {}).get('enable_thinking', True),
+        }
+        base = {'id': 'chatcmpl-test', 'created': 1, 'model': model}
+
+        def usage(item):
+            prompt, completion = getattr(item, 'prompt_tokens', 0), getattr(item, 'generation_tokens', 0)
+            return {'prompt_tokens': prompt, 'completion_tokens': completion, 'total_tokens': prompt + completion}
+
+        def chunk(delta, finish=None, **extra):
+            return (
+                base
+                | {
+                    'object': 'chat.completion.chunk',
+                    'choices': [{'index': 0, 'delta': delta, 'finish_reason': finish}],
+                }
+                | extra
+            )
+
+        def events():
+            last = types.SimpleNamespace()
+            try:
+                yield 'data: ' + json.dumps(chunk({'reasoning': 'private synthetic reasoning'})) + '\n\n'
+                for item in reg.chat[model].stream(body['messages'], **options):
+                    last = item
+                    yield 'data: ' + json.dumps(chunk({'content': item.text})) + '\n\n'
+                timings = {key: getattr(last, key, None) for key in ('prompt_tps', 'generation_tps')}
+                yield 'data: ' + json.dumps(chunk({}, 'stop', usage=usage(last), timings=timings)) + '\n\n'
+                yield 'data: [DONE]\n\n'
+            except Exception as error:
+                yield (
+                    'data: '
+                    + json.dumps(
+                        {'error': {'message': str(error), 'type': 'server_error', 'code': type(error).__name__}}
+                    )
+                    + '\n\n'
+                )
+
+        if body.get('stream'):
+            return StreamingResponse(events(), media_type='text/event-stream')
+        items = list(reg.chat[model].stream(body['messages'], **options))
+        return base | {
+            'object': 'chat.completion',
+            'choices': [
+                {
+                    'index': 0,
+                    'message': {'role': 'assistant', 'content': ''.join(item.text for item in items)},
+                    'finish_reason': 'stop',
+                }
+            ],
+            'usage': usage(items[-1]) if items else usage(types.SimpleNamespace()),
+        }
+
     tc = TestClient(server_api.create_app(TEST_TOKEN, reg))
+    generation_client = TestClient(generation)
     real_client = ac.ModelServerClient
     env.setattr(service, 'ModelServerClient', lambda url, token: real_client(url, token, http=tc))
-    env.setattr(service, 'OpenAI', lambda **kw: OpenAI(**(kw | {'http_client': tc})))
-    with tc:
+    env.setattr(service, 'OpenAI', lambda **kw: OpenAI(**(kw | {'http_client': generation_client})))
+    with tc, generation_client:
         yield reg
 
 
@@ -422,16 +512,15 @@ def test_end_to_end_through_real_server_app(env, real_server, tmp_path):
     emb = real_server.fixed['lawbot-emb-v4']
     assert emb.calls == [(415, 'document', 2304)]
     assert len(a.retriever.ids) == 415 and a.retriever.D.shape == (415, 64)
-    assert not a.models.is_loaded('fast')  # 서버에 아직 올라 있지 않음
     steps = list(service.ask(a, '수습 기간에도 해고 예고를 해야 하나요?', 'fast'))
-    assert steps[0][0] == 'load' and steps[-1][0] == 'done'
+    assert steps[0][0] == 'generate' and steps[-1][0] == 'done'
     _, hits, raw, st = steps[-1]
     assert raw == f'【결론】\n예고해야 합니다.\n\n【근거 조문】\n{hits[0]["doc"].splitlines()[0]}'
     assert (st['prompt_tokens'], st['gen_tokens'], st['tps'], st['peak_gb'], st['finish']) == (
         50,
         2,
         25.0,
-        3.25,
+        None,
         'stop',
     )
     assert emb.calls[-1] == (1, 'query', 2304)
@@ -439,8 +528,7 @@ def test_end_to_end_through_real_server_app(env, real_server, tmp_path):
     assert messages[1]['content'].startswith('[참고 조문]\n[1] ') and messages[1]['content'].endswith(
         '[질문]\n수습 기간에도 해고 예고를 해야 하나요?'
     )
-    assert kw == {'max_tokens': 1024, 'temperature': 0.0, 'top_p': None, 'enable_thinking': False}
-    assert a.models.is_loaded('fast')
+    assert kw == {'max_tokens': 1024, 'temperature': 0.0, 'top_p': None, 'enable_thinking': True}
     r = run(a, '해고 예고?', 'fast', 'concise')
     text, stats = r.text, r.stats
     assert text.startswith('예고해야 합니다.') and '25.0 tok/s' in stats
@@ -515,7 +603,8 @@ def test_calculation_router_through_real_server_app(env, real_server, tmp_path, 
     assert f'[질문]\n{question}\n\n[계산 결과]\n' in answer_messages[1]['content']
     assert '계산 결과의 숫자를 그대로 쓰고 다시 계산하지 말 것.' in answer_messages[1]['content']
     posts = [line for line in capsys.readouterr().out.splitlines() if ' POST ' in line]
-    assert len(posts) == 5
+    assert len(posts) == 2
+    assert [path for path, _ in real_server.generation_requests].count('/v1/chat/completions') == 3
 
 
 def test_web_noncalculation_prompt_and_calls_unchanged(env, real_server, capsys):
@@ -547,9 +636,10 @@ def test_web_noncalculation_prompt_and_calls_unchanged(env, real_server, capsys)
             '사용자는 근로자가 사망 또는 퇴직한 경우에는 14일 이내에 지급하여야 한다.\n\n[질문]\n해고 예고?'
         ).encode()
     )
-    assert kwargs == {'max_tokens': 1024, 'temperature': 0.0, 'top_p': None, 'enable_thinking': False}
+    assert kwargs == {'max_tokens': 1024, 'temperature': 0.0, 'top_p': None, 'enable_thinking': True}
     posts = [line.split()[2] for line in capsys.readouterr().out.splitlines() if ' POST ' in line]
-    assert posts == ['/v1/embeddings', '/v1/rerank', '/v1/chat/completions']
+    assert posts == ['/v1/embeddings', '/v1/rerank']
+    assert [path for path, _ in real_server.generation_requests].count('/v1/chat/completions') == 1
 
 
 def test_gated_lookup_uses_identical_rag_messages_and_no_calculation_event(env, real_server, tmp_path, capsys):
@@ -585,27 +675,24 @@ def test_gated_lookup_uses_identical_rag_messages_and_no_calculation_event(env, 
     assert [message['content'].encode() for message in answer] == [message['content'].encode() for message in baseline]
     assert answer_kwargs == baseline_kwargs
     posts = [line.split()[2] for line in capsys.readouterr().out.splitlines() if ' POST ' in line]
-    assert posts == ['/v1/chat/completions', '/v1/embeddings', '/v1/rerank', '/v1/chat/completions']
+    assert posts == ['/v1/embeddings', '/v1/rerank']
+    assert [path for path, _ in real_server.generation_requests][-2:] == ['/v1/chat/completions'] * 2
     row = json.loads(path.read_text(encoding='utf-8').splitlines()[-1])
     assert row['router_reason'] == 'lookup_question' and row['calculation_status'] == 'none'
 
 
-def test_router_queue_full_shows_temporary_guidance_and_continues_rag(env, real_server, tmp_path):
+def test_router_unavailable_shows_temporary_guidance_and_continues_rag(env, real_server, tmp_path):
     from lawbot import web
-    from lawbot_model_server.scheduler import QueueFull, Scheduler
 
     question = '2026년 총급여 5천만 원, 의료비 300만 원이면 세액공제액은 얼마인가요?'
-    diagnostic = 'fixture 내부 대기열 진단'
-    original_chat = Scheduler.chat
-    chat_tokens = []
+    diagnostic = 'fixture private transport diagnostic'
+    router_tokens = []
 
-    def chat(self, model_id, messages, options):
-        chat_tokens.append(options['max_tokens'])
-        if options['max_tokens'] == SELECT_MAX_TOKENS:
-            raise QueueFull(diagnostic)
-        return original_chat(self, model_id, messages, options)
+    def unavailable(self, system, user, max_tokens, metrics):
+        router_tokens.append(max_tokens)
+        raise ac.ModelServerError(diagnostic, 503)
 
-    env.setattr(Scheduler, 'chat', chat)
+    env.setattr(service.LLM, '_router_completion', unavailable)
     path = tmp_path / 'requests.jsonl'
     env.setenv('LAWBOT_REQUEST_LOG', str(path))
     app = service.load_app()
@@ -616,13 +703,13 @@ def test_router_queue_full_shows_temporary_guidance_and_continues_rag(env, real_
     assert diagnostic not in events['calculation']['message']
     assert events['done']['text'].startswith('예고해야 합니다.')
     assert 'error' not in events
-    assert chat_tokens == [SELECT_MAX_TOKENS, 1024]
+    assert router_tokens == [SELECT_MAX_TOKENS]
     [(messages, _)] = real_server.chat[app.models.specs['pro'].model].calls
     assert messages[1]['content'].startswith('[참고 조문]\n')
     assert '직접 계산하지 말고 계산에 필요한 정보와 근거 조문만 안내할 것.' in messages[1]['content']
     logged = path.read_text(encoding='utf-8')
     record = json.loads(logged)
-    assert record['router_reason'] == 'queue_full'
+    assert record['router_reason'] == 'model_error'
     assert record['calculation_status'] == 'none'
     assert diagnostic not in logged and question not in logged
 
@@ -633,11 +720,13 @@ def test_request_id_reaches_model_server_log(env, real_server, capsys):
     env.setenv('LAWBOT_RERANKER_ENABLED', '1')
     a = service.load_app()
     capsys.readouterr()
+    real_server.generation_requests.clear()
     steps = list(service.ask(a, '수습 기간에도 해고 예고를 해야 하나요?', 'fast'))
     rid = steps[-1][3]['request_id']
     server = [line for line in capsys.readouterr().out.splitlines() if line.startswith('[model-server]')]
     paths = [line.split()[2] for line in server if ' POST ' in line and line.endswith(f'rid={rid}')]
-    assert paths == ['/v1/embeddings', '/v1/rerank', '/v1/chat/completions']
+    assert paths == ['/v1/embeddings', '/v1/rerank']
+    assert real_server.generation_requests == [('/v1/chat/completions', rid)]
     assert not any('수습' in line for line in server)  # 질문 내용은 모델 서버 로그에 없음
     assert all(line.endswith(f'rid={rid}') for line in server if ' /v1/' in line)  # 모델 목록 확인(GET)도 같은 id
 
@@ -663,11 +752,49 @@ def test_reranker_through_real_server_app(env, real_server):
 def test_server_errors_reach_web_app_as_known_types(env, real_server):
     a = service.load_app()
 
-    def broken(path):
-        raise FileNotFoundError('모델 폴더 없음')
+    llm = a.models.get('pro')[0]
+    request = httpx.Request('POST', 'http://127.0.0.1:65534/v1/chat/completions')
 
-    real_server.loaders['chat'] = broken
-    assert run(a, '질문', 'pro', 'full').error.startswith('Lawbot Pro 모델을 불러오지 못했습니다')
+    def unavailable(**kwargs):
+        import openai
+
+        raise openai.APIStatusError(
+            'unavailable', response=httpx.Response(503, request=request), body={'message': 'unavailable'}
+        )
+
+    env.setattr(llm.client.chat.completions, 'create', unavailable)
+    assert run(a, '질문', 'pro', 'full').error.startswith('모델 서버가 준비되지 않았습니다')
     env.setenv('LAWBOT_PRO_MODEL', '없는-모델')
     with pytest.raises(RuntimeError, match='chat 없는-모델'):  # 시작할 때 /v1/models로 확인
         service.load_app()
+
+
+def test_generation_models_preserve_independent_revisions(env, real_server):
+    app = service.load_app()
+    client = app.models.get('pro')[0].client
+    models = service.generation_models(client)
+    assert {row['id'] for row in models} == {'lawbot-fast-v4', 'qwen3.8-27b-4bit'}
+    assert all(row['revision'] == 'synthetic-e2e' for row in models)
+    assert all(row.get('type') is None and row.get('loaded') is None for row in models)
+
+
+def test_generation_rejects_model_server_token(env, real_server):
+    env.setenv('LAWBOT_LLM_API_KEY', TEST_TOKEN)
+    with pytest.raises(ac.ModelServerError, match='LAWBOT_LLM_API_KEY') as exc:
+        service.load_app()
+    assert exc.value.status == 401
+
+
+def test_check_deploy_skips_external_generation_discovery(env):
+    from lawbot import check_deploy, deploy
+
+    env.setenv('LAWBOT_LLM_BASE_URL', 'https://api.example.com/v1')
+    env.setenv('LAWBOT_LLM_ALLOW_EXTERNAL', '1')
+
+    def unexpected_discovery(client):
+        raise AssertionError('External APIs must not be queried for chat models')
+
+    env.setattr(service, 'generation_models', unexpected_discovery)
+    out = []
+    check_deploy.check_model_server(deploy.get_profile(), out)
+    assert not any(level == 'FAIL' for level, _ in out)

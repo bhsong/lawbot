@@ -36,7 +36,6 @@ from lawbot.calculators import (
 )
 from lawbot.labor_dates import parse_labor_date
 from lawbot.labor_language import is_uncertain
-from lawbot_common.api import SERVER_BUSY
 
 CALCULATED_INSTRUCTION = '계산 결과의 숫자를 그대로 쓰고 다시 계산하지 말 것. 결론에는 결과 항목과 금액(원)을 표의 순서대로 쓰고 중간 금액은 설명에 둘 것.'
 CALCULATED_UNITS_INSTRUCTION = '표의 결과 항목과 숫자·단위를 결론에 그대로 쓰고 다시 계산하지 말 것.'
@@ -240,8 +239,8 @@ def route_calculation(
         error = exc.reason
     except ModelServerTimeout:
         error = 'timeout'
-    except ModelServerError as exc:
-        error = 'queue_full' if exc.status == 503 and exc.kind == SERVER_BUSY else 'model_error'
+    except ModelServerError:
+        error = 'model_error'
     except ModelLoadError, ConnectionError:
         error = 'model_error'
     elapsed_ms = round((time.perf_counter() - started) * 1000)

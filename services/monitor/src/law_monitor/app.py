@@ -155,7 +155,7 @@ class Monitor:
         """
         if self.llm is None:
             raise MissingSecret(
-                '요약 모델 설정이 없습니다: LAWBOT_MODEL_SERVER·LAWBOT_MODEL_TOKEN '
+                '요약 모델 설정이 없습니다: LAWBOT_LLM_BASE_URL·LAWBOT_LLM_API_KEY '
                 '(환경변수, services/monitor/.env 또는 레포 최상위 .env)'
             )
         now = self.now()

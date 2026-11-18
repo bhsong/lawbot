@@ -8,6 +8,7 @@ from law_monitor import cli
 from law_monitor.app import AlreadyBootstrapped, BootstrapRequired
 from law_monitor.collectors.base import CollectResult
 from mon_helpers import LAW_PATH, SourceRepo, law_md, make_config, make_monitor
+from mon_helpers import isolated_monitor_credentials as isolated_monitor_credentials
 
 
 class OkCollector:

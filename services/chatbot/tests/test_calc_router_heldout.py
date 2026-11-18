@@ -34,12 +34,10 @@ def install_transport(monkeypatch, on_post=None):
         nonlocal posts
         requests.append(request)
         assert request.headers['authorization'] == 'Bearer fixture-token'
-        if request.url.path == '/health':
-            return httpx.Response(200, json={'ready': True, 'max_concurrent': 1, 'commit': COMMIT})
         if request.url.path == '/v1/models':
             return httpx.Response(
                 200,
-                json={'data': [{'id': 'pro', 'type': 'chat', 'loaded': True, 'revision': 'sha256:fixture'}]},
+                json={'data': [{'id': 'pro', 'revision': 'sha256:fixture'}]},
             )
         assert request.url.path == '/v1/chat/completions'
         posts += 1
@@ -72,7 +70,9 @@ def install_transport(monkeypatch, on_post=None):
             super().__init__(**kwargs, transport=httpx.MockTransport(reply))
 
     monkeypatch.setattr(evaluator.httpx, 'Client', MockClient)
-    monkeypatch.setattr(evaluator, '_heldout_settings', lambda: ('http://127.0.0.1:9', 'fixture-token', 'pro'))
+    monkeypatch.setattr(
+        evaluator, '_heldout_settings', lambda: ('http://127.0.0.1:19/v1', 'fixture-token', 'pro', False)
+    )
     monkeypatch.setattr(evaluator, '_heldout_guard', lambda: 1)
     monkeypatch.setattr(evaluator, '_webapp_commit', lambda: COMMIT)
     monkeypatch.setattr(evaluator, 'calculator_compatibility', lambda path: {'severance_pay': ()})
@@ -90,11 +90,14 @@ def test_heldout_router_only_complete_run(monkeypatch, tmp_path):
     assert report['status'] == 'completed'
     assert report['valid'] is True and report['before'] == report['after']
     assert report['before']['fixture_sha256'] == digest
-    assert report['before']['webapp_commit'] == report['before']['model_server_commit'] == COMMIT
+    assert report['before']['webapp_commit'] == COMMIT
+    assert report['before']['model'] == {'id': 'pro', 'revision': 'sha256:fixture'}
+    assert report['before']['generation_server_mlx_lm_version'] is None
     assert report['inference_posts'] == 2 * len(report['routes']) == 120
     assert all(row['classification_match'] and row['reason'] == 'missing_required' for row in report['routes'])
-    assert [req.method for req in requests] == ['GET', 'GET', *(['POST'] * 120), 'GET', 'GET']
-    for index, req in enumerate(requests[2:-2]):
+    assert [req.method for req in requests] == ['GET', *(['POST'] * 120), 'GET']
+    assert all(req.url.port == 19 and req.url.path != '/health' for req in requests)
+    for index, req in enumerate(requests[1:-1]):
         body = json.loads(req.content)
         assert body['model'] == 'pro'
         select = index % 2 == 0
@@ -129,7 +132,7 @@ def test_heldout_stops_and_keeps_partial_json(monkeypatch, tmp_path, failure):
     assert report['inference_posts'] == 3
     assert report['routes'][0]['classification_match']
     assert 'private failure details' not in output.read_text()
-    assert [req.method for req in requests] == ['GET', 'GET', 'POST', 'POST', 'POST']
+    assert [req.method for req in requests] == ['GET', 'POST', 'POST', 'POST']
 
 
 def test_heldout_rejects_oversized_fixture_before_api(monkeypatch, tmp_path):
@@ -175,7 +178,7 @@ def test_heldout_pressure_stop_does_not_send_next_post(monkeypatch, tmp_path):
     report = json.loads(output.read_text())
     assert report['stop_reason'] == 'critical_memory_pressure'
     assert report['inference_posts'] == 2 * len(report['routes']) == 2
-    assert [req.method for req in requests] == ['GET', 'GET', 'POST', 'POST']
+    assert [req.method for req in requests] == ['GET', 'POST', 'POST']
 
 
 def test_heldout_requires_exact_guidance_reason_and_no_results():
@@ -199,3 +202,34 @@ def test_new_heldout_fixture_is_pinned_and_valid():
     rows = evaluator._heldout_cases(fixture.read_bytes(), digest, count)
     assert len(rows) == count == 52
     assert {row['kind'] for row in rows} >= {'calculated', 'missing', 'ambiguous', 'lookup', 'general', 'unsupported'}
+
+
+@pytest.mark.parametrize('card', [{'id': 'other', 'revision': 'sha256:other'}, {'id': 'pro'}])
+def test_heldout_requires_generation_id_and_revision_without_loaded(monkeypatch, card):
+    monkeypatch.setattr(evaluator.service, 'generation_models', lambda client: [card])
+    with pytest.raises(evaluator._HeldoutStop, match='pro_not_ready'):
+        evaluator._heldout_configuration(object(), 'pro', 'fixture', 'articles')
+
+
+def test_external_generation_has_no_revision_or_models_probe(monkeypatch):
+    monkeypatch.setattr(
+        evaluator.service, 'generation_models', lambda client: pytest.fail('must not probe external models')
+    )
+    monkeypatch.setattr(evaluator, '_webapp_commit', lambda: COMMIT)
+    configuration = evaluator._heldout_configuration(object(), 'pro', 'fixture', 'articles', external=True)
+    assert configuration['model'] == {'id': 'pro', 'revision': None}
+
+
+def test_heldout_uses_common_generation_endpoint_and_dedicated_key(monkeypatch):
+    from types import SimpleNamespace
+
+    monkeypatch.setattr(evaluator.envfile, 'load', lambda: None)
+    monkeypatch.setattr(
+        evaluator.deploy,
+        'get_profile',
+        lambda: SimpleNamespace(name='v5', models=[SimpleNamespace(key='pro', model='pro')]),
+    )
+    monkeypatch.setenv('LAWBOT_LLM_BASE_URL', 'http://127.0.0.1:19/v1')
+    monkeypatch.setenv('LAWBOT_LLM_API_KEY', 'generation-only-secret')
+    monkeypatch.setenv('LAWBOT_MODEL_TOKEN', 'embedding-only-secret')
+    assert evaluator._heldout_settings() == ('http://127.0.0.1:19/v1', 'generation-only-secret', 'pro', False)

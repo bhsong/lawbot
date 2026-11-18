@@ -6,8 +6,8 @@ from lawbot_common import api
 
 
 def test_error_body_is_openai_shape():
-    assert api.error_body('대기열', api.SERVER_BUSY) == {
-        'error': {'message': '대기열', 'type': 'server_busy', 'param': None, 'code': None}
+    assert api.error_body('연산 실패', api.SERVER_ERROR) == {
+        'error': {'message': '연산 실패', 'type': 'server_error', 'param': None, 'code': None}
     }
 
 
@@ -20,5 +20,5 @@ def test_requests_reject_unknown_fields_and_types():
 
 def test_responses_allow_extra_fields():
     # 받는 쪽(웹앱)은 서버가 필드를 더 보내도 받는다 (OpenAI 응답과 같이)
-    m = api.ModelsResponse.model_validate({'data': [{'id': 'x', 'type': 'chat', 'loaded': True, 'new': 1}]})
+    m = api.ModelsResponse.model_validate({'data': [{'id': 'x', 'type': 'embedding', 'loaded': True, 'new': 1}]})
     assert m.data[0].loaded and m.data[0].model_dump()['new'] == 1

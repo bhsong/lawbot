@@ -5,7 +5,7 @@
 - 설계: [docs/plans/monitor-collector.md](../../docs/plans/monitor-collector.md) (원 계획서: [monitor-collector-spec.md](../../docs/plans/monitor-collector-spec.md))
 - 지금 있는 수집기: `legalize_law`([legalize-kr](https://github.com/legalize-kr/legalize-kr), 법률·시행령·시행규칙), `legalize_admrule`([admrule-kr](https://github.com/legalize-kr/admrule-kr), 고시 등). 변경은 공개 git 저장소에서 찾고, 이벤트마다 법제처 Open API로 개정문·제개정이유를 채웁니다 ([계획](../../docs/archives/monitor-lawgo.md)).
 - 별표·서식: `forms` 대상 법령과 추적 행정규칙은 신·구판의 별표·서식 텍스트를 비교해 바뀐 것만 `lawgo_forms`·`lawgo_admrul` 이벤트로 만들고, 그 서식의 PDF·HWP 원본을 받습니다.
-- 요약(2단계): 요약하지 않은 이벤트를 운영 모델 서버의 `qwen3.8-27b-4bit`로 요약해 `data/summaries/YYYY-MM-DD.md`를 만듭니다 ([계획](../../docs/archives/monitor-summary.md)).
+- 요약(2단계): 요약하지 않은 이벤트를 단독 생성 서버의 `qwen3.8-27b-4bit`로 요약해 `data/summaries/YYYY-MM-DD.md`를 만듭니다 ([계획](../../docs/archives/monitor-summary.md)).
 - 점검: `config/targets.yaml`의 `checks`에 지정된 캘린더 sync와 챗봇 조문 데이터 자동 갱신을 `daily`가 순차 실행합니다.
 - 전자신고 파일 레이아웃(지급명세서 전산매체 제출요령)은 3단계 연례 리마인드 대상입니다 ([결정](../../docs/plans/monitor-collector.md) 9절).
 
@@ -67,7 +67,8 @@ uv run --project services/law-calendar --locked python -m law_calendar.manage pr
 
 - 대상: `state.db`의 `events`에서 `processed_at`이 빈 것. 요약이 끝나면 `processed_at`을 적습니다.
 - 법령·행정규칙 이벤트 하나에 모델 호출 하나입니다. 같은 개정의 별표서식 이벤트(`parent_event_id`)는 그 호출에 함께 넣습니다. 입력은 호출당 약 12,000자이고, 넘치면 뒤를 자르고 내용을 못 넣은 서식은 제목만 넣습니다.
-- 모델 설정은 웹앱과 같은 `LAWBOT_MODEL_SERVER`·`LAWBOT_MODEL_TOKEN`입니다. 환경변수 → `services/monitor/.env` → **레포 최상위 `.env`** 순서로 읽어서, 운영 worktree에서는 따로 넣을 것이 없습니다. 모델 id는 `LAW_MONITOR_SUMMARY_MODEL`(기본 `qwen3.8-27b-4bit`, 환경변수나 `services/monitor/.env`에만: 레포 최상위 `.env`에는 `LAWBOT_*`만 적을 수 있음). `.env` 형식은 웹앱과 같은 규칙입니다(`export`·따옴표·줄 끝 ` # 주석` 허용, `lawbot_common.envfile`). `services/monitor/.env`에는 `LAW_*`·`DATA_GO_KR_*`·`LAWBOT_MODEL_SERVER`·`LAWBOT_MODEL_TOKEN`만 적을 수 있고, 다른 변수가 있으면 실행을 거부합니다. 생성 설정은 temperature 0, 최대 800토큰, thinking 끔.
+- 생성 설정은 웹앱과 같은 필수 `LAWBOT_LLM_BASE_URL`·`LAWBOT_LLM_API_KEY`입니다. 환경변수 → `services/monitor/.env` → 레포 최상위 `.env` 순서로 읽습니다. 로컬 주소도 전용 키 16자 이상이 필요하며 모델 서버 토큰은 쓰지 않습니다. 외부 API는 https와 `LAWBOT_LLM_ALLOW_EXTERNAL=1`이 필요합니다. 모델 id는 `LAW_MONITOR_SUMMARY_MODEL`(기본 `qwen3.8-27b-4bit`, 환경변수나 `services/monitor/.env`에만)입니다. `services/monitor/.env`에는 `LAW_*`·`DATA_GO_KR_*`와 위 생성 설정 세 항목만 허용합니다. 생성 설정은 temperature 0, 최대 800토큰, thinking 끔입니다.
+- 생성 서버 관리·재시작 위치는 저장소 밖 `~/Services/qwen27b`입니다. 전용 Bearer 토큰을 붙여 `<LAWBOT_LLM_BASE_URL>/models`의 허용 모델 id·revision을 확인합니다. 토큰·Host 검사, CORS 없음, 허용 id 제한과 `HF_HUB_OFFLINE=1`은 [운영 문서](../../docs/operations.md#단독-생성-서버-외부-의존-서비스)를 따릅니다. 다른 앱도 같은 전용 토큰과 허용 모델 id를 사용해야 합니다.
 - md 구성: 머리(실행 시각·수집 요약 줄·이벤트 수) → 한눈에 보기 번호별 절 → 법령마다 모델 요약 + 바뀐 별표서식 목록 + 원문 이벤트 경로·법제처 링크 → 경고(수집기 연속 실패). 새 이벤트가 없으면 "새 변경 없음".
 - 파일 날짜는 **요약을 실행한 날**입니다. 내용은 "지난 요약 실행(처음이면 bootstrap) ~ 이번 실행" 사이에 저장소에 새로 들어와 감지된 변경이고, md 머리의 `대상:` 줄에 그 구간을 적습니다. 공포일은 항목마다 따로 나옵니다 (legalize-kr은 커밋 날짜가 공포일이라 오늘 들어온 개정이 과거 공포일일 수 있음).
 - 같은 날 두 번 실행하면 두 번째 파일은 `YYYY-MM-DD-HHMMSS.md`입니다 (앞 파일을 덮지 않음).

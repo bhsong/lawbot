@@ -9,7 +9,7 @@ from lawbot_model_server import api, revision
 from lawbot_model_server.config import ModelEntry
 from lawbot_model_server.registry import Registry
 
-from .ms_fakes import AUTH, TOKEN, FakeChat, FakeEmbedder, FakeReranker
+from .ms_fakes import AUTH, TOKEN, FakeEmbedder, FakeReranker
 
 BIG = 3 * revision.EDGE  # 앞뒤 1MB 사이에 읽지 않는 가운데가 있는 크기
 
@@ -71,11 +71,10 @@ def test_missing_folder_is_none(tmp_path):
 # ---- /v1/models·/health ----
 def registry_with(path):
     entries = (
-        ModelEntry('chat-a', 'chat', path),
         ModelEntry('emb', 'embedding', Path('/models/none-emb')),
-        ModelEntry('rr', 'rerank', Path('/models/none-rr')),
+        ModelEntry('rr', 'rerank', path),
     )
-    reg = Registry(entries, {'chat': FakeChat, 'embedding': FakeEmbedder, 'rerank': FakeReranker}, 1)
+    reg = Registry(entries, {'embedding': FakeEmbedder, 'rerank': FakeReranker})
     reg.load_fixed()
     return reg
 
@@ -84,7 +83,7 @@ def test_models_listing_has_revision(tmp_path):
     d = model_dir(tmp_path)
     with TestClient(api.create_app(TOKEN, registry_with(d))) as c:
         data = {m['id']: m for m in c.get('/v1/models', headers=AUTH).json()['data']}
-    assert data['chat-a']['revision'] == revision.fingerprint(d)
+    assert data['rr']['revision'] == revision.fingerprint(d)
     assert data['emb']['revision'] is None  # 폴더 없음 (가짜 모델)
 
 

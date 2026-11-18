@@ -1,5 +1,5 @@
 # lawbot/llm.py  →  답변 생성: [참고 조문] 프롬프트를 만들어 OpenAI 호환 chat completions로 스트리밍 (openai SDK)
-# 기본은 모델 서버(/v1), LAWBOT_LLM_BASE_URL로 클라우드 모델도 쓸 수 있다. 응답은 이전 MLX 생성과 같은 속성으로 바꿔 낸다
+# Generation uses a dedicated OpenAI-compatible endpoint, local or explicitly allowed external HTTPS.
 # (text·generation_tps·prompt_tokens·prompt_tps·generation_tokens·peak_memory·finish_reason: service.ask가 읽음)
 import re
 import types
@@ -7,7 +7,14 @@ import types
 import httpx
 import openai
 
-from lawbot.api_client import ModelServerError, ModelServerTimeout, RouterTimeout, error_from_body, request_headers
+from lawbot.api_client import (
+    ModelLoadError,
+    ModelServerError,
+    ModelServerTimeout,
+    RouterTimeout,
+    error_from_body,
+    request_headers,
+)
 from lawbot.hits import Hit
 
 
@@ -28,6 +35,7 @@ def build_prompt(hits: list[Hit], question: str) -> str:
 
 GEN_FIELDS = (
     'text',
+    'reasoning',
     'generation_tps',
     'prompt_tokens',
     'prompt_tps',
@@ -46,11 +54,18 @@ def convert_error(e):
     """openai SDK 예외 → 웹앱이 안내하는 예외 (시간 초과는 ModelServerTimeout, 연결 실패는 ConnectionError,
     모델 불러오기 실패는 ModelLoadError)"""
     if isinstance(e, openai.APITimeoutError):
+        if isinstance(e.__cause__, httpx.ConnectTimeout):
+            return ConnectionError(f'생성 API에 연결할 수 없습니다 ({type(e.__cause__).__name__})')
         return ModelServerTimeout(f'생성 API가 응답하지 않았습니다 ({type(e).__name__})')
     if isinstance(e, openai.APIConnectionError):
         return ConnectionError(f'생성 API에 연결할 수 없습니다 ({type(e).__name__})')
     if isinstance(e, openai.APIStatusError):
+        if e.status_code == 401:
+            return ModelServerError('생성 API의 LAWBOT_LLM_API_KEY가 맞지 않습니다.', 401)
         body = e.body if isinstance(e.body, dict) else {}
+        error = body.get('error', body)
+        if error.get('type') == 'model_load_error':
+            return ModelLoadError(f'생성 API 오류: {error.get("message", "model_load_error")}')
         return error_from_body(e.status_code, body if 'error' in body else {'error': body})
     if isinstance(e, openai.APIError):  # 스트림 중 error 이벤트
         return RuntimeError(f'생성 오류: {e.message}')
@@ -77,9 +92,12 @@ def responses(chunks):
         choice = ch.choices[0]
         if choice.finish_reason:
             stats['finish_reason'] = choice.finish_reason
-        if choice.delta is not None and choice.delta.content is not None:
-            n += 1
-            yield response(choice.delta.content)
+        if choice.delta is not None:
+            text = choice.delta.content
+            reasoning = getattr(choice.delta, 'reasoning_content', None) or getattr(choice.delta, 'reasoning', None)
+            if text is not None or reasoning is not None:
+                n += 1
+                yield response(text or '', reasoning=reasoning)
     if stats or not n:
         yield response('', **stats)
 
@@ -172,8 +190,12 @@ class LLM:
             yield from responses(s)
         except openai.OpenAIError as e:
             raise convert_error(e) from e
+        except httpx.ConnectTimeout as e:
+            raise ConnectionError(f'생성 API에 연결할 수 없습니다 ({type(e).__name__})') from e
         except httpx.TimeoutException as e:  # 스트림 중 응답 조각 사이가 상한을 넘음 (SDK가 감싸지 않음)
             raise ModelServerTimeout(f'생성 API가 응답 중에 멈췄습니다 ({type(e).__name__})') from e
+        except httpx.TransportError as e:
+            raise ConnectionError(f'생성 API와 연결이 끊겼습니다 ({type(e).__name__})') from e
         finally:
             s.close()
 

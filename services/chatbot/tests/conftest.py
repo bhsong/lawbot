@@ -121,18 +121,21 @@ def admin_hash():
 
 
 TEST_TOKEN = 'test-only-model-token-0123'  # 테스트 전용 가짜 값
+TEST_LLM_TOKEN = 'test-only-generation-token-0123'
 
 
 @pytest.fixture(autouse=True)
 def model_server(env):
-    """load_app이 접속하는 모델 서버와 생성 API를 가짜로 (fakes.FakeServerClient·FakeOpenAI)
-    기본: 프로필에 필요한 모델이 모두 있고 올라 있음. 테스트가 FakeServerClient.available·loaded를 바꿔 쓴다"""
+    """Provide separate embedding/rerank and generation client fakes."""
     import lawbot.service as service
     from fakes import FakeOpenAI, FakeServerClient
 
     env.setenv('LAWBOT_MODEL_SERVER', 'http://127.0.0.1:65535')  # 의미 없는 경계값 (가짜라 접속하지 않음)
     env.setenv('LAWBOT_MODEL_TOKEN', TEST_TOKEN)
+    env.setenv('LAWBOT_LLM_BASE_URL', 'http://127.0.0.1:65534/v1')
+    env.setenv('LAWBOT_LLM_API_KEY', TEST_LLM_TOKEN)
     FakeServerClient.reset()
+    FakeOpenAI.available = None
     env.setattr(service, 'ModelServerClient', FakeServerClient)
     env.setattr(service, 'OpenAI', FakeOpenAI)
     return FakeServerClient

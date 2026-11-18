@@ -16,22 +16,19 @@ log = logger('lawbot_model_server', 'model-server')
 def build_server(app, port):
     """127.0.0.1 고정 (port 0이면 빈 포트). uvicorn 접근 로그 대신 api.Guard가 한 줄씩 (질문 내용 없음)"""
     return uvicorn.Server(
-        uvicorn.Config(app, host=config.HOST, port=port, log_level='warning', access_log=False, lifespan='off')
+        uvicorn.Config(app, host=config.HOST, port=port, log_level='warning', access_log=False, lifespan='on')
     )
 
 
 def load_models(app, cfg, registry_cls=Registry):
-    """embedding·rerank 전부 + preload chat 모델. 성공하면 app.state.registry에 넣는다"""
+    """Load all embedding/rerank models before publishing readiness."""
     t0 = time.perf_counter()
-    reg = registry_cls(cfg.models, max_resident=cfg.max_resident)
+    reg = registry_cls(cfg.models)
     reg.load_fixed()
-    reg.preload(cfg.preload)
-    app.state.max_concurrent, app.state.max_queued = cfg.max_concurrent, cfg.max_queued
     api.set_registry(app, reg)
     log.info(
-        f'ready · 불러오기 {time.perf_counter() - t0:.1f}초 · 동시 생성 최대 {cfg.max_concurrent} · '
-        f'대기 최대 {cfg.max_queued} · '
-        + ', '.join(f'{m["id"]}({m["type"]}{", 상주" if m["loaded"] else ""})' for m in reg.listing())
+        f'ready · 불러오기 {time.perf_counter() - t0:.1f}초 · '
+        + ', '.join(f'{m["id"]}({m["type"]}, 상주)' for m in reg.listing())
     )
 
 
@@ -40,8 +37,6 @@ def main():
     cfg = config.load()  # 포트·토큰·모델 목록이 없으면 모델을 올리기 전에 실행 거부
     app = api.create_app(
         cfg.token,
-        max_concurrent=cfg.max_concurrent,
-        max_queued=cfg.max_queued,
         commit=revision.git_commit(envfile.ROOT),
     )
     server = build_server(app, cfg.port)

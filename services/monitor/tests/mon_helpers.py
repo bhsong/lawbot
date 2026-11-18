@@ -1,7 +1,4 @@
-"""테스트 도우미: 임시 git 저장소(legalize-kr·admrule-kr 모양)와 설정을 만든다.
-
-conftest.py를 두지 않는다: 다른 서비스의 tests/conftest.py와 모듈 이름이 겹치기 때문 (루트 pytest가 함께 수집).
-"""
+"""Create isolated source repositories and monitor fixtures."""
 
 import copy
 import json
@@ -11,7 +8,9 @@ from datetime import datetime
 from pathlib import Path
 
 import httpx
+import pytest
 
+from law_monitor import secrets
 from law_monitor.app import Monitor
 from law_monitor.config import from_dict
 from law_monitor.lawgo import LawGoClient
@@ -19,6 +18,15 @@ from law_monitor.paths import Paths
 from law_monitor.utils.http import HttpClient
 
 FIXED_NOW = datetime.fromisoformat('2026-11-02T06:30:00+09:00')
+
+
+@pytest.fixture(autouse=True)
+def isolated_monitor_credentials(tmp_path, monkeypatch):
+    """Keep CLI tests independent of workstation credentials."""
+    monkeypatch.setattr(secrets, 'ENV_FILE', tmp_path / 'monitor.env')
+    monkeypatch.setattr(secrets, 'ROOT_ENV_FILE', tmp_path / 'root.env')
+    for key in (*secrets.ROOT_KEYS, 'LAW_OC', 'DATA_GO_KR_KEY', 'LAW_MONITOR_SUMMARY_MODEL'):
+        monkeypatch.delenv(key, raising=False)
 
 
 def git(cwd: Path, *args: str, env: dict | None = None) -> str:
