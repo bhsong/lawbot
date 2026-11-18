@@ -32,8 +32,6 @@ def test_seed_includes_all_agencies_and_unverified_boards(registry):
     assert {row['agency'] for row in sources.values()} == {'lawgo', 'moel', 'mofe', 'nts', 'hometax'}
     assert {'nts-tax-02', 'hometax-errata', 'existing-erp'} <= sources.keys()
     assert {key for key, row in sources.items() if row['agency'] == 'moel' and row['mode'] == 'rss'} == {
-        'moel-rss-notice',
-        'moel-rss-policy',
         'moel-rss-lawinfo',
     }
     assert all(not row['runnable'] for row in sources.values() if row['verification'] == 'not_tested')
@@ -78,7 +76,7 @@ def test_settings_are_hierarchical_audited_and_run_plans_are_frozen(registry):
 )
 def test_invalid_patch_does_not_change_the_registry(registry, fields):
     with pytest.raises(ValueError):
-        registry.patch('source', 'moel-rss-notice', fields, actor='operator', reason='fixture', version=0)
+        registry.patch('source', 'moel-rss-lawinfo', fields, actor='operator', reason='fixture', version=0)
     assert registry.snapshot()['config_version'] == 0
     assert registry.history() == []
 

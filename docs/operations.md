@@ -2,6 +2,14 @@
 
 README의 "사용법"을 자세히 적은 문서입니다. 구조는 [architecture.md](architecture.md), 평가는 [evals/README.md](evals/README.md)를 보세요.
 
+## 기관 소식 수집 범위
+
+고용노동부는 입법·행정예고 RSS(`moel-rss-lawinfo`), 고시·훈령·예규(`moel-rules`), 행정해석·질의회시(`moel-interpretations`)만 등록합니다. 재정경제부는 입법·행정예고(`mofe-tax-reform`), 법령자료실(`mofe-laws`), 고시·공고·지침(`mofe-notice`), 간추린 개정세법(`mofe-publications`)과 비활성 세제 문답자료(`mofe-qa`)를 등록합니다. 국세청의 전체 게시판, 국가법령정보센터와 홈택스 링크는 유지합니다. [수동 수집·일일 발행](../services/source-hub/README.md)
+
+ERP 기관 소식은 고시·법령·행정규칙 → 기타 → 공지·보도자료 순서이며 게시판별 최신 10개까지 제공합니다. 국세청 공지사항은 마지막에 표시합니다.
+
+축소 전 데이터는 코드로 호환하지 않습니다. 운영 반영 시 별도 승인·백업 후 제거 대상 출처의 등록부 `settings`·`audit`(`kind='source' AND target IN (...)`)와 `runs`(`source_id IN (...)`), 수집 자료 DB의 `news_reviews`·`board_posts`·`revisions`·`documents`·`board_runs`·`latest_success`(`source_id IN (...)`)를 외래 키의 자식부터 정리합니다. 대상은 이번 등록 축소에서 제거한 12개 출처 ID로 한정하고 유지 출처의 행을 보존합니다. 당일 작업 스냅샷과 공개 ERP 파일에도 이전 등록 목록이 남을 수 있으므로 등록부 정리 후 새 계획으로 재발행하고 게시판 목록을 확인합니다.
+
 ## 요구 사항
 
 - Apple Silicon 맥(M 시리즈), 메모리 8GB 이상

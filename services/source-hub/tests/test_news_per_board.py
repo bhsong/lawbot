@@ -26,10 +26,8 @@ def record(upstream: str, published: str | None, host: str = 'https://www.moel.g
 def test_each_board_publishes_ten_and_rules_and_law_boards_come_first(tmp_path):
     plan = runnable_plan(tmp_path)
     records = {
-        'moel-rss-notice': [record(f'n{day}', f'2026-11-{day:02}') for day in range(1, 13)],
-        'moel-press': [record('p1', '2026-11-16')],
         'moel-rules': [record('r1', '2026-09-01')],
-        'moel-rss-lawinfo': [record('l1', '2026-11-04')],
+        'moel-rss-lawinfo': [record(f'l{day}', f'2026-11-{day:02}') for day in range(1, 13)],
         'moel-interpretations': [record('i1', '2022-08-03')],
     }
 
@@ -38,16 +36,11 @@ def test_each_board_publishes_ten_and_rules_and_law_boards_come_first(tmp_path):
     assert [board['name'] for board in moel['boards']] == [
         '입법·행정예고 RSS',
         '고시·훈령·예규',
-        '정책자료 RSS',
         '행정해석·질의회시',
-        '정책자료',
-        '주요 발간물·업무편람',
-        '공지사항 RSS',
-        '보도자료',
     ]
     boards = [item['board'] for item in moel['items']]
-    assert boards.count('공지사항 RSS') == 10
-    assert {'보도자료', '고시·훈령·예규', '입법·행정예고 RSS', '행정해석·질의회시'} <= set(boards)
+    assert boards.count('입법·행정예고 RSS') == 10
+    assert {'고시·훈령·예규', '입법·행정예고 RSS', '행정해석·질의회시'} == set(boards)
 
 
 def save(database, source_id, upstream_ids, at):
