@@ -10,7 +10,7 @@ from source_hub import cli, materials, moel
 from test_moel_rss import FEED, HOST, NOW, ROBOTS, SOURCE, feed, item, setting
 from test_moel_rss import setup as setup
 
-BOARD = HOST + '/news/notice/noticeList.do'
+BOARD = HOST + '/info/lawinfo/lawmaking/list.do'
 PAGE_TWO = BOARD + '?pageIndex=2'
 
 

@@ -137,7 +137,7 @@ def test_daily_reuses_one_snapshot_and_exposes_same_public_data(registry, tmp_pa
     version = registry.patch(
         'source', 'legalize_admrule', {'enabled': False}, actor='fixture', reason='fixture', version=0
     )
-    registry.patch('source', 'moel-rss-notice', {'enabled': True}, actor='fixture', reason='fixture', version=version)
+    registry.patch('source', 'moel-rss-lawinfo', {'enabled': True}, actor='fixture', reason='fixture', version=version)
     calls = []
 
     def legacy(config, plan, previous):
@@ -174,7 +174,7 @@ def test_daily_reuses_one_snapshot_and_exposes_same_public_data(registry, tmp_pa
     monkeypatch.setattr(daily, 'run_legacy', legacy)
     monkeypatch.setattr(daily, 'run_erp', local)
     monkeypatch.setattr(daily, 'capture', capture)
-    monkeypatch.setattr(daily, 'COLLECTORS', {'moel-rss-notice': agency})
+    monkeypatch.setattr(daily, 'COLLECTORS', {'moel-rss-lawinfo': agency})
     first = daily.run(registry, cfg, now=lambda: STAMP)
     assert first['status'] == 'partial'
     assert [entry[0] for entry in calls] == ['legacy', 'erp', 'agency', 'capture']
@@ -183,7 +183,7 @@ def test_daily_reuses_one_snapshot_and_exposes_same_public_data(registry, tmp_pa
     assert saved['snapshotHash'] == first['snapshot_hash']
     assert saved['feeds']['news']['moel']['items']
     sources = {source['sourceId']: source for source in saved['sources']}
-    assert sources['moel-rss-notice']['outcome'] == 'blocked'
+    assert sources['moel-rss-lawinfo']['outcome'] == 'blocked'
     assert sources['legalize_admrule']['outcome'] == 'disabled'
     assert sources['legalize_law']['newCount'] == 0
     again = daily.run(registry, cfg, now=lambda: STAMP + timedelta(hours=2))
@@ -197,7 +197,7 @@ def test_daily_reuses_one_snapshot_and_exposes_same_public_data(registry, tmp_pa
     assert json.loads(first_bytes)['dayKst'] == '2026-11-13'
 
     version = registry.snapshot()['config_version']
-    registry.patch('source', 'moel-rss-notice', {'enabled': False}, actor='fixture', reason='fixture', version=version)
+    registry.patch('source', 'moel-rss-lawinfo', {'enabled': False}, actor='fixture', reason='fixture', version=version)
     refreshed = daily.run(registry, cfg, now=lambda: STAMP + timedelta(hours=3), republish=True)
     assert refreshed['snapshot_hash'] != first['snapshot_hash']
     assert [entry[0] for entry in calls] == ['legacy', 'erp', 'agency', 'capture', 'erp', 'capture']
@@ -311,14 +311,14 @@ def test_collection_resumes_after_failed_capture_without_repeating_completed_sta
 
 
 def test_changes_follow_public_revisions_beyond_latest_ten(registry):
-    registry.patch('source', 'moel-rss-notice', {'enabled': True}, actor='fixture', reason='fixture', version=0)
+    registry.patch('source', 'moel-rss-lawinfo', {'enabled': True}, actor='fixture', reason='fixture', version=0)
     plan = registry.snapshot()
     initial = [
         (
             str(i),
             {
                 'title': '가상 글',
-                'canonical_url': f'https://www.moel.go.kr/news/notice?id={i}',
+                'canonical_url': f'https://www.moel.go.kr/info/lawinfo/lawmaking/view.do?bbs_seq={i}',
                 'revision': 1,
                 'event': 'new_post' if i == 10 else 'baseline',
             },
@@ -326,12 +326,12 @@ def test_changes_follow_public_revisions_beyond_latest_ten(registry):
         for i in range(11)
     ]
     feeds = {'erp': {'items': []}, 'rules': None, 'news': {}}
-    changes, ledger = daily.change_records(plan, {'moel-rss-notice': initial}, feeds, '2026-11-13', {})
+    changes, ledger = daily.change_records(plan, {'moel-rss-lawinfo': initial}, feeds, '2026-11-13', {})
     assert len(ledger) == 11 and len(changes) == 1 and changes[0]['url'].endswith('=10')
     updated = [*initial[:-1], ('10', initial[-1][1] | {'revision': 2, 'event': 'post_modified'})]
-    changes, ledger = daily.change_records(plan, {'moel-rss-notice': updated}, feeds, '2026-11-14', ledger)
+    changes, ledger = daily.change_records(plan, {'moel-rss-lawinfo': updated}, feeds, '2026-11-14', ledger)
     assert len(changes) == 1 and changes[0]['change'] == 'modified'
-    assert daily.change_records(plan, {'moel-rss-notice': updated}, feeds, '2026-11-15', ledger)[0] == []
+    assert daily.change_records(plan, {'moel-rss-lawinfo': updated}, feeds, '2026-11-15', ledger)[0] == []
 
 
 def test_attachment_replacement_and_new_presentation_fields_preserve_previous_ledger(registry):

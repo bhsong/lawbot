@@ -22,7 +22,7 @@ MODES = {
     'local': {'local'},
     'lawgo': {'api'},
     'moel': {'rss', 'html', 'metadata'},
-    'mofe': {'rss', 'html', 'metadata'},
+    'mofe': {'html', 'metadata'},
     'nts': {'api', 'html', 'metadata'},
     'hometax': {'html', 'browser', 'metadata'},
 }

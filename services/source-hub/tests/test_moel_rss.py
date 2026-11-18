@@ -10,9 +10,9 @@ from source_hub import cli, moel
 from source_hub.config import load
 from source_hub.store import Registry
 
-SOURCE = 'moel-rss-notice'
+SOURCE = 'moel-rss-lawinfo'
 HOST = 'https://www.moel.go.kr'
-FEED = HOST + '/rss/notice.do'
+FEED = HOST + '/rss/lawinfo.do'
 ROBOTS = HOST + '/robots.txt'
 NOW = datetime(2026, 11, 13, 12, tzinfo=UTC)
 
@@ -27,7 +27,7 @@ def feed(*items):
 
 
 def item(title, upstream='20261100123'):
-    return title, HOST + f'/news/notice/noticeView.do?bbs_seq={upstream}'
+    return title, HOST + f'/info/lawinfo/lawmaking/view.do?bbs_seq={upstream}'
 
 
 @pytest.fixture
@@ -109,8 +109,8 @@ def test_collect_and_disable_at_each_level(setup):
     'robots',
     [
         b'User-agent: *\nDisallow: /rss/*',
-        b'User-agent: *\nDisallow: /rss/notice.do$',
-        b'User-agent: *\nDisallow: /rss/%6eotice.do$',
+        b'User-agent: *\nDisallow: /rss/lawinfo.do$',
+        b'User-agent: *\nDisallow: /rss/%6cawinfo.do$',
         b'User-agent: LawbotSourceHub\nDisallow: /rss/*\nUser-agent: *\nAllow: /',
         b'<html>error</html>',
         b'',
@@ -207,7 +207,7 @@ def test_redirect_handler_declines_official_and_unrelated_targets():
 def test_allow_uses_most_specific_rule(setup):
     registry, database, calls, bodies = setup
     setting(registry, 'source', SOURCE, True)
-    bodies[ROBOTS] = b'User-agent: *\nDisallow: /rss/*\nAllow: /rss/notice.do$'
+    bodies[ROBOTS] = b'User-agent: *\nDisallow: /rss/*\nAllow: /rss/lawinfo.do$'
     assert moel.collect(registry, database, SOURCE, now=NOW)['outcome'] == 'ok'
     assert calls == [ROBOTS, FEED]
 
