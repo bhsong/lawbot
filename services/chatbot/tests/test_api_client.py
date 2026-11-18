@@ -261,6 +261,94 @@ def test_wait_ready(env):
         ac.wait_ready(Never(), 0.05)
 
 
+@pytest.fixture
+def generation_startup(env):
+    from fakes import FakeRetriever
+    from lawbot import deploy
+
+    state = types.SimpleNamespace(now=0.0, requests=[], sleeps=[], failures=[], models=None)
+    state.models = [{'id': spec.model, 'object': 'model'} for spec in deploy.get_profile().models]
+
+    def sleep(seconds):
+        state.sleeps.append(seconds)
+        state.now += seconds
+
+    def handler(request):
+        assert request.url.path == '/v1/models'
+        state.requests.append((state.now, request.extensions['timeout']))
+        failure = state.failures.pop(0) if state.failures else None
+        if failure == 'refused':
+            raise httpx.ConnectError('Connection refused', request=request)
+        if failure == 'timeout':
+            state.now += request.extensions['timeout']['read']
+            raise httpx.ReadTimeout('Loading', request=request)
+        if failure:
+            return httpx.Response(
+                failure,
+                json={'error': {'type': 'server_not_ready', 'message': 'Loading', 'code': 'server_not_ready'}},
+            )
+        return httpx.Response(200, json={'object': 'list', 'data': state.models})
+
+    with httpx.Client(transport=httpx.MockTransport(handler)) as http:
+        with OpenAI(
+            base_url='http://127.0.0.1:9/v1', api_key=TEST_LLM_TOKEN, max_retries=0, http_client=http
+        ) as client:
+            env.setattr(service, 'OpenAI', lambda **kwargs: client)
+            env.setattr(service, 'Retriever', FakeRetriever)
+            env.setattr(ac.time, 'monotonic', lambda: state.now)
+            env.setattr(ac.time, 'sleep', sleep)
+            env.setenv('LAWBOT_MODEL_SERVER_WAIT', '2.5')
+            yield state
+
+
+@pytest.mark.parametrize('failure', [503, 'refused'])
+def test_load_app_waits_for_generation_ready(generation_startup, failure):
+    state = generation_startup
+    state.failures = [failure, failure]
+    app = service.load_app()
+    assert app.llm_mode == 'api'
+    assert [when for when, _ in state.requests] == [0, 1, 2]
+    assert state.sleeps == [1, 1]
+    assert all(0 < timeout['read'] <= 2.5 - when for when, timeout in state.requests)
+    assert all(0 < timeout['connect'] <= 2.5 - when for when, timeout in state.requests)
+
+
+@pytest.mark.parametrize('failure', [401, 'missing', 500])
+def test_load_app_generation_fails_without_retry(generation_startup, failure):
+    state = generation_startup
+    if failure in (401, 500):
+        state.failures = [failure]
+        error, message = ac.ModelServerError, 'LAWBOT_LLM_API_KEY' if failure == 401 else 'server_not_ready'
+    else:
+        state.models = []
+        error, message = RuntimeError, 'chat '
+    with pytest.raises(error, match=message):
+        service.load_app()
+    assert len(state.requests) == 1
+    assert state.sleeps == []
+
+
+@pytest.mark.parametrize('failure', [503, 'refused'])
+def test_load_app_generation_wait_expires(generation_startup, failure):
+    state = generation_startup
+    state.failures = [failure] * 10
+    with pytest.raises(RuntimeError, match=r'생성 서버.*2.5초.*LAWBOT_MODEL_SERVER_WAIT'):
+        service.load_app()
+    assert state.now == 2.5
+    assert [when for when, _ in state.requests] == [0, 1, 2]
+    assert state.sleeps == [1, 1, 0.5]
+
+
+def test_load_app_generation_probe_timeout_stays_within_budget(generation_startup):
+    state = generation_startup
+    state.failures = ['timeout']
+    with pytest.raises(RuntimeError, match=r'생성 서버.*2.5초.*LAWBOT_MODEL_SERVER_WAIT'):
+        service.load_app()
+    assert state.now == 2.5
+    assert len(state.requests) == 1
+    assert state.sleeps == []
+
+
 # ---- 생성 API 주소 ----
 
 

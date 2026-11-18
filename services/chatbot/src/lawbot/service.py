@@ -20,6 +20,7 @@ from lawbot import corpus_store, deploy, manifest
 from lawbot import decree as decree_filter
 from lawbot.api_client import (
     REQUEST_ID,
+    WAIT_INTERVAL,
     Embedder,
     ModelLoadError,
     ModelServerClient,
@@ -149,14 +150,38 @@ def missing_models(available, p, rr, *, chat_available=None):
     return missing
 
 
-def generation_models(client):
+def generation_models(client, *, timeout=None):
     """Read generation model IDs and revisions without requiring residency fields."""
     import openai
 
     try:
-        return [row.model_dump() for row in client.models.list().data]
+        options = {} if timeout is None else {'timeout': timeout}
+        return [row.model_dump() for row in client.models.list(**options).data]
     except openai.OpenAIError as exc:
         raise convert_error(exc) from exc
+
+
+def _wait_generation_models(client, wait_s):
+    """Wait for local generation discovery; authentication and model errors stay fatal."""
+    deadline, last = time.monotonic() + wait_s, '모델을 불러오는 중'
+    while (remaining := deadline - time.monotonic()) > 0:
+        try:
+            return generation_models(client, timeout=min(5.0, remaining))
+        except ConnectionError as exc:
+            last = str(exc)
+        except ModelServerError as exc:
+            if exc.status != 503 or 'server_not_ready' not in (exc.kind, exc.code):
+                raise
+            last = str(exc)
+        except ModelServerTimeout as exc:
+            last = str(exc)
+        remaining = deadline - time.monotonic()
+        if remaining > 0:
+            time.sleep(min(WAIT_INTERVAL, remaining))
+    raise RuntimeError(
+        f'생성 서버가 {wait_s:g}초 안에 준비되지 않았습니다 ({last}). '
+        'LAWBOT_MODEL_SERVER_WAIT로 대기 시간을 늘리거나 생성 서버 로그를 확인하세요.'
+    )
 
 
 def _record_embeddings(db, release_id, retriever, profile, decree, revision):
@@ -201,7 +226,7 @@ def load_app(settings=None):
         timeout=limit,  # pyright: ignore[reportArgumentType]
         http_client=httpx.Client(trust_env=external),  # pyright: ignore[reportArgumentType]
     )
-    chat_available = None if external else generation_models(oa)
+    chat_available = None if external else _wait_generation_models(oa, wait)
     available = client.models()
     missing = missing_models(available, p, rr, chat_available=chat_available)
     if missing:
