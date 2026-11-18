@@ -7,13 +7,8 @@ import pytest
 from playwright.sync_api import expect
 
 import e2e_support as e2e
-from lawbot import cache_store, deploy
-from lawbot.cache_store import Draft, Store, init
-from lawbot.corpus_store import active_release, active_token
+from lawbot import deploy
 from lawbot.db import cli
-from lawbot.exact_cache import Snapshot, digest, normalize
-from lawbot.service import system_text
-from test_exact_cache import ID, RAW
 from test_migrate_csv_to_sqlite import run as migrate
 
 pytestmark = pytest.mark.e2e_stub
@@ -44,32 +39,6 @@ def calculation_stack(tmp_path_factory):
         )
         == 0
     )
-    path = tmp / 'private' / 'exact.db'
-    init(path)
-    store = Store(path)
-    snapshot = Snapshot.load(
-        active_release(corpus, 'v5'),
-        system=system_text(profile, profile.models[0]),
-        combined=False,
-        attach_decrees=False,
-    )
-    citations = [(ID, snapshot.articles[ID].text_hash)]
-    text = snapshot.render(RAW, citations)
-    draft = Draft('fixture', MEDICAL, 'key', digest(RAW), text, citations, {})
-    namespace = snapshot.namespace.id
-    with pytest.MonkeyPatch.context() as legacy_policy:
-        legacy_policy.setattr(cache_store, 'is_calculation_question', lambda question: False)
-        store.stage(snapshot.namespace, [draft], 'tester', 'synthetic draft')
-        approval = store.approve(
-            namespace,
-            active_token(corpus, 'v5')[1],
-            'synthetic',
-            {draft.query_id(namespace): draft.answer_id(namespace)},
-            actor='tester',
-            reason='test',
-        )
-    store.set_mode('on', 'tester', 'test', approval)
-    assert store.lookup(namespace, normalize(MEDICAL))[2] == 'hit'
     stack = e2e.Stack(
         tmp,
         3,
@@ -85,7 +54,6 @@ def calculation_stack(tmp_path_factory):
         LAWBOT_PROFILE='v5',
         LAWBOT_CORPUS='db',
         LAWBOT_DB=str(corpus),
-        LAWBOT_EXACT_CACHE_DB=str(path),
         LAWBOT_DECREE_ENABLED='0',
         LAWBOT_RERANKER_ENABLED='1',
     )
@@ -167,8 +135,6 @@ def test_calculation_and_guidance_cards(calculation_stack, ui, width):
     rows = e2e.request_log(calculation_stack.request_log)[-5:]
     assert len(rows) == 5
     for row in rows:
-        assert row['cache_reason'] == 'calculation_question' and row['response_source'] == 'rag'
-        assert row['cache_eligible'] is False and row['exact_lookup_ms'] is None
         assert row['call_counts']['router'] == row['call_counts']['llm'] == 1
     assert rows[-2]['calculation_check'] == 'match'
     assert rows[-1]['router_reason'] == 'lookup_question'
@@ -224,8 +190,6 @@ def test_labor_calculation_cards(calculation_stack, ui, width):
     assert [row['calculation_check'] for row in rows] == ['match', 'match', 'not_run']
     assert rows[-1]['router_reason'] == 'missing_required'
     for row in rows:
-        assert row['cache_reason'] == 'calculation_question' and row['response_source'] == 'rag'
-        assert row['cache_eligible'] is False and row['exact_lookup_ms'] is None
         assert row['call_counts']['router'] == row['call_counts']['llm'] == 1
 
 
@@ -248,6 +212,4 @@ def test_invalid_labor_input_keeps_guidance_and_no_calculation(calculation_stack
     assert row['calculation_status'] == 'guidance'
     assert row['router_reason'] == 'unresolved_input'
     assert row['calculation_check'] == 'not_run'
-    assert row['cache_reason'] == 'calculation_question' and row['response_source'] == 'rag'
-    assert row['cache_eligible'] is False and row['exact_lookup_ms'] is None
     assert row['call_counts']['router'] == row['call_counts']['llm'] == 1

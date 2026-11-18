@@ -164,7 +164,7 @@ def test_model_only_receives_approved_facts_and_selects_exact_spans(tmp_path):
         return httpx.Response(200, json={'choices': [{'message': {'content': content}, 'finish_reason': 'stop'}]})
 
     with httpx.Client(transport=httpx.MockTransport(handle)) as http:
-        model = digest_model.Model(http, 'http://127.0.0.1', 'fixture')
+        model = digest_model.Model(http, 'http://127.0.0.1:9/v1', 'fixture')
         assert model.summarize(snapshot) == {'erp:one': '새 안내서가 공개되었습니다.'}
         assert model.summarize(published(tmp_path / 'public.json')) == {}
     assert len(posted) == 1 and posted[0]['max_tokens'] == 800
@@ -248,3 +248,143 @@ def test_preview_and_disabled_command_do_not_use_network_or_create_outbox(tmp_pa
 def test_malformed_addresses_are_reported_as_configuration_errors():
     with pytest.raises(ValueError, match='Invalid or duplicate ERP email address'):
         digest.Settings(PAGE, 'sender@example.test', {'first': 'user@@example.test'})
+
+
+def test_busy_enrichment_reports_failure_without_retry(tmp_path, caplog):
+    from source_hub.digest_model import Model
+
+    requests = []
+
+    def busy(request):
+        requests.append(request)
+        return httpx.Response(
+            503, json={'error': {'type': 'server_busy', 'code': 'queue_full', 'message': 'Synthetic queue full'}}
+        )
+
+    snapshot = published(
+        tmp_path / 'public.json', [NEWS | {'id': 'erp:one', 'kind': 'erp', 'excerpt': '새 안내서가 공개되었습니다.'}]
+    )
+    with httpx.Client(transport=httpx.MockTransport(busy)) as http:
+        model = Model(http, 'http://127.0.0.1:9/v1', 'generation-only-secret')
+        assert model.summarize(snapshot) == {}
+    assert len(requests) == 1
+    assert 'ERP enrichment failed: HTTP 503' in caplog.text
+    assert 'generation-only-secret' not in caplog.text
+
+
+@pytest.mark.parametrize('failure', [None, 'missing_model', 'missing_concurrency', 'unauthorized'])
+def test_digest_generation_readiness_and_enrichment(tmp_path, monkeypatch, failure):
+    from source_hub import digest_model
+
+    class Clock:
+        @staticmethod
+        def now(tz):
+            return NOW
+
+    monkeypatch.setattr(digest_model, 'datetime', Clock)
+    requests = []
+    excerpt = '새 안내서가 공개되었습니다.'
+    snapshot = published(tmp_path / 'public.json', [NEWS | {'id': 'erp:one', 'kind': 'erp', 'excerpt': excerpt}])
+
+    def handle(request):
+        requests.append(request)
+        assert request.headers['authorization'] == 'Bearer generation-only-secret'
+        if request.method == 'GET':
+            assert request.url.path == '/v1/models'
+            if failure == 'unauthorized':
+                return httpx.Response(401)
+            card = {'id': digest_model.MODEL, 'revision': 'sha256:fixture', 'max_concurrent': 1}
+            if failure == 'missing_concurrency':
+                del card['max_concurrent']
+            return httpx.Response(200, json={'data': [] if failure == 'missing_model' else [card]})
+        assert request.url.path == '/v1/chat/completions'
+        payload = json.loads(request.content)
+        assert payload['chat_template_kwargs'] == {'enable_thinking': False}
+        content = json.dumps({'erp:one': excerpt})
+        return httpx.Response(200, json={'choices': [{'message': {'content': content}, 'finish_reason': 'stop'}]})
+
+    with httpx.Client(transport=httpx.MockTransport(handle)) as http:
+        model = digest_model.Model(http, 'http://127.0.0.1:9/v1', 'generation-only-secret')
+        assert model.summarize(snapshot, preflight=True) == ({} if failure else {'erp:one': excerpt})
+    assert [r.method for r in requests] == (['GET'] if failure else ['GET', 'POST', 'GET'])
+    if not failure:
+        assert model.before.max_concurrent == 1
+
+
+def test_digest_cli_uses_dedicated_generation_credentials(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+
+    from source_hub import digest_cli, digest_model
+
+    class Clock:
+        @staticmethod
+        def now(tz):
+            return NOW
+
+    monkeypatch.setattr(digest_model, 'datetime', Clock)
+    for key, value in {
+        'LAWBOT_LLM_BASE_URL': 'http://127.0.0.1:9/v1',
+        'LAWBOT_LLM_API_KEY': 'generation-only-secret',
+        'LAWBOT_MODEL_SERVER': 'http://127.0.0.1:8',
+        'LAWBOT_MODEL_TOKEN': 'embedding-only-secret',
+        'ERP_GMAIL_CLIENT_ID': 'client',
+        'ERP_GMAIL_CLIENT_SECRET': 'secret',
+        'ERP_GMAIL_REFRESH_TOKEN': 'refresh',
+    }.items():
+        monkeypatch.setenv(key, value)
+    path = tmp_path / 'public.json'
+    excerpt = '새 안내서가 공개되었습니다.'
+    published(path, [NEWS | {'id': 'erp:one', 'kind': 'erp', 'excerpt': excerpt}])
+    settings = tmp_path / 'settings.json'
+    settings.write_text(
+        json.dumps(
+            {
+                'enabled': True,
+                'model_enabled': True,
+                'erp_page': PAGE,
+                'sender': 'sender@example.test',
+                'recipients': {'first': 'first@example.test'},
+            }
+        )
+    )
+    settings.chmod(0o600)
+    calls, messages = [], []
+
+    def reply(request):
+        calls.append(request.method)
+        assert request.url.port == 9
+        assert request.headers['authorization'] == 'Bearer generation-only-secret'
+        if request.method == 'GET':
+            assert request.url.path == '/v1/models'
+            return httpx.Response(200, json={'data': [{'id': digest_model.MODEL, 'max_concurrent': 1}]})
+        assert request.url.path == '/v1/chat/completions'
+        content = json.dumps({'erp:one': excerpt})
+        return httpx.Response(200, json={'choices': [{'message': {'content': content}, 'finish_reason': 'stop'}]})
+
+    original = httpx.Client
+
+    class Client(original):
+        def __init__(self, **kwargs):
+            super().__init__(**kwargs, transport=httpx.MockTransport(reply))
+
+    def send(self, raw):
+        messages.append(
+            BytesParser(policy=policy.default).parsebytes(raw).get_body(preferencelist=('plain',)).get_content()
+        )
+        return gmail.Result('accepted', 'fixture')
+
+    monkeypatch.setattr(digest_cli.httpx, 'Client', Client)
+    monkeypatch.setattr(gmail.Gmail, 'send', send)
+    args = SimpleNamespace(
+        settings=settings,
+        preview=False,
+        snapshot=path,
+        monitor_home=None,
+        outbox=tmp_path / 'outbox.db',
+        database=tmp_path / 'collector.db',
+    )
+    with Client() as http:
+        result = digest_cli.run(args, http, NOW)
+    assert result['deliveries'] == {'first': 'accepted'}
+    assert excerpt in messages[0]
+    assert calls == ['GET', 'POST', 'GET']

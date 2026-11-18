@@ -29,8 +29,6 @@ class Decision(BaseModel):
     source_url: str | None = None
     dates_verified: bool = False
     promulgated_on: str | None = None
-    published_on: str | None = None
-    comment_deadline: str | None = None
     changes: list[ChangeReview] = Field(default_factory=list)
 
 
@@ -132,9 +130,6 @@ def review(database: Path, payload: dict, *, reviewer: str, idempotent: bool = F
             raise ValueError('changes: Review at least one article')
         _require_evidence('source_url', decision.source_url or '')
         _require_date('promulgated_on', decision.promulgated_on or '')
-        for field, value in (('published_on', decision.published_on), ('comment_deadline', decision.comment_deadline)):
-            if value is not None:
-                _require_date(field, value)
         for index, change in enumerate(decision.changes, 1):
             field = f'changes[{index}]'
             _require_date(f'{field}.effective_on', change.effective_on)
@@ -172,14 +167,12 @@ def review(database: Path, payload: dict, *, reviewer: str, idempotent: bool = F
         if state == 'approved':
             conn.execute(
                 "UPDATE change_events SET review_state=?,status='검토 승인',source_url=?,verified_at=?,"
-                'promulgated_on=?,published_on=?,comment_deadline=? WHERE id=?',
+                'promulgated_on=? WHERE id=?',
                 (
                     state,
                     decision.source_url,
                     reviewed_at,
                     decision.promulgated_on,
-                    decision.published_on,
-                    decision.comment_deadline,
                     decision.event_id,
                 ),
             )

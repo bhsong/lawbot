@@ -8,7 +8,7 @@ from fastapi import HTTPException
 import lawbot.retriever as retriever_mod
 import lawbot.service as service
 from chat_support import run
-from fakes import HITS, FakeLLM, FakeRetriever
+from fakes import HITS, FakeLLM, FakeOpenAI, FakeRetriever
 from lawbot import check_deploy, deploy, manifest, paths, view, web
 from lawbot.answer_format import cited_hits, concise
 from lawbot.llm import build_prompt
@@ -76,8 +76,8 @@ def test_profile_env_override(env):
     assert p.models[1].system_file == paths.ROOT / 'data/x.txt'  # 파일 경로는 레포 최상위 기준 절대 경로
 
 
-# ---- 모델 관리 (불러오기·상주는 모델 서버) ----
-def test_chat_models_create_once_and_check_server(env, model_server):
+# Answer clients are cached locally; generation residency is not queried.
+def test_chat_models_create_once(env, model_server):
     a = make_app(env)
     assert a.models.llms == {}  # 답변 모델 클라이언트는 처음 쓸 때
     fast, load_s = a.models.get('fast')
@@ -85,8 +85,7 @@ def test_chat_models_create_once_and_check_server(env, model_server):
     assert fast.client is a.models.get('pro')[0].client  # 같은 생성 API 클라이언트
     with pytest.raises(KeyError):
         a.models.get('ultra')
-    model_server.loaded = {'lawbot-fast-v4'}  # 서버 /v1/models의 loaded
-    assert a.models.is_loaded('fast') and not a.models.is_loaded('pro')
+    assert not hasattr(a.models, 'is_loaded')
 
 
 def test_load_app_builds_clients(env):
@@ -125,10 +124,17 @@ def test_format_follows_model_by_default(env):
     assert {m['key']: m['format'] for m in cfg['models']} == {'fast': 'full', 'pro': 'concise'}
 
 
-def test_missing_model_on_server_refuses_start(env, model_server):
-    p = deploy.get_profile()
-    model_server.available = [{'id': p.emb_model, 'type': 'embedding'}, {'id': 'lawbot-fast-v4', 'type': 'chat'}]
-    with pytest.raises(RuntimeError, match=r'모델 서버에 필요한 모델이 없습니다: chat qwen3\.8-27b-4bit'):
+def test_missing_model_on_generation_server_refuses_start(env, model_server):
+    FakeOpenAI.available = [
+        {
+            'id': 'lawbot-fast-v4',
+            'object': 'model',
+            'revision': 'chat-revision',
+            'mlx_lm_version': '0.31.2',
+            'max_concurrent': 1,
+        }
+    ]
+    with pytest.raises(RuntimeError, match=r'서버에 필요한 모델이 없습니다: chat qwen3\.8-27b-4bit'):
         make_app(env)
     env.setenv('LAWBOT_MODELS', 'fast')  # 이 기기에서 Fast만 쓰면 Pro는 서버에 없어도 됨
     assert list(make_app(env).models.specs) == ['fast']
@@ -182,20 +188,16 @@ def test_fast_and_pro_get_same_context(env):
     assert a.models.llms['fast'].args == a.models.llms['pro'].args == ('수습 해고 예고?', HITS)
 
 
-def test_switch_shows_loading_then_answer(env, model_server):
-    model_server.loaded = {'lawbot-fast-v4'}  # 서버에 Pro가 올라 있지 않음 (첫 요청 때 서버가 불러옴)
+def test_switch_does_not_wait_for_model_residency(env, model_server):
     a = make_app(env)
     r = run(a, '질문', 'pro', 'concise')
-    events = r.events[1:]  # 첫 이벤트는 검색 중 문구 (test_status_steps)
-    assert events[0] == ('sources', web.sources_data(HITS[:3]))  # 조문 카드는 로딩 중에도 먼저 보임
-    assert events[1] == ('status', {'text': '⏳ Lawbot Pro 불러오는 중…'})
-    assert events[2][0] == 'stats' and '모델 전환 대기' in events[2][1]['text']
-    assert r.text.startswith('qwen3.8-27b-4bit')  # 그다음 답 (로딩 시간은 서버의 첫 토큰 시간에 포함)
-    model_server.loaded = None
-    again = run(a, '질문', 'pro', 'concise')
+    assert r.events[1] == ('sources', web.sources_data(HITS[:3]))
+    assert r.text.startswith('qwen3.8-27b-4bit')
     assert not any(
-        '불러오는 중' in d.get('text', '') for e, d in again.events if e == 'status'
-    )  # 이미 올라 있으면 바로 답
+        '불러오는 중' in data.get('text', '') or '모델 전환' in data.get('text', '')
+        for event, data in r.events
+        if event in ('status', 'stats')
+    )
 
 
 def test_invalid_inputs(env):
@@ -340,11 +342,16 @@ def test_check_deploy_reports_models_and_server(env, model_server):
     text = '\n'.join(f'{lv} {m}' for lv, m in out)
     assert 'OK 비삭제 조문 415개 (기대 415)' in text
     assert 'INFO 임베딩 lawbot-emb-v4' in text and 'INFO Lawbot Pro: 모델 qwen3.8-27b-4bit' in text
-    assert 'OK 생성 API: 모델 서버' in text and 'OK 필요한 모델이 모델 서버에 모두 있음' in text
+    assert 'OK 생성 API: http://127.0.0.1:65534/v1' in text and 'OK 필요한 모델이 각 서버에 모두 있음' in text
     model_server.available = []
     fails = [m for lv, m in check_deploy.run() if lv == 'FAIL']
-    assert '모델 서버에 embedding 모델 lawbot-emb-v4 없음 (LAWBOT_SERVE_*와 맞추기)' in fails
-    assert any('chat 모델 qwen3.8-27b-4bit' in m for m in fails)
+    assert '모델 서버에 embedding 모델 lawbot-emb-v4 없음' in fails
+    assert not any('chat 모델' in message for message in fails)
+    FakeOpenAI.available = []
+    assert any(
+        level == 'FAIL' and '생성 API에 chat 모델 qwen3.8-27b-4bit 없음' in message
+        for level, message in check_deploy.run()
+    )
     env.delenv('LAWBOT_MODEL_SERVER')
     assert any(lv == 'FAIL' and '모델 서버 주소 없음' in m for lv, m in check_deploy.run())
     assert all('test-only-model-token' not in m for _, m in out)  # 토큰 값은 출력하지 않음
@@ -413,14 +420,28 @@ def test_env_example_is_complete_without_secrets(env):
     assert paths.V5_SYSTEM_CONCISE.is_file()  # Pro 간결형 system은 저장소에 있음
     from lawbot_model_server.config import parse_models
 
-    served = {
-        e.id: e.kind
-        for kind, key in (('chat', 'CHAT'), ('embedding', 'EMBEDDING'), ('rerank', 'RERANK'))
-        for e in parse_models(kind, values[f'LAWBOT_SERVE_{key}'])
-    }
-    needed = {p.emb_model: 'embedding', deploy.reranker(p).model: 'rerank'} | {m.model: 'chat' for m in p.models}
-    assert needed.items() <= served.items()  # 웹앱이 고르는 모델 id를 모델 서버가 제공
-    assert values['LAWBOT_MODEL_TOKEN'] == '' and values['LAWBOT_MODEL_SERVER_PORT'] == ''  # 비밀·포트는 비워 둠
+    served = [
+        {'id': entry.id, 'type': entry.kind}
+        for kind, key in (('embedding', 'EMBEDDING'), ('rerank', 'RERANK'))
+        for entry in parse_models(kind, values[f'LAWBOT_SERVE_{key}'])
+    ]
+    assert service.missing_models(served, p, deploy.reranker(p)) == []
+    from conftest import TEST_LLM_TOKEN, TEST_TOKEN
+    from lawbot.settings import load
+
+    cfg = load(
+        values
+        | {
+            'LAWBOT_MODEL_SERVER': 'http://127.0.0.1:65535',
+            'LAWBOT_MODEL_TOKEN': TEST_TOKEN,
+            'LAWBOT_LLM_BASE_URL': 'http://127.0.0.1:65534/v1',
+            'LAWBOT_LLM_API_KEY': TEST_LLM_TOKEN,
+        }
+    )
+    assert cfg.model_server != cfg.llm_url.removesuffix('/v1')
+    assert cfg.llm_key == TEST_LLM_TOKEN and not cfg.llm_external
+    assert values['LAWBOT_MODEL_TOKEN'] == values['LAWBOT_LLM_API_KEY'] == ''
+    assert values['LAWBOT_MODEL_SERVER_PORT'] == ''
     assert not [v for v in values.values() if v.isdigit() and len(v) >= 4]  # 포트 번호를 적지 않음
 
 

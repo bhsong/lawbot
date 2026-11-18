@@ -1,12 +1,12 @@
 # services/model-server/tests/test_ms_real_models.py  →  uv run pytest -m models services/model-server
-# 실제 모델 폴더(models/)와 Apple Silicon이 필요한 스모크 테스트 (기본 실행·CI에서는 제외)
-# 폴더는 .env와 같은 변수(LAWBOT_SERVE_*)의 첫 번째 항목, 없으면 docs/operations.md '모델 준비'의 기본 경로
-# 챗봇의 이전 test_models.py·test_reranker_models.py에서 옮김. 품질 수치는 docs/evals 기록 참고
+# Explicit-only smoke tests: local embedding/rerank weights and the standalone generation server.
+# Generation requires LAWBOT_LLM_BASE_URL, LAWBOT_LLM_API_KEY and LAWBOT_PRO_MODEL.
 import csv
 import os
 
 import pytest
 
+from lawbot_common.llm_endpoint import endpoint
 from lawbot_model_server.config import parse_models
 from lawbot_model_server.envfile import ROOT
 
@@ -15,12 +15,15 @@ pytestmark = pytest.mark.models
 
 def first(kind, default):
     """conftest가 환경 변수를 지우기 전(모듈 import 때)에 읽음"""
-    env = {'chat': 'LAWBOT_SERVE_CHAT', 'embedding': 'LAWBOT_SERVE_EMBEDDING', 'rerank': 'LAWBOT_SERVE_RERANK'}[kind]
+    env = {'embedding': 'LAWBOT_SERVE_EMBEDDING', 'rerank': 'LAWBOT_SERVE_RERANK'}[kind]
     entries = parse_models(kind, os.environ.get(env))
     return entries[0].path if entries else ROOT / default
 
 
-CHAT = first('chat', 'models/v4/sllm_4b_lora_mlx_4bit')
+GENERATION_ENV = {
+    key: os.environ.get(key, '')
+    for key in ('LAWBOT_LLM_BASE_URL', 'LAWBOT_LLM_API_KEY', 'LAWBOT_LLM_ALLOW_EXTERNAL', 'LAWBOT_PRO_MODEL')
+}
 EMB = first('embedding', 'models/v4/emb_v4_fp16')
 RERANK = first('rerank', 'models/v4/reranker_4b_mlx_4bit')
 QUESTION = '해고 예고 없이 갑자기 해고되면 어떻게 하나요?'
@@ -83,14 +86,6 @@ def test_embedding_finds_article():
     assert keys[int(np.argmax(d @ q[0]))] == '근로기준법 제26조'
 
 
-@pytest.fixture(scope='module')
-def chat_model():
-    need(CHAT)
-    from lawbot_model_server.chat import ChatModel
-
-    return ChatModel(CHAT)
-
-
 def answer_messages(article, question):
     docs = v4_docs()
     system = (ROOT / 'data/v4/system_v4.txt').read_text(encoding='utf-8').strip()
@@ -98,67 +93,23 @@ def answer_messages(article, question):
     return [{'role': 'system', 'content': system}, {'role': 'user', 'content': user}]
 
 
-KW = {'max_tokens': 256, 'temperature': 0.0, 'top_p': None, 'enable_thinking': False}
+def test_chat_answers_in_format():
+    import httpx
+    import openai
 
-
-def run_engine(engine, requests):
-    """requests: {이름: messages}. 모두 끝날 때까지 step → {이름: 응답 목록}"""
-    out = {n: [] for n in requests}
-    for n, m in requests.items():
-        engine.add(n, m, KW)
-    ended = set()
-    while len(ended) < len(requests):
-        for t, kind, v in engine.step():
-            if kind == 'item':
-                out[t].append(v)
-            elif kind == 'end':
-                ended.add(t)
-            else:
-                raise v
-    engine.close()
-    return out
-
-
-def answer_text(items):
-    return ''.join(r.text for r in items)
-
-
-def stream_generate_answer(chat, messages):
-    """기준: mlx_lm.stream_generate (PR 2까지 쓰던 순차 생성 경로, 생각 블록 숨김 포함)"""
-    from mlx_lm import stream_generate
-    from mlx_lm.sample_utils import make_sampler
-
-    from lawbot_model_server.chat import ThinkFilter
-
-    f = ThinkFilter(chat.think) if chat.think else None
-    gen = stream_generate(
-        chat.model, chat.tok, chat.prompt(messages), max_tokens=KW['max_tokens'], sampler=make_sampler(temp=0.0)
-    )
-    return ''.join((f.feed(r) if f else r).text for r in gen)
-
-
-def test_chat_answers_in_format(chat_model):
-    out = run_engine(chat_model.engine(1), {'q': answer_messages('근로기준법 제26조', QUESTION)})['q']
-    answer = answer_text(out)
+    base_url, api_key, _ = endpoint(GENERATION_ENV)
+    model = GENERATION_ENV['LAWBOT_PRO_MODEL'].strip()
+    assert model, 'LAWBOT_PRO_MODEL must name the standalone generation model'
+    with httpx.Client(trust_env=False, timeout=300) as transport:
+        with openai.OpenAI(base_url=base_url, api_key=api_key, http_client=transport, max_retries=0) as client:
+            response = client.chat.completions.create(
+                model=model,
+                messages=answer_messages('근로기준법 제26조', QUESTION),
+                max_tokens=256,
+                temperature=0,
+                extra_body={'chat_template_kwargs': {'enable_thinking': False}},
+            )
+    answer = response.choices[0].message.content or ''
     assert '【결론】' in answer and '제26조' in answer
-    assert out[-1].finish_reason in ('stop', 'length') and out[-1].prompt_tokens > 0
-
-
-def test_batch_engine_one_request_matches_stream_generate(chat_model):
-    """BatchEngine 1건이 stream_generate와 같은 답 (SequentialEngine 삭제 근거, mlx_lm 업데이트 때 다시 확인)"""
-    m = answer_messages('근로기준법 제26조', QUESTION)
-    assert answer_text(run_engine(chat_model.engine(1), {'q': m})['q']) == stream_generate_answer(chat_model, m)
-
-
-def test_batch_engine_two_requests_finish(chat_model):
-    from lawbot_model_server.chat import BatchEngine
-
-    out = run_engine(
-        BatchEngine(chat_model, 4),
-        {
-            'a': answer_messages('근로기준법 제26조', QUESTION),
-            'b': answer_messages('근로기준법 제60조', '1년 일하면 연차휴가가 며칠인가요?'),
-        },
-    )
-    out = {k: answer_text(v) for k, v in out.items()}
-    assert all('【결론】' in v for v in out.values()) and '제26조' in out['a'] and '제60조' in out['b']
+    assert response.choices[0].finish_reason in ('stop', 'length')
+    assert response.usage is not None and response.usage.prompt_tokens > 0

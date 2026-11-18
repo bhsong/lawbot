@@ -17,39 +17,35 @@ def dataset(tmp_path):
     migrate(path)
     with sqlite3.connect(path) as conn:
         conn.execute("INSERT INTO laws VALUES ('law','[예시] 가상법')")
-        for kind in ('notice', 'effective'):
+        conn.execute(
+            'INSERT INTO change_events VALUES (?,?,?,?,?,?,?,?)',
+            (
+                'effective',
+                'law',
+                '예시',
+                'approved',
+                '2026-10-01',
+                'https://www.law.go.kr/법령/예시',
+                '2026-11-05T10:00:00+09:00',
+                '2026-11-05T11:00:00+09:00',
+            ),
+        )
+        for index in range(2):
             conn.execute(
-                'INSERT INTO change_events VALUES (?,?,?,?,?,?,?,?,?,?,?)',
+                'INSERT INTO article_changes VALUES (?,?,?,?,?,?,?,?,?,?)',
                 (
-                    kind,
-                    'law',
-                    kind,
-                    '예시',
+                    f'effective-{index}',
+                    'effective',
+                    f'제{index + 1}조',
+                    f'2026-11-0{5 + index}',
+                    '예시 요약',
+                    '원문\n이전',
+                    '원문\n이후',
+                    1,
                     'approved',
-                    '2026-11-05',
-                    '2026-10-01',
-                    None,
-                    'https://www.law.go.kr/법령/예시',
-                    '2026-11-05T10:00:00+09:00',
                     '2026-11-05T11:00:00+09:00',
                 ),
             )
-            for index in range(2):
-                conn.execute(
-                    'INSERT INTO article_changes VALUES (?,?,?,?,?,?,?,?,?,?)',
-                    (
-                        f'{kind}-{index}',
-                        kind,
-                        f'제{index + 1}조',
-                        f'2026-11-0{5 + index}',
-                        '예시 요약',
-                        '원문\n이전',
-                        '원문\n이후',
-                        1,
-                        'approved',
-                        '2026-11-05T11:00:00+09:00',
-                    ),
-                )
     return path
 
 
@@ -57,11 +53,11 @@ def test_counts_lists_and_detail_agree_with_article_effective_dates(dataset):
     with TestClient(create_app(dataset)) as client:
         month = client.get('/api/law-calendar', params={'month': '2026-11'}).json()
         assert month['days'] == [
-            {'event_on': '2026-11-05', 'notice_count': 1, 'effective_count': 1},
-            {'event_on': '2026-11-06', 'notice_count': 0, 'effective_count': 1},
+            {'event_on': '2026-11-05', 'effective_count': 1},
+            {'event_on': '2026-11-06', 'effective_count': 1},
         ]
         listing = client.get('/api/law-events?date=2026-11-05&page_size=1').json()
-        assert listing['total'] == 3 and len(listing['items']) == 1
+        assert listing['total'] == 1 and len(listing['items']) == 1
         assert client.get('/api/law-events?month=2026-11&type=effective').json()['total'] == 2
         detail = client.get('/api/law-changes/effective-0').json()
         assert detail['before'] == '원문\n이전' and detail['after'] == '원문\n이후'
@@ -139,7 +135,8 @@ def test_nonpublic_data_is_absent_from_every_endpoint(dataset, table, field, val
         assert client.get('/api/law-changes/effective-0').status_code == 404
         items = client.get('/api/law-events?month=2026-11').json()['items']
         assert 'effective-0' not in [item['id'] for item in items]
-        assert client.get('/api/law-calendar?month=2026-11').json()['days'][0]['effective_count'] == 0
+        days = client.get('/api/law-calendar?month=2026-11').json()['days']
+        assert not any(day['event_on'] == '2026-11-05' for day in days)
 
 
 @pytest.mark.parametrize(
@@ -151,6 +148,8 @@ def test_nonpublic_data_is_absent_from_every_endpoint(dataset, table, field, val
         '/api/law-events',
         '/api/law-events?month=2026-11&date=2026-11-05',
         '/api/law-events?month=2026-11&type=other',
+        '/api/law-events?month=2026-11&type=bill',
+        '/api/law-holds?type=notice',
         '/api/law-events?month=2026-11&page_size=101',
     ],
 )
@@ -191,3 +190,39 @@ def test_migration_preserves_foreign_database_and_backs_up_existing_empty_file(t
         result = client.get('/api/law-events?month=2026-11')
         assert result.json()['total'] == 0 and result.headers['cache-control'] == 'no-store'
         assert client.get('/api/law-calendar/status').json()['delayed'] is True
+
+
+def test_v9_public_contract_contains_only_effective_articles(dataset):
+    with TestClient(create_app(dataset)) as client:
+        assert client.get('/api/law-events?month=2026-11&type=notice').status_code == 422
+        item = client.get('/api/law-events?month=2026-11').json()['items'][0]
+        assert set(item) == {
+            'id',
+            'eventId',
+            'date',
+            'lawName',
+            'article',
+            'summary',
+            'status',
+            'before',
+            'after',
+            'comparable',
+            'promulgatedOn',
+            'effectiveOn',
+            'sourceUrl',
+            'collectedAt',
+            'verifiedAt',
+            'reviewState',
+        }
+        detail = client.get('/api/law-changes/' + item['id']).json()
+        assert set(detail) == {*item, 'diff'}
+
+
+def test_v9_reads_refuse_an_unmigrated_v8_database_without_modification(tmp_path):
+    database = tmp_path / 'old.db'
+    with sqlite3.connect(database) as conn:
+        conn.executescript('CREATE TABLE original(value TEXT); PRAGMA user_version=8;')
+    before = database.read_bytes()
+    with TestClient(create_app(database)) as client:
+        assert client.get('/api/law-calendar/status').status_code == 503
+    assert database.read_bytes() == before

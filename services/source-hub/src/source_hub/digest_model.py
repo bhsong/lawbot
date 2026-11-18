@@ -2,12 +2,13 @@
 
 import hashlib
 import json
+import logging
 from datetime import datetime, time
 from typing import NamedTuple
-from urllib.parse import urlsplit
 
 import httpx
 
+from lawbot_common.llm_endpoint import generation_model
 from source_hub.store import KST
 
 MODEL = 'qwen3.8-27b-4bit'
@@ -21,7 +22,6 @@ SYSTEM = (
 
 
 class Runtime(NamedTuple):
-    commit: str | None
     revision: str | None
     max_concurrent: int
     prompt_sha256: str
@@ -29,19 +29,6 @@ class Runtime(NamedTuple):
 
 class Model:
     def __init__(self, http: httpx.Client, url: str, token: str):
-        parsed = urlsplit(url)
-        if (
-            not parsed.hostname
-            or parsed.username
-            or parsed.query
-            or parsed.fragment
-            or parsed.path not in ('', '/')
-            or (
-                parsed.scheme != 'https'
-                and not (parsed.scheme == 'http' and parsed.hostname in ('127.0.0.1', '::1', 'localhost'))
-            )
-        ):
-            raise ValueError('Invalid configured model server address')
         self.http, self.url = http, url.rstrip('/')
         self.headers = {'Authorization': f'Bearer {token}'}
         self.requests = 0
@@ -50,22 +37,12 @@ class Model:
 
     def runtime(self) -> Runtime | None:
         try:
-            health = self.http.get(self.url + '/health?runtime=1', headers=self.headers, timeout=10)
-            health.raise_for_status()
-            status = health.json()
-            concurrent = status.get('max_concurrent')
-            if not status.get('ready') or type(concurrent) is not int or concurrent < 1:
-                return None
-            models = self.http.get(self.url + '/v1/models', headers=self.headers, timeout=10)
+            models = self.http.get(self.url + '/models', headers=self.headers, timeout=10)
             models.raise_for_status()
-            model = next((row for row in models.json()['data'] if row['id'] == MODEL and row['type'] == 'chat'), None)
-            if model and model.get('loaded') is True:
-                return Runtime(
-                    status.get('commit'), model.get('revision'), concurrent, hashlib.sha256(SYSTEM.encode()).hexdigest()
-                )
+            model = generation_model(models.json()['data'], MODEL)
+            return Runtime(model.get('revision'), model['max_concurrent'], hashlib.sha256(SYSTEM.encode()).hexdigest())
         except httpx.HTTPError, ValueError, TypeError, KeyError, AttributeError:
             return None
-        return None
 
     def summarize(self, snapshot: dict, *, preflight: bool = False) -> dict[str, str]:
         excerpts: dict[str, str] = {}
@@ -93,7 +70,7 @@ class Model:
         }
         try:
             self.requests += 1
-            response = self.http.post(self.url + '/v1/chat/completions', headers=self.headers, json=payload)
+            response = self.http.post(self.url + '/chat/completions', headers=self.headers, json=payload)
             response.raise_for_status()
             choice = response.json()['choices'][0]
             if choice['finish_reason'] != 'stop':
@@ -102,6 +79,9 @@ class Model:
             if not isinstance(raw, str) or len(raw) > 8_000:
                 return {}
             selected = json.loads(raw)
+        except httpx.HTTPStatusError as exc:
+            logging.getLogger(__name__).warning('ERP enrichment failed: HTTP %s', exc.response.status_code)
+            return {}
         except httpx.HTTPError, KeyError, IndexError, TypeError, ValueError:
             return {}
         finally:

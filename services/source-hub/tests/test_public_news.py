@@ -112,7 +112,7 @@ def test_official_metadata_appears_automatically_without_baseline_alerts(setup):
 def test_only_verified_news_sources_opt_in_by_default(setup):
     registry, _, _, _ = setup
     sources = news.review_sources(registry)
-    for source in ['moel-rss-notice', 'moel-press', 'mofe-rss-press', 'mofe-laws', 'nts-notice']:
+    for source in ['moel-rss-lawinfo', 'moel-rules', 'mofe-tax-reform', 'mofe-laws', 'nts-notice']:
         assert sources[source]['review_policy'] == 'auto_metadata'
-    for source in ['moel-policy', 'mofe-rss', 'nts-calendar', 'nts-forms']:
+    for source in ['mofe-qa', 'nts-calendar', 'nts-forms']:
         assert sources[source]['review_policy'] == 'manual'

@@ -13,6 +13,7 @@ import pytest
 from law_monitor import checks, cli
 from law_monitor.config import ConfigError
 from law_monitor.paths import Paths
+from mon_helpers import isolated_monitor_credentials as isolated_monitor_credentials
 
 PY = sys.executable
 
@@ -55,7 +56,7 @@ def test_daily_preserves_article_regeneration_input_and_order(tmp_path, monkeypa
         assert only is None
         head.write_text('updated')
         calls.append('collect')
-        return SimpleNamespace(failed={'assembly_notice': 'unavailable'}, line='partial')
+        return SimpleNamespace(failed={'legalize_admrule': 'unavailable'}, line='partial')
 
     def run(command, **_):
         assert head.read_text() == 'updated'
@@ -96,18 +97,6 @@ def test_calendar_check_uses_independent_project_and_launchd_uv(monkeypatch, tmp
     assert command[command.index('--project') + 1] == str(SERVICE_DIR.parents[1] / 'services/law-calendar')
     assert '--no-sync' in command
     assert command[-3:] == ['law_calendar.sync', '--monitor-home', str(tmp_path)]
-
-
-def test_single_monitor_launchd_job_keeps_0630_and_supplies_calendar_configuration():
-    import plistlib
-
-    from law_monitor.paths import SERVICE_DIR
-
-    job = plistlib.loads((SERVICE_DIR / 'deploy/com.lawbot.monitor.plist.example').read_bytes())
-    assert job['StartCalendarInterval'] == {'Hour': 6, 'Minute': 30}
-    assert job['ProgramArguments'][-2:] == ['law-monitor', 'daily']
-    assert job['EnvironmentVariables']['LAW_MONITOR_UV'] == '__UV__'
-    assert job['EnvironmentVariables']['LAW_CALENDAR_DB'] == '__CALENDAR_DB__'
 
 
 def test_placeholders(tmp_path):

@@ -10,7 +10,8 @@ from test_e2e_live import Live, comparable
 ENV = {
     'LAWBOT_MODEL_SERVER': 'http://127.0.0.1:65535',
     'LAWBOT_MODEL_TOKEN': 'test-only-model-token-0123',
-    'LAWBOT_MODEL_SERVER_PORT': '65535',
+    'LAWBOT_LLM_BASE_URL': 'http://127.0.0.1:65534/v1',
+    'LAWBOT_LLM_API_KEY': 'test-only-generation-token-0123',
     'LAWBOT_EMB_MODEL': 'emb',
     'LAWBOT_RERANK_MODEL': 'rr',
     'LAWBOT_RERANKER_ENABLED': '1',
@@ -19,22 +20,34 @@ ENV = {
 NOON = datetime.time(12, 0)
 
 
-def server(ready=True, loaded=True, missing=(), error=None, concurrency=1):
+def server(ready=True, missing=(), error=None, chat_revision='sha256:c', concurrent=1, mlx_lm_version='0.31.2'):
     models = [
         {'id': 'emb', 'type': 'embedding', 'loaded': True, 'revision': 'sha256:a'},
         {'id': 'rr', 'type': 'rerank', 'loaded': True, 'revision': 'sha256:b'},
-        {'id': 'chat', 'type': 'chat', 'loaded': loaded, 'revision': 'sha256:c'},
     ]
 
-    def get(self, path):
+    def get(self, path, *, generation=False):
         if error:
             raise error
-        if path in ('/health', '/health?runtime=1'):
-            result = {'ready': ready, 'commit': 'abc'}
-            if concurrency is not None and path.endswith('runtime=1'):
-                result['max_concurrent'] = concurrency
-            return result
-        return {'data': [m for m in models if m['id'] not in missing]}
+        if generation:
+            assert path == '/models'
+            return {
+                'data': []
+                if 'chat' in missing
+                else [
+                    {
+                        'id': 'chat',
+                        'object': 'model',
+                        'revision': chat_revision,
+                        'max_concurrent': concurrent,
+                        'mlx_lm_version': mlx_lm_version,
+                    }
+                ]
+            }
+        if path == '/health':
+            return {'ready': ready, 'commit': 'abc'}
+        assert path == '/v1/models'
+        return {'data': [model for model in models if model['id'] not in missing]}
 
     return get
 
@@ -73,21 +86,32 @@ def test_preflight_missing_model(live):
     assert live(missing=('rr',)).preflight(NOON) == ['모델 없음: rr']
 
 
-def test_preflight_chat_not_loaded_stops(live):
-    (reason,) = live(loaded=False).preflight(NOON)
-    assert '올라 있지 않음' in reason  # 모델 교체로 운영이 느려지므로 질문하지 않음
+def test_preflight_generation_model_missing(live):
+    assert live(missing=('chat',)).preflight(NOON) == ['생성 모델 없음: chat']
+
+
+def test_preflight_generation_revision_required(live):
+    assert live(chat_revision=None).preflight(NOON) == ['생성 모델 revision 없음: chat']
+
+
+@pytest.mark.parametrize('key', ['LAWBOT_LLM_BASE_URL', 'LAWBOT_LLM_API_KEY'])
+def test_preflight_generation_config_required(tmp_path, key):
+    config = dict(ENV)
+    del config[key]
+    assert 'LAWBOT_LLM_BASE_URL·LAWBOT_LLM_API_KEY' in Live(tmp_path, config).preflight(NOON)[0]
 
 
 def test_config_hides_secrets(live):
     cfg = live().config()
     text = repr(cfg)
     assert ENV['LAWBOT_MODEL_TOKEN'] not in text and 'LAWBOT_MODEL_TOKEN' not in cfg['settings']
-    assert '65535' not in text  # 포트·주소도 남기지 않음 (포트는 각 .env에만)
-    assert cfg['model_server_commit'] == 'abc' and [m['revision'] for m in cfg['models']] == [
-        'sha256:a',
-        'sha256:b',
-        'sha256:c',
-    ]
+    assert ENV['LAWBOT_LLM_API_KEY'] not in text and 'LAWBOT_LLM_API_KEY' not in cfg['settings']
+    assert '65535' not in text and '65534' not in text
+    assert cfg['model_server_commit'] == 'abc'
+    assert [model['revision'] for model in cfg['models']] == ['sha256:a', 'sha256:b']
+    assert cfg['generation_models'] == [{'id': 'chat', 'object': 'model', 'revision': 'sha256:c'}]
+    assert cfg['generation_server_mlx_lm_version'] == '0.31.2'
+    assert 'generation_server_mlx_lm_version_note' not in cfg
 
 
 def test_comparable_ignores_loaded_but_not_revision(live):
@@ -98,13 +122,43 @@ def test_comparable_ignores_loaded_but_not_revision(live):
     assert comparable(swapped) != comparable(before)  # 같은 id로 폴더가 바뀌면 무효
 
 
-def test_legacy_health_without_concurrency_stops_before_questions(live):
-    assert live(concurrency=None).preflight(NOON) == ['서버 동시 생성 상한을 확인할 수 없음']
+def test_generation_revision_change_invalidates_run(live):
+    before = live(chat_revision='sha256:c').config()
+    after = live(chat_revision='sha256:d').config()
+    assert comparable(before) != comparable(after)
 
 
-@pytest.mark.parametrize('end', [2, None, True])
-def test_runtime_concurrency_change_invalidates_run(live, end):
-    before = live(concurrency=1).config()
-    after = live(concurrency=end).config()
+def test_generation_version_required_and_change_invalidates(live):
+    assert 'mlx_lm_version' in live(mlx_lm_version=None).preflight(NOON)[0]
+    with pytest.raises(ValueError, match='mlx_lm_version'):
+        live(mlx_lm_version=None).config()
+    assert comparable(live().config()) != comparable(live(mlx_lm_version='0.32.0').config())
+
+
+@pytest.mark.parametrize('concurrent', [None, True, '1', 0])
+def test_generation_concurrency_required(live, concurrent):
+    stack = live(concurrent=concurrent)
+    assert 'max_concurrent' in stack.preflight(NOON)[0]
+    with pytest.raises(ValueError, match='max_concurrent'):
+        stack.config()
+
+
+def test_generation_concurrency_recorded_and_change_invalidates(live):
+    before = live(concurrent=1).config()
+    after = live(concurrent=2).config()
     assert before['server_max_concurrent'] == 1
     assert comparable(before) != comparable(after)
+
+
+def test_external_generation_skips_metadata_probe(tmp_path, env):
+    original = server()
+
+    def get(self, path, *, generation=False):
+        assert not generation
+        return original(self, path)
+
+    env.setattr(Live, 'get', get)
+    config = ENV | {'LAWBOT_LLM_BASE_URL': 'https://generation.example/v1', 'LAWBOT_LLM_ALLOW_EXTERNAL': '1'}
+    stack = Live(tmp_path, config)
+    assert stack.preflight(NOON) == []
+    assert stack.config()['server_max_concurrent'] is None

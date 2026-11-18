@@ -8,20 +8,17 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field
 
 # ---- 경로 ----
-CHAT_PATH, EMBEDDINGS_PATH, RERANK_PATH = '/v1/chat/completions', '/v1/embeddings', '/v1/rerank'
+EMBEDDINGS_PATH, RERANK_PATH = '/v1/embeddings', '/v1/rerank'
 MODELS_PATH, HEALTH_PATH = '/v1/models', '/health'
 
 # ---- 오류 type (error.type) ----
 INVALID_REQUEST = 'invalid_request_error'  # 400·404·413
 AUTHENTICATION = 'authentication_error'  # 401 토큰 불일치
-MODEL_LOAD = 'model_load_error'  # 500 chat 모델 폴더 없음·형식 오류 (code는 원래 예외 이름)
 SERVER_NOT_READY = 'server_not_ready'  # 503 시작할 때 모델을 불러오는 중
-SERVER_BUSY = 'server_busy'  # 503 생성 대기열이 가득 참 (LAWBOT_MAX_QUEUED)
 SERVER_ERROR = 'server_error'  # 500 그 밖의 모델 연산 오류 (code는 예외 이름)
 MODEL_NOT_FOUND = 'model_not_found'  # 404의 code
 
 # ---- 요청 한도 ----
-MAX_TOKENS_LIMIT = 32768
 MAX_INPUTS = 4096  # embeddings input 개수
 MAX_DOCUMENTS = 1000  # rerank documents 개수
 MAX_SEQ_LIMIT = 32768
@@ -30,41 +27,6 @@ MAX_SEQ_LIMIT = 32768
 # ---- 요청 (모르는 필드는 400: 조용히 무시하지 않음) ----
 class Strict(BaseModel):
     model_config = ConfigDict(extra='forbid', strict=True)
-
-
-class TextPart(Strict):
-    type: Literal['text']
-    text: str
-
-
-class Message(Strict):
-    role: Literal['system', 'user', 'assistant']
-    content: str | list[TextPart]
-    name: str | None = None
-
-
-class StreamOptions(Strict):
-    include_usage: bool = False
-
-
-class TemplateKwargs(Strict):
-    enable_thinking: bool = False
-
-
-class ChatRequest(Strict):
-    """웹앱은 openai SDK로 보낸다 (이 모델은 서버 검증용)"""
-
-    model: str
-    messages: list[Message] = Field(min_length=1)
-    max_tokens: int | None = Field(None, ge=1, le=MAX_TOKENS_LIMIT)
-    max_completion_tokens: int | None = Field(None, ge=1, le=MAX_TOKENS_LIMIT)
-    temperature: float | None = Field(None, ge=0, le=2)  # 없으면 0 (탐욕적 생성). OpenAI 기본값(1)과 다름
-    top_p: float | None = Field(None, gt=0, le=1)
-    stream: bool = False
-    stream_options: StreamOptions | None = None
-    n: int | None = Field(None, ge=1, le=1)
-    chat_template_kwargs: TemplateKwargs | None = None  # 기본 생각 끔
-    user: str | None = None  # 받기만 하고 쓰지 않음
 
 
 class EmbeddingRequest(Strict):
@@ -129,7 +91,7 @@ class ModelCard(Response):
     object: Literal['model'] = 'model'
     created: int = 0
     owned_by: str = 'lawbot'
-    type: Literal['chat', 'embedding', 'rerank']  # 확장
+    type: Literal['embedding', 'rerank']
     loaded: bool  # 확장: 지금 올라 있는지
     revision: str | None = None  # 확장: 모델 폴더 지문 'sha256:<16자>' (폴더 없음·옛 서버는 None)
 

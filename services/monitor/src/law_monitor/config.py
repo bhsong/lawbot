@@ -7,7 +7,7 @@ from pathlib import Path
 import yaml
 
 from law_monitor.paths import SERVICE_DIR
-from lawbot_common.law_scope import load_law_scope, scope_keywords
+from lawbot_common.law_scope import load_law_scope
 
 CONFIG_FILE = SERVICE_DIR / 'config' / 'targets.yaml'
 CATEGORIES = range(1, 8)  # 한눈에 보기 표 번호
@@ -51,10 +51,7 @@ class Config:
     forms: tuple[FormTarget, ...]
     admrule_names: tuple[AdmruleName, ...]
     keyword_rules: tuple[KeywordRule, ...]
-    prelegislation_keywords: tuple[str, ...]
     checks: tuple = ()  # law_monitor.checks.Check: daily에서 부르는 점검 명령
-    assembly_enabled: bool = False
-    assembly_age: int = 22
 
     def law_category(self, folder: str) -> int | None:
         return next((law.category for law in self.laws if law.name == folder), None)
@@ -73,12 +70,10 @@ class Config:
 def load(path: Path = CONFIG_FILE) -> Config:
     with open(path, encoding='utf-8') as f:
         data = yaml.safe_load(f) or {}
-    prelegislation = data.get('prelegislation') or {}
-    if 'laws' in data or 'keywords' in prelegislation:
-        raise ConfigError('Manage laws and prelegislation keywords in law_scope.json')
+    if 'laws' in data:
+        raise ConfigError('Manage laws in law_scope.json')
     scope = load_law_scope()
     data['laws'] = [{'name': law.folder, 'category': law.category} for law in scope]
-    data['prelegislation'] = {**prelegislation, 'keywords': scope_keywords(scope)}
     return from_dict(data)
 
 
@@ -116,17 +111,9 @@ def from_dict(data: dict) -> Config:
             KeywordRule(_name(x.get('agency'), 'keyword_rules agency'), keywords, _category(x, 'keyword_rules'))
         )
 
-    prelegislation = data.get('prelegislation') or {}
-    pre = tuple(_name(value, 'prelegislation.keywords') for value in prelegislation.get('keywords') or ())
-    assembly = prelegislation.get('assembly') or {}
-    enabled, age = assembly.get('enabled', False), assembly.get('age', 22)
-    if type(enabled) is not bool or type(age) is not int or age < 1 or (enabled and not pre):
-        raise ConfigError('Invalid prelegislation.assembly settings')
     from law_monitor import checks  # checks가 ConfigError를 쓰므로 여기서
 
-    return Config(
-        dict(repos), laws, forms, tuple(names), tuple(rules), pre, checks.parse(data.get('checks')), enabled, age
-    )
+    return Config(dict(repos), laws, forms, tuple(names), tuple(rules), checks.parse(data.get('checks')))
 
 
 def _name(value, where: str) -> str:

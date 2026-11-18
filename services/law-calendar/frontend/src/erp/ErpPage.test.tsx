@@ -34,9 +34,9 @@ const feed: ErpUpdates = {
   ],
 }
 const change: CalendarChange = {
-  id: 'related', kind: 'effective', date: '2026-11-20', lawName: '[예시] 가상법 시행령', article: '제189조',
-  summary: '관련 시행 요약', status: '시행', before: null, after: null, comparable: false, publishedOn: null,
-  promulgatedOn: null, effectiveOn: '2026-11-20', commentDeadline: null, sourceUrl: null, collectedAt: null, verifiedAt: null,
+  id: 'related', date: '2026-11-20', lawName: '[예시] 가상법 시행령', article: '제189조',
+  summary: '관련 시행 요약', status: '시행', before: null, after: null, comparable: false,
+  promulgatedOn: null, effectiveOn: '2026-11-20', sourceUrl: null, collectedAt: null, verifiedAt: null,
 }
 const lawLoader: CalendarLoader = async (month) => ({
   changes: month === '2026-11' ? [change, { ...change, id: 'other', lawName: '[예시] 무관법', summary: '무관 요약' }] : [],
@@ -79,7 +79,7 @@ test('related law schedule keeps only laws named by the feed', async () => {
   expect(await within(related).findByText('관련 시행 요약')).toBeInTheDocument()
   expect(within(related).queryByText('무관 요약')).not.toBeInTheDocument()
   await userEvent.click(within(related).getByRole('button', { name: '다음 달' }))
-  expect(await within(related).findByText('이 달에 관련 법령의 입법예고·시행 조문이 없습니다.')).toBeInTheDocument()
+  expect(await within(related).findByText('이 달에 관련 법령의 시행 조문이 없습니다.')).toBeInTheDocument()
 })
 
 test('history button lists what was collected and when', async () => {
@@ -144,13 +144,12 @@ const rules: ErpRules = {
           currentVersion: null, recheckRequired: true, scheduledChanges: [],
         },
       ],
-      proposalLinks: [{ ruleVersionId: 'draft', evidenceUrl: 'https://pal.assembly.go.kr/napal/lgsltpa/예시' }],
     },
-    { ruleId: 'INS-03', sourceKey: 'INS-03', title: '가상 산재 기준', scopes: [], proposalLinks: [] },
+    { ruleId: 'INS-03', sourceKey: 'INS-03', title: '가상 산재 기준', scopes: [] },
   ],
 }
 
-test('shows current, upcoming, additional stages, and proposals within a single rule card', async () => {
+test('shows current, upcoming and additional stages within a single rule card', async () => {
   const loaderWithFuture: ErpLoader = async () => ({
     ...feed, items: [...(feed.items ?? []), { ...base, id: 'duplicate', effectiveFrom: '2028-01-01' }],
   })
@@ -164,8 +163,6 @@ test('shows current, upcoming, additional stages, and proposals within a single 
   expect(content.getByText('검증된 가상 예정값')).toBeVisible()
   expect(content.getByText('현행 기준 확인 필요')).toBeVisible()
   expect(content.getByText('예정 변경 재확인 필요')).toBeVisible()
-  expect(content.getByRole('heading', { name: '검토 중' })).toBeVisible()
-  expect(content.getByRole('link', { name: '검토 중인 공식 원문' })).toHaveAttribute('target', '_blank')
   const later = content.getByText('이후 변경 1건')
   expect(later.closest('details')).not.toHaveAttribute('open')
   await userEvent.click(later)
@@ -181,7 +178,7 @@ test('empty v2 rule entries keep existing approved cards, excerpts and attachmen
   const empty: ErpRules = {
     ...rules,
     rules: (feed.items ?? []).map((item) => ({
-      ruleId: item.sourceKey, sourceKey: item.sourceKey, title: item.sourceTitle, scopes: [], proposalLinks: [],
+      ruleId: item.sourceKey, sourceKey: item.sourceKey, title: item.sourceTitle, scopes: [],
     })),
   }
   render(<ErpPage loader={loader} ruleLoader={async () => empty} lawLoader={lawLoader} today="2026-11-12" />)
@@ -209,7 +206,7 @@ test('a configured rule feed failure keeps documents as references and preserves
 test('a seventh registered rule uses the same card and reference links without a source-specific renderer', async () => {
   const [first] = rules.rules ?? []
   const registered = ['INS-01', 'INS-02H', 'INS-02L', 'INS-03', 'TAX-01', 'TAX-03', 'NEW-07']
-    .map((key) => ({ ruleId: key, sourceKey: key, title: key, scopes: [], proposalLinks: [] }))
+    .map((key) => ({ ruleId: key, sourceKey: key, title: key, scopes: [] }))
   const seventh = { ...first, ruleId: 'NEW-07', sourceKey: 'NEW-07', title: '일곱 번째 가상 기준' }
   const legacyLoader: ErpLoader = async () => ({
     ...feed, items: [...(feed.items ?? []), { ...base, id: 'seventh', sourceKey: 'NEW-07', title: '공유 원천 자료' }],

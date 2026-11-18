@@ -398,14 +398,12 @@ afterEach(() => {
   Reflect.deleteProperty(HTMLDialogElement.prototype, 'close')
 })
 
-test('calendar events, notice details and holds use the admin proxy', async () => {
+test('calendar events, law details and holds use the admin proxy', async () => {
   stubDialog()
   const date = new Intl.DateTimeFormat('sv-SE', { timeZone: 'Asia/Seoul' }).format(new Date())
-  const pdfUrl = 'https://likms.assembly.go.kr/filegate/servlet/FileGate?bookId=fixture&type=1'
   const change = {
-    id: 'cal-id', kind: 'notice', date, lawName: '합성 법령', article: '제1조', summary: '예고 요약',
-    status: '공개', comparable: false, before: null, after: null,
-    noticeContent: { summary: '주요 내용', pdfUrl },
+    id: 'cal-id', date, lawName: '합성 법령', article: '제1조', summary: '시행 요약',
+    status: '공개', comparable: true, before: '이전 원문', after: '이후 원문',
   }
   const s = server({
     role: 'admin', adminRoutes: (url) => {
@@ -424,24 +422,24 @@ test('calendar events, notice details and holds use the admin proxy', async () =
   expect(await calendar.findByText(/합성 수집 시각/)).toBeVisible()
   await userEvent.click(await calendar.findByRole('button', { name: /합성 법령 제1조/ }))
   const comparison = within(await screen.findByRole('dialog', { name: '합성 법령 제1조' }))
-  expect(comparison.getByText('주요 내용')).toBeVisible()
-  expect(comparison.getByRole('link', { name: '법률안 PDF 원문 (새 창)' })).toHaveAttribute('href', pdfUrl)
-  expect(comparison.queryByRole('img')).not.toBeInTheDocument()
+  const originals = comparison.getByRole('group', { name: '검증된 원문 비교' }).querySelectorAll('pre')
+  expect(originals[0].textContent).toBe('이전 원문')
+  expect(originals[1].textContent).toBe('이후 원문')
+  expect(comparison.getByRole('heading', { name: 'Before · 시행 직전' })).toBeVisible()
   await userEvent.click(comparison.getByRole('button', { name: '변경 상세 닫기' }))
   await userEvent.click(calendar.getByRole('button', { name: '보류 목록' }))
   const holds = within(await screen.findByRole('dialog', { name: '보류 목록' }))
-  await userEvent.click(holds.getByRole('button', { name: '입법예고 검토 대기' }))
   expect(await holds.findByText('현재 공개된 보류 항목이 없습니다.')).toBeVisible()
   const paths = s.fetch.mock.calls.map(([url]) => url)
   expect(paths).toContain('/api/admin/calendar/law-calendar/status')
   expect(paths).toContain('/api/admin/calendar/law-changes/cal-id')
-  expect(paths).toContain('/api/admin/calendar/law-holds?type=notice&page=1&page_size=20')
+  expect(paths).toContain('/api/admin/calendar/law-holds?type=effective&page=1&page_size=20')
   expect(paths.some((url) => url.startsWith('/api/law-'))).toBe(false)
 })
 
-test('approving a notice with only an end date opens its calendar month and refreshes holds', async () => {
+test('approving a held law opens its calendar month and refreshes holds', async () => {
   stubDialog()
-  const notice = { id: 'notice-id', lawName: '합성 개정안', billNo: '1234', reason: '기간 확인', sourceUrl: 'https://example.test/notice' }
+  const hold = { id: 'law-id', lawName: '합성 법령', article: '제1조', reason: '시행일 확인', sourceUrl: 'https://www.law.go.kr/법령/합성법' }
   let reviewed = false
   const s = server({
     role: 'admin', adminRoutes: (url, init) => {
@@ -450,21 +448,28 @@ test('approving a notice with only an end date opens its calendar month and refr
       if (url.pathname.endsWith('/law-calendar/status')) return json(200, { delayed: false })
       if (url.pathname.endsWith('/law-events')) return json(200, { items: [], page: 1, total: 0 })
       if (url.pathname.endsWith('/law-holds')) {
-        const items = url.searchParams.get('type') === 'notice' && !reviewed ? [notice] : []
+        const items = reviewed ? [] : [hold]
         return json(200, { items, page: currentPage, total: items.length, page_size: 20 })
       }
-      if (url.pathname.endsWith('/law-holds/notice/notice-id')) {
+      if (url.pathname.endsWith('/law-holds/effective/law-id')) {
         if (init?.method === 'POST') {
           reviewed = true
           return json(200, { ok: true })
         }
         return json(200, {
-          template: { snapshot_id: notice.id, decision: 'approve', note: '' }, title: notice.lawName,
-          source_url: notice.sourceUrl, bill_no: notice.billNo, dates: [{ role: 'notice_end', date: '2030-05-15' }],
+          template: {
+            event_id: 'law-event', snapshot_id: 'law-snapshot', decision: 'approve', note: '',
+            source_url: hold.sourceUrl, dates_verified: false, promulgated_on: '2030-04-15',
+            changes: [{
+              id: hold.id, effective_on: '2030-05-15', evidence_url: hold.sourceUrl,
+              summary: '제1조 개정', comparison_verified: false,
+            }],
+          },
+          changes: [{ id: hold.id, article: hold.article, before: '시행 전 원문', after: '시행 후 원문' }],
         })
       }
       if (url.pathname.endsWith('/import-failures')) return json(200, {
-        items: [{ source: 'assembly_notice', event_id: 'notice-bad', error_type: 'ValueError', message: '예고일 누락', occurred_at: '2026-11-10T00:00:00+00:00' }],
+        items: [{ source: 'legalize_law', event_id: 'law-bad', error_type: 'ValueError', message: '시행일 누락', occurred_at: '2026-11-10T00:00:00+00:00' }],
         page: currentPage, total: 1, page_size: 20,
       })
       return page()
@@ -474,11 +479,13 @@ test('approving a notice with only an end date opens its calendar month and refr
   const calendar = within(screen.getByRole('region', { name: '법령 캘린더' }))
   await userEvent.click(await calendar.findByRole('button', { name: '보류 목록' }))
   const holds = within(screen.getByRole('dialog', { name: '보류 목록' }))
-  await userEvent.click(holds.getByRole('button', { name: '입법예고 검토 대기' }))
-  await userEvent.click(await holds.findByRole('button', { name: /검토 열기.*합성 개정안/ }))
-  expect(await holds.findByText('예고 종료일')).toBeVisible()
-  expect(holds.getByLabelText('검토 결정')).toHaveValue('approve')
-  await userEvent.type(holds.getByLabelText('검토 메모'), '공식 예고 종료일을 확인했습니다.')
+  await userEvent.click(await holds.findByRole('button', { name: /검토 열기.*합성 법령 제1조/ }))
+  expect(await holds.findByRole('heading', { name: '시행일 보류 검토' })).toBeVisible()
+  expect(holds.getByText('시행 전 원문')).toBeVisible()
+  expect(holds.getByText('시행 후 원문')).toBeVisible()
+  await userEvent.click(holds.getByLabelText('공포일과 부칙을 확인했습니다'))
+  await userEvent.click(holds.getByLabelText('시행 전후 원문을 비교했습니다'))
+  await userEvent.type(holds.getByLabelText('검토 메모'), '공식 시행일을 확인했습니다.')
   await userEvent.click(holds.getByRole('button', { name: /^승인$/ }))
   expect(await holds.findByText('검토 결정을 저장했습니다.')).toBeVisible()
   expect(await holds.findByText('현재 공개된 보류 항목이 없습니다.')).toBeVisible()
@@ -486,12 +493,18 @@ test('approving a notice with only an end date opens its calendar month and refr
     .toContain('month=2030-05')
   const [, decision] = s.fetch.mock.calls.find(([, init]) => init?.method === 'POST')!
   expect(JSON.parse(String(decision?.body))).toEqual({
-    snapshot_id: notice.id, decision: 'approve', note: '공식 예고 종료일을 확인했습니다.', idempotency_key: expect.any(String),
+    event_id: 'law-event', snapshot_id: 'law-snapshot', decision: 'approve', note: '공식 시행일을 확인했습니다.',
+    source_url: hold.sourceUrl, dates_verified: true, promulgated_on: '2030-04-15',
+    changes: [{
+      id: hold.id, effective_on: '2030-05-15', evidence_url: hold.sourceUrl,
+      summary: '제1조 개정', comparison_verified: true,
+    }],
+    idempotency_key: expect.any(String),
   })
   await userEvent.click(holds.getByRole('button', { name: '보류 목록 닫기' }))
   await userEvent.click(calendar.getByRole('button', { name: '가져오기 실패' }))
   const failures = within(await screen.findByRole('dialog', { name: '가져오기 실패' }))
-  expect(await failures.findByText('예고일 누락')).toBeVisible()
-  expect(failures.getByText('notice-bad')).toBeVisible()
+  expect(await failures.findByText('시행일 누락')).toBeVisible()
+  expect(failures.getByText('law-bad')).toBeVisible()
   expect(s.fetch.mock.calls.filter(([, init]) => init?.method === 'POST')).toHaveLength(1)
 })

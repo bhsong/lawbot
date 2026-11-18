@@ -11,11 +11,12 @@ from law_monitor.app import MissingSecret
 from law_monitor.llm import ChatClient, LLMConfig
 from law_monitor.utils.http import HttpClient
 from mon_helpers import FIXED_NOW, FakeLawGo, SourceRepo, fixture, law_md, make_config, make_monitor
+from mon_helpers import isolated_monitor_credentials as isolated_monitor_credentials
 
 RULE = 'kr/소득세법/시행규칙.md'
 OLD_MST, NEW_MST = '284987', '286379'
 FORMS = [{'law': '소득세법 시행규칙', 'kinds': ['별표', '서식']}]
-TOKEN = 'MODELTOKEN123'
+TOKEN = 'SUMMARY-TEST-TOKEN-ONLY'
 
 
 class FakeLLM:
@@ -33,7 +34,10 @@ class FakeLLM:
         self.headers.append(request.headers)
         if self.fail:
             self.fail -= 1
-            return httpx.Response(self.status, json={'error': {'message': 'busy'}})
+            return httpx.Response(
+                self.status,
+                json={'error': {'message': 'busy', 'type': 'server_busy', 'code': 'queue_full'}},
+            )
         name = next(line for line in body['messages'][-1]['content'].splitlines() if line.startswith('이름:'))
         content = f'**무엇이 바뀌었나**\n- 가짜 요약 ({name})\n\n**시행일**\n- 원문 확인 필요'
         return httpx.Response(
@@ -52,7 +56,7 @@ class FakeLLM:
 
     def client(self) -> ChatClient:
         http = HttpClient(transport=httpx.MockTransport(self.handler), retries=3, min_interval=0, sleep=lambda s: None)
-        return ChatClient(LLMConfig('http://127.0.0.1:9', TOKEN, 'qwen3.8-27b-4bit'), http)
+        return ChatClient(LLMConfig('http://127.0.0.1:9/v1', TOKEN, 'qwen3.8-27b-4bit'), http)
 
 
 def rule_md(mst: str, promulgated: str, body: str) -> str:
@@ -230,6 +234,34 @@ def test_failure_keeps_events_pending(tmp_path, legalize):
     assert later.events == 3 and later.calls == 1 and mon.state.pending_count() == 0
 
 
+@pytest.mark.parametrize('fail', [3, 1])
+def test_busy_summary_retries_before_failing_or_succeeding(tmp_path, legalize, monkeypatch, fail):
+    busy = FakeLLM(fail=fail, status=503)
+    waits = []
+    monkeypatch.setattr(
+        'law_monitor.llm.HttpClient',
+        lambda **kw: HttpClient(transport=httpx.MockTransport(busy.handler), sleep=waits.append, **kw),
+    )
+    client = ChatClient(LLMConfig('http://127.0.0.1:9/v1', TOKEN, 'synthetic'))
+    mon = monitor_with_events(tmp_path, legalize, client)
+    result = mon.summarize()
+    md = result.path.read_text(encoding='utf-8')
+    if fail == 3:
+        assert result.failed and 'HTTP 503' in result.failed
+        assert result.calls == 0
+        assert mon.state.pending_count() == 3
+        assert '요약 실패' in md and '대기 이벤트 3건' in md
+        assert len(busy.bodies) == 3
+        assert waits == [5, 10]
+    else:
+        assert not result.failed
+        assert result.events == 3 and result.calls == 1
+        assert mon.state.pending_count() == 0
+        assert '가짜 요약' in md and '요약 실패' not in md
+        assert len(busy.bodies) == 2
+        assert waits == [5]
+
+
 def test_collector_failing_is_warning_without_model(tmp_path):
     from test_mon_runner import BrokenCollector
 
@@ -314,36 +346,59 @@ def test_group_attaches_children_and_orphans():
 
 def test_llm_settings_order(tmp_path, monkeypatch):
     mon_env, root_env = tmp_path / 'monitor.env', tmp_path / 'root.env'
-    root_env.write_text('LAWBOT_MODEL_SERVER=http://root\nLAWBOT_MODEL_TOKEN=roottoken\n', encoding='utf-8')
+    root_env.write_text(f'LAWBOT_LLM_BASE_URL=http://127.0.0.1:9/v1\nLAWBOT_LLM_API_KEY={TOKEN}\n', encoding='utf-8')
     monkeypatch.setattr(secrets, 'ENV_FILE', mon_env)
     monkeypatch.setattr(secrets, 'ROOT_ENV_FILE', root_env)
-    for key in ('LAWBOT_MODEL_SERVER', 'LAWBOT_MODEL_TOKEN', 'LAW_MONITOR_SUMMARY_MODEL'):
+    for key in ('LAWBOT_LLM_BASE_URL', 'LAWBOT_LLM_API_KEY', 'LAWBOT_LLM_ALLOW_EXTERNAL', 'LAW_MONITOR_SUMMARY_MODEL'):
         monkeypatch.delenv(key, raising=False)
     from law_monitor.llm import load_config
 
     cfg = load_config()
-    assert (cfg.url, cfg.token, cfg.model) == ('http://root', 'roottoken', 'qwen3.8-27b-4bit')
-    mon_env.write_text('LAWBOT_MODEL_SERVER=http://monitor\n', encoding='utf-8')
-    assert load_config().url == 'http://monitor'
-    monkeypatch.setenv('LAWBOT_MODEL_SERVER', 'http://env')
-    assert load_config().url == 'http://env'
+    assert (cfg.url, cfg.token, cfg.model) == ('http://127.0.0.1:9/v1', TOKEN, 'qwen3.8-27b-4bit')
+    mon_env.write_text('LAWBOT_LLM_BASE_URL=http://127.0.0.1:10/v1\n', encoding='utf-8')
+    assert load_config().url == 'http://127.0.0.1:10/v1'
+    monkeypatch.setenv('LAWBOT_LLM_BASE_URL', 'http://127.0.0.1:11/v1')
+    assert load_config().url == 'http://127.0.0.1:11/v1'
     root_env.write_text('', encoding='utf-8')
-    monkeypatch.delenv('LAWBOT_MODEL_SERVER')
+    monkeypatch.delenv('LAWBOT_LLM_BASE_URL')
     mon_env.write_text('', encoding='utf-8')
     assert load_config() is None
     assert secrets.law_oc() is None  # LAW_OC는 레포 최상위 .env에서 읽지 않음
 
 
+def test_summary_does_not_use_embedding_server_credentials(monkeypatch):
+    from law_monitor.llm import load_config
+
+    monkeypatch.setenv('LAWBOT_MODEL_SERVER', 'http://127.0.0.1:9')
+    monkeypatch.setenv('LAWBOT_MODEL_TOKEN', TOKEN)
+    assert load_config() is None
+    monkeypatch.setenv('LAWBOT_LLM_BASE_URL', 'http://127.0.0.1:10/v1')
+    with pytest.raises(ValueError, match='LAWBOT_LLM_API_KEY'):
+        load_config()
+
+
+def test_summary_ignores_separate_reasoning():
+    def handler(request):
+        return httpx.Response(
+            200,
+            json={'choices': [{'message': {'content': 'public summary', 'reasoning': 'private reasoning'}}]},
+        )
+
+    http = HttpClient(transport=httpx.MockTransport(handler), retries=1, min_interval=0)
+    client = ChatClient(LLMConfig('http://127.0.0.1:9/v1', TOKEN, 'qwen3.8-27b-4bit'), http)
+    assert client.complete('system', 'user').text == 'public summary'
+
+
 def test_summarize_requires_model_settings(tmp_path):
     mon = make_monitor(tmp_path, make_config(), llm=None)
-    with pytest.raises(MissingSecret, match='LAWBOT_MODEL_SERVER'):
+    with pytest.raises(MissingSecret, match='LAWBOT_LLM_BASE_URL'):
         mon.summarize()
 
 
 def test_cli_daily(tmp_path, legalize, monkeypatch, capsys):
     monkeypatch.setenv('LAW_OC', 'TESTOC77')
-    monkeypatch.setenv('LAWBOT_MODEL_SERVER', 'http://127.0.0.1:9')
-    monkeypatch.setenv('LAWBOT_MODEL_TOKEN', TOKEN)
+    monkeypatch.setenv('LAWBOT_LLM_BASE_URL', 'http://127.0.0.1:9/v1')
+    monkeypatch.setenv('LAWBOT_LLM_API_KEY', TOKEN)
     cfg = tmp_path / 'targets.yaml'
     cfg.write_text(
         f'repos: {{legalize-kr: "{legalize.url}", admrule-kr: "file:///none"}}\n'
@@ -358,11 +413,11 @@ def test_cli_daily(tmp_path, legalize, monkeypatch, capsys):
     md = next((tmp_path / 'h' / 'data' / 'summaries').glob('*.md')).read_text(encoding='utf-8')
     assert '새 변경 없음' in md and 'collectors=1 ok=1 failed=0 events=0' in md
 
-    monkeypatch.delenv('LAWBOT_MODEL_SERVER')
+    monkeypatch.delenv('LAWBOT_LLM_BASE_URL')
     monkeypatch.setattr(secrets, 'ENV_FILE', tmp_path / 'none.env')
     monkeypatch.setattr(secrets, 'ROOT_ENV_FILE', tmp_path / 'none.env')
     assert cli.main([*base, 'daily', '--only', 'legalize_law']) == 2  # 수집은 하고 요약은 거부
-    assert 'LAWBOT_MODEL_SERVER' in capsys.readouterr().err
+    assert 'LAWBOT_LLM_BASE_URL' in capsys.readouterr().err
     runs = (
         __import__('sqlite3')
         .connect(tmp_path / 'h' / 'data' / 'state.db')
@@ -377,8 +432,8 @@ def test_cli_daily_runs_checks_before_summary(tmp_path, legalize, monkeypatch, c
     import sys
 
     monkeypatch.setenv('LAW_OC', 'TESTOC77')
-    monkeypatch.setenv('LAWBOT_MODEL_SERVER', 'http://127.0.0.1:9')
-    monkeypatch.setenv('LAWBOT_MODEL_TOKEN', TOKEN)
+    monkeypatch.setenv('LAWBOT_LLM_BASE_URL', 'http://127.0.0.1:9/v1')
+    monkeypatch.setenv('LAWBOT_LLM_API_KEY', TOKEN)
     differ = repr([sys.executable, '-c', 'import sys; print("articles same=no changed=6"); sys.exit(1)'])
     cfg = tmp_path / 'targets.yaml'
     cfg.write_text(

@@ -58,16 +58,14 @@ class FakeLLM:
 
 
 class FakeServerClient:
-    """api_client.ModelServerClient 대역 (service.load_app이 만든다). 접속하지 않음
-    available: /v1/models 목록 (None이면 현재 프로필에 필요한 모델 전부), loaded: 상주 중인 chat id (None이면 전부)"""
+    """Embedding/rerank client fake; no generation models are served here."""
 
     available = None
-    loaded = None
     instances = []
 
     @classmethod
     def reset(cls):
-        cls.available, cls.loaded, cls.instances = None, None, []
+        cls.available, cls.instances = None, []
 
     def __init__(self, url, token, http=None):
         self.url, self.token, self.calls = url, token, []
@@ -85,10 +83,6 @@ class FakeServerClient:
         out = [{'id': rr, 'type': 'rerank', 'loaded': True}]
         p = deploy.get_profile()
         out.append({'id': p.emb_model, 'type': 'embedding', 'loaded': True})
-        out += [
-            {'id': s.model, 'type': 'chat', 'loaded': self.loaded is None or s.model in self.loaded}
-            for s in p.models + p.disabled
-        ]
         return out
 
     def embed(self, model, texts, input_type='document', max_seq_length=None, timeout=None):
@@ -106,7 +100,34 @@ class FakeServerClient:
 
 
 class FakeOpenAI:
-    """openai.OpenAI 대역: 만들 때 인자만 기록 (생성은 FakeLLM이 대신함)"""
+    """Generation client fake with the external model-list contract."""
+
+    available = None
 
     def __init__(self, **kw):
         self.kw = kw
+        self.models = types.SimpleNamespace(list=self.list_models)
+        self.closed = False
+
+    def list_models(self, **kwargs):
+        from lawbot import deploy
+
+        models = self.available
+        if models is None:
+            profile = deploy.get_profile()
+            models = [
+                {
+                    'id': spec.model,
+                    'object': 'model',
+                    'revision': 'synthetic-e2e',
+                    'mlx_lm_version': '0.31.2',
+                    'max_concurrent': 1,
+                }
+                for spec in profile.models + profile.disabled
+            ]
+        return types.SimpleNamespace(
+            data=[types.SimpleNamespace(**model, model_dump=lambda row=model: dict(row)) for model in models]
+        )
+
+    def close(self):
+        self.closed = True

@@ -5,7 +5,6 @@ import pytest
 from lawbot.api_client import request_timeout
 from lawbot.calc_router import route_calculation
 from lawbot.llm import LLM
-from lawbot_common.api import SERVER_BUSY
 from lawbot_tools import eval_calc_router
 
 
@@ -40,6 +39,30 @@ def test_router_inherits_configured_read_limit():
     assert requests[0].extensions['timeout']['read'] == 90
 
 
+def test_router_rejects_completion_without_finish_reason():
+    def reply(request):
+        return httpx.Response(
+            200,
+            json={
+                'id': 'route',
+                'object': 'chat.completion',
+                'created': 0,
+                'model': 'pro',
+                'choices': [{'index': 0, 'message': {'role': 'assistant', 'content': 'lookup'}, 'finish_reason': None}],
+            },
+        )
+
+    with openai.OpenAI(
+        base_url='http://127.0.0.1:9/v1',
+        api_key='fixture',
+        max_retries=0,
+        http_client=httpx.Client(transport=httpx.MockTransport(reply)),
+    ) as client:
+        outcome = route_calculation('질문', LLM('pro', client, 'system').route_calculation, {})
+    assert outcome.reason == 'model_error'
+    assert outcome.payload['status'] == 'none'
+
+
 @pytest.mark.parametrize(
     ('error_type', 'reason'),
     [
@@ -47,16 +70,16 @@ def test_router_inherits_configured_read_limit():
         (httpx.ReadTimeout, 'read_timeout'),
         (httpx.WriteTimeout, 'write_timeout'),
         (httpx.PoolTimeout, 'pool_timeout'),
-        (None, 'queue_full'),
+        (None, 'model_error'),
     ],
 )
-def test_router_failure_reports_only_known_transport_or_queue_phase(error_type, reason):
+def test_router_failure_reports_transport_phase_or_generation_error(error_type, reason):
     requests = []
 
     def fail_request(request):
         requests.append(request)
         if error_type is None:
-            return httpx.Response(503, json={'error': {'type': SERVER_BUSY, 'message': 'fixture queue full'}})
+            return httpx.Response(503, json={'error': {'type': 'server_error', 'message': 'generation unavailable'}})
         raise error_type('fixture timeout', request=request)
 
     with openai.OpenAI(
@@ -101,3 +124,59 @@ def test_answer_sample_compares_two_paths_on_same_question(monkeypatch):
     assert answer['ttft_delta_ms'] == 10
     assert answer['first_text_delta_ms'] == 130
     assert eval_calc_router._latency_report([], [answer])['answer_first_text_ms']['delta']['p95'] == 130
+
+
+@pytest.mark.parametrize('concurrent', [1, 2, None, True, '1', 0])
+@pytest.mark.parametrize('mlx_lm_version', ['0.31.2', None])
+def test_live_configuration_checks_only_embedding_health_and_residency(monkeypatch, concurrent, mlx_lm_version):
+    from types import SimpleNamespace
+
+    cfg = eval_calc_router.settings.load(
+        {
+            'LAWBOT_PROFILE': 'v5',
+            'LAWBOT_MODEL_SERVER': 'http://127.0.0.1:19001',
+            'LAWBOT_MODEL_TOKEN': 'embedding-only-secret',
+            'LAWBOT_LLM_BASE_URL': 'http://127.0.0.1:19/v1',
+            'LAWBOT_LLM_API_KEY': 'generation-only-secret',
+            'LAWBOT_RERANKER_ENABLED': '0',
+        }
+    )
+    pro = cfg.profile.models[0].model
+    calls = []
+
+    def generation_models(client):
+        assert str(client.base_url) == 'http://127.0.0.1:19/v1/'
+        assert client.api_key == 'generation-only-secret'
+        calls.append('generation_models')
+        return [
+            {'id': pro, 'revision': 'generation-rev', 'max_concurrent': concurrent, 'mlx_lm_version': mlx_lm_version}
+        ]
+
+    def health(request):
+        assert request.url.path == '/health'
+        return httpx.Response(200, json={'ready': True, 'commit': 'embedding-commit'})
+
+    monkeypatch.setattr(eval_calc_router, '_time_guard', lambda: None)
+    monkeypatch.setattr(eval_calc_router.service, 'generation_models', generation_models)
+    monkeypatch.setattr(eval_calc_router.subprocess, 'check_output', lambda *args, **kwargs: 'webapp-commit')
+    with httpx.Client(base_url=cfg.model_server, transport=httpx.MockTransport(health)) as http:
+        client = SimpleNamespace(
+            http=http,
+            models=lambda: [
+                {'id': cfg.profile.emb_model, 'type': 'embedding', 'loaded': True, 'revision': 'embedding-rev'}
+            ],
+        )
+        if type(concurrent) is not int or concurrent < 1:
+            with pytest.raises(ValueError, match='max_concurrent'):
+                eval_calc_router._configuration(cfg, client)
+            return
+        if not mlx_lm_version:
+            with pytest.raises(SystemExit, match='mlx_lm_version'):
+                eval_calc_router._configuration(cfg, client)
+            return
+        configuration = eval_calc_router._configuration(cfg, client)
+    assert configuration['models'][pro] == {'revision': 'generation-rev'}
+    assert configuration['model_residency'] == {cfg.profile.emb_model: True}
+    assert configuration['generation_server_mlx_lm_version'] == '0.31.2'
+    assert configuration['server_max_concurrent'] == concurrent
+    assert calls == ['generation_models']

@@ -145,7 +145,6 @@ def test_erp_reads_daily_snapshot_through_public_routes(dataset, tmp_path, calen
                             'sourceKey': ITEM['sourceKey'],
                             'title': '가상 미등록 적용 기준',
                             'scopes': [],
-                            'proposalLinks': [],
                         }
                     ],
                 },
@@ -222,12 +221,6 @@ def test_verified_rule_card_keeps_current_and_future_together(dataset, feed, tmp
                                 ],
                             }
                         ],
-                        'proposalLinks': [
-                            {
-                                'ruleVersionId': 'draft',
-                                'evidenceUrl': 'https://pal.assembly.go.kr/napal/lgsltpa/예시',
-                            }
-                        ],
                     }
                 ],
             }
@@ -242,7 +235,6 @@ def test_verified_rule_card_keeps_current_and_future_together(dataset, feed, tmp
             expect(card.get_by_text('가상 현행 기준', exact=True)).to_be_visible()
             expect(card.get_by_text('가상 예정 기준', exact=True)).to_be_visible()
             expect(card.get_by_role('link', name='현행 공식 원문', exact=False)).to_have_attribute('target', '_blank')
-            expect(card.get_by_role('heading', name='검토 중')).to_be_visible()
             expect(card.get_by_text('가상 추가 변경')).to_be_hidden()
             card.get_by_text('이후 변경 1건').press('Enter')
             expect(card.get_by_text('가상 추가 변경')).to_be_visible()

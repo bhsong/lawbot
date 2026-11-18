@@ -1,8 +1,6 @@
-# tests/test_e2e_live.py  →  브라우저 E2E (실제 모델): Playwright → 개발 웹앱(이 worktree) → 공유 모델 서버(실제 모델)
-# uv run pytest -m e2e_live services/chatbot/tests/test_e2e_live.py   (기본 실행·CI에서 제외. 사용자 승인 후 맥 미니에서만)
-# 공유 모델 서버는 운영 서버다: 질문 3개를 순서대로, 재시도 없이. 실행 전 확인(preflight)이 하나라도 실패하면 질문을 보내지
-# 않고 실패로 끝낸다 (건너뛰기로 처리하지 않음). 계약은 연결·표시만 보고 답의 정확성은 보지 않는다 (품질 평가는 docs/evals)
-# 실행 구성은 시작 전·후에 읽어 results/e2e_live/<시각>.json에 남긴다. 둘이 다르면 결과는 무효 (docs/archives/e2e-playwright.md 3절)
+# Opt-in real-model browser E2E against separately configured generation and embedding/rerank servers.
+# Never run this suite without approval. Configuration comes only from the supplied environment.
+# Revisions are captured before and after the run; generation has no loaded/type fields.
 import csv
 import datetime
 import hashlib
@@ -17,16 +15,16 @@ import pytest
 
 import e2e_support as e2e
 from conftest import free_port
-from lawbot import deploy, envfile, llm, manifest
+from lawbot import deploy, llm, manifest
 from lawbot.paths import ROOT
+from lawbot_common.llm_endpoint import endpoint, generation_model
 from lawbot_model_server import revision
 
 pytestmark = pytest.mark.e2e_live
 
-ANSWER_TIMEOUT = 180_000  # ms, 27B 한 질문 (모델 교체는 preflight에서 막음)
+ANSWER_TIMEOUT = 180_000
 UPDATE_WINDOW = (datetime.time(6, 20), datetime.time(6, 50))  # 조문 자동 갱신(06:30) 앞뒤
 CITATION = re.compile(r'\S+ 제\d+조')  # 근거 조문 형식 '법령명 제N조'
-RUNTIME_HEALTH = '/health?runtime=1'
 LOCAL = ('LAWBOT_PORT', 'LAWBOT_REQUEST_LOG', 'LAWBOT_FEEDBACK', 'LAWBOT_FEEDBACK_DIR', 'LAWBOT_INSTANCE')
 
 
@@ -47,31 +45,27 @@ def sha256(path):
     return hashlib.sha256((ROOT / path).read_bytes()).hexdigest() if path and (ROOT / path).is_file() else None
 
 
-def server_max_concurrent(health):
-    value = health.get('max_concurrent')
-    return value if type(value) is int and value > 0 else None
-
-
 class Live:
-    """레포 .env의 모델 서버·웹앱 설정. 웹앱은 이 worktree 코드로 빈 포트에, 요청 로그·피드백은 tmp로"""
+    """Record an explicitly configured live stack without reading the repository .env."""
 
     def __init__(self, tmp, env=None):
-        """env: .env 값 (없으면 레포 .env를 읽음. 단위 테스트는 직접 넘김)"""
+        """Unit tests pass env directly; approved live runs use the process environment."""
         self.tmp = tmp
         if env is None:
-            envfile.load()
             env = {k: v for k, v in os.environ.items() if k.startswith('LAWBOT_') and k != 'LAWBOT_ENV_FILE'}
         self.env = env | {'LAWBOT_MODELS': 'pro'}
         self.server = self.env.get('LAWBOT_MODEL_SERVER')
         self.token = self.env.get('LAWBOT_MODEL_TOKEN')
+        self.generation_server = self.env.get('LAWBOT_LLM_BASE_URL', '').rstrip('/')
+        self.generation_token = self.env.get('LAWBOT_LLM_API_KEY')
         self.request_log = tmp / 'requests.jsonl'
         self.web, self.url, self.started, self.before, self.results = None, None, None, None, {}
         self.chat_model = self.env.get('LAWBOT_PRO_MODEL') or 'qwen3.8-27b-4bit'
 
-    def get(self, path):
-        r = httpx.get(
-            self.server + path, headers={'Authorization': f'Bearer {self.token}'}, timeout=10, trust_env=False
-        )
+    def get(self, path, *, generation=False):
+        server = self.generation_server if generation else self.server
+        token = self.generation_token if generation else self.token
+        r = httpx.get(server + path, headers={'Authorization': f'Bearer {token}'}, timeout=10, trust_env=False)
         r.raise_for_status()
         return r.json()
 
@@ -81,36 +75,65 @@ class Live:
         if UPDATE_WINDOW[0] <= now <= UPDATE_WINDOW[1]:
             return [f'조문 자동 갱신 시간대({UPDATE_WINDOW[0]:%H:%M}–{UPDATE_WINDOW[1]:%H:%M})']
         if not (self.server and self.token):
-            return ['레포 .env에 LAWBOT_MODEL_SERVER·LAWBOT_MODEL_TOKEN이 없음']
+            return ['LAWBOT_MODEL_SERVER·LAWBOT_MODEL_TOKEN이 없음']
+        if not (self.generation_server and self.generation_token):
+            return ['LAWBOT_LLM_BASE_URL·LAWBOT_LLM_API_KEY가 없음']
         try:
-            health = self.get(RUNTIME_HEALTH)
+            external = endpoint(self.env)[2]
+        except (RuntimeError, ValueError) as exc:
+            return [str(exc)]
+        try:
+            health = self.get('/health')
             if not health.get('ready'):
                 return ['서버 미준비: /health ready가 아님']
-            if server_max_concurrent(health) is None:
-                return ['서버 동시 생성 상한을 확인할 수 없음']
             models = {m['id']: m for m in self.get('/v1/models')['data']}
+            generation_models = (
+                {} if external else {model['id']: model for model in self.get('/models', generation=True)['data']}
+            )
         except httpx.HTTPError as e:
             return [f'서버 미준비: {type(e).__name__}']
         profile = deploy.get_profile(self.env)
         rr = deploy.reranker(profile, self.env)
-        need = [profile.emb_model, self.chat_model]
+        need = [profile.emb_model]
         if rr:
             need.append(rr.model)
         reasons = [f'모델 없음: {m}' for m in need if m and m not in models]
-        if self.chat_model in models and not models[self.chat_model]['loaded']:
-            reasons.append(f'{self.chat_model}가 올라 있지 않음: 모델 교체로 운영 응답이 느려지므로 중단')
+        if external:
+            return reasons
+        if self.chat_model not in generation_models:
+            reasons.append(f'생성 모델 없음: {self.chat_model}')
+        elif not generation_models[self.chat_model].get('revision'):
+            reasons.append(f'생성 모델 revision 없음: {self.chat_model}')
+        elif not generation_models[self.chat_model].get('mlx_lm_version'):
+            reasons.append(f'생성 서버 mlx_lm_version 없음: {self.chat_model}')
+        else:
+            try:
+                generation_model(generation_models.values(), self.chat_model)
+            except ValueError as exc:
+                reasons.append(str(exc))
         return reasons
 
     def config(self):
         """실행 구성 (비밀값 제외). 시작 전·후를 비교해 다르면 결과 무효"""
-        health, models = self.get(RUNTIME_HEALTH), self.get('/v1/models')['data']
+        health, models = self.get('/health'), self.get('/v1/models')['data']
+        external = endpoint(self.env)[2]
+        generation_models = [] if external else self.get('/models', generation=True)['data']
+        chat_model = {} if external else generation_model(generation_models, self.chat_model)
+        if not external and not chat_model.get('revision'):
+            raise ValueError('Generation model revision is required')
+        if not external and not chat_model.get('mlx_lm_version'):
+            raise ValueError('Generation server mlx_lm_version is required')
         profile = deploy.get_profile(self.env)
         rr, dc = deploy.reranker(profile, self.env), deploy.decree(profile, self.env)
         m = manifest.load(profile.articles) or {}
         return {
             'webapp_commit': revision.git_commit(ROOT),
             'model_server_commit': health.get('commit'),
-            'server_max_concurrent': server_max_concurrent(health),
+            'server_max_concurrent': chat_model.get('max_concurrent'),
+            'generation_server_mlx_lm_version': chat_model.get('mlx_lm_version'),
+            'generation_models': [
+                {key: model.get(key) for key in ('id', 'object', 'revision')} for model in generation_models
+            ],
             'models': [{k: x.get(k) for k in ('id', 'type', 'loaded', 'revision')} for x in models],
             'dataset_version': m.get('dataset_version'),
             'articles_sha256': sha256(profile.articles),
@@ -145,8 +168,6 @@ def live(tmp_path_factory):
     if reasons:
         pytest.fail('실행 전 확인 실패 (질문을 보내지 않음): ' + '; '.join(reasons))
     s.before = s.config()
-    if s.before['server_max_concurrent'] is None:
-        pytest.fail('실행 시작 구성에서 서버 동시 생성 상한을 확인할 수 없음 (질문을 보내지 않음)')
     port = free_port()
     env = {k: v for k, v in s.env.items() if k not in LOCAL}
     env.update(LAWBOT_REQUEST_LOG=str(s.request_log), LAWBOT_FEEDBACK='0', LAWBOT_MODELS='pro')

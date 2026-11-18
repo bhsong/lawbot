@@ -26,7 +26,7 @@ COLLECTORS = (
     | dict.fromkeys(mofe.CHANNELS, mofe.collect)
     | dict.fromkeys(nts.CHANNELS, nts.collect)
 )
-LEGACY = ('legalize_law', 'legalize_admrule', 'assembly_bill', 'assembly_notice')
+LEGACY = ('legalize_law', 'legalize_admrule')
 GOOD = {'ok', 'disabled', 'unverified', 'not_due'}
 
 

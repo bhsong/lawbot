@@ -1,13 +1,13 @@
 # tests/web_server.py  →  새 화면 API 통합 테스트용 서버 (test_web_integration.py가 별도 프로세스로 실행)
 # 실제 lawbot.web.main()을 가짜 모델로 띄운다. 인증·주소 설정은 web 그대로, 포트는 --port로
 # 사용법: python tests/web_server.py <포트> <호출 기록 파일> <토큰 간격 초>
-import os
 import runpy
 import sys
 import time
 import types
 from pathlib import Path
 
+import lawbot.service as service
 from fakes import FakeLLM, FakeOpenAI, FakeRetriever, FakeServerClient
 
 port, call_log, delay = sys.argv[1], Path(sys.argv[2]), float(sys.argv[3])
@@ -33,19 +33,7 @@ class SlowLLM(FakeLLM):
                 f.write(f'end {time.monotonic()}\n')
 
 
-def fake_module(name, **attrs):
-    m = types.ModuleType(name)
-    m.__dict__.update(attrs)
-    return m
-
-
-sys.modules['lawbot.retriever'] = fake_module('lawbot.retriever', Retriever=FakeRetriever)
-sys.modules['lawbot.llm'] = fake_module('lawbot.llm', LLM=SlowLLM)
-os.environ['LAWBOT_MODEL_SERVER'] = 'http://127.0.0.1:65535'  # 가짜 클라이언트라 접속하지 않음
-os.environ['LAWBOT_MODEL_TOKEN'] = 'test-only-model-token-0123'  # 테스트 전용 가짜 값
-
-import lawbot.service as service  # 가짜 모듈을 넣은 뒤에 import해야 함
-
+service.Retriever, service.LLM = FakeRetriever, SlowLLM
 service.ModelServerClient, service.OpenAI = FakeServerClient, FakeOpenAI
 if '--module' in sys.argv[4:]:
     sys.argv[1:] = ['--port', port]

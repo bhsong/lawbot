@@ -1,14 +1,13 @@
-"""요약 모델 클라이언트: 운영 모델 서버(OpenAI 호환 /v1/chat/completions)를 httpx로 부른다.
+"""Summarize through the dedicated OpenAI-compatible generation endpoint.
 
-주소·토큰은 웹앱과 같은 LAWBOT_MODEL_SERVER·LAWBOT_MODEL_TOKEN (환경변수 → services/monitor/.env → 레포 .env).
-모델 id LAW_MONITOR_SUMMARY_MODEL은 환경변수·services/monitor/.env에서만 (레포 .env는 LAWBOT_*만 허용).
-토큰은 Authorization 헤더에만 넣고 오류·로그에는 남기지 않는다.
+Credentials use the same validation as the web app and are sent only in headers.
 """
 
 from dataclasses import dataclass
 
 from law_monitor import secrets
 from law_monitor.utils.http import HttpClient, HttpError
+from lawbot_common.llm_endpoint import endpoint
 
 DEFAULT_MODEL = 'qwen3.8-27b-4bit'
 
@@ -33,11 +32,14 @@ class Completion:
 
 
 def load_config() -> LLMConfig | None:
-    url = secrets.get('LAWBOT_MODEL_SERVER', root=True)
-    token = secrets.get('LAWBOT_MODEL_TOKEN', root=True)
-    if not url or not token:
+    values = {key: secrets.get(key, root=True) for key in secrets.ROOT_KEYS}
+    if not values['LAWBOT_LLM_BASE_URL']:
         return None
-    return LLMConfig(url.rstrip('/'), token, secrets.get('LAW_MONITOR_SUMMARY_MODEL') or DEFAULT_MODEL)
+    try:
+        url, token, _ = endpoint(values)
+    except RuntimeError as exc:
+        raise ValueError(str(exc)) from exc
+    return LLMConfig(url, token, secrets.get('LAW_MONITOR_SUMMARY_MODEL') or DEFAULT_MODEL)
 
 
 class ChatClient:
@@ -61,7 +63,7 @@ class ChatClient:
         }
         try:
             resp = self.http.post(
-                f'{self.config.url}/v1/chat/completions',
+                f'{self.config.url}/chat/completions',
                 json=body,
                 headers={'Authorization': f'Bearer {self.config.token}'},
             )

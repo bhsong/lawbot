@@ -48,7 +48,6 @@ export type Turn = {
   calculation?: Calculation
   calculationCheck?: CalculationCheck
   stats?: string
-  suggestions?: string[]
   done: boolean
   stopped?: boolean
   error?: string

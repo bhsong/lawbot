@@ -3,6 +3,7 @@
 - 한 수집기의 예외는 잡아서 runs.summary_json에 남기고 다음 수집기로 넘어간다.
 - 연속 3회 실패하면 collector_failing 이벤트를 한 번 남긴다 (3단계의 "수집이 멈췄다" 알림용).
 - 같은 날 여러 번 실행해도 이벤트는 내용 기반 event_id로 한 번만 저장된다.
+File failures are persisted alongside healthy events and items as a partial run.
 """
 
 import json
@@ -14,8 +15,6 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from law_monitor import checks as checks_mod
-from law_monitor.assembly import SOURCES, AssemblyClient
-from law_monitor.collectors.assembly import AssemblyCollector
 from law_monitor.collectors.base import Collector, CollectResult, RunContext
 from law_monitor.collectors.legalize_git import LawMatcher, LegalizeGitCollector, default_collectors
 from law_monitor.config import Config
@@ -70,7 +69,6 @@ class Monitor:
         now: Callable[[], datetime] | None = None,
         lawgo: LawGoClient | None = None,
         llm: ChatClient | None = None,
-        assembly: AssemblyClient | None = None,
     ):
         """lawgo가 없으면 bootstrap만 된다 (collect·replay는 법제처 원문 보강이 필요해 거부). llm은 요약 모델."""
         self.paths, self.config, self.lawgo, self.llm = paths, config, lawgo, llm
@@ -78,9 +76,6 @@ class Monitor:
         self.collectors: list[Collector] = list(
             collectors if collectors is not None else default_collectors(config, enricher)
         )
-        if collectors is None and (config.assembly_enabled or assembly is not None):
-            client = assembly or AssemblyClient(None)
-            self.collectors.extend(AssemblyCollector(source, client) for source in SOURCES)
         self.now = now or (lambda: datetime.now(KST))
         self.state = State(paths.state_db)
 
@@ -110,9 +105,7 @@ class Monitor:
     def collect(self, only: str | None = None) -> RunSummary:
         chosen = self._select(only)
         self._require_lawgo(chosen)
-        missing = [
-            c.name for c in chosen if not getattr(c, 'isolated_baseline', False) and not c.has_baseline(self.state)
-        ]
+        missing = [c.name for c in chosen if not c.has_baseline(self.state)]
         if missing:
             raise BootstrapRequired(f'기준점이 없습니다: {", ".join(missing)}. 먼저 law-monitor bootstrap을 실행하세요')
         return self._run(chosen, 'normal')
@@ -139,6 +132,9 @@ class Monitor:
                 len(result.events),
                 self.paths.rel(store.base),
             )
+            if result.file_failures:
+                errors = '; '.join(f'{path}: {error}' for path, error in result.file_failures.items())
+                raise ValueError(errors)
         return result.events
 
     def check(self, *, articles_enabled: bool = True) -> list:
@@ -163,7 +159,7 @@ class Monitor:
         """
         if self.llm is None:
             raise MissingSecret(
-                '요약 모델 설정이 없습니다: LAWBOT_MODEL_SERVER·LAWBOT_MODEL_TOKEN '
+                '요약 모델 설정이 없습니다: LAWBOT_LLM_BASE_URL·LAWBOT_LLM_API_KEY '
                 '(환경변수, services/monitor/.env 또는 레포 최상위 .env)'
             )
         now = self.now()
@@ -270,7 +266,7 @@ class Monitor:
         for collector in chosen:
             try:
                 self._require_lawgo([collector])
-                if not getattr(collector, 'isolated_baseline', False) and not collector.has_baseline(self.state):
+                if not collector.has_baseline(self.state):
                     raise BootstrapRequired('수집 기준점이 없습니다')
             except (MissingSecret, BootstrapRequired) as exc:
                 skipped[collector.name] = str(exc)
@@ -306,8 +302,19 @@ class Monitor:
             for c in chosen:
                 try:
                     results[c.name] = c.collect(ctx)
-                    summary.ok.append(c.name)
-                    per[c.name] = {'status': 'ok', 'events': len(results[c.name].events)}
+                    result = results[c.name]
+                    if result.file_failures:
+                        error = '; '.join(f'{path}: {error}' for path, error in result.file_failures.items())
+                        summary.failed[c.name] = error
+                        per[c.name] = {
+                            'status': 'failed',
+                            'error': error,
+                            'events': len(result.events),
+                            'file_failures': result.file_failures,
+                        }
+                    else:
+                        summary.ok.append(c.name)
+                        per[c.name] = {'status': 'ok', 'events': len(result.events)}
                 except Exception as e:
                     log.exception('%s 실패', c.name)
                     summary.failed[c.name] = f'{type(e).__name__}: {e}'
@@ -343,7 +350,8 @@ class Monitor:
             if baselines_added:
                 details['baselines_added'] = baselines_added
             summary.line += _baseline_suffix(baselines_added)
-            status = 'ok' if not summary.failed else ('partial' if summary.ok else 'failed')
+            partial = summary.ok or any(r.events or r.items or r.removed for r in results.values())
+            status = 'ok' if not summary.failed else ('partial' if partial else 'failed')
             finished = self.now().isoformat(timespec='seconds')
             self.state.apply(
                 cursors={k: v for r in results.values() for k, v in r.cursors.items()},

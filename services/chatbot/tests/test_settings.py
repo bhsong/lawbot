@@ -1,7 +1,7 @@
 # tests/test_settings.py  →  설정 객체 (lawbot.settings): 시작할 때 한 번 읽어 모두 검증, 틀린 값은 한꺼번에
 import pytest
 
-from conftest import TEST_TOKEN
+from conftest import TEST_LLM_TOKEN, TEST_TOKEN
 from lawbot import settings
 from lawbot.db import connection, migrate
 from lawbot.paths import ROOT
@@ -11,6 +11,8 @@ BASE = {
     'LAWBOT_PW': 'test-only-pw',
     'LAWBOT_MODEL_SERVER': 'http://127.0.0.1:65535',
     'LAWBOT_MODEL_TOKEN': TEST_TOKEN,
+    'LAWBOT_LLM_BASE_URL': 'http://127.0.0.1:65534/v1',
+    'LAWBOT_LLM_API_KEY': TEST_LLM_TOKEN,
     'LAWBOT_PORT': '27000',
     'LAWBOT_RERANKER_ENABLED': '1',
     'LAWBOT_DECREE_ENABLED': '1',
@@ -24,7 +26,7 @@ def test_load_reads_given_mapping_only(env):
     assert s.port == 27000 and s.auth == ('tester', 'test-only-pw') and s.model_server == 'http://127.0.0.1:65535'
     assert s.profile.name == 'v4' and [m.key for m in s.profile.models] == ['pro']
     assert s.reranker.candidates == 10 and s.decree.tau == 0.9 and s.decree.models == ('pro',)
-    assert (s.llm_url, s.llm_external) == ('http://127.0.0.1:65535/v1', False)
+    assert (s.llm_url, s.llm_key, s.llm_external) == ('http://127.0.0.1:65534/v1', TEST_LLM_TOKEN, False)
     assert (s.server_wait, s.read_timeout, s.chat_concurrency, s.instance) == (300.0, 300.0, 1, None)
     assert s.feedback is None and s.request_log is not None
 
@@ -129,6 +131,12 @@ def test_missing_model_server_is_reported(env):
         settings.load({k: v for k, v in BASE.items() if k != 'LAWBOT_MODEL_SERVER'})
 
 
+@pytest.mark.parametrize('key', ['LAWBOT_LLM_BASE_URL', 'LAWBOT_LLM_API_KEY'])
+def test_generation_configuration_is_required(key):
+    with pytest.raises(settings.SettingsError, match=key):
+        settings.load({name: value for name, value in BASE.items() if name != key})
+
+
 def test_load_app_uses_given_settings(env):
     import lawbot.service as service
     from fakes import FakeLLM, FakeRetriever
@@ -142,3 +150,28 @@ def test_load_app_uses_given_settings(env):
     a = service.load_app(settings=s)
     assert a.settings is s and a.retriever.args[0][0].query_timeout.read == 90
     assert list(a.models.specs) == ['pro']
+
+
+@pytest.mark.parametrize(
+    ('key', 'value'),
+    [
+        ('LAWBOT_' + 'EXACT' + '_CACHE_DB', 'data/not-ignored.db'),
+        ('LAWBOT_' + 'SUGGEST' + 'IONS_TAU', 'not-a-number'),
+        ('LAWBOT_UNKNOWN_OPTION', 'unused'),
+    ],
+)
+def test_retired_and_unknown_settings_do_not_block_web_start(env, key, value):
+    from fastapi.testclient import TestClient
+
+    from fakes import FakeLLM, FakeRetriever
+    from lawbot import service, web
+
+    env.setattr(service, 'Retriever', FakeRetriever)
+    env.setattr(service, 'LLM', FakeLLM)
+    cfg = settings.load(BASE | {'LAWBOT_DECREE_ENABLED': '0', key: value}, web=True)
+    with TestClient(web.create_app(service.load_app(cfg), cfg.auth, dist=None)) as client:
+        response = client.post('/api/login', json={'user': BASE['LAWBOT_USER'], 'password': BASE['LAWBOT_PW']})
+        assert response.status_code == 200
+        response = client.get('/api/config')
+        assert response.status_code == 200
+        assert response.json()['default_model'] == 'pro'

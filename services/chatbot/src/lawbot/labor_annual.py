@@ -50,7 +50,7 @@ _UNSUPPORTED = re.compile(
     r'회계\s*연도|단시간\s*(?:근로|근무)|시간제|파트타임|교대근무|근로시간\s*단축|'
     r'잔여\s*(?:연차|일수)|남은\s*연차|연차\s*(?:미사용\s*)?수당|사용\s*촉진|연차\s*대체'
 )
-_INPUT_RANGE = re.compile(r'\d+(?:\.\d+)?\s*(?:%|시간|명)?\s*(?:[~～∼–-]|또는)\s*\d+(?:\.\d+)?\s*(?:%|시간|명)')
+_INPUT_RANGE = re.compile(r'\d+(?:\.\d+)?\s*+(?:%|시간|명)?\s*+(?:[~～∼–-]|또는)\s*\d+(?:\.\d+)?\s*(?:%|시간|명)')
 _FIRST_YEAR_SUM = re.compile(r'(?:첫해|첫1년|최초1년)[^.!?,]{0,36}(?:합산|합쳐|더해|더하면|포함)(?!하지(?:않|말))')
 _ACCRUAL_EMPLOYMENT = re.compile(
     r'(?:발생일|다음날|1주년)[^.!?]{0,28}(?:재직|근로관계|고용관계|근로계약|고용계약|퇴사|근무중)'
@@ -104,7 +104,7 @@ def question_issue(question: str, inputs: Mapping[str, str], facts: Mapping[str,
     if re.search(r'(?:상시\s*(?:근로자|인원)|소정\s*근로시간)[^.!?\n]{0,24}(?:변동|달라|바뀌)', question):
         return '해당 기간에 적용되는 상시 근로자수와 주 소정근로시간을 확인해 주세요.'
     if _INPUT_RANGE.search(question) or re.search(
-        r'출근율\s*(?:은|이|:)?\s*(?:약|대략|[\d.]+\s*%\s*(?:정도|가량))', question
+        r'출근율\s*+(?:(?:은|이|:)\s*+)?(?:약|대략|[\d.]+\s*%\s*(?:정도|가량))', question
     ):
         return '상시 근로자수, 주 소정근로시간과 출근율을 확인해 주세요.'
     if 'full_attendance_months' in inputs and not re.search(r'개근|빠짐없이\s*출근|결근\s*없이', question):

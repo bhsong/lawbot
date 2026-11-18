@@ -8,6 +8,7 @@ from pathlib import Path
 from lawbot.auth import AdminCredentials, admin_credentials
 from lawbot.deploy import DecreeConfig, Profile, RerankerConfig
 from lawbot.feedback import Feedback
+from lawbot_common.llm_endpoint import endpoint
 
 
 class SettingsError(ValueError, RuntimeError):
@@ -21,7 +22,7 @@ class Settings:
     decree: DecreeConfig | None
     model_server: str  # http://127.0.0.1:<포트>
     model_token: str
-    llm_url: str  # 생성 API base_url (모델 서버 /v1 또는 외부)
+    llm_url: str  # Dedicated generation API base URL.
     llm_key: str
     llm_external: bool
     server_wait: float  # 시작할 때 모델 서버 준비 대기 (초)
@@ -39,8 +40,6 @@ class Settings:
     calendar_api_url: str | None = None
     calendar_admin_token: str | None = field(default=None, repr=False)
     corpus: str = 'csv'
-    exact_cache_db: Path | None = None
-    suggestions_tau: float | None = None
 
 
 MISSING_SERVER = (
@@ -69,28 +68,6 @@ def corpus_mode(env):
     return mode
 
 
-def exact_cache_path(value: str, corpus_db: Path | None) -> Path:
-    from lawbot.db.connection import db_path
-
-    path = db_path(value)
-    if path == corpus_db:
-        raise ValueError('정확 일치 캐시는 별도 SQLite 파일을 사용해야 합니다.')
-    return path
-
-
-def suggestions_tau(env):
-    raw = env.get('LAWBOT_SUGGESTIONS_TAU', '').strip()
-    if not raw:
-        return None
-    try:
-        value = float(raw)
-    except ValueError:
-        raise ValueError('LAWBOT_SUGGESTIONS_TAU는 -1~1 사이의 수여야 합니다.') from None
-    if not -1 <= value <= 1:
-        raise ValueError('LAWBOT_SUGGESTIONS_TAU는 -1~1 사이의 수여야 합니다.')
-    return value
-
-
 def load(env=None, web=False):
     """env(기본 os.environ)에서 설정을 읽는다. web=True면 로그인·포트·동시 처리 수·피드백까지 (웹앱 시작)
     틀린 값이 하나라도 있으면 SettingsError에 모두 적어 올린다 (모델 서버에 접속하기 전에)"""
@@ -116,10 +93,9 @@ def load(env=None, web=False):
     url = take('model_server', lambda: security.model_server_url(env))
     if url is None and not any('LAWBOT_MODEL_SERVER' in e for e in errors):
         errors.append(MISSING_SERVER)
-    take('model_token', lambda: security.model_token(env=env))
-    if url:
-        llm = take('llm', lambda: security.llm_endpoint(url, env))
-        got['llm_url'], got['llm_key'], got['llm_external'] = llm or (None, None, None)
+    take('model_token', lambda: security.model_token(min_len=16, env=env))
+    llm = take('llm', lambda: endpoint(env))
+    got['llm_url'], got['llm_key'], got['llm_external'] = llm or (None, None, None)
     take('server_wait', lambda: service.server_wait(env))
     take('read_timeout', lambda: service.read_timeout(env))
     take('request_log', lambda: service.request_log_path(env))
@@ -141,9 +117,6 @@ def load(env=None, web=False):
         take('instance', lambda: security.instance_name(env))
         take('chat_concurrency', lambda: view.chat_concurrency(env))
         take('feedback', lambda: feedback.from_env(env, db=got.get('db')))
-        if cache := (env.get('LAWBOT_EXACT_CACHE_DB') or '').strip():
-            take('exact_cache_db', lambda: exact_cache_path(cache, got.get('db')))
-        take('suggestions_tau', lambda: suggestions_tau(env))
     if errors:
         raise SettingsError(f'설정 오류 {len(errors)}개:\n' + '\n'.join(f'- {e}' for e in errors))
     fields = Settings.__dataclass_fields__

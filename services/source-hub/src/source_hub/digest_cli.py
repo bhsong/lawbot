@@ -7,6 +7,7 @@ from datetime import datetime, time
 import httpx
 
 from lawbot_common.erp_daily import read_snapshot
+from lawbot_common.llm_endpoint import endpoint
 from source_hub import digest, digest_model, gmail
 from source_hub.daily import daily_lock
 
@@ -68,15 +69,14 @@ def run(args, http: httpx.Client, now: datetime) -> dict:
     with httpx.Client(timeout=300, trust_env=False, follow_redirects=False) as model_http:
         enrich = None
         if cfg.get('model_enabled', False):
-            url = os.environ.get('LAWBOT_MODEL_SERVER')
-            token = os.environ.get('LAWBOT_MODEL_TOKEN')
-            if url and token:
-                try:
-                    model = digest_model.Model(model_http, url, token)
-                except ValueError:
-                    model = None
-                if model:
-                    enrich = lambda snapshot: model.summarize(snapshot, preflight=True)
+            try:
+                url, token, _ = endpoint()
+            except RuntimeError, ValueError:
+                model = None
+            else:
+                model = digest_model.Model(model_http, url, token)
+            if model is not None:
+                enrich = lambda snapshot: model.summarize(snapshot, preflight=True)
         return digest.deliver(
             args.snapshot,
             args.outbox,

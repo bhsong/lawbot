@@ -11,12 +11,97 @@ from law_monitor.paths import Paths
 from mon_helpers import LAW_PATH, FakeLawGo, SourceRepo, git, law_md, make_config, make_monitor
 
 
+@pytest.mark.parametrize('command', ['bootstrap', 'collect', 'check', 'replay'])
+def test_non_model_commands_do_not_load_generation_config(tmp_path, monkeypatch, command):
+    calls = []
+
+    def invalid_config():
+        pytest.fail('Non-model commands must not validate generation credentials')
+
+    class FakeMonitor:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def bootstrap(self, **kwargs):
+            calls.append('bootstrap')
+            return SimpleNamespace(line='ok', failed={})
+
+        def collect(self, **kwargs):
+            calls.append('collect')
+            return SimpleNamespace(line='ok', failed={})
+
+        def replay(self, *args):
+            calls.append('replay')
+            self.paths = SimpleNamespace(replay=tmp_path)
+            return []
+
+    monkeypatch.setattr(cli, 'load_config', invalid_config)
+    monkeypatch.setattr(cli.secrets, 'law_oc', lambda: None)
+    monkeypatch.setattr(cli, 'Monitor', FakeMonitor)
+    monkeypatch.setattr(cli, '_check', lambda monitor: (calls.append('check'), 0))
+    argv = [command]
+    if command == 'replay':
+        argv += ['--repo', 'legalize-kr', '--from', 'old', '--to', 'new']
+    args = cli.build_parser().parse_args(argv)
+    assert cli._run(args, Paths(tmp_path)) == 0
+    assert calls == [command]
+
+
+@pytest.mark.parametrize('credentials', ['no-url', 'no-key', 'short-key'])
+def test_daily_bad_generation_config_preserves_collection_and_checks(tmp_path, monkeypatch, capsys, credentials):
+    calls = []
+
+    class Collector:
+        name = 'legalize_admrule'
+
+        def has_baseline(self, state):
+            return True
+
+        def collect(self, ctx):
+            calls.append('collect')
+            return CollectResult()
+
+    monitor = Monitor(Paths(tmp_path), load(), collectors=[Collector()])
+    monkeypatch.setattr(monitor, 'refresh_article_repo', lambda: calls.append('article_input'))
+    monkeypatch.setattr(cli, 'Monitor', lambda *args, **kwargs: monitor)
+    monkeypatch.setattr(cli.secrets, 'law_oc', lambda: None)
+    values = {
+        'LAWBOT_LLM_BASE_URL': '' if credentials == 'no-url' else 'http://127.0.0.1:9999/v1',
+        'LAWBOT_LLM_API_KEY': '' if credentials == 'no-key' else 'short',
+    }
+    monkeypatch.setattr(cli.secrets, 'get', lambda key, **kwargs: values.get(key, ''))
+
+    def run(command, **kwargs):
+        calls.append('calendar' if 'law_calendar.sync' in command else 'articles')
+        return SimpleNamespace(returncode=0, stdout='ok', stderr='')
+
+    monkeypatch.setattr(checks.subprocess, 'run', run)
+    plan = tmp_path / 'plan.json'
+    plan.write_text(
+        json.dumps(
+            {
+                'run_id': 'daily-bad-generation-config',
+                'collectors': ['legalize_admrule'],
+                'law_paths': None,
+                'articles_enabled': True,
+            }
+        )
+    )
+    args = cli.build_parser().parse_args(['daily', '--source-plan', str(plan)])
+    assert cli._run(args, monitor.paths) == 2
+    assert calls == ['article_input', 'collect', 'calendar', 'articles']
+    [row] = monitor.state.conn.execute("SELECT * FROM runs WHERE mode='normal'").fetchall()
+    assert row['run_id'] == 'daily-bad-generation-config'
+    assert json.loads(row['summary_json'])['collectors']['legalize_admrule']['status'] == 'ok'
+    assert '요약 모델 설정이 없습니다' in capsys.readouterr().err
+
+
 @pytest.mark.parametrize('articles_enabled', [True, False], ids=['law-not-due', 'law-disabled'])
 def test_managed_daily_uses_one_normal_run_and_respects_law_switch(tmp_path, monkeypatch, articles_enabled):
     calls = []
 
     class Collector:
-        name = 'assembly_bill'
+        name = 'legalize_admrule'
 
         def has_baseline(self, state):
             return True
@@ -43,7 +128,7 @@ def test_managed_daily_uses_one_normal_run_and_respects_law_switch(tmp_path, mon
         json.dumps(
             {
                 'run_id': 'daily-abc',
-                'collectors': ['assembly_bill'],
+                'collectors': ['legalize_admrule'],
                 'law_paths': None,
                 'articles_enabled': articles_enabled,
             }
@@ -52,10 +137,10 @@ def test_managed_daily_uses_one_normal_run_and_respects_law_switch(tmp_path, mon
     selection = cli._daily_selection(plan_file)
     assert cli._daily(monitor, None, selection=selection) == 0
     expected = (
-        ['article_input', 'assembly_bill', 'calendar', 'articles', 'summary']
+        ['article_input', 'legalize_admrule', 'calendar', 'articles', 'summary']
         if articles_enabled
         else [
-            'assembly_bill',
+            'legalize_admrule',
             'calendar',
             'summary',
         ]
@@ -66,7 +151,7 @@ def test_managed_daily_uses_one_normal_run_and_respects_law_switch(tmp_path, mon
     assert row['run_id'] == selection.run_id
     assert json.loads(row['summary_json']) == {
         'managed': True,
-        'collectors': {'assembly_bill': {'status': 'ok', 'events': 0}},
+        'collectors': {'legalize_admrule': {'status': 'ok', 'events': 0}},
         'events': 0,
     }
 
@@ -179,29 +264,3 @@ def test_managed_plan_cannot_select_the_git_collector_with_article_input_off(tmp
     )
     with pytest.raises(ValueError, match='조문 갱신 설정'):
         cli._daily_selection(plan)
-
-
-def test_cli_managed_assembly_selection_initializes_the_client(tmp_path, monkeypatch):
-    assert not load().assembly_enabled
-    monkeypatch.setattr(cli.secrets, 'get', lambda key: 'fixture' if key == 'LAW_ASSEMBLY_KEY' else None)
-    monkeypatch.setattr(cli.secrets, 'law_oc', lambda: None)
-    monkeypatch.setattr(cli, 'load_config', lambda: None)
-    plan = tmp_path / 'plan.json'
-    plan.write_text(
-        json.dumps(
-            {
-                'run_id': 'daily-assembly',
-                'collectors': ['assembly_notice'],
-                'law_paths': None,
-                'articles_enabled': False,
-            }
-        )
-    )
-
-    def inspect(monitor, only, *, selection):
-        assert selection.collectors == ['assembly_notice']
-        assert 'assembly_notice' in {collector.name for collector in monitor.collectors}
-        return 0
-
-    monkeypatch.setattr(cli, '_daily', inspect)
-    assert cli.main(['--home', str(tmp_path), 'daily', '--source-plan', str(plan)]) == 0

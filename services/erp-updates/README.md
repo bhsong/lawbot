@@ -84,7 +84,7 @@ uv run erp-updates export-rules --out $rules_feed
 ```
 
 - `effectiveFrom`은 시행일, `appliesFrom`과 선택 `appliesUntil`은 업무 적용 범위입니다. 종료일은 포함합니다. 귀속연도와 보험료 적용월은 각각 그 해와 달의 첫날을 적습니다. 적용 유형은 `legal_effective_date`, `payment_date`, `work_period`, `income_year`, `insurance_month`, `filing_date`, `other`입니다.
-- 적용 범위의 첫 판은 `predecessorId`를 생략합니다. 후속 판에는 직전 판 ID를 적습니다. 초안은 `decision: proposed`와 `evidenceKind: proposal`로 등록하고 판 ID와 공식 링크를 제공합니다. 확정판의 날짜와 값은 생략합니다.
+- 적용 범위의 첫 판은 `predecessorId`를 생략합니다. 후속 판에는 직전 판 ID를 적습니다.
 - 예정판의 시행·적용이 시작되면 그날 이후 같은 판을 다시 확인해 `confirmed`를 기록합니다. 근거를 재확인해야 하면 같은 판에 `recheck_required`를 기록합니다. 시행 연기·정정은 기존 판을 `withdrawn`으로 기록하고 사유를 남긴 뒤 새 판 ID를 사용합니다. 철회된 판의 내용은 비공개 DB의 이력에만 남습니다.
 - 공개 파일은 v1 및 DB와 별개입니다. 변경 뒤 `export-rules`를 다시 실행합니다. 공식 근거 링크와 검증한 문구만 제공하며 비교표는 원문에서 확인합니다. [캘린더에서 설정](../law-calendar/README.md#erp-적용-기준-v2)
 

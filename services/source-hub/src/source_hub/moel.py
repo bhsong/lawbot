@@ -1,4 +1,4 @@
-"""Collect metadata from the three RSS channels published by the Ministry of Employment and Labor."""
+"""Collect metadata from the reviewed MOEL law-notice feed and boards."""
 
 import re
 from datetime import datetime
@@ -20,8 +20,6 @@ HOST = moel_board.HOST
 ROBOTS = HOST + '/robots.txt'
 USER_AGENT = robots.PRODUCT + '/1.0'
 CHANNELS = {
-    'moel-rss-notice': ('/rss/notice.do', '/news/notice/noticeView.do', '/news/notice/noticeList.do'),
-    'moel-rss-policy': ('/rss/policy.do', '/policy/policydata/view.do', '/policy/policydata/list.do'),
     'moel-rss-lawinfo': ('/rss/lawinfo.do', '/info/lawinfo/lawmaking/view.do', '/info/lawinfo/lawmaking/list.do'),
 }
 BOARDS = {
@@ -31,12 +29,6 @@ BOARDS = {
         '/info/publicdata/qnrinfo/qnrInfoView.do',
         'qnr_uid',
     ),
-    'moel-publications': (
-        '/info/publicdata/majorpublish/majorPublishList.do',
-        '/info/publicdata/majorpublish/majorPublishView.do',
-        'bbs_seq',
-    ),
-    'moel-press': ('/news/enews/report/enewsList.do', '/news/enews/report/enewsView.do', 'news_seq'),
 }
 ROBOTS_LIMIT = 512_000
 FEED_LIMIT = 2_097_152

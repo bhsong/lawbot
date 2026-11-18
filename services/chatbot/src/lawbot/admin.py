@@ -15,8 +15,6 @@ from httpx import URL, AsyncClient, RequestError, TimeoutException
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints, ValidationError
 
 from lawbot import audit_store, dataset_store, feedback_store
-from lawbot.cache_review_store import ReviewCatalog
-from lawbot.cache_store import CacheDatabaseError
 from lawbot.db.connection import connect, transaction
 from lawbot.qa_rules import ProtectedQA, assigned_overlap
 from lawbot.web import (
@@ -33,7 +31,7 @@ from lawbot_common.logs import logger
 STATUSES = ('pending', 'reviewed', 'hold', 'rejected', 'quarantined', 'promoted', 'all')
 REASONS = ('retrieval', 'answer', 'false_refusal', 'other')
 CALENDAR_PATH = re.compile(r'(?:law-calendar(?:/status)?|law-events|law-holds|law-changes/[A-Za-z0-9_:-]+)')
-CALENDAR_REVIEW_PATH = re.compile(r'law-holds/(effective|notice)/([A-Za-z0-9_:-]+)')
+CALENDAR_REVIEW_PATH = re.compile(r'law-holds/effective/[A-Za-z0-9_:-]+')
 CALENDAR_TIMEOUT = 10
 log = logger('lawbot', 'lawbot')
 
@@ -44,8 +42,6 @@ Question = Annotated[Nonempty, Field(max_length=2000)]
 Answer = Annotated[Nonempty, Field(max_length=8000)]
 Note = Annotated[str, Field(max_length=2000)]
 Scope = Literal['in', 'out']
-CacheDigest = Annotated[str, StringConstraints(pattern=r'^[a-f0-9]{64}$')]
-DEFAULT_APPROVAL_REASON = '표시본 확인 승인'
 
 
 class Body(BaseModel):
@@ -94,27 +90,6 @@ class Revoke(Body):
     note: Annotated[Nonempty, Field(max_length=2000)]
 
 
-class CacheMutation(Body):
-    generation: int = Field(ge=0)
-    reason: Note | None = None
-
-
-class CacheAction(CacheMutation):
-    action: Literal['approve', 'revoke_answer', 'revoke_query', 'mode']
-    target: Annotated[Nonempty, Field(max_length=64)]
-    preview_sha256: CacheDigest | None = None
-
-
-class CacheApprovalItem(BaseModel):
-    model_config = ConfigDict(extra='forbid', strict=True)
-    answer_id: CacheDigest
-    preview_sha256: CacheDigest
-
-
-class CacheApprovals(CacheMutation):
-    items: list[CacheApprovalItem] = Field(min_length=1, max_length=50)
-
-
 def _mutation(model, body, who, endpoint):
     try:
         parsed = model.model_validate_json(body)
@@ -154,7 +129,7 @@ def _save_calendar_review(db, mutation, kind, hold_id, decision):
         if receipt := mutation.receipt(conn):
             return receipt
         at = datetime.now(UTC).isoformat()
-        summary = {'decision': decision} if decision in ('approve', 'reject', 'withdraw') else None
+        summary = {'decision': decision} if decision == 'approve' else None
         audit_store.record_action(conn, at, mutation.actor, 'calendar_review', kind, hold_id, summary=summary)
         result = {'ok': True}
         mutation.save(conn, 200, result, at)
@@ -233,69 +208,12 @@ def load_protected(db):
     return ProtectedQA(dataset_store.protection_rows(db))
 
 
-async def _cache_call(fn, *args):
-    try:
-        return await anyio.to_thread.run_sync(fn, *args)
-    except feedback_store.StoreError as exc:
-        raise AdminError(exc.status, exc.detail, exc.code) from exc
-    except (CacheDatabaseError, OSError, ValueError, RuntimeError) as exc:
-        log.warning('관리자 캐시 확인 실패 (%s)', type(exc).__name__)
-        raise AdminError(503, '캐시 DB 또는 검토 자료를 확인할 수 없습니다.', 'cache_unavailable') from exc
-
-
 def router(db, app, *, protected=None, calendar_url=None, calendar_token=None):
     api = APIRouter(prefix='/api/admin', dependencies=[Depends(require_admin)])
     index = load_protected(db) if protected is None else protected
     corpus = Corpus(app)
     post_guards = [Depends(_post_body), Depends(require_admin_post_rate)]
     calendar_review_lock = anyio.Lock()
-
-    def cache_catalog():
-        cache = getattr(app, 'exact_cache', None)
-        if cache is None:
-            raise AdminError(503, 'v5 정확 일치 캐시가 설정되지 않았습니다.', 'cache_unavailable')
-        return ReviewCatalog(cache.store.path, cache.corpus_db, cache.snapshot)
-
-    @api.get('/cache')
-    async def cache_index(status: Literal['all', 'keep', 'pending', 'off', 'approved', 'revoked', 'draft'] = 'all'):
-        return await _cache_call(cache_catalog().index, status)
-
-    @api.get('/cache/answers/{answer_id}')
-    async def cache_detail(answer_id: str):
-        return await _cache_call(cache_catalog().detail, answer_id)
-
-    @api.post('/cache/actions', dependencies=post_guards)
-    async def cache_action(body: PostBody, who: AdminWho):
-        mutation, parsed = _mutation(CacheAction, body, who, '/cache/actions')
-        reason = (parsed.reason or '').strip()
-        if not reason and parsed.action != 'approve':
-            raise AdminError(400, '변경 사유를 입력하세요.', 'reason_required')
-        catalog = cache_catalog()
-        if parsed.action == 'approve':
-            status, payload = await _cache_call(
-                catalog.approve,
-                mutation,
-                parsed.generation,
-                [(parsed.target, parsed.preview_sha256)],
-                reason or DEFAULT_APPROVAL_REASON,
-            )
-        else:
-            status, payload = await _cache_call(
-                catalog.mutate, mutation, parsed.generation, parsed.action, parsed.target, reason
-            )
-        return JSONResponse(payload, status_code=status)
-
-    @api.post('/cache/approvals', dependencies=post_guards)
-    async def cache_approvals(body: PostBody, who: AdminWho):
-        mutation, parsed = _mutation(CacheApprovals, body, who, '/cache/approvals')
-        status, payload = await _cache_call(
-            partial(cache_catalog().approve, record_rejections=True),
-            mutation,
-            parsed.generation,
-            [(item.answer_id, item.preview_sha256) for item in parsed.items],
-            (parsed.reason or '').strip() or DEFAULT_APPROVAL_REASON,
-        )
-        return JSONResponse(payload, status_code=status)
 
     @api.get('/feedbacks')
     async def feedbacks(

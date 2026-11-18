@@ -93,21 +93,13 @@ def searching_stats(app, model_key=None):
     )
 
 
-def loading_text(spec):
-    return f'⏳ {spec.label} 불러오는 중…'
-
-
 def fmt_stats(label, stage, st):
     """측정 칸: 서버 기준 시간 (브라우저 표시 지연은 포함하지 않음)"""
-    if stage == 'load':
-        return f'⏳ {label} 불러오는 중… (모델 전환 대기, 검색 {st["search"]:.2f}초)'
     parts = [label, f'검색 {st["search"]:.2f}초']
     if 'rerank' in st:
         parts.append(f'리랭킹 {st["rerank"]:.2f}초')
     if 'decree_rerank' in st:
         parts.append(f'시행령·시행규칙 {st["decree_search"] + st["decree_rerank"]:.2f}초 ({st["n_decree"]}개 첨부)')
-    if st['load'] is not None:
-        parts.append(f'모델 전환 {st["load"]:.1f}초')
     if 'ttft' in st:
         parts.append(f'첫 토큰 {st["ttft"]:.1f}초')
     if 'first_text' in st:
@@ -130,7 +122,7 @@ def error_message(kind, cause, spec):
         return f'모델 서버 응답이 없습니다 ({cause}). 잠시 뒤 다시 질문하세요.'
     if kind == 'model_server_busy':
         return '모델 서버가 바쁩니다 (대기 중인 질문이 많음). 잠시 뒤 다시 질문하세요.'
-    if kind == 'model_server':  # 모델 서버(생성 API) 연결 실패·토큰 불일치·로딩 중
+    if kind == 'model_server':  # Embedding/rerank or generation connection, authentication, or readiness failure.
         return (
             f'모델 서버가 준비되지 않았습니다 ({name}). 잠시 뒤 다시 질문하고, 계속되면 '
             'uv run python -m lawbot.check_deploy로 모델 서버를 확인하세요.'
@@ -172,8 +164,7 @@ CHAT_CONCURRENCY_LIMIT = 16
 
 
 def chat_concurrency(env=None):
-    """LAWBOT_CHAT_CONCURRENCY: 웹앱이 동시에 처리하는 질문 수 (기본 1). 모델 서버의 LAWBOT_MAX_CONCURRENT와 따로 둔다
-    (서버를 다른 앱과 같이 쓰므로). 서버 상한보다 크면 넘는 질문은 서버에서 기다린다"""
+    """LAWBOT_CHAT_CONCURRENCY limits simultaneous web-app questions (default 1)."""
     env = os.environ if env is None else env
     raw = (env.get('LAWBOT_CHAT_CONCURRENCY') or '1').strip()
     if not raw.isdigit() or not 1 <= int(raw) <= CHAT_CONCURRENCY_LIMIT:

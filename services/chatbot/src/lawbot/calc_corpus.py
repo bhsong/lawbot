@@ -1,13 +1,13 @@
 """Fence deterministic calculations against changes to their legal text."""
 
 import csv
+import hashlib
 from collections.abc import Iterable
 from io import StringIO
 from pathlib import Path
 
 from lawbot.calculators import ARTICLE_HASHES
 from lawbot.corpus_store import active_article_bodies
-from lawbot.exact_cache import digest
 
 _REQUIRED_IDS = frozenset(key for dependencies in ARTICLE_HASHES.values() for key in dependencies)
 
@@ -21,7 +21,7 @@ def _article_hashes(rows: Iterable[tuple[str, str, str | None]]) -> dict[str, st
             continue
         seen.add(key)
         if deleted == '0' and isinstance(text, str):
-            hashes[key] = digest(text)
+            hashes[key] = hashlib.sha256(text.encode('utf-8')).hexdigest()
     return hashes
 
 

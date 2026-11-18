@@ -75,11 +75,9 @@ class Retriever:
     def _hit(self, i, score) -> Hit:
         return Hit(article_id=self.ids[i], title=self.titles[i], doc=self.docs[i], score=score, law=self.laws[i])
 
-    def search(self, query, k=3, *, capture=None) -> list[Hit]:
+    def search(self, query, k=3) -> list[Hit]:
         """법률 조문 상위 k개 (하위법령을 켜도 같음)"""
         vector = self._encode_queries([query])[0]
-        if capture is not None:
-            capture(vector)
         s = self.D @ vector
         return [self._hit(i, float(s[i])) for i in np.argsort(-s)[:k]]
 

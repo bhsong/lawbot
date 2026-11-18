@@ -2,6 +2,14 @@
 
 README의 "사용법"을 자세히 적은 문서입니다. 구조는 [architecture.md](architecture.md), 평가는 [evals/README.md](evals/README.md)를 보세요.
 
+## 기관 소식 수집 범위
+
+고용노동부는 입법·행정예고 RSS(`moel-rss-lawinfo`), 고시·훈령·예규(`moel-rules`), 행정해석·질의회시(`moel-interpretations`)만 등록합니다. 재정경제부는 입법·행정예고(`mofe-tax-reform`), 법령자료실(`mofe-laws`), 고시·공고·지침(`mofe-notice`), 간추린 개정세법(`mofe-publications`)과 비활성 세제 문답자료(`mofe-qa`)를 등록합니다. 국세청의 전체 게시판, 국가법령정보센터와 홈택스 링크는 유지합니다. [수동 수집·일일 발행](../services/source-hub/README.md)
+
+ERP 기관 소식은 고시·법령·행정규칙 → 기타 → 공지·보도자료 순서이며 게시판별 최신 10개까지 제공합니다. 국세청 공지사항은 마지막에 표시합니다.
+
+축소 전 데이터는 코드로 호환하지 않습니다. 운영 반영 시 별도 승인·백업 후 제거 대상 출처의 등록부 `settings`·`audit`(`kind='source' AND target IN (...)`)와 `runs`(`source_id IN (...)`), 수집 자료 DB의 `news_reviews`·`board_posts`·`revisions`·`documents`·`board_runs`·`latest_success`(`source_id IN (...)`)를 외래 키의 자식부터 정리합니다. 대상은 이번 등록 축소에서 제거한 12개 출처 ID로 한정하고 유지 출처의 행을 보존합니다. 당일 작업 스냅샷과 공개 ERP 파일에도 이전 등록 목록이 남을 수 있으므로 등록부 정리 후 새 계획으로 재발행하고 게시판 목록을 확인합니다.
+
 ## 요구 사항
 
 - Apple Silicon 맥(M 시리즈), 메모리 8GB 이상
@@ -20,27 +28,13 @@ uv sync
 
 화면 코드(`services/chatbot/frontend`)가 바뀌면 다시 빌드합니다. 빌드가 없거나 지금 소스와 다르면 `lawbot-app`이 시작을 거부합니다(`dist/build.json`의 소스 지문 비교).
 
-## 국회 입법예고 캘린더 DB v4 반영
+## 캘린더 DB v9 반영
 
-운영 반영 승인 후 등록된 캘린더 DB 경로와 서비스 실행 환경을 확인합니다. 같은 경로를 쓰는 sync와 검토 쓰기가 없는 배포 창을 잡고, 기존 코드와 DB 버전을 기록합니다. 복사본에서 `python -m law_calendar.db "$CALENDAR_DB"`를 먼저 실행해 `PRAGMA quick_check`, `PRAGMA foreign_key_check`, 공개 일정과 검토 기록을 대조합니다.
+운영 반영 승인 후 등록된 캘린더 DB 경로와 쓰기 작업을 확인합니다. 같은 DB를 사용하는 sync와 검토 쓰기가 없는 배포 창을 잡고, 먼저 SQLite 사본에서 `uv run --project services/law-calendar --locked python -m law_calendar.db "$CALENDAR_DB"`를 실행합니다.
 
-검증된 명령을 운영 DB에 적용하면 v3의 SQLite backup 사본이 `.pre-v4.backup`으로 생깁니다. 백업 이름이 이미 사용 중이면 원인을 확인하고 보존 위치를 정한 뒤 다시 진행합니다. v4 마이그레이션과 새 API 상태 확인이 끝나면 [Monitor 국회 기준선과 활성화 절차](../services/monitor/README.md#국회-법률안과-입법예고)를 따릅니다.
+v8에서 올리면 `.pre-v9.backup`이 생성됩니다. 마이그레이션은 제거된 수집원의 테이블과 공개 뷰를 정리하고, 법령 변경 이벤트의 종류·게시일·의견 마감 컬럼과 전용 인덱스를 삭제한 뒤 시행 조문 기준의 공개 뷰를 다시 만듭니다. 모두 한 트랜잭션에서 처리하며 새 DB도 같은 v9 스키마로 초기화합니다. `PRAGMA user_version`, `PRAGMA quick_check`, `PRAGMA foreign_key_check`와 공개 법령 변경 수, 보류·감사 기록의 보존을 확인합니다. 양쪽 화면을 빌드한 뒤 공개 캘린더와 관리자 보류 검토를 확인합니다.
 
-복구가 필요한 경우 새 쓰기를 먼저 멈추고, v4 DB와 WAL을 보존합니다. v3 백업을 별도 복구 경로에 복사해 정합성과 버전을 확인한 뒤 승인된 이전 코드와 그 DB 경로로 되돌립니다. 반영 뒤 새로 기록된 검토가 있으면 별도로 보존해 확인합니다.
-
-## 국회 입법예고 자동 공개용 캘린더 DB v7
-
-승인된 운영 반영 시 위 절차에 따라 DB 사본을 먼저 마이그레이션합니다. `PRAGMA quick_check`, `PRAGMA foreign_key_check`, 기존 예고 일정과 검토 이력, `assembly_notice_content`의 본문과 `assembly_notice_pages`의 이미지 수를 확인합니다. v6에서 올리면 `.pre-v7.backup`이 생성됩니다. 국회 수집을 활성화한 환경에서는 다음 06:30 캘린더 sync가 일치한 예고를 자동 공개합니다. 점검 결과에 남은 검토 대기, PDF 재시도, PDF 처리 한도 초과 건수를 확인합니다. [샘플 검토 방법](../services/law-calendar/README.md#국회-이벤트-공개-검토)
-
-## 국회 입법예고 대비표 이미지 정리용 캘린더 DB v8
-
-운영 반영 승인 후 등록된 캘린더 DB와 쓰기 작업을 확인합니다. 먼저 SQLite 사본에서 `uv run --project services/law-calendar --locked python -m law_calendar.db "$CALENDAR_DB"`를 실행합니다. v7에서 올리면 권한이 제한된 `.pre-v8.backup`이 생성됩니다. 이 백업에는 이전 이미지가 포함되므로 접근과 보존 기간을 정합니다.
-
-마이그레이션은 `secure_delete`를 켜고 대비표 이미지 테이블과 PDF 처리 상태를 한 트랜잭션에서 제거합니다. 운영 DB에 쓰기가 없는 배포 창에서 적용한 뒤, 다른 연결이 이전 WAL을 읽고 있지 않은 상태에서 `PRAGMA wal_checkpoint(TRUNCATE)`가 성공하는지 확인합니다. 스키마 버전, 이미지 테이블 부재, `quick_check`, `foreign_key_check`와 기존 일정·본문·공식 PDF 링크·승인 이력을 대조합니다. 양쪽 화면을 빌드한 뒤 공개 캘린더와 웹앱 관리자에서 상세 링크와 이전 이미지 경로의 404를 확인합니다.
-
-정리한 운영 DB에서 별도 파일로 `VACUUM INTO`를 실행해 이미지가 없는 새 백업을 만듭니다. 파일 권한을 `600`으로 제한하고 스키마 버전, 이미지 테이블 부재, `quick_check`, `foreign_key_check` 및 보존 대상 데이터 일치를 확인합니다. 새 백업을 검증한 뒤, 이미지가 든 이전 백업과 해당 WAL·SHM 파일의 경로를 대조해 삭제 대상으로 확정합니다.
-
-새 백업을 검증하기 전 복구가 필요하면 제한된 위치의 이전 백업을 사용합니다. 복구 전에 자동 다운로드와 이미지 공개가 재개되는지 확인합니다.
+백업에는 제거 전 자료가 포함되므로 접근 권한과 보존 기간을 정합니다. 복구가 필요하면 새 쓰기를 멈추고 현재 DB와 WAL을 보존한 뒤, 백업 사본의 정합성과 버전을 확인해 승인된 이전 코드와 DB 경로로 되돌립니다.
 
 ## 캘린더 매일 점검
 
@@ -72,7 +66,7 @@ uv run --project services/law-calendar --locked python -m law_calendar.manage pr
 
 ## 모델 준비
 
-학습된 모델은 용량이 커서 저장소에 포함하지 않습니다. `.env.example`은 **v5** 조문과 v5b 임베딩, 기존 리랭커와 Pro 27B를 선택합니다. 조문·매니페스트와 프롬프트는 저장소에 있으며 모델 파일은 아래 경로에 둡니다. 모델 경로가 다르면 `LAWBOT_SERVE_*`로 지정합니다.
+학습된 모델은 용량이 커서 저장소에 포함하지 않습니다. `.env.example`은 v5 조문과 v6 임베딩, 기존 리랭커와 Pro 27B를 선택합니다. 조문·매니페스트와 프롬프트는 저장소에 있으며 임베딩·리랭크 모델 폴더는 `LAWBOT_SERVE_*`로 지정합니다. Pro 생성 모델은 저장소 밖 단독 생성 서버에서 관리합니다.
 
 ```
 data/v5/
@@ -87,22 +81,14 @@ models/v6/
 models/v5/
 └── emb_v5b_fp16/                       # v5b (v6.0.0부터 모델 서버에 올리지 않음, 되돌리기용)
 models/v4/
-├── reranker_4b_mlx_4bit/               # Qwen3-Reranker-4B, MLX 4비트
-└── qwen_27b_mlx_4bit/                  # Qwen3.8-27B, MLX 4비트
+└── reranker_4b_mlx_4bit/               # Qwen3-Reranker-4B, MLX 4비트
 ```
 
 `article_id`에 법령명이 들어 있으면(`근로기준법 제26조`) 번호만 담은 `article_no` 열(`제26조`)을 함께 둡니다. 앱은 `article_no`가 있으면 그 값을 조문 번호로 씁니다.
 
-v4에서 Fast 모델을 사용하는 경우 병합한 Hugging Face 모델을 MLX 4비트로 변환합니다.
+리랭커는 원본을 MLX 4비트로 변환합니다.
 
 ```bash
-uv run mlx_lm.convert --hf-path <병합한 4B 폴더> --mlx-path models/v4/sllm_4b_lora_mlx_4bit -q --q-bits 4 --q-group-size 64
-```
-
-Pro(27B)는 이미 4비트로 변환된 MLX 모델을 그대로 내려받고, 리랭커는 원본을 4비트로 변환합니다.
-
-```bash
-uv run hf download mlx-community/Qwen3.8-27B-4bit --local-dir models/v4/qwen_27b_mlx_4bit
 uv run mlx_lm.convert --hf-path Qwen/Qwen3-Reranker-4B --mlx-path models/v4/reranker_4b_mlx_4bit -q --q-bits 4 --q-group-size 64 --dtype float16
 ```
 
@@ -114,15 +100,15 @@ uv run python -m lawbot.check_deploy        # 웹앱: 조문 CSV·system·검색
 uv run python -m lawbot_tools.versions            # 설치된 패키지 버전·맥 사양
 ```
 
-## 실행 (모델 서버 + 웹앱, 설정 파일 .env)
+## 실행 (임베딩·리랭크 모델 서버 + 단독 생성 서버 + 웹앱)
 
-모델은 모두 모델 서버(`services/model-server`, OpenAI 호환 API)가 올리고, 웹앱(`services/chatbot`)은 조문 검색·프롬프트 조립·화면만 맡습니다. 두 프로세스가 레포 최상위의 같은 `.env`를 읽습니다. `.env.example`(맥 미니 32GB 예시: v5, v5b 임베딩 0.6B, 후보 10개 → 리랭커 4비트 → 3개, Pro 27B만 사용)을 복사해서 사용자명·비밀번호와 모델 서버의 포트·주소·토큰을 채웁니다.
+임베딩·리랭크는 모델 서버(`services/model-server`), 답변·계산 분류·하위법령 판단·monitor 요약은 저장소 밖 단독 생성 서버가 맡습니다. 웹앱은 조문 검색·프롬프트 조립·화면을 담당합니다. `.env.example`을 복사해서 로그인, 모델 서버 주소·토큰과 생성 서버 주소·전용 토큰을 채웁니다. 생성 서버는 먼저 별도 관리 위치에서 준비합니다.
 
 ```zsh
 cp .env.example .env
 chmod 600 .env            # 나만 읽고 쓰기 (비밀번호·토큰이 들어가므로)
-openssl rand -hex 32      # 토큰: LAWBOT_MODEL_TOKEN에 붙여 넣기
-open -e .env              # LAWBOT_USER·LAWBOT_PW, LAWBOT_MODEL_SERVER_PORT·LAWBOT_MODEL_SERVER 입력 후 저장
+openssl rand -hex 32      # LAWBOT_MODEL_TOKEN과 LAWBOT_LLM_API_KEY는 각각 별도로 생성
+open -e .env              # 로그인 및 두 서버의 주소·전용 토큰 입력
 uv run lawbot-model-server   # 터미널 1: 포트를 먼저 열고 모델을 올린 뒤 'ready'
 uv run lawbot-app            # 터미널 2: 모델 서버가 준비될 때까지 기다린 뒤 조문 인덱스를 만들고 시작
 ```
@@ -148,14 +134,13 @@ v5의 답변 모델은 Pro입니다. v4 프로필에서 `LAWBOT_MODELS=fast,pro`
 
 v5 Pro는 간결형에 `data/v5/system_v5_concise.txt`를 쓰고, 화면에서 "전체 (4항목)"를 고르면 `data/v5/system_v5.txt`로 생성합니다. v4 Fast는 4항목으로 생성하고, "간결"을 고르면 화면에서 결론·근거를 보여 줍니다.
 
-| 모델 | 구성 (모델 id · v4 기본 폴더) | 기본 답변 형식 |
+| 모델 | 구성 | 기본 답변 형식 |
 | --- | --- | --- |
-| Lawbot Fast | Qwen3-4B + LoRA (`lawbot-fast-v4` · `models/v4/sllm_4b_lora_mlx_4bit`) | 전체: `【결론】【근거 조문】【설명】【참고】` 4항목 |
-| Lawbot Pro | Qwen3.8-27B 4비트, 튜닝 전 (`qwen3.8-27b-4bit` · `models/v4/qwen_27b_mlx_4bit`), 간결형 system(`data/v5/system_v5_concise.txt`) | 간결: 결론 + `근거: 실제 인용 조문`. 답변이 더 느림 |
+| Lawbot Pro | 단독 생성 서버에 상주하는 Qwen3.8-27B 4비트 (`qwen3.8-27b-4bit`), 간결형 system(`data/v5/system_v5_concise.txt`) | 간결: 결론 + `근거: 실제 인용 조문` |
 
-모델을 바꾸면 답변 형식도 그 모델의 기본값으로 바뀌고, 형식은 직접 다시 고를 수 있습니다. 화면 아래 측정 줄에 검색·첫 토큰·첫 글자·생성 속도·완료 시간이 표시됩니다. 모델 서버에 아직 올라 있지 않은 모델을 고르면 "불러오는 중"을 먼저 보여 주고, 불러오는 시간은 첫 토큰 시간에 들어갑니다. 웹앱이 고른 모델 id가 모델 서버에 없으면 시작을 거부합니다.
+화면 아래 측정 줄에 검색·첫 토큰·첫 글자·생성 속도·완료 시간이 표시됩니다. 시작 시 로컬 생성 서버의 연결 실패·503 `server_not_ready`는 `LAWBOT_MODEL_SERVER_WAIT` 한도 안에서 1초 간격으로 다시 확인합니다. 토큰 오류나 `/v1/models`의 필요한 모델 id 누락은 즉시 시작을 거부합니다. 외부 생성 API는 준비 확인을 생략하고, `check_deploy`는 한 번만 조회합니다. 생성 서버는 모델 교체 요청을 받지 않습니다.
 
-웹앱은 모델을 폴더가 아니라 모델 id로 고르고(`LAWBOT_*_MODEL`), 모델 폴더와 상주 수는 모델 서버 설정(`LAWBOT_SERVE_*`, `LAWBOT_MAX_RESIDENT`)입니다. 아래 표가 전체 변수입니다(상대 경로는 저장소 최상위 기준).
+웹앱은 모델을 폴더가 아니라 모델 id로 고릅니다(`LAWBOT_*_MODEL`). 임베딩·리랭크 폴더는 모델 서버의 `LAWBOT_SERVE_*`, 생성 모델은 저장소 밖 생성 서버가 관리합니다. 아래 표가 전체 변수입니다(상대 경로는 저장소 최상위 기준).
 
 웹앱은 이 맥에서만 쓰는 로컬 전용입니다. 주소는 `127.0.0.1` 고정이고, 포트는 `.env`의 `LAWBOT_PORT`(없으면 기존 기본값)입니다. 브라우저에서 `http://127.0.0.1:<포트>`로 접속해 로그인합니다. 같은 네트워크의 다른 기기에서는 접속할 수 없습니다. 주소는 바꿀 수 없습니다(`services/chatbot/src/lawbot/security.py`). 로그인 세션은 웹앱 메모리에만 있어 웹앱을 다시 띄우면 다시 로그인합니다. https(Tailscale)로 접속하면 로그인 쿠키에 `Secure`가 붙습니다. 상시 운영할 때는 `.env`에 `LAWBOT_PORT`를 따로 정하세요.
 
@@ -169,7 +154,7 @@ v5 Pro는 간결형에 `data/v5/system_v5_concise.txt`를 쓰고, 화면에서 "
 | `LAWBOT_ADMIN_PW_HASH` | 관리자 사용 시 | `python -m lawbot.auth hash`가 출력한 scrypt 해시. `.env`에서 작은따옴표로 감쌈 |
 | `LAWBOT_MODEL_SERVER` | 예 | 모델 서버 주소 `http://127.0.0.1:<모델 서버 포트>` (이 맥만 허용) |
 | `LAWBOT_MODEL_TOKEN` | 예 | 모델 서버 토큰 (16자 이상, `openssl rand -hex 32`). 웹앱과 모델 서버가 같은 값 |
-| `LAWBOT_MODEL_SERVER_WAIT` | 아니요 | 시작할 때 모델 서버 준비를 기다리는 최대 초 (기본 `300`) |
+| `LAWBOT_MODEL_SERVER_WAIT` | 아니요 | 시작할 때 임베딩·리랭크 모델 서버와 로컬 생성 서버 각각의 준비를 기다리는 최대 초 (기본 `300`) |
 | `LAWBOT_MODEL_READ_TIMEOUT` | 아니요 | 질문 처리 중(질문 임베딩·리랭크·생성) 응답 조각 사이 최대 대기 초 (기본 `300`). 넘으면 "모델 서버 응답이 없습니다", 요청 로그 `model_server_timeout`. 시작할 때 조문 인덱스 인코딩에는 걸지 않음 |
 | `LAWBOT_PROFILE` | 아니요 | `v4` (생략 시 기본값) 또는 `v5` (노동·소득세법 전체와 세금·4대보험 선택 범위, Pro 전용) |
 | `LAWBOT_EMB_MODEL` | 아니요 | 검색 임베딩 모델 id (v4 기본 `lawbot-emb-v4`, v5 기본 `lawbot-emb-v6`. v6.0.0 전에는 `lawbot-emb-v5b`) |
@@ -189,8 +174,8 @@ v5 Pro는 간결형에 `data/v5/system_v5_concise.txt`를 쓰고, 화면에서 "
 | `LAWBOT_DECREE_K` | 아니요 | 붙일 하위법령 최대 수 (기본 `2`) |
 | `LAWBOT_DECREE_MODELS` | 아니요 | 하위법령을 붙일 답변 모델 key (기본 `pro`. Fast는 참고 조문 3개로 학습했고 첨부를 평가하지 않음) |
 | `LAWBOT_V4_DECREE_ARTICLES` | 아니요 | 하위법령을 켰을 때 쓰는 812조문 CSV (기본 `data/v4/law_articles_v4_decree.csv`). 켜면 `LAWBOT_V4_ARTICLES` 대신 이 파일 |
-| `LAWBOT_LLM_BASE_URL` | 아니요 | 생성만 다른 OpenAI 호환 API로 (예: `https://…/v1`). 없으면 모델 서버의 `/v1` |
-| `LAWBOT_LLM_API_KEY` | 외부 API면 예 | 그 API의 키 (모델 서버 토큰은 외부로 보내지 않음) |
+| `LAWBOT_LLM_BASE_URL` | 예 | 생성 API 주소 `http://127.0.0.1:<생성 서버 포트>/v1`. 모델 서버로 되돌아가지 않음 |
+| `LAWBOT_LLM_API_KEY` | 예 | 생성 서버 전용 키(로컬도 16자 이상). 모델 서버 토큰으로 대신하지 않음 |
 | `LAWBOT_LLM_ALLOW_EXTERNAL` | 외부 API면 예 | `1`: 질문이 이 맥 밖으로 나가는 것을 허용 (https만) |
 | `LAWBOT_PORT` | 아니요 | 웹앱 포트 (1024–65535). 없으면 기존 기본값. 운영·개발을 함께 띄울 때는 서로 다른 값 |
 | `LAWBOT_INSTANCE` | 아니요 | 화면·탭 제목에 붙일 이름 (예: `운영`, `개발`, 40자 이하) |
@@ -210,11 +195,7 @@ v5 Pro는 간결형에 `data/v5/system_v5_concise.txt`를 쓰고, 화면에서 "
 | --- | --- | --- |
 | `LAWBOT_MODEL_SERVER_PORT` | 예 | 모델 서버 포트 (1024–65535, 기본값 없음). 주소는 127.0.0.1 고정 |
 | `LAWBOT_MODEL_TOKEN` | 예 | 위와 같은 토큰 (16자 이상) |
-| `LAWBOT_SERVE_CHAT` / `LAWBOT_SERVE_EMBEDDING` / `LAWBOT_SERVE_RERANK` | 하나 이상 | 제공할 모델 `id=폴더`를 쉼표로 (예: `qwen3.8-27b-4bit=models/v4/qwen_27b_mlx_4bit`) |
-| `LAWBOT_SERVE_PRELOAD` | 아니요 | 시작할 때 올릴 chat 모델 id (기본: chat 목록 앞에서부터 상주 수만큼). 임베딩·리랭커는 항상 시작할 때 |
-| `LAWBOT_MAX_RESIDENT` | 아니요 | 동시에 올려 둘 chat 모델 수 (기본 `2`, LRU로 교체). 32GB에서 27B를 쓰면 `1` |
-| `LAWBOT_MAX_CONCURRENT` | 아니요 | 동시에 생성하는 chat 요청 수 (1–16, 기본 `1`). 생성은 mlx_lm `BatchGenerator`로 하고, 이 값이 배치 크기. `1`이면 이전 순차 생성과 같은 답, `2` 이상은 처리량이 늘지만 요청마다 느려지고 답 표현이 조금 달라질 수 있음([기록](evals/2026-11-01-batch-generation.md)). 넘는 요청은 받은 순서대로 기다림 |
-| `LAWBOT_MAX_QUEUED` | 아니요 | 생성을 기다리는 chat 요청 상한 (1–1024, 기본 `32`). 넘으면 503 `server_busy` (웹앱은 "모델 서버가 바쁩니다", 요청 로그 `model_server_busy`) |
+| `LAWBOT_SERVE_EMBEDDING` / `LAWBOT_SERVE_RERANK` | 하나 이상 | 제공할 임베딩·리랭크 모델 `id=폴더`를 쉼표로 지정 |
 
 웹앱은 시작할 때 위 설정을 한 번에 모두 검사하고(`lawbot.settings`), 틀린 값이 여러 개면 "설정 오류 N개"로 한꺼번에 알린 뒤 모델 서버에 접속하기 전에 끝납니다(값은 출력하지 않음). 요청 로그 경로 같은 설정은 시작할 때 읽은 값을 끝까지 씁니다.
 
@@ -255,40 +236,38 @@ Colab 실험(transformers fp16)과의 순위 일치는 리랭커 도입 때 val�
 
 ## 모델 서버 (OpenAI 호환 API)
 
-모델 서버(`services/model-server`, FastAPI)는 조문 데이터나 챗봇 설정을 모르는 범용 추론 서버입니다. 챗봇 외의 앱(예: 법령 모니터링의 요약)도 OpenAI SDK로 그대로 부를 수 있습니다.
+모델 서버(`services/model-server`, FastAPI)는 임베딩·리랭크만 제공합니다. chat 생성 경로·모델 로더·생성 대기열은 없습니다.
 
 | 엔드포인트 | 형식 | 비고 |
 | --- | --- | --- |
-| `POST /v1/chat/completions` | OpenAI | 스트림(SSE)·`stream_options.include_usage`. `temperature`가 없으면 0(탐욕적 생성, OpenAI 기본값 1과 다름). 확장: `chat_template_kwargs.enable_thinking`(기본 끔), 응답의 `timings`(프리필·생성 속도, MLX 최대 메모리) |
 | `POST /v1/embeddings` | OpenAI | `encoding_format` `float`·`base64`. 확장: `input_type`(`query`·`document`), `max_seq_length`. 목록 하나를 encode 한 번으로 처리 |
 | `POST /v1/rerank` | Cohere/Jina | `results: [{index, relevance_score}]`. 확장: `instruction`(작업 설명) |
-| `GET /v1/models` | OpenAI | 확장: `type`(chat·embedding·rerank), `loaded`, `revision`(모델 폴더 지문 `sha256:<16자>`: 파일 경로·크기·앞뒤 1MB로 시작할 때 계산. 같은 id로 폴더를 바꾸면 값이 달라짐) |
+| `GET /v1/models` | OpenAI | 확장: `type`(embedding·rerank), `loaded`, `revision`(모델 폴더 지문 `sha256:<16자>`) |
 | `GET /health` | | `{ready, commit}` (모델을 불러오는 중에도 응답. `commit`은 모델 서버를 띄운 레포의 git 커밋, 변경이 있으면 `+dirty`) |
 
-```python
-from openai import OpenAI
+- 127.0.0.1에만 열고, 모든 요청(`/health` 포함)에 `LAWBOT_MODEL_TOKEN`이 필요합니다. 모르는 요청 필드는 400으로 거절합니다. 질문·문서 내용은 로그에 남기지 않습니다.
+- 임베딩·리랭크 연산은 GPU 작업 스레드 하나에서 순차 실행합니다.
 
-client = OpenAI(base_url='http://127.0.0.1:<모델 서버 포트>/v1', api_key='<LAWBOT_MODEL_TOKEN>')
-client.chat.completions.create(
-    model='qwen3.8-27b-4bit', messages=[{'role': 'user', 'content': '다음 개정 내용을 요약해 줘: …'}]
-)
-```
+### 단독 생성 서버 (외부 의존 서비스)
 
-- 127.0.0.1에만 열고, 모든 요청(`/health` 포함)에 토큰이 필요합니다. 모르는 필드(`tools`, `n`>1 등)는 400으로 거절합니다. 질문·문서 내용은 로그에 남기지 않습니다(경로·모델·상태·시간만).
-- 모델 연산은 GPU 스레드 하나가 맡습니다(MLX·MPS를 여러 스레드에서 동시에 돌리지 않음). chat 생성은 `LAWBOT_MAX_CONCURRENT`개까지 동시에(2 이상이면 한 배치로) 하고, 넘는 요청은 받은 순서대로 기다립니다. embeddings·rerank는 생성 스텝 사이에 실행되어 그동안 생성 중인 스트림이 잠깐 멈춥니다. 스트림 중 연결이 끊기면(정지 버튼) 다음 스텝에서 그 요청을 빼고 자리를 비웁니다.
-- 다른 chat 모델 요청이 오면 진행 중인 생성이 끝난 뒤 모델을 바꿉니다(그 뒤에 온 요청도 순서대로 기다림).
-- 웹앱은 임베딩·리랭크를 항상 이 서버에서 쓰고, 생성만 `LAWBOT_LLM_BASE_URL`로 다른 OpenAI 호환 API(클라우드 모델 등)로 바꿀 수 있습니다. 이 맥 밖 주소는 질문이 외부로 나가므로 `LAWBOT_LLM_ALLOW_EXTERNAL=1`과 https가 있어야 허용합니다.
+- 관리·재시작 위치는 저장소 밖 `~/Services/qwen27b`입니다. FastAPI·uvicorn과 `mlx-lm` 라이브러리로 구현하며 `mlx_lm.server` 래퍼가 아닙니다. `run.sh`로 실행하고 launchd 서비스 이름은 `local.qwen27b`입니다. 이 저장소의 모델 서버 실행·재시작으로 생성 서버를 관리하지 않습니다.
+- 바인딩은 `127.0.0.1`로 고정합니다. 모든 HTTP 경로(상태·존재하지 않는 경로 포함)에 전용 Bearer 토큰이 필요하며, 인증 실패는 OpenAI 오류 형식의 401입니다. `HF_HUB_OFFLINE=1`로 실행하고 설정한 단일 모델 id만 제공합니다.
+- 웹앱과 monitor는 `LAWBOT_LLM_BASE_URL`·`LAWBOT_LLM_API_KEY`로 접속합니다. 인증된 `GET <LAWBOT_LLM_BASE_URL>/models`는 `object: list`와 `data`의 `id`, `object: model`, `revision`, `max_concurrent`, `mlx_lm_version`을 제공합니다(`type`·`loaded` 없음). `mlx_lm_version`은 생성 서버가 시작할 때 한 번 확인한 설치 배포판 버전이며 요청마다 조회하지 않습니다.
+- 모델·엔진 준비 전이나 작업 스레드 종료 후에는 모델 목록·생성 요청에 503 `server_not_ready`를 반환합니다. `GET /health`는 인증 후 `ready`를 보고합니다. 실제 실행은 모델·엔진 초기화 후 리스너를 엽니다.
+- `POST <LAWBOT_LLM_BASE_URL>/chat/completions`는 스트리밍·usage·`chat_template_kwargs`·`max_tokens`·`temperature` 등을 지원합니다. 생각은 기본적으로 끄고 출력 맨 앞 생각 블록을 숨깁니다. `enable_thinking=true`이면 생각 텍스트를 그대로 내보내며 별도 `reasoning` 필드는 만들지 않습니다.
+- GPU 작업 스레드 하나가 생성·취소·종료를 담당합니다. 대기 요청은 FIFO로 배치에 투입하며, 제한된 대기열이 차면 503 `server_busy`를 반환합니다. 생성 중인 요청은 대기열 수에 포함하지 않습니다.
+- 로컬 생성은 요청 로그 `mode=api`, 명시적으로 허용한 외부 https 생성 API는 `mode=external`입니다. 외부 생성 API는 chat 모델 존재 확인과 revision 조회를 생략합니다. 실제 모델 검증 기록에는 로컬 생성 서버 `/v1/models`의 `revision`·`mlx_lm_version`을 적고 lawbot에 설치된 버전으로 대신하지 않습니다.
 
 ## 상시 운영과 개발 동시 실행
 
-맥 미니에서 운영 웹앱을 계속 켜 두고(휴대폰은 Tailscale로 접속) 같은 맥에서 개발 웹앱도 띄울 때도 모델 서버 하나를 두 웹앱이 함께 씁니다. 웹앱마다 27B와 리랭커를 따로 올리면 32GB를 넘기 때문입니다.
+운영·개발 웹앱은 임베딩·리랭크 모델 서버 하나와 단독 생성 서버 하나를 함께 씁니다. 웹앱마다 모델을 별도로 올리지 않습니다.
 
 ```
 휴대폰 ──(Tailscale HTTPS, tailscale serve)──▶ 127.0.0.1:<운영 포트>  운영 웹앱 (FastAPI + React 화면, 모델 없음)
 맥 브라우저 ─────────────────────────────────▶ 127.0.0.1:<개발 포트>  개발 웹앱 (FastAPI + React 화면, 모델 없음)
                                                    │  둘 다 OpenAI 호환 HTTP + 토큰
                                                    ▼
-                                     127.0.0.1:<모델 서버 포트>  모델 서버 (1개)
+                                     임베딩·리랭크 모델 서버 + 단독 생성 서버
 ```
 
 | 프로세스 | 포트 | 실행 위치 | 외부 노출 |
@@ -296,6 +275,7 @@ client.chat.completions.create(
 | 운영 웹앱 | `<운영 포트>` | 운영 worktree | `tailscale serve`로 이 포트만 |
 | 개발 웹앱 | `<개발 포트>` | 개발 레포 | 없음 |
 | 모델 서버 | `<모델 서버 포트>` | 운영 worktree | 없음 (127.0.0.1 고정) |
+| 단독 생성 서버 | `<생성 서버 포트>` | `~/Services/qwen27b` | 없음 (127.0.0.1 고정) |
 
 포트 번호는 직접 정해 각 `.env`에만 적습니다(레포에 올리지 않음). 운영·개발 포트는 서로 떨어뜨리고, 모델 서버 포트도 따로 둡니다. 모델 서버는 토큰이나 포트가 없으면 실행을 거부합니다.
 
@@ -312,7 +292,7 @@ client.chat.completions.create(
    (cd services/chatbot/frontend && npm ci && npm run build)   # 화면 파일
    ```
 
-   운영 `.env`는 `.env.example` 그대로(모델 서버 + 웹앱) `LAWBOT_INSTANCE=운영`, `LAWBOT_PORT`를 더하고, 개발 레포 `.env`는 `.env.dev.example`대로 웹앱 설정만 적습니다. 두 `.env`의 `LAWBOT_MODEL_SERVER`·`LAWBOT_MODEL_TOKEN`은 같아야 하고, 웹앱이 고르는 모델 id(`LAWBOT_*_MODEL`)는 운영 `.env`의 `LAWBOT_SERVE_*`에 있어야 합니다.
+   운영 `.env`는 `.env.example`에 `LAWBOT_INSTANCE=운영`, `LAWBOT_PORT`를 더하고, 개발 `.env`는 `.env.dev.example`대로 적습니다. 두 웹앱은 같은 `LAWBOT_MODEL_SERVER`·`LAWBOT_MODEL_TOKEN`과 같은 `LAWBOT_LLM_BASE_URL`·`LAWBOT_LLM_API_KEY`를 씁니다. 임베딩·리랭크 id는 모델 서버 목록, chat id는 생성 서버 목록에 있어야 합니다.
 3. 직접 실행해 확인합니다.
 
    ```zsh
@@ -351,10 +331,10 @@ client.chat.completions.create(
 
 - 웹앱 쪽 코드(`services/chatbot`: 검색·리랭킹 정렬·하위법령 필터·프롬프트 조립·화면, system 파일, 조문 데이터)는 개발 웹앱만 다시 띄워 시험합니다.
 - 모델 서버 코드(`services/model-server`)는 개발용 모델 서버로 시험합니다. 운영 모델 서버를 멈추고(`launchctl bootout …/com.lawbot.model-server`), 개발 레포에서 다른 포트로 띄운 뒤(`LAWBOT_MODEL_SERVER_PORT=<시험 포트> uv run lawbot-model-server`) 개발 웹앱을 그 포트로 연결합니다(`LAWBOT_MODEL_SERVER=http://127.0.0.1:<시험 포트> uv run lawbot-app`). 메모리 때문에 모델 서버는 한 번에 하나만 띄웁니다.
-- 모델 서버는 기본(`LAWBOT_MAX_CONCURRENT=1`)으로 생성을 한 번에 하나만 합니다. 개발 화면에서 질문하는 동안 휴대폰 질문은 기다립니다. 정지 버튼으로 연결이 끊기면 바로 다음 요청을 받지만, 휴대폰이 연결을 끊지 않고 사라지면 생성이 최대 길이(1024토큰)에서 끝날 때까지 기다립니다.
+- 단독 생성 서버는 기본 동시 생성 1개로 운영합니다. 개발 요청도 운영과 같은 생성 순서를 기다립니다. 클라이언트 연결 종료가 서버 추론 취소를 보장한다고 가정하지 않습니다.
 - 웹앱은 시작할 때 조문 인덱스를 모델 서버의 임베딩으로 만듭니다(812조문 기준 수십 초). 같은 조문·모델이면 다음 시작부터는 `cache/embeddings/`의 캐시를 씁니다(`LAWBOT_EMBED_CACHE`). 운영·개발 웹앱은 각자 레포 폴더에 캐시를 둡니다.
 - 같은 브라우저에서 운영·개발 화면에 번갈아 로그인할 때 로그인 쿠키가 겹치면, 개발 화면은 `http://localhost:<개발 포트>`로 접속합니다(호스트가 다르면 쿠키가 분리됨).
-- `eval_v4`도 같은 모델 서버를 씁니다. 결과의 `peak_gb`는 모델 서버 프로세스 값입니다.
+- `eval_v4`도 같은 두 서버를 씁니다. 생성 서버가 제공하지 않는 메모리 측정값을 모델 서버 값으로 대신하지 않습니다.
 
 ## 운영 버전과 태그
 
@@ -413,7 +393,7 @@ git push origin vX.Y.Z
 
 개발에서는 [.env.dev.example](../.env.dev.example)의 v5 설정을 적용합니다. 기본 조문은 `data/v5`의 두 CSV와 각 매니페스트입니다. 기존 설정에서 `LAWBOT_EMB_MODEL`은 `lawbot-emb-v5b`로 바꾸고, 이전 `LAWBOT_PRO_SYSTEM`과 인코딩 길이 재지정을 비우면 v5의 기본 간결형과 인코딩 설정을 씁니다. 전체 답변 형식은 별도의 `data/v5/system_v5.txt`를 씁니다.
 
-운영 반영 승인 후 운영 worktree에서 기존 `.env`와 HEAD를 보관합니다. 공유 모델 서버의 모델 목록에서 `lawbot-emb-v5b`, `qwen3-reranker-4b`, `qwen3.8-27b-4bit`의 id와 revision을 확인합니다. 조문 전환과 별개로 현재 운영 HEAD에서 반영할 커밋까지의 변경과 필요한 배포 단계를 확인합니다.
+운영 반영 승인 후 운영 worktree에서 기존 `.env`와 HEAD를 보관합니다. 임베딩·리랭크 모델 서버의 모델 목록에서 `lawbot-emb-v5b`, `qwen3-reranker-4b`의 id와 revision을 확인하고, 별도 생성 서버의 `/v1/models`에서 `qwen3.8-27b-4bit`의 id와 revision을 확인합니다. 조문 전환과 별개로 현재 운영 HEAD에서 반영할 커밋까지의 변경과 필요한 배포 단계를 확인합니다.
 
 ```zsh
 LAWBOT_PROFILE=v5 uv run lawbot-articles-update --init
@@ -425,14 +405,16 @@ LAWBOT_PROFILE=v5 uv run lawbot-articles-update --init
 
 ## 요청 로그와 오류 안내
 
-웹앱은 질문마다 `logs/requests-YYYY-MM.jsonl`(달마다 새 파일, Git 제외)에 한 줄을 남깁니다. `log_summary`는 이 폴더의 월별 파일과 예전 `requests.jsonl`을 함께 읽습니다. 질문마다의 `request_id`는 모델 서버 요청에 `X-Request-Id` 헤더로 함께 가서, 모델 서버 로그 줄 끝(`rid=…`)에도 남습니다 (두 로그를 이 값으로 이어 봄). 단계별 시간(검색·리랭킹·모델 전환·첫 토큰·완료), 토큰 수, `peak_gb`, 상태(`ok`/`error`/`cancelled`), 오류 유형이 들어가고, 질문 원문·답변·조문 내용은 남기지 않습니다. 평가 스크립트도 같은 경로를 쓰므로 `caller`로 구분합니다.
+웹앱은 질문마다 `logs/requests-YYYY-MM.jsonl`(달마다 새 파일, Git 제외)에 한 줄을 남깁니다. `log_summary`는 이 폴더의 월별 파일과 예전 `requests.jsonl`을 함께 읽습니다. 질문마다의 `request_id`는 서버 요청에 `X-Request-Id` 헤더로 함께 갑니다. 단계별 시간(검색·리랭킹·첫 토큰·완료), 토큰 수, 제공되는 경우 `peak_gb`, 상태(`ok`/`error`/`cancelled`), 오류 유형이 들어가고, 질문 원문·답변·조문 내용은 남기지 않습니다. 평가 스크립트도 같은 경로를 쓰므로 `caller`로 구분합니다.
 
 ```zsh
 uv run python -m lawbot_tools.log_summary                      # 상태별 건수, 단계별 중앙값·p95, 오류 유형별 건수
 uv run python -m lawbot_tools.log_summary --caller lawbot-app  # 평가 실행 제외
 ```
 
-오류 유형은 화면 안내와 같습니다. `model_server`(서버 연결 실패·토큰 불일치·로딩 중)는 "모델 서버가 준비되지 않았습니다", `model_load`(모델 서버의 모델 폴더 없음·형식 오류, 웹앱의 system 파일 없음)는 "모델을 불러오지 못했습니다"로 안내합니다. `model_server_timeout`(질문 처리 중 응답 조각 사이가 `LAWBOT_MODEL_READ_TIMEOUT`을 넘음)은 "모델 서버 응답이 없습니다", `model_server_busy`(모델 서버 대기열이 `LAWBOT_MAX_QUEUED`개로 가득 참)는 "모델 서버가 바쁩니다"로 안내합니다. 요청 로그의 `mode`는 `api`(모델 서버에서 생성) 또는 `external`(외부 생성 API)입니다. `search`·`rerank`·`generation`(검색·리랭킹·생성 중 오류)은 "조문을 검색하지 못했습니다"·"조문 순위를 매기지 못했습니다"·"답변을 생성하지 못했습니다"로 안내하고, 임베딩 순위로 되돌리지 않습니다.
+오류 유형은 화면 안내와 같습니다. `model_server`(생성 서버 또는 임베딩·리랭크 서버 연결 실패·토큰 불일치·미준비)는 "모델 서버가 준비되지 않았습니다", `model_load`(모델 폴더·system 파일 오류)는 "모델을 불러오지 못했습니다"로 안내합니다. `model_server_timeout`(질문 처리 중 응답 조각 사이가 `LAWBOT_MODEL_READ_TIMEOUT`을 넘음)은 "모델 서버 응답이 없습니다"로 안내합니다. `model_server_busy`(생성 서버 대기열 가득 참: HTTP `503`, `error.type=server_busy`)는 "모델 서버가 바쁩니다 (대기 중인 질문이 많음). 잠시 뒤 다시 질문하세요."로 안내합니다. 계산 라우터에서도 busy가 발생하면 추가 생성을 하지 않고 같은 오류로 안내하며, 생성 요청은 자동 재시도하지 않습니다. monitor 아침 요약은 실패와 대기 이벤트를 기록하고, ERP 메일 보강은 HTTP 실패를 경고 로그에 남긴 뒤 기존 원문 표시를 유지합니다. 요청 로그의 `mode`는 `api`(로컬 단독 생성 서버) 또는 `external`(외부 생성 API)입니다. `search`·`rerank`·`generation` 오류는 각각 "조문을 검색하지 못했습니다"·"조문 순위를 매기지 못했습니다"·"답변을 생성하지 못했습니다"로 안내하고, 임베딩 순위로 되돌리지 않습니다.
+
+생성 스트림의 종료 `finish_reason`이 없으면 `generation` 오류로 처리하며, 부분 답변을 정상 턴이나 피드백 대상으로 저장하지 않습니다.
 
 ## 관리자 계정 (선택)
 
@@ -524,86 +506,7 @@ uv run lawbot-db export-release --db PATH --release ID --out DIR
 
 DB 갱신 뒤에도 `data/live/v5`는 이전 CSV를 담고 있습니다. 평가 도구는 CSV를 읽으므로 평가 전에 `lawbot-db export-release`로 평가할 릴리스를 별도 폴더에 내보내고 그 CSV 경로를 지정합니다. 자동 생성 릴리스는 비교할 원본 CSV 폴더를 보관하지 않으므로 저장 바이트의 해시는 `export-release`로 검증합니다. [CSV 내보내기](#db-코퍼스와-csv-내보내기)
 
-### P07 정확 일치 캐시
-
-v5 DB 코퍼스와 Pro 간결형에서 승인된 질문을 재사용합니다. `LAWBOT_EXACT_CACHE_DB`에는 코퍼스·피드백 DB와 분리한 비공개 로컬 SQLite 경로를 지정합니다. 미설정이면 웹앱은 캐시를 조회하지 않고, 새 DB의 모드는 `off`입니다. 웹앱 시작 로그와 `uv run python -m lawbot.check_deploy`에서 캐시 스키마·모드·namespace 또는 우회 사유를 확인합니다.
-
-운영 반영과 활성화는 별도 승인 후 진행합니다. 개발에서는 아래 명령으로 P07 검토를 재현할 수 있습니다. `$cache_db`는 개발 전용 DB, `$cache_bundle`은 원본 P07 ZIP, `$review_dir`는 새 비공개 검토 폴더입니다. ZIP을 받는 `inspect`·`seed`·`approve`·`replace`는 개발 전용입니다. ZIP의 보호 문항이 개발 코퍼스 DB 보호 분할에 모두 들어 있지 않으면 이 명령들은 실패합니다.
-
-```zsh
-uv run python -m lawbot.cache_admin init --db "$cache_db"
-uv run python -m lawbot.cache_admin seed --db "$cache_db" --bundle "$cache_bundle" --dry-run --report-dir "$review_dir"
-uv run python -m lawbot.cache_admin seed --db "$cache_db" --bundle "$cache_bundle"
-uv run python -m lawbot.cache_admin approve --db "$cache_db" --bundle "$cache_bundle" --review-file "$review_dir/review.json" --reviewed --reason "$reason"
-```
-
-검수 후 운영에서는 현재 승인 ID를 확인하고 아래 명령을 실행합니다. 적중 후보 관찰이 필요하면 `shadow`를 먼저 사용합니다.
-
-```zsh
-uv run python -m lawbot.cache_admin set-mode shadow --db "$cache_db" --approval "$approval_id" --reason "$reason"
-uv run python -m lawbot.cache_admin set-mode on --db "$cache_db" --approval "$approval_id" --reason "$reason"
-```
-
-승인 전에 `review.json`의 표시본·근거·적용 조건·공개 적합성을 확인하고 승인한 질문과 답변 ID만 `selection`에 적습니다. `approve`가 반환한 ID를 `$approval_id`에 넣습니다. `off`, `shadow`, `on`은 어느 방향으로든 직접 전환할 수 있습니다. `shadow`와 `on`에는 현재 승인 ID와 일치하는 보호 분할이 필요합니다. `shadow`는 승인 답변을 반환하지 않고 `would_hit`와 비용·우회 사유를 기록하는 선택 단계입니다. 추가 보호셋이 있으면 `--protected-csv`에 같은 입력을 검토·등록·승인·전환 때 지정합니다. 보호셋 갱신 전에 캐시를 `off`로 둡니다.
-
-보호 분할은 코퍼스 DB의 val/test 분할로, 표시본 원문은 캐시 DB의 `cache_render_inputs`로 확인합니다. DB 조문 자동 갱신과 롤백은 활성화 직후 웹앱을 재시작하기 전에 답변별로 판정합니다. 표시·검토 참고 조문이 바뀌거나 사라지면 끔, 같은 법령의 다른 조문이 바뀌면 검토 대기입니다. 의존 범위와 재렌더링 결과가 동일한 답변은 새 리비전으로 자동 유지합니다. 원문을 확인할 수 없거나 표시 정책·보호 지문이 바뀌면 검토 대기입니다. 이전 모드는 유지되며, 기존의 미승인·철회 항목은 자동으로 돌아오지 않습니다. 실패하면 기존 제어 행을 보존해 RAG로 우회하고 조문 갱신은 계속합니다. 갱신 보고서와 마지막 상태 줄 바로 앞에 판정 수 또는 실패가 남습니다.
-
-관리자 화면에서 **캐시** 탭을 열고 초안 또는 검토 대기 답변의 상세에서 연결 질문, 현재 표시본과 근거, 변경 조문의 이전·이후 본문을 확인합니다. 상세 하단의 **표시본 확인 및 승인** 또는 **표시본 확인 및 재승인**을 누릅니다. 여러 답변은 상세를 각각 연 뒤 목록에서 체크하고 **선택 승인**을 누릅니다. 한 번에 최대 50개를 처리하며, 하나라도 검증에 실패하면 선택한 답변 모두 이전 상태를 유지합니다. 검토 중 상태가 바뀌면 새로고침 후 표시본을 다시 확인합니다.
-
-승인 사유를 비우면 감사에 `표시본 확인 승인`이 남습니다. 모드 전환과 철회에는 사유가 필요합니다. 추가 보호 CSV를 쓰는 환경에서는 `import-db`와 `set-mode`의 `--protected-csv`에 같은 파일을 지정합니다. 이전 정정 리비전의 원문을 확인할 수 없으면 재승인을 보류합니다.
-
-QA 재적재로 보호 지문이 달라지면 캐시를 `off`로 두고 다음 명령을 실행합니다. 현재 namespace의 승인·활성 질문은 검토 대기로 이동하고, 새 보호 지문을 기록하며 이전 승인 ID를 비웁니다. 같은 지문에서 다시 실행하면 변경 건수는 0개입니다. 추가 보호 CSV는 보호 지문 변경·적재·모드 전환에 같은 파일을 지정합니다.
-
-```zsh
-uv run python -m lawbot.cache_admin rebaseline-protection --db "$cache_db" --corpus-db "$corpus_db" --reason "$reason"
-```
-
-한 번도 승인되지 않은 초안은 이전 namespace에 보존됩니다. 개발에서 새 릴리스의 검토를 재현할 때는 해당 개발 코퍼스로 `cache_admin seed`를 다시 실행합니다. 운영에서는 DB 적재 후 관리자 화면에서 신규 초안과 검토 대기 답변을 검수합니다. `on`에서 승인하면 보호 분할을 통과한 연결 질문에 즉시 반환됩니다.
-
-계산 질문 게이트를 통과한 질문은 캐시 조회·seed·승인에서 제외됩니다. 관리 화면의 **캐시** 탭에서 현재 namespace의 제외 개수와 연결 질문의 `끔` 표시를 확인할 수 있습니다. seed 보고서에는 `excluded_calculation_rows` 개수와 제외된 입력 ID가 남습니다.
-
-배포 때 전용 캐시 DB의 기존 초안과 승인 항목을 점검합니다. 첫 명령은 모든 namespace의 질문 행을 읽기 전용으로 집계합니다. JSON의 `counts`는 초안·승인별 개수이며 `items`에는 질문·답변·namespace·출처 ID가 있습니다. 둘째 명령은 기존의 활성 플래그를 끄고 실제 변경 개수를 `disabled`에 기록합니다. 두 명령 모두 질문 원문을 출력하지 않으며 승인·감사 이력은 보존됩니다.
-
-```zsh
-uv run python -m lawbot.cache_admin exclude-calculations --db "$cache_db"
-uv run python -m lawbot.cache_admin exclude-calculations --db "$cache_db" --apply --reason "$reason"
-```
-
 `uv run python -m lawbot.check_deploy`와 `lawbot-articles-update` 갱신 보고서에서 계산기별 근거 조문 본문 일치 여부를 확인합니다. 적용 데이터와 본문 해시가 다르거나 조문이 누락된 계산기는 자동으로 꺼집니다.
-
-기존 캐시에서 처음 전환할 때는 전용 DB를 백업하고 `uv run python -m lawbot.cache_admin migrate --db "$cache_db"`로 스키마를 적용합니다. 캐시를 `off`로 둔 상태에서 `uv run python -m lawbot.cache_carry`로 현재 릴리스를 판정합니다. 이전 파일 지문과 새 `DISPLAY_VERSION` 기반 지문이 달라 첫 판정은 검토 대기로 시작합니다. 관리자 화면이나 CLI에서 검토한 뒤 바로 `on`으로 전환하거나 `shadow`에서 먼저 관찰할 수 있습니다. `answer_format.py`·`citation.py`의 표시 동작을 바꿀 때는 `DISPLAY_VERSION`과 렌더 스냅샷을 갱신합니다.
-
-문제가 발생하면 `set-mode off --db "$cache_db" --reason "$reason"`로 먼저 우회하고, 개별 답변은 `revoke answer "$answer_id" --db "$cache_db" --reason "$reason"`로 철회합니다. 두 명령은 `uv run python -m lawbot.cache_admin`으로 실행합니다. 개발에서 정정 검토를 재현할 때는 `off`에서 `replace`를 사용할 수 있습니다. DB 복구가 필요하면 `cache_admin backup`의 온라인 백업을 별도 경로에 준비해 무결성과 마지막 철회·감사 이력을 대조합니다. 복구 DB도 `off`에서 시작합니다. [개발 정정 검토 파일과 세부 절차](archives/exact-cache-p07.md#10-구현-명령과-개발-기록)
-
-### 검수된 정확 일치 캐시의 DB 전송
-
-개발에서만 통과 ZIP을 활성 v5 Pro 코퍼스 기준으로 개발 캐시 DB에 한 번 적재합니다. `$cache_copy`는 `off` 모드의 개발 캐시이며 `$source_db`는 전송할 SQLite 백업 파일입니다.
-
-```zsh
-uv run python -m lawbot.cache_seed_pass --bundle "$pass_bundle" --corpus-db "$corpus_copy" --cache-db "$cache_copy"
-uv run python -m lawbot.cache_admin backup --db "$cache_copy" --out "$source_db"
-```
-
-운영 적재는 승인 후 `off`인 캐시와 현재 활성 코퍼스 DB를 대상으로 실행합니다. `$source_db`에는 개발에서 만든 닫힌 백업 DB를 지정합니다. 운영 적재·확인·런타임은 DB만 읽습니다.
-
-```zsh
-uv run python -m lawbot.cache_admin import-db --from "$source_db" --db "$cache_db" --corpus-db "$corpus_db"
-```
-
-대상 코퍼스의 조문 해시, 계산 질문, 보호 분할과 리비전 충돌을 다시 확인합니다. 원천 DB와 원래 검수 ZIP의 SHA-256, 승인·제외 집계는 대상 DB 감사에 남습니다. 승인 범위가 늘어나면 이전 ID와 적재 영수증에서 새 승인 ID를 발급합니다. 같은 원천 백업·활성 코퍼스·보호 분할에서 재실행하면 저장된 집계가 반환됩니다. 운영에서는 관리자 화면의 검수·승인을 마친 뒤 최종 승인 ID로 `set-mode`를 실행합니다.
-
-### 검토된 비슷한 질문
-
-P07 재승인 후 다음 명령으로 생성할 질문 벡터와 임베딩 요청 수를 확인합니다. 벡터는 승인 질문을 정규화해 만들며, 모델 revision·질문 해시·최대 인코딩 길이가 맞는 벡터는 재사용합니다. 개발 val과 벡터 생성은 같은 사용자의 worktree 공용 잠금을 사용합니다.
-
-```zsh
-uv run python -m lawbot.cache_admin generate-question-vectors --db "$cache_db" --corpus-db "$corpus_db" --dry-run
-uv run python -m lawbot.cache_admin generate-question-vectors --db "$cache_db" --corpus-db "$corpus_db" --approved-requests "$requests" --max-runtime-seconds "$seconds"
-```
-
-둘째 명령은 표시된 요청 수를 승인받은 뒤 실행합니다. 배치 상한은 16이며 한 번에 한 요청씩 실행합니다. 개발 웹앱 시험과 운영 반영 승인을 거친 뒤, `set-mode on` 단계에서 운영 웹앱 `.env`에 `LAWBOT_SUGGESTIONS_TAU=0.80`(초기값)을 설정하고 최종 승인 ID로 캐시를 켭니다. 웹앱 시작 로그에서 승인 후보와 벡터 누락 수를 확인합니다. 운영 요청 로그의 추천 수와 `suggestion_click`을 보고 τ를 조정합니다.
-
-개발에서는 `python -m lawbot_tools.eval_suggestions --help`로 고정 val 도구의 인자를 확인합니다. `--dry-run`은 전체와 v6 학습 문장 제외 집합의 질의·요청 수를 출력합니다. 승인 실행에서 `--save-vectors`는 질의 ID별 벡터와 메타데이터를 저장하고 `--out`은 두 집합의 τ별 표를 씁니다. 새 출력 파일을 개발 `results/suggestions-val/` 같은 `results/` 아래에 지정합니다. `--load-vectors`와 새 `--out`으로 다시 실행하면 모델 revision과 저장 정보를 대조하고 임베딩 없이 곡선을 계산합니다. 운영 명령은 SQLite 백업과 현재 코퍼스를 사용합니다.
 
 ### CSV·JSONL 이관과 대조
 
@@ -642,7 +545,7 @@ uv run pyright             # 타입 검사 (웹앱 런타임·모델 서버·mon
 (cd services/chatbot/frontend && npm run typecheck && npm test)   # 화면: tsc, Vitest
 ```
 
-브라우저 E2E는 두 층입니다. `e2e_stub`(기본 실행·CI 포함)는 임베딩·리랭크·답변 생성 세 호출을 모두 가짜 모델로 바꾼 것이라 **실제 모델 연결 확인이 아닙니다**. 설정은 `.env.example`(운영 구성)과 같게 띄우고, 실패한 테스트만 `results/e2e_stub/<시각>-<테스트>/`에 스크린샷·화면 HTML·프로세스 출력·요청 로그를 남깁니다(성공하면 남기지 않음, 진단 후 지움). 실제 공유 모델 서버로 하는 `e2e_live`는 승인 후 맥 미니의 개발 worktree에서만 실행합니다([계획](archives/e2e-playwright.md)).
+브라우저 E2E는 두 층입니다. `e2e_stub`(기본 실행·CI 포함)는 임베딩·리랭크·답변 생성 세 호출을 모두 가짜 모델로 바꾼 것이라 **실제 모델 연결 확인이 아닙니다**. 설정은 `.env.example`(운영 구성)과 같게 띄우고, 실패한 테스트만 `results/e2e_stub/<시각>-<테스트>/`에 스크린샷·화면 HTML·프로세스 출력·요청 로그를 남깁니다(성공하면 남기지 않음, 진단 후 지움). 실제 공유 임베딩·리랭크 모델 서버와 별도 생성 서버로 하는 `e2e_live`는 승인 후 맥 미니의 개발 worktree에서만 실행합니다([계획](archives/e2e-playwright.md)).
 
 브라우저 E2E를 새로 쓰거나 고칠 때:
 

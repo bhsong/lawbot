@@ -233,11 +233,10 @@ def test_enabled_refuses_before_loading(env, tmp_path, model_server):
     env.setenv('LAWBOT_RERANKER_ENABLED', '1')
     FakeRetriever.created = FakeLLM.created = FakeReranker.created = 0
     p = deploy.get_profile()
-    model_server.available = [{'id': p.emb_model, 'type': 'embedding'}] + [
-        {'id': s.model, 'type': 'chat'} for s in p.models
-    ]  # 서버에 리랭커 모델 없음
-    with pytest.raises(RuntimeError, match='모델 서버에 필요한 모델이 없습니다: rerank qwen3-reranker-4b'):
+    model_server.available = [{'id': p.emb_model, 'type': 'embedding'}]
+    with pytest.raises(RuntimeError) as exc:
         service.load_app()
+    assert deploy.reranker(p).model in str(exc.value)
     assert FakeRetriever.created == FakeLLM.created == FakeReranker.created == 0
 
 
@@ -276,19 +275,18 @@ def test_prompt_format_unchanged_by_rerank_keys():
 
 # ---- 배포 검사 (리랭커 폴더 검사는 모델 서버 lawbot_model_server.check) ----
 def test_check_deploy_reranker(env, model_server):
-    def run():
-        return [(lv, m) for lv, m in check_deploy.run() if '리랭커' in m]
-
-    assert run() == [('INFO', '리랭커 꺼짐 (LAWBOT_RERANKER_ENABLED=1이면 모델 서버의 리랭커 모델도 확인)')]
-    env.setenv('LAWBOT_RERANKER_ENABLED', '1')
-    assert ('OK', '리랭커 qwen3-reranker-4b: 후보 10개 → 3개 (v4 실험 10개)') in run()
-    env.setenv('LAWBOT_RERANKER_CANDIDATES', '2')
-    assert any(lv == 'FAIL' and '후보 2개' in m for lv, m in run())
-    env.delenv('LAWBOT_RERANKER_CANDIDATES')
-    env.setenv('LAWBOT_RERANK_MODEL', '없는-리랭커')
     p = deploy.get_profile()
-    model_server.available = [
-        {'id': p.emb_model, 'type': 'embedding'},
-        {'id': 'qwen3-reranker-4b', 'type': 'rerank'},
-    ] + [{'id': s.model, 'type': 'chat'} for s in p.models]
-    assert ('FAIL', '모델 서버에 rerank 모델 없는-리랭커 없음 (LAWBOT_SERVE_*와 맞추기)') in check_deploy.run()
+    model_server.available = [{'id': p.emb_model, 'type': 'embedding'}]
+    out = []
+    check_deploy.check_model_server(p, out)
+    assert not any(level == 'FAIL' for level, _ in out)
+
+    env.setenv('LAWBOT_RERANKER_ENABLED', '1')
+    out = []
+    check_deploy.check_model_server(p, out)
+    assert any(level == 'FAIL' and deploy.reranker(p).model in message for level, message in out)
+
+    env.setenv('LAWBOT_RERANKER_CANDIDATES', '2')
+    out = []
+    check_deploy.check_reranker(p, out)
+    assert any(level == 'FAIL' for level, _ in out)

@@ -1,13 +1,12 @@
 import { useCallback, useId, useRef, useState } from 'react'
-import { ChangeView, EventList, Modal, MonthCalendar, dateLabel, dateRoleLabel, todayKst } from '@lawbot/ui'
+import { ChangeView, EventList, Modal, MonthCalendar, dateLabel, todayKst } from '@lawbot/ui'
 import type { CalendarChange, CalendarDay } from '@lawbot/ui'
 import { AdminApiError, adminGet, adminMessage, useAdminRead } from './adminApi'
 import { CalendarHoldReview } from './CalendarHoldReview'
 
 type CalendarStatus = { collectedAt: string | null; verifiedAt: string | null; delayed: boolean }
 type ChangePage = { items: CalendarChange[]; total: number; page: number }
-type HoldKind = 'effective' | 'notice'
-type Hold = { id: string; lawName: string; article?: string; billNo?: string; reason: string; sourceUrl: string }
+type Hold = { id: string; lawName: string; article: string; reason: string; sourceUrl: string }
 type Page<T> = { items: T[]; total: number; page: number; page_size: number }
 type ImportFailure = {
   source: string; event_id: string | null; error_type: string; message: string; occurred_at: string
@@ -48,15 +47,13 @@ function CalendarDetail({ changeId, onClose, onUnauthorized }: {
   const { data, error, retry } = useAdminRead(load, onUnauthorized)
   if (error != null) return readError(error, retry, onClose)
   if (!data) return <p role="status">법령 변경 상세를 불러오는 중입니다.</p>
-  const header = data.assembly ? dateRoleLabel(data.assembly.dateRole)
-    : data.kind === 'notice' ? '입법예고 · 게시일 기준' : '시행 조문 · 시행일 기준'
-  return <Modal header={header} closeLabel="변경 상세 닫기" labelledBy={`${id}-title`} describedBy={`${id}-description`} onClose={onClose}>
+  return <Modal header="시행 조문 · 시행일 기준" closeLabel="변경 상세 닫기" labelledBy={`${id}-title`} describedBy={`${id}-description`} onClose={onClose}>
     <ChangeView change={data} demo={false} titleId={`${id}-title`} descriptionId={`${id}-description`} />
   </Modal>
 }
 
 function holdTitle(hold: Hold) {
-  return [hold.lawName, hold.billNo ? `의안번호 ${hold.billNo}` : hold.article].filter(Boolean).join(' ')
+  return [hold.lawName, hold.article].filter(Boolean).join(' ')
 }
 
 function Holds({ onClose, onUnauthorized, onReviewed }: {
@@ -64,18 +61,12 @@ function Holds({ onClose, onUnauthorized, onReviewed }: {
 }) {
   const id = useId()
   const heading = useRef<HTMLHeadingElement>(null)
-  const [kind, setKind] = useState<HoldKind>('effective')
   const [page, setPage] = useState(1)
   const [hold, setHold] = useState<Hold | null>(null)
   const [saved, setSaved] = useState(false)
   const load = useCallback((signal: AbortSignal) =>
-    calendarGet<Page<Hold>>(`law-holds?type=${kind}&page=${page}&page_size=20`, signal), [kind, page])
+    calendarGet<Page<Hold>>(`law-holds?type=effective&page=${page}&page_size=20`, signal), [page])
   const { data, error, retry } = useAdminRead(load, onUnauthorized)
-
-  function select(next: HoldKind) {
-    setKind(next)
-    setPage(1)
-  }
 
   function back() {
     setHold(null)
@@ -93,14 +84,10 @@ function Holds({ onClose, onUnauthorized, onReviewed }: {
   return <Modal header="법령 캘린더" closeLabel="보류 목록 닫기" labelledBy={`${id}-title`} describedBy={`${id}-description`} onClose={onClose}>
     <div className="lc-dialog-body admin-holds">
       <h2 ref={heading} tabIndex={-1} id={`${id}-title`}>보류 목록</h2>
-      <p id={`${id}-description`}>시행일 또는 예고기간 확인이 필요한 항목입니다.</p>
-      {hold ? <CalendarHoldReview kind={kind} holdId={hold.id} title={holdTitle(hold)} reason={hold.reason}
+      <p id={`${id}-description`}>시행일 확인이 필요한 항목입니다.</p>
+      {hold ? <CalendarHoldReview holdId={hold.id} title={holdTitle(hold)} reason={hold.reason}
         onBack={back} onReviewed={reviewed} onUnauthorized={onUnauthorized} /> : <>
         {saved && <p role="status">검토 결정을 저장했습니다.</p>}
-        <div className="admin-actions" role="group" aria-label="보류 유형">
-          <button type="button" aria-pressed={kind === 'effective'} onClick={() => select('effective')}>시행일 보류</button>
-          <button type="button" aria-pressed={kind === 'notice'} onClick={() => select('notice')}>입법예고 검토 대기</button>
-        </div>
         {error != null ? readError(error, retry) : !data ? <p role="status">보류 목록을 불러오는 중입니다.</p> : <>
           <p aria-live="polite">총 {data.total}건 · {data.page}페이지</p>
           {data.items.length ? <ul className="admin-calendar-list">{data.items.map((item) => <li key={item.id}>
@@ -192,13 +179,7 @@ export function CalendarPanel({ onUnauthorized }: { onUnauthorized: () => void }
       <MonthCalendar selected={date} changes={changes} totals={data?.counts} onSelect={select} />
       {data && <>
         <h3>{dateLabel(date)}</h3>
-        <div className="admin-grid">
-          {(['notice', 'effective', 'bill'] as const).map((kind) => {
-            const events = selected.filter((change) => change.kind === kind)
-            return (kind !== 'bill' || events.length > 0) && <EventList key={`${date}-${kind}`} kind={kind} changes={events}
-              onOpen={(change) => setChangeId(change.id)} />
-          })}
-        </div>
+        <EventList key={date} changes={selected} onOpen={(change) => setChangeId(change.id)} />
       </>}
       {changeId && <CalendarDetail key={changeId} changeId={changeId} onClose={() => setChangeId(null)} onUnauthorized={onUnauthorized} />}
     </>}

@@ -82,7 +82,7 @@ def page_url(url: str) -> bool:
 
 
 def public_link(url: str) -> bool:
-    return any(official_url(url, agency) for agency in AGENCIES) or official_link(url, proposal=True)
+    return any(official_url(url, agency) for agency in AGENCIES) or official_link(url)
 
 
 def morning_entries(path: Path, run_id: str) -> list[dict]:

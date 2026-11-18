@@ -16,7 +16,7 @@
 #   summary  : 위 결과 파일로 지표 표 → results/v4/summary_<tag>.csv, 실패 유형 → results/v4/fail_<tag>.csv
 #   compare  : 두 tag의 summary·실패 유형을 나란히 놓고 report.py 경고 기준으로 나빠진 지표를 경고
 # 결과는 results/v4/<단계>_<tag>.csv에 문항마다 한 행씩 바로 쓴다: 중간에 멈추면 같은 명령으로 이어서 실행
-# 실행마다 설정(생성 위치·모델 서버 /v1/models·모델 id·데이터 버전·커밋)을 results/v4/run_<tag>.json에 남긴다
+# Record generation and retrieval server model metadata separately for every run.
 # test 문항은 평가 전용 (docs/evals/README.md '평가 데이터 사용 제한'): 설정·프롬프트·규칙은 --split val 결과로 고른다
 import argparse
 import concurrent.futures
@@ -31,7 +31,7 @@ import time
 import numpy as np
 import pandas as pd
 
-from lawbot import deploy, envfile, manifest
+from lawbot import deploy, envfile, manifest, service
 
 # 인용·거절 판정은 웹앱 화면과 같은 citation 모듈 (ev.citations·ev.refused·ev.key 등 기존 이름은 그대로 둠)
 from lawbot.citation import LAW_ALIASES, NONEXISTENT, OUTSIDE, WRONG_LAW, check, citations, cite_section, refused  # noqa: F401 (기존 이름 ev.LAW_ALIASES 등 유지, test_citation 검사)
@@ -816,12 +816,26 @@ def git_state():
 
 
 def run_meta(app, model, fmt, split, n, stages):
-    """이번 실행의 설정: 생성 위치(api/external), 모델 서버 /v1/models, 답변·임베딩·리랭커 모델 id, 데이터 버전, 커밋"""
+    """Record separate generation and retrieval metadata for this evaluation."""
     client = getattr(getattr(app.retriever, 'encoder', None), 'client', None)
     try:
         info = {'models': client.models()} if client is not None else None
     except Exception as e:  # 기록용: 실패해도 평가는 계속
         info = {'error': f'{type(e).__name__}: {e}'}
+    generation = None
+    mlx_lm_version = None
+    try:
+        bot, _ = app.models.get(model)
+        generation_client = getattr(bot, 'client', None)
+        if app.llm_mode == 'external':
+            generation = {'id': app.models.specs[model].model, 'revision': None}
+        elif generation_client is not None:
+            cards = service.generation_models(generation_client)
+            card = next(card for card in cards if card['id'] == app.models.specs[model].model)
+            mlx_lm_version = card.get('mlx_lm_version')
+            generation = {key: card.get(key) for key in ('id', 'revision')}
+    except Exception as exc:
+        generation = {'error': type(exc).__name__}
     head, dirty = git_state()
     return {
         'date': datetime.datetime.now().astimezone().isoformat(timespec='seconds'),
@@ -835,6 +849,8 @@ def run_meta(app, model, fmt, split, n, stages):
         'emb_model': app.profile.emb_model,
         'rerank_model': getattr(app.reranker, 'model', None),
         'info': info,
+        'generation': generation,
+        'generation_server_mlx_lm_version': mlx_lm_version,
         'dataset': manifest.summary(manifest.load(app.profile.articles)),
         'commit': head,
         'dirty': dirty,
@@ -1062,7 +1078,7 @@ def main():
         '--concurrency',
         type=int,
         default=1,
-        help='문항을 동시에 몇 개씩 보낼지 (기본 1). 모델 서버의 LAWBOT_MAX_CONCURRENT와 함께 처리량 측정용',
+        help='문항을 동시에 몇 개씩 보낼지 (기본 1). 생성 API의 처리량 측정용',
     )
     args = ap.parse_args()
     if not 1 <= args.concurrency <= 16:

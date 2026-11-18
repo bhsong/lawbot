@@ -1,7 +1,7 @@
 [project]
 name = "lawbot-model-server"
 version = "0.1.0"
-description = "OpenAI 호환 로컬 모델 서버 (FastAPI · MLX · sentence-transformers): chat completions·embeddings·rerank"
+description = "OpenAI 호환 로컬 모델 서버 (FastAPI · MLX · sentence-transformers): embeddings·rerank"
 authors = [
     { name = "bhsong", email = "sbh3003@gmail.com" }
 ]

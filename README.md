@@ -19,16 +19,16 @@ Lawbot은 대한민국 노동법 질문에 조문을 근거로 답하는 검색 
 - **시행령·시행규칙 첨부**: 관련 하위법령을 따로 찾아 법률 조문 뒤에 붙입니다 (Pro 모델).
 - **법령 변경 수집·요약**: 추적 대상 법령·행정규칙·별표서식의 변경을 매일 수집하고 요약합니다 ([services/monitor](services/monitor/README.md)).
 - **법령 변경 캘린더 UI**: 챗봇과 별도 서브도메인에서 로그인·모델 서버 없이 실행하는 독립 웹앱입니다 ([services/law-calendar](services/law-calendar/README.md)).
-- **로컬 실행**: 임베딩·리랭커·답변 모델이 맥 한 대의 모델 서버(OpenAI 호환 API)에서 돌고, 질문이 맥 밖으로 나가지 않습니다.
+- **로컬 실행**: 임베딩·리랭커는 lawbot 모델 서버, 답변은 단독 생성 서버에서 실행합니다. 모두 같은 맥에 있어 질문이 맥 밖으로 나가지 않습니다.
 
 ### 구성
 
 ```
-브라우저 ──▶ 웹앱 (services/chatbot, React 화면)──┐
-             조문 검색·정렬·프롬프트·화면         │  OpenAI 호환 HTTP + 토큰 (127.0.0.1)
-                                                  ▼
-             법령 변경 수집기 (services/monitor) ──▶ 모델 서버 (services/model-server)
-             git 저장소·법제처 API → 이벤트·요약       임베딩 · 리랭커 · 답변 모델 (MLX)
+브라우저 ──▶ 웹앱 (services/chatbot, React 화면)
+               ├──▶ 임베딩·리랭크 모델 서버 (services/model-server)
+               └──▶ 단독 생성 서버 (저장소 밖 ~/Services/qwen27b)
+법령 변경 수집기 (services/monitor) ──▶ 단독 생성 서버
+                         OpenAI 호환 HTTP + 각 전용 토큰 (127.0.0.1)
 ```
 
 자세한 흐름과 레포 구성은 [docs/architecture.md](docs/architecture.md)에 있습니다.
@@ -123,16 +123,16 @@ This is a learning and portfolio project. Its answers are informational and do n
 - **Enforcement decrees and rules**: Related decree/rule articles are retrieved separately and attached after the Act articles (Pro model).
 - **Law change monitoring**: Changes to tracked laws, administrative rules and forms are collected and summarized daily ([services/monitor](services/monitor/README.md), Korean).
 - **Law calendar UI**: An independent public app for a separate subdomain, running without chatbot login or model services ([services/law-calendar](services/law-calendar/README.md), Korean).
-- **Local inference**: Embedding, reranker and answer models run in a model server (OpenAI-compatible API) on the same Mac; questions never leave it.
+- **Local inference**: Embedding and reranking use the lawbot model server; answers use a standalone generation server. Both run on the same Mac.
 
 ### Components
 
 ```
-Browser ──▶ Web app (services/chatbot, React UI)──┐
-            retrieval, ranking, prompt, UI          │  OpenAI-compatible HTTP + token (127.0.0.1)
-                                                    ▼
-            Law change monitor (services/monitor) ──▶ Model server (services/model-server)
-            git repos, law.go.kr API → events, summaries   embedding · reranker · answer models (MLX)
+Browser ──▶ Web app (services/chatbot, React UI)
+              ├──▶ Embedding/reranking server (services/model-server)
+              └──▶ Standalone generation server (outside this repo: ~/Services/qwen27b)
+Law change monitor (services/monitor) ──▶ Standalone generation server
+                         OpenAI-compatible HTTP + separate tokens (127.0.0.1)
 ```
 
 Details are in [docs/architecture.md](docs/architecture.md) (Korean).

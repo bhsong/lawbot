@@ -17,6 +17,90 @@ from test_source_hub import registry as registry
 STAMP = datetime(2026, 11, 13, 6, 30, tzinfo=KST)
 
 
+def test_daily_finishes_collection_calendar_articles_summary_and_erp_without_removed_sources(
+    registry, tmp_path, monkeypatch
+):
+    from types import SimpleNamespace
+
+    from law_monitor import checks
+    from law_monitor import cli as monitor_cli
+    from law_monitor.app import Monitor
+    from law_monitor.collectors.base import CollectResult
+    from law_monitor.config import load as monitor_config
+    from law_monitor.paths import Paths
+
+    assert {row['agency'] for row in registry.snapshot()['sources']} == {
+        'lawgo',
+        'moel',
+        'mofe',
+        'nts',
+        'hometax',
+    }
+    calls = []
+
+    class Collector:
+        def __init__(self, name):
+            self.name = name
+
+        def has_baseline(self, state):
+            return True
+
+        def collect(self, ctx):
+            calls.append(self.name)
+            return CollectResult()
+
+    cfg = daily.DailyConfig(
+        root=tmp_path,
+        monitor_home=tmp_path / 'monitor',
+        erp_data=tmp_path / 'erp',
+        calendar_db=tmp_path / 'calendar.db',
+        materials_db=tmp_path / 'materials.db',
+        public=tmp_path / 'daily.json',
+    )
+    monitor = Monitor(
+        Paths(cfg.monitor_home),
+        monitor_config(),
+        collectors=[Collector(name) for name in ('legalize_law', 'legalize_admrule')],
+    )
+    monkeypatch.setattr(monitor, 'refresh_article_repo', lambda: None)
+
+    def check_command(command, **kwargs):
+        calls.append('calendar' if 'law_calendar.sync' in command else 'articles')
+        return SimpleNamespace(returncode=0, stdout='ok', stderr='')
+
+    def managed_command(config, project, *args, **kwargs):
+        selection = monitor_cli._daily_selection(Path(args[args.index('--source-plan') + 1]))
+        assert selection.collectors == ['legalize_law', 'legalize_admrule']
+        code = monitor_cli._daily(monitor, None, selection=selection)
+        return SimpleNamespace(returncode=code)
+
+    def erp(config, *, collect):
+        assert collect
+        calls.append('erp')
+        return {'outcome': 'ok', 'new_count': 0}
+
+    monkeypatch.setattr(checks.subprocess, 'run', check_command)
+    monkeypatch.setattr(monitor_cli, '_summarize', lambda *args, **kwargs: calls.append('summary') or 0)
+    monkeypatch.setattr(daily, 'command', managed_command)
+    monkeypatch.setattr(daily, 'run_erp', erp)
+    monkeypatch.setattr(daily, 'COLLECTORS', {})
+    monkeypatch.setattr(
+        daily, 'capture', lambda *args: {'erp': {'items': [], 'history': []}, 'rules': None, 'news': {}}
+    )
+    try:
+        result = daily.run(registry, cfg, now=lambda: STAMP)
+        assert result['status'] == 'ok'
+        assert calls == ['legalize_law', 'legalize_admrule', 'calendar', 'articles', 'summary', 'erp']
+        assert {entry['sourceId'] for entry in read_snapshot(cfg.public)['sources']} >= {
+            'legalize_law',
+            'legalize_admrule',
+            'moel-rss-lawinfo',
+            'mofe-tax-reform',
+        }
+    finally:
+        monitor.state.conn.close()
+
+
 @pytest.mark.parametrize(
     ('setting', 'enabled'),
     [(None, True), (('group', 'law'), False), (('agency', 'lawgo'), False), (('source', 'legalize_law'), False)],
@@ -51,14 +135,14 @@ def test_daily_plan_pauses_articles_when_all_individual_laws_are_off(registry):
 
 def test_daily_reuses_one_snapshot_and_exposes_same_public_data(registry, tmp_path, monkeypatch):
     version = registry.patch(
-        'source', 'assembly_notice', {'enabled': False}, actor='fixture', reason='fixture', version=0
+        'source', 'legalize_admrule', {'enabled': False}, actor='fixture', reason='fixture', version=0
     )
-    registry.patch('source', 'moel-rss-notice', {'enabled': True}, actor='fixture', reason='fixture', version=version)
+    registry.patch('source', 'moel-rss-lawinfo', {'enabled': True}, actor='fixture', reason='fixture', version=version)
     calls = []
 
     def legacy(config, plan, previous):
         calls.append(('legacy', plan))
-        assert 'assembly_notice' not in plan['collectors']
+        assert 'legalize_admrule' not in plan['collectors']
         return {source: {'outcome': 'ok', 'run_id': plan['run_id'], 'new_count': 0} for source in plan['collectors']}
 
     def local(config, *, collect):
@@ -90,7 +174,7 @@ def test_daily_reuses_one_snapshot_and_exposes_same_public_data(registry, tmp_pa
     monkeypatch.setattr(daily, 'run_legacy', legacy)
     monkeypatch.setattr(daily, 'run_erp', local)
     monkeypatch.setattr(daily, 'capture', capture)
-    monkeypatch.setattr(daily, 'COLLECTORS', {'moel-rss-notice': agency})
+    monkeypatch.setattr(daily, 'COLLECTORS', {'moel-rss-lawinfo': agency})
     first = daily.run(registry, cfg, now=lambda: STAMP)
     assert first['status'] == 'partial'
     assert [entry[0] for entry in calls] == ['legacy', 'erp', 'agency', 'capture']
@@ -99,8 +183,8 @@ def test_daily_reuses_one_snapshot_and_exposes_same_public_data(registry, tmp_pa
     assert saved['snapshotHash'] == first['snapshot_hash']
     assert saved['feeds']['news']['moel']['items']
     sources = {source['sourceId']: source for source in saved['sources']}
-    assert sources['moel-rss-notice']['outcome'] == 'blocked'
-    assert sources['assembly_notice']['outcome'] == 'disabled'
+    assert sources['moel-rss-lawinfo']['outcome'] == 'blocked'
+    assert sources['legalize_admrule']['outcome'] == 'disabled'
     assert sources['legalize_law']['newCount'] == 0
     again = daily.run(registry, cfg, now=lambda: STAMP + timedelta(hours=2))
     assert again['snapshot_hash'] == first['snapshot_hash'] and cfg.public.read_bytes() == first_bytes
@@ -113,7 +197,7 @@ def test_daily_reuses_one_snapshot_and_exposes_same_public_data(registry, tmp_pa
     assert json.loads(first_bytes)['dayKst'] == '2026-11-13'
 
     version = registry.snapshot()['config_version']
-    registry.patch('source', 'moel-rss-notice', {'enabled': False}, actor='fixture', reason='fixture', version=version)
+    registry.patch('source', 'moel-rss-lawinfo', {'enabled': False}, actor='fixture', reason='fixture', version=version)
     refreshed = daily.run(registry, cfg, now=lambda: STAMP + timedelta(hours=3), republish=True)
     assert refreshed['snapshot_hash'] != first['snapshot_hash']
     assert [entry[0] for entry in calls] == ['legacy', 'erp', 'agency', 'capture', 'erp', 'capture']
@@ -227,14 +311,14 @@ def test_collection_resumes_after_failed_capture_without_repeating_completed_sta
 
 
 def test_changes_follow_public_revisions_beyond_latest_ten(registry):
-    registry.patch('source', 'moel-rss-notice', {'enabled': True}, actor='fixture', reason='fixture', version=0)
+    registry.patch('source', 'moel-rss-lawinfo', {'enabled': True}, actor='fixture', reason='fixture', version=0)
     plan = registry.snapshot()
     initial = [
         (
             str(i),
             {
                 'title': '가상 글',
-                'canonical_url': f'https://www.moel.go.kr/news/notice?id={i}',
+                'canonical_url': f'https://www.moel.go.kr/info/lawinfo/lawmaking/view.do?bbs_seq={i}',
                 'revision': 1,
                 'event': 'new_post' if i == 10 else 'baseline',
             },
@@ -242,12 +326,12 @@ def test_changes_follow_public_revisions_beyond_latest_ten(registry):
         for i in range(11)
     ]
     feeds = {'erp': {'items': []}, 'rules': None, 'news': {}}
-    changes, ledger = daily.change_records(plan, {'moel-rss-notice': initial}, feeds, '2026-11-13', {})
+    changes, ledger = daily.change_records(plan, {'moel-rss-lawinfo': initial}, feeds, '2026-11-13', {})
     assert len(ledger) == 11 and len(changes) == 1 and changes[0]['url'].endswith('=10')
     updated = [*initial[:-1], ('10', initial[-1][1] | {'revision': 2, 'event': 'post_modified'})]
-    changes, ledger = daily.change_records(plan, {'moel-rss-notice': updated}, feeds, '2026-11-14', ledger)
+    changes, ledger = daily.change_records(plan, {'moel-rss-lawinfo': updated}, feeds, '2026-11-14', ledger)
     assert len(changes) == 1 and changes[0]['change'] == 'modified'
-    assert daily.change_records(plan, {'moel-rss-notice': updated}, feeds, '2026-11-15', ledger)[0] == []
+    assert daily.change_records(plan, {'moel-rss-lawinfo': updated}, feeds, '2026-11-15', ledger)[0] == []
 
 
 def test_attachment_replacement_and_new_presentation_fields_preserve_previous_ledger(registry):

@@ -20,8 +20,8 @@ def test_capture_binds_public_law_rows_to_the_imported_monitor_revision(tmp_path
         with conn:
             conn.execute("INSERT INTO laws VALUES ('law','가상 법률')")
             conn.execute(
-                """INSERT INTO change_events(id,law_id,kind,status,review_state,promulgated_on,source_url,collected_at,verified_at)
-                   VALUES ('event','law','effective','public','approved','2026-11-13','https://www.law.go.kr/법령/가상',?,?)""",
+                """INSERT INTO change_events(id,law_id,status,review_state,promulgated_on,source_url,collected_at,verified_at)
+                   VALUES ('event','law','public','approved','2026-11-13','https://www.law.go.kr/법령/가상',?,?)""",
                 (STAMP, STAMP),
             )
             conn.execute("INSERT INTO source_snapshots VALUES ('snapshot','event',?,'{}','1',?,?)", (raw, STAMP, STAMP))

@@ -80,7 +80,7 @@ def classify_employment(source: str, *, weekly: bool = False) -> bool | None:
     return positive
 
 
-_PAY_SCOPE_UNCERTAIN = re.compile(r'\s*(?:인|는)지|\s*여부|\s*일지')
+_PAY_SCOPE_UNCERTAIN = re.compile(r'(?<!\s)\s*(?:(?:인|는)지|여부|일지)')
 _BASE_WAGE_NAME = r'기본\s*(?:임금|급)'
 _BASE_WAGE = rf'{_BASE_WAGE_NAME}\s*(?:(?:을|은|도|과|에|까지)\s*)?'
 _BASE_INCLUDED = re.compile(

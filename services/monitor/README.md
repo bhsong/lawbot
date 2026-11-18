@@ -5,9 +5,9 @@
 - 설계: [docs/plans/monitor-collector.md](../../docs/plans/monitor-collector.md) (원 계획서: [monitor-collector-spec.md](../../docs/plans/monitor-collector-spec.md))
 - 지금 있는 수집기: `legalize_law`([legalize-kr](https://github.com/legalize-kr/legalize-kr), 법률·시행령·시행규칙), `legalize_admrule`([admrule-kr](https://github.com/legalize-kr/admrule-kr), 고시 등). 변경은 공개 git 저장소에서 찾고, 이벤트마다 법제처 Open API로 개정문·제개정이유를 채웁니다 ([계획](../../docs/archives/monitor-lawgo.md)).
 - 별표·서식: `forms` 대상 법령과 추적 행정규칙은 신·구판의 별표·서식 텍스트를 비교해 바뀐 것만 `lawgo_forms`·`lawgo_admrul` 이벤트로 만들고, 그 서식의 PDF·HWP 원본을 받습니다.
-- 요약(2단계): 요약하지 않은 이벤트를 운영 모델 서버의 `qwen3.8-27b-4bit`로 요약해 `data/summaries/YYYY-MM-DD.md`를 만듭니다 ([계획](../../docs/archives/monitor-summary.md)).
+- 요약(2단계): 요약하지 않은 이벤트를 단독 생성 서버의 `qwen3.8-27b-4bit`로 요약해 `data/summaries/YYYY-MM-DD.md`를 만듭니다 ([계획](../../docs/archives/monitor-summary.md)).
 - 점검: `config/targets.yaml`의 `checks`에 지정된 캘린더 sync와 챗봇 조문 데이터 자동 갱신을 `daily`가 순차 실행합니다.
-- 국회 법률안과 입법예고는 아래 절의 선택 수집기로 연결합니다. 전자신고 파일 레이아웃(지급명세서 전산매체 제출요령)은 3단계 연례 리마인드 대상입니다 ([결정](../../docs/plans/monitor-collector.md) 9절).
+- 전자신고 파일 레이아웃(지급명세서 전산매체 제출요령)은 3단계 연례 리마인드 대상입니다 ([결정](../../docs/plans/monitor-collector.md) 9절).
 
 ## 설치
 
@@ -63,29 +63,13 @@ uv run --project services/law-calendar --locked python -m law_calendar.manage pr
 - 한 수집기가 3번 연속 실패하면 `collector_failing` 이벤트가 한 번 생깁니다.
 - Git 수집에서 `bootstrap --force`를 실행하면 현재 저장소를 새 기준점으로 삼습니다. 새 행정규칙을 현재 상태부터 추적해야 할 때 사용합니다. 설정만 바꾸면 기존 행정규칙은 다음 개정부터 잡힙니다.
 
-## 국회 법률안과 입법예고
-
-`services/monitor/.env`의 `LAW_ASSEMBLY_KEY`를 사용합니다. 공통 법령 범위의 `keywords`와 `config/targets.yaml`의 `prelegislation.assembly.age`에 따라 의안검색·진행 중·종료 예고를 읽습니다. 제목과 키워드를 정규화한 뒤 포함 여부를 검사합니다. [공통 법령 범위](../../packages/lawbot-common/src/lawbot_common/law_scope.json)
-
-배포 전에는 임시 home에서 아래 명령을 사용합니다.
-
-```bash
-uv run law-monitor --home "$MONITOR_HOME" bootstrap --only assembly_bill
-uv run law-monitor --home "$MONITOR_HOME" bootstrap --only assembly_notice
-uv run law-monitor --home "$MONITOR_HOME" collect --only assembly_notice
-```
-
-기준선을 잡은 뒤 첫 정상 예고 수집에서 해당 키워드의 진행 중 예고를 검토 후보로 발행합니다. 이후 의안·예고 변경을 이어서 추적합니다. 공통 키워드나 국회 대수를 바꿀 때는 다음 정기 실행 전에 `assembly_bill`과 `assembly_notice` 각각에 `bootstrap --only <수집기> --force`를 실행해 기준을 갱신합니다.
-
-강제 bootstrap은 기존 관측 순번을 유지하면서 비교 기준을 갱신합니다. 기준에 흡수된 변경은 이벤트 발행 대상에서 제외됩니다. 정상 수집에서 들어온 변경 예고는 캘린더 sync에서 공식 상세의 의안번호와 기간이 일치하면 자동 공개됩니다. 의안 공개는 수동 검토를 거칩니다.
-
-일일 수집과 예고 자동 공개를 사용하려면 캘린더 DB v8과 두 국회 기준선이 준비된 뒤 Monitor 환경의 `LAW_ASSEMBLY_ENABLED=1`을 사용합니다. 이 값은 YAML 활성화 설정에 우선합니다. 기존 06:30 작업에서 각 국회 수집기 실패를 별도로 기록합니다. 국회 이벤트는 공식 날짜와 상태로 별도 요약하므로 모델 호출 수를 늘리지 않습니다. [캘린더 공개 검토 절차](../law-calendar/README.md#국회-이벤트-공개-검토) · [실제 API 검증 방법](../../docs/evals/2026-11-05-assembly-api-validation-guide.md)
-
 ## 요약 (2단계)
 
 - 대상: `state.db`의 `events`에서 `processed_at`이 빈 것. 요약이 끝나면 `processed_at`을 적습니다.
 - 법령·행정규칙 이벤트 하나에 모델 호출 하나입니다. 같은 개정의 별표서식 이벤트(`parent_event_id`)는 그 호출에 함께 넣습니다. 입력은 호출당 약 12,000자이고, 넘치면 뒤를 자르고 내용을 못 넣은 서식은 제목만 넣습니다.
-- 모델 설정은 웹앱과 같은 `LAWBOT_MODEL_SERVER`·`LAWBOT_MODEL_TOKEN`입니다. 환경변수 → `services/monitor/.env` → **레포 최상위 `.env`** 순서로 읽어서, 운영 worktree에서는 따로 넣을 것이 없습니다. 모델 id는 `LAW_MONITOR_SUMMARY_MODEL`(기본 `qwen3.8-27b-4bit`, 환경변수나 `services/monitor/.env`에만: 레포 최상위 `.env`에는 `LAWBOT_*`만 적을 수 있음). `.env` 형식은 웹앱과 같은 규칙입니다(`export`·따옴표·줄 끝 ` # 주석` 허용, `lawbot_common.envfile`). `services/monitor/.env`에는 `LAW_*`·`DATA_GO_KR_*`·`LAWBOT_MODEL_SERVER`·`LAWBOT_MODEL_TOKEN`만 적을 수 있고, 다른 변수가 있으면 실행을 거부합니다. 생성 설정은 temperature 0, 최대 800토큰, thinking 끔.
+- 생성 설정은 웹앱과 같은 필수 `LAWBOT_LLM_BASE_URL`·`LAWBOT_LLM_API_KEY`입니다. 환경변수 → `services/monitor/.env` → 레포 최상위 `.env` 순서로 읽습니다. 로컬 주소도 전용 키 16자 이상이 필요하며 모델 서버 토큰은 쓰지 않습니다. 외부 API는 https와 `LAWBOT_LLM_ALLOW_EXTERNAL=1`이 필요합니다. 모델 id는 `LAW_MONITOR_SUMMARY_MODEL`(기본 `qwen3.8-27b-4bit`, 환경변수나 `services/monitor/.env`에만)입니다. `services/monitor/.env`에는 `LAW_*`·`DATA_GO_KR_*`와 위 생성 설정 세 항목만 허용합니다. 생성 설정은 temperature 0, 최대 800토큰, thinking 끔입니다.
+- 생성 설정은 요약 단계에서만 검증합니다. URL·키 누락이나 짧은 키는 요약 실패로 보고하며, `daily`에서 앞서 실행한 수집·캘린더 sync·조문 갱신과 수집 기록을 되돌리지 않습니다. `bootstrap`·`collect`·`check`·`replay`는 생성 설정을 검증하지 않습니다.
+- 생성 서버 관리·재시작 위치는 저장소 밖 `~/Services/qwen27b`입니다(`run.sh`, launchd `local.qwen27b`). 전용 Bearer 토큰을 붙여 `<LAWBOT_LLM_BASE_URL>/models`의 모델 `id`·`revision`·`mlx_lm_version`을 확인합니다. 루프백 고정·모든 경로 인증·FIFO 대기열과 503 `server_busy`·`server_not_ready` 계약은 [운영 문서](../../docs/operations.md#단독-생성-서버-외부-의존-서비스)를 따릅니다. 다른 앱도 같은 전용 토큰과 설정한 모델 id를 사용해야 합니다.
 - md 구성: 머리(실행 시각·수집 요약 줄·이벤트 수) → 한눈에 보기 번호별 절 → 법령마다 모델 요약 + 바뀐 별표서식 목록 + 원문 이벤트 경로·법제처 링크 → 경고(수집기 연속 실패). 새 이벤트가 없으면 "새 변경 없음".
 - 파일 날짜는 **요약을 실행한 날**입니다. 내용은 "지난 요약 실행(처음이면 bootstrap) ~ 이번 실행" 사이에 저장소에 새로 들어와 감지된 변경이고, md 머리의 `대상:` 줄에 그 구간을 적습니다. 공포일은 항목마다 따로 나옵니다 (legalize-kr은 커밋 날짜가 공포일이라 오늘 들어온 개정이 과거 공포일일 수 있음).
 - 같은 날 두 번 실행하면 두 번째 파일은 `YYYY-MM-DD-HHMMSS.md`입니다 (앞 파일을 덮지 않음).
@@ -133,30 +117,14 @@ uv run law-monitor --home "$MONITOR_HOME" collect --only assembly_notice
 
 ## 추적 대상 바꾸기
 
-법률·시행령·시행규칙 수집은 공통 법령 범위의 `folder`에 해당하는 Legalize KR `kr/<폴더>/`를 추적합니다. `category`는 수집 분류이며 `keywords`는 국회 제목 필터에 사용합니다. [공통 법령 범위](../../packages/lawbot-common/src/lawbot_common/law_scope.json)
+법률·시행령·시행규칙 수집은 공통 법령 범위의 `folder`에 해당하는 Legalize KR `kr/<폴더>/`를 추적합니다. `category`는 수집 분류입니다. [공통 법령 범위](../../packages/lawbot-common/src/lawbot_common/law_scope.json)
 
-별표·서식, 행정규칙, 수집기 설정과 점검 명령은 `config/targets.yaml` 또는 `--config`로 지정한 YAML에서 관리합니다. 이전 설정의 `laws`와 `prelegislation.keywords`는 실행 오류가 되므로 YAML에서 제거하고 공통 법령 범위에 반영합니다. 부가가치세법은 법령과 별표·서식 수집 범위 및 국회 제목 키워드에서 제외했습니다. 행정규칙은 아래 규칙으로 별도 추적합니다.
+별표·서식, 행정규칙, 수집기 설정과 점검 명령은 `config/targets.yaml` 또는 `--config`로 지정한 YAML에서 관리합니다. 이전 설정의 `laws`는 실행 오류가 되므로 YAML에서 제거하고 공통 법령 범위에 반영합니다. 부가가치세법은 법령과 별표·서식 수집 범위에서 제외했습니다. 행정규칙은 아래 규칙으로 별도 추적합니다.
 
 - `admrules.names`: 소관부처명 + 행정규칙명 정규식. 최저임금처럼 이름에 연도가 들어가는 고시는 `^\d{4}년 적용 최저임금(안)? 고시$`처럼 씁니다.
 - `admrules.keyword_rules`: 소관부처명 + 이름 키워드 (하나라도 들어 있으면 대상).
 - `agency`는 파일 머리말 `소관부처명`과 정확히 같아야 합니다 (국세청 고시는 경로가 `재정경제부/국세청/...`이지만 소관부처명은 `국세청`).
 - `forms`: 별표·서식을 비교할 법령(머리말 `제목`, 띄어쓰기 있음)과 구분(`별표`·`서식`). 추적 행정규칙의 별지·별표는 설정 없이 모두 비교합니다.
-
-## launchd 등록 (매일 06:30)
-
-템플릿은 `law-monitor daily`(수집 → 캘린더 import → 기존 챗봇 점검 → 요약)를 실행합니다. 캘린더는 독립 Python 환경의 하위 프로세스로 실행하며 monitor가 calendar 패키지를 import하지 않습니다. 기본 설정에서 캘린더 점검이 실패해도 뒤 점검과 요약은 이어집니다.
-
-등록 전에 캘린더 환경을 `uv sync --project services/law-calendar --locked`로 준비하고, [캘린더 사용법](../law-calendar/README.md)에 따라 별도 DB를 초기화/마이그레이션합니다. `deploy/com.lawbot.monitor.plist.example`의 `__UV__`·`__PROD_DIR__`·`__LOG_DIR__`·`__CALENDAR_DB__`를 채워 `~/Library/LaunchAgents/com.lawbot.monitor.plist`로 복사합니다. `__CALENDAR_DB__`는 캘린더 DB 절대 경로이고, `__UV__`는 `LAW_MONITOR_UV` 환경변수에도 사용합니다. 스케줄은 Mac 시스템 시간대가 KST일 때 매일 06:30입니다.
-
-직접 점검하는 경우에도 프로세스 환경에 `LAW_CALENDAR_DB`를 지정합니다. `{uv}`는 `LAW_MONITOR_UV` 또는 PATH에서 찾은 uv를 사용하고 `{root}`는 저장소 루트입니다. 스케줄은 사전 설치된 캘린더 환경을 `--no-sync`로 실행합니다. 아래 launchctl 명령은 실제 운영 등록/실행/해제 작업입니다.
-
-```bash
-launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.lawbot.monitor.plist
-launchctl kickstart gui/$(id -u)/com.lawbot.monitor     # 바로 한 번 실행해 보기
-launchctl bootout gui/$(id -u)/com.lawbot.monitor       # 해제
-```
-
-등록 전에 같은 worktree에서 `uv run law-monitor bootstrap`을 한 번 실행해야 합니다 (안 하면 collect가 종료 코드 2로 거부).
 
 ## 테스트·린트
 

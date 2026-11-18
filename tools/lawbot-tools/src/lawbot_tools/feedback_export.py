@@ -91,9 +91,15 @@ def export(review_csv, out, articles=None, frac=VAL_FRAC):
     check_private(out, '--out')
     d, records = read_review(review_csv)
     d = d[(d['h_ok'] != '') | (d['h_gold'] != '')]
-    d = d[~d['feedback_id'].isin(f for f, record in records.items() if record.get('response_source') == 'exact_cache')]
     skipped = [f for f in d['feedback_id'] if records[f].get('profile') not in SUPPORTED_PROFILES]
     d = d[~d['feedback_id'].isin(skipped)]
+    required = ('question', 'label', 'reason', 'hits', 'model', 'fmt', 'system', 'answer_raw')
+    incomplete = [
+        f
+        for f in d['feedback_id']
+        if any(key not in records[f] or (records[f][key] is None and key != 'reason') for key in required)
+    ]
+    d = d[~d['feedback_id'].isin(incomplete)]
     profiles = sorted({records[f]['profile'] for f in d['feedback_id']})
     override = article_docs(articles) if articles is not None else None
     docs_by_profile = {p: override if override is not None else article_docs(deploy.article_paths(p)) for p in profiles}
@@ -152,6 +158,8 @@ def export(review_csv, out, articles=None, frac=VAL_FRAC):
     if skipped:
         supported = '·'.join(SUPPORTED_PROFILES)
         lines.append(f'지원하지 않는 프로필이라 뺌 {len(skipped)}: {skipped[:5]} (지원 범위 {supported})')
+    if incomplete:
+        lines.append(f'학습 필수 필드가 없어 뺌 {len(incomplete)}: {incomplete[:5]}')
     no_gold = [f for f, g in golds.items() if not g and records[f].get('reason') == 'retrieval']
     if no_gold:  # 검색 오류는 정답 조문이 있어야 임베딩 쌍이 된다
         lines.append(f'⚠ 검색 오류인데 h_gold가 빈 행 {len(no_gold)}: {no_gold[:5]}')

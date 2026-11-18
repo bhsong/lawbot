@@ -17,15 +17,17 @@ from zoneinfo import ZoneInfo
 import httpx
 from openai import OpenAI
 
-from lawbot import deploy, envfile, manifest, security, service, settings
-from lawbot.api_client import ModelServerClient, request_timeout
+from lawbot import deploy, envfile, manifest, service, settings
+from lawbot.api_client import ModelServerClient, ModelServerError, request_timeout
 from lawbot.calc_corpus import calculator_compatibility
 from lawbot.calc_extract import FIELD_DESCRIPTIONS, SELECT_MAX_TOKENS, SELECT_SYSTEM, label_system
 from lawbot.calc_gate import is_calculation_question
 from lawbot.calc_router import route_calculation
 from lawbot.llm import LLM, TEMPERATURE
 from lawbot.paths import ROOT
-from lawbot_common.api import CHAT_PATH, HEALTH_PATH, MODELS_PATH, ModelsResponse
+from lawbot_common.api import HEALTH_PATH
+from lawbot_common.llm_endpoint import endpoint as llm_endpoint
+from lawbot_common.llm_endpoint import generation_model
 
 VAL = ROOT / 'services/chatbot/tests/fixtures/calc_router_val.json'
 FIXTURES = VAL.parent
@@ -124,19 +126,33 @@ def _configuration(cfg, client):
         response.raise_for_status()
         health = response.json()
     except httpx.HTTPError, ValueError:
-        raise SystemExit('공유 모델 서버의 준비 상태를 확인할 수 없습니다.') from None
-    if not health.get('ready') or health.get('max_concurrent') != 1:
-        raise SystemExit('공유 모델 서버가 준비되고 동시 생성 상한이 1이어야 합니다.')
+        raise SystemExit('임베딩·리랭크 모델 서버의 준비 상태를 확인할 수 없습니다.') from None
+    if not health.get('ready'):
+        raise SystemExit('임베딩 모델 서버가 준비되어야 합니다.')
     pro = next(spec for spec in cfg.profile.models if spec.key == 'pro')
     advertised = {m['id']: m for m in client.models()}
-    missing = service.missing_models(list(advertised.values()), cfg.profile, cfg.reranker, False)
-    model_ids = (pro.model, cfg.profile.emb_model) + ((cfg.reranker.model,) if cfg.reranker else ())
+    with OpenAI(
+        base_url=cfg.llm_url,
+        api_key=cfg.llm_key,
+        max_retries=0,
+        timeout=5,
+        http_client=httpx.Client(trust_env=False),
+    ) as generation:
+        chat = None if cfg.llm_external else service.generation_models(generation)
+    missing = service.missing_models(list(advertised.values()), cfg.profile, cfg.reranker, chat_available=chat)
+    model_ids = (cfg.profile.emb_model,) + ((cfg.reranker.model,) if cfg.reranker else ())
     if missing or any(not advertised[model]['loaded'] for model in model_ids):
-        raise SystemExit('평가에 필요한 모델이 모두 상주 중이어야 합니다.')
+        raise SystemExit('평가에 필요한 임베딩·리랭커 상주 상태와 생성 모델 id를 확인하세요.')
+    chat_model = {} if cfg.llm_external else generation_model(chat, pro.model)
+    if not cfg.llm_external and not chat_model.get('revision'):
+        raise SystemExit('생성 모델 revision을 확인하세요.')
+    if not cfg.llm_external and not chat_model.get('mlx_lm_version'):
+        raise SystemExit('생성 서버 mlx_lm_version을 확인하세요.')
     return {
         'webapp_commit': subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=ROOT, text=True).strip(),
         'model_server_commit': health.get('commit'),
-        'server_max_concurrent': health['max_concurrent'],
+        'server_max_concurrent': chat_model.get('max_concurrent'),
+        'generation_server_mlx_lm_version': chat_model.get('mlx_lm_version'),
         'profile': cfg.profile.name,
         'dataset_version': (manifest.load(cfg.profile.articles) or {}).get('dataset_version'),
         'articles_sha256': manifest.sha256(cfg.profile.articles),
@@ -147,7 +163,10 @@ def _configuration(cfg, client):
         'router_timeout_s': cfg.read_timeout,
         'answer_max_tokens': 1024,
         'embedding_max_seq': cfg.profile.max_seq,
-        'models': {model: {key: advertised[model].get(key) for key in ('type', 'revision')} for model in model_ids},
+        'models': {
+            **{model: {key: advertised[model].get(key) for key in ('type', 'revision')} for model in model_ids},
+            pro.model: {'revision': chat_model.get('revision')},
+        },
         'model_residency': {model: advertised[model]['loaded'] for model in model_ids},
         'reranker': {
             'revision': advertised[cfg.reranker.model].get('revision'),
@@ -306,10 +325,10 @@ def _quality(routes):
 def _live(groups, samples, output, post_limit):
     _time_guard()
     envfile.load()
-    env = {k: v for k, v in os.environ.items() if k not in ('LAWBOT_DB', 'LAWBOT_EXACT_CACHE_DB')}
+    env = {k: v for k, v in os.environ.items() if k != 'LAWBOT_DB'}
     cfg = settings.load(env | {'LAWBOT_CORPUS': 'csv', 'LAWBOT_REQUEST_LOG': '', 'LAWBOT_EMBED_CACHE': '0'})
-    if cfg.profile.name != 'v5' or cfg.llm_external or [m.key for m in cfg.profile.models] != ['pro']:
-        raise SystemExit('개발 CSV v5 프로필과 공유 서버의 Pro 모델을 사용하세요.')
+    if cfg.profile.name != 'v5' or [m.key for m in cfg.profile.models] != ['pro']:
+        raise SystemExit('개발 CSV v5 프로필과 Pro 모델을 사용하세요.')
     compatibility = calculator_compatibility(cfg.profile.articles)
     if not compatibility or any(compatibility.values()):
         raise SystemExit('평가 코퍼스에서 계산기 근거 조문이 일치해야 합니다.')
@@ -381,45 +400,38 @@ def _heldout_settings():
     try:
         envfile.load()
         profile = deploy.get_profile()
-        server = security.model_server_url()
-        token = security.model_token()
-        endpoint, _, external = security.llm_endpoint(server)
+        base_url, token, external = llm_endpoint()
     except OSError, ValueError, RuntimeError:
         raise _HeldoutStop('configuration_error') from None
     pro = next((spec for spec in profile.models if spec.key == 'pro'), None)
-    if not server or external or endpoint != f'{server}/v1' or profile.name != 'v5' or pro is None:
+    if profile.name != 'v5' or pro is None:
         raise _HeldoutStop('configuration_error')
-    return server, token, pro.model
+    return base_url, token, pro.model, external
 
 
 def _webapp_commit():
     return subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=ROOT, text=True, timeout=5).strip()
 
 
-def _heldout_configuration(client, model, fixture_sha256, articles_sha256):
+def _heldout_configuration(client, model, fixture_sha256, articles_sha256, *, external=False):
     try:
-        health = client.get(f'{HEALTH_PATH}?runtime=true').raise_for_status().json()
-        if (
-            not isinstance(health, dict)
-            or health.get('ready') is not True
-            or type(health.get('max_concurrent')) is not int
-            or health['max_concurrent'] != 1
-            or not isinstance(health.get('commit'), str)
-            or not health['commit']
-        ):
-            raise _HeldoutStop('server_not_ready')
-        cards = ModelsResponse.model_validate(client.get(MODELS_PATH).raise_for_status().json()).data
-        pro = next((card for card in cards if card.id == model and card.type == 'chat'), None)
-        if pro is None or not pro.loaded or not pro.revision:
-            raise _HeldoutStop('pro_not_ready')
+        revision = concurrent = mlx_lm_version = None
+        if not external:
+            cards = service.generation_models(client)
+            pro = next((card for card in cards if card['id'] == model), None)
+            if pro is None or not pro.get('revision') or not pro.get('mlx_lm_version'):
+                raise _HeldoutStop('pro_not_ready')
+            concurrent = generation_model(cards, model)['max_concurrent']
+            revision = pro['revision']
+            mlx_lm_version = pro['mlx_lm_version']
         webapp_commit = _webapp_commit()
-    except httpx.HTTPError, OSError, ValueError, subprocess.SubprocessError:
+    except ModelServerError, httpx.HTTPError, OSError, ValueError, subprocess.SubprocessError:
         raise _HeldoutStop('configuration_probe_failed') from None
     return {
         'webapp_commit': webapp_commit,
-        'model_server_commit': health['commit'],
-        'server_max_concurrent': health['max_concurrent'],
-        'model': {'id': pro.id, 'revision': pro.revision, 'loaded': pro.loaded},
+        'generation_server_mlx_lm_version': mlx_lm_version,
+        'model': {'id': model, 'revision': revision},
+        'server_max_concurrent': concurrent,
         'fixture_sha256': fixture_sha256,
         'articles_sha256': articles_sha256,
         'router_sha256': _router_sha256(),
@@ -559,19 +571,25 @@ def _live_heldout(fixture, expected_hash, output, *, suite=HELDOUT_SUITE, count=
     try:
         cases = _heldout_cases(fixture.read_bytes(), expected_hash, count)
         report['memory_pressure_level'] = _heldout_guard()
-        server, token, model = _heldout_settings()
-        endpoint = httpx.URL(f'{server}{CHAT_PATH}')
+        base_url, token, model, external = _heldout_settings()
+        endpoint = httpx.URL(f'{base_url}/chat/completions')
         articles = HELDOUT_CORPUS.read_bytes()
         compatibility = calculator_compatibility(articles)
         if not compatibility or any(compatibility.values()):
             raise _HeldoutStop('corpus_mismatch')
-        with httpx.Client(
-            base_url=server, headers={'Authorization': f'Bearer {token}'}, timeout=5, trust_env=False
+        with OpenAI(
+            base_url=base_url,
+            api_key=token,
+            max_retries=0,
+            timeout=5,
+            http_client=httpx.Client(trust_env=False),
         ) as checks:
-            report['before'] = _heldout_configuration(checks, model, expected_hash, sha256(articles).hexdigest())
+            report['before'] = _heldout_configuration(
+                checks, model, expected_hash, sha256(articles).hexdigest(), external=external
+            )
             transport = httpx.Client(trust_env=False, event_hooks={'request': [on_request], 'response': [on_response]})
             with OpenAI(
-                base_url=f'{server}/v1',
+                base_url=base_url,
                 api_key=token,
                 max_retries=0,
                 timeout=request_timeout(HELDOUT_READ_TIMEOUT),  # pyright: ignore[reportArgumentType]
@@ -589,7 +607,6 @@ def _live_heldout(fixture, expected_hash, output, *, suite=HELDOUT_SUITE, count=
                         'read_timeout',
                         'write_timeout',
                         'pool_timeout',
-                        'queue_full',
                         'model_error',
                     ):
                         raise _HeldoutStop(row['reason'])
@@ -598,7 +615,7 @@ def _live_heldout(fixture, expected_hash, output, *, suite=HELDOUT_SUITE, count=
                     _checkpoint(output, report)
             report['memory_pressure_level'] = _heldout_guard()
             report['after'] = _heldout_configuration(
-                checks, model, manifest.sha256(fixture), manifest.sha256(HELDOUT_CORPUS)
+                checks, model, manifest.sha256(fixture), manifest.sha256(HELDOUT_CORPUS), external=external
             )
         report['status'] = 'completed'
         report['valid'] = report['before'] == report['after']

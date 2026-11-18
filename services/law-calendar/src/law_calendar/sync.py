@@ -9,16 +9,14 @@ from contextlib import closing
 from datetime import datetime
 from pathlib import Path
 
-from law_calendar.assembly_ingest import ASSEMBLY_TYPES, import_assembly
 from law_calendar.db import read_database, write_database
 from law_calendar.import_failures import ImportInputError, error_message, record_import_failure
 from law_calendar.ingest import ARTICLE, Diff, import_files, inside
-from law_calendar.notice_content import synchronize_notice_content
 from law_calendar.validation import timestamp
-from lawbot_common.law_scope import LawScope, load_law_scope, normalize_law_text, scope_keywords
+from lawbot_common.law_scope import LawScope, load_law_scope, normalize_law_text
 
 LAW_SOURCE = 'legalize_law'
-SOURCE_TYPES = {LAW_SOURCE: ('law_new', 'law_amended', 'law_repealed'), **ASSEMBLY_TYPES}
+SOURCE_TYPES = {LAW_SOURCE: ('law_new', 'law_amended', 'law_repealed')}
 
 
 def registrations(home: Path) -> tuple[sqlite3.Row | None, dict, dict[str, list[sqlite3.Row]]]:
@@ -33,8 +31,8 @@ def registrations(home: Path) -> tuple[sqlite3.Row | None, dict, dict[str, list[
         ).fetchone()
         collectors = json.loads(run['summary_json'] or '{}').get('collectors', {}) if run else {}
         rows = conn.execute(
-            'SELECT event_id,source,change_type,json_path FROM events WHERE source IN (?,?,?) ORDER BY created_at,rowid',
-            tuple(SOURCE_TYPES),
+            'SELECT event_id,source,change_type,json_path FROM events WHERE source=? ORDER BY created_at,rowid',
+            (LAW_SOURCE,),
         ).fetchall()
     grouped: dict[str, list[sqlite3.Row]] = {source: [] for source in SOURCE_TYPES}
     for row in rows:
@@ -44,14 +42,9 @@ def registrations(home: Path) -> tuple[sqlite3.Row | None, dict, dict[str, list[
 
 
 def _recorded_ids(database: Path, source: str) -> set[str]:
-    """Read source IDs already committed by the importer, including old Assembly revisions."""
-    query = (
-        'SELECT upstream_id FROM event_sources WHERE source=?'
-        if source == LAW_SOURCE
-        else 'SELECT id FROM assembly_snapshots WHERE source=?'
-    )
+    """Read upstream law IDs already committed by the importer."""
     with read_database(database) as conn:
-        return {row[0] for row in conn.execute(query, (source,))}
+        return {row[0] for row in conn.execute('SELECT upstream_id FROM event_sources WHERE source=?', (source,))}
 
 
 def source_snapshot(
@@ -73,7 +66,6 @@ def source_snapshot(
         recorded = _recorded_ids(database, source)
         folders = {law.folder for law in scope}
         law_titles = {normalize_law_text(law.name + kind) for law in scope for kind in ('', ' 시행령', ' 시행규칙')}
-        keywords = tuple(map(normalize_law_text, scope_keywords(scope)))
         events = []
         skipped = unchanged = 0
         for row in rows:
@@ -83,18 +75,15 @@ def source_snapshot(
                 continue
             path, event = _read_registration(home, row)
             title = normalize_law_text(event['target']['law_name'])
-            if source == LAW_SOURCE:
-                item_id = event['target'].get('item_id', '')
-                parts = item_id.split('/') if isinstance(item_id, str) else []
-                in_scope = parts[1] in folders if len(parts) == 3 and parts[0] == 'kr' else title in law_titles
-                if not in_scope:
-                    skipped += 1
-                    continue
-                diff = Diff.model_validate(event.get('diff'))
-                if not any(ARTICLE.fullmatch('##### ' + chunk.article) for chunk in diff.chunks):
-                    skipped += 1
-                    continue
-            elif not any(word in title for word in keywords):
+            item_id = event['target'].get('item_id', '')
+            parts = item_id.split('/') if isinstance(item_id, str) else []
+            in_scope = parts[1] in folders if len(parts) == 3 and parts[0] == 'kr' else title in law_titles
+            if not in_scope:
+                skipped += 1
+                continue
+            diff = Diff.model_validate(event.get('diff'))
+            if not any(ARTICLE.fullmatch('##### ' + chunk.article) for chunk in diff.chunks):
+                skipped += 1
                 continue
             events.append((path, event))
     except (OSError, ValueError) as exc:
@@ -150,41 +139,11 @@ def _synchronize_laws(
 def synchronize(database: Path, monitor_home: Path) -> dict[str, int]:
     scope = load_law_scope()
     run, collectors, rows = registrations(monitor_home)
-    assembly = [source for source in ASSEMBLY_TYPES if source in collectors]
     result = {'imported': 0, 'unchanged': 0, 'failed': 0, 'skipped': 0}
     managed = run is not None and json.loads(run['summary_json'] or '{}').get('managed') is True
     if not managed or LAW_SOURCE in collectors:
-        try:
-            snapshot = source_snapshot(database, monitor_home, LAW_SOURCE, run, collectors, rows[LAW_SOURCE], scope)
-            result = _synchronize_laws(database, monitor_home, snapshot)
-        except (OSError, ValueError, sqlite3.Error) as exc:
-            if not assembly:
-                raise
-            result['failed'] = 1
-            print(f'calendar sync {LAW_SOURCE} failed: {type(exc).__name__}', file=sys.stderr)
-
-    for source in assembly:
-        try:
-            stamp, events, _, recorded = source_snapshot(
-                database, monitor_home, source, run, collectors, rows[source], scope
-            )
-            imported, unchanged = import_assembly(
-                database, source, stamp, [event for _, event in events], record_failures=True
-            )
-            unchanged += recorded
-        except (OSError, ValueError, sqlite3.Error) as exc:
-            result[f'{source}_failed'] = 1
-            result['failed'] += 1
-            print(f'calendar sync {source} failed: {type(exc).__name__}', file=sys.stderr)
-        else:
-            result.update({f'{source}_imported': imported, f'{source}_unchanged': unchanged, f'{source}_failed': 0})
-    if result.get('assembly_notice_failed') == 0:
-        try:
-            result.update(synchronize_notice_content(database))
-        except (OSError, ValueError, sqlite3.Error) as exc:
-            result['failed'] += 1
-            record_import_failure(database, 'assembly_notice', None, exc)
-            print(f'calendar sync notice content failed: {type(exc).__name__}', file=sys.stderr)
+        snapshot = source_snapshot(database, monitor_home, LAW_SOURCE, run, collectors, rows[LAW_SOURCE], scope)
+        result = _synchronize_laws(database, monitor_home, snapshot)
     return result
 
 
@@ -203,16 +162,7 @@ def main() -> int:
     print('calendar sync ' + ' '.join(f'{key}={value}' for key, value in result.items()))
     if result['failed']:
         return 2
-    return int(
-        any(
-            result.get(key)
-            for key in (
-                'notice_pending',
-                'notice_content_errors',
-                'notice_migration_required',
-            )
-        )
-    )
+    return 0
 
 
 if __name__ == '__main__':

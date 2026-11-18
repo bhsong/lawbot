@@ -208,6 +208,48 @@ def test_llm_no_content_still_yields_one():
     assert len(out) == 1 and out[0].text == '' and out[0].finish_reason == 'stop'
 
 
+@pytest.mark.parametrize('items', [[], [chunk('partial')], [chunk('partial'), chunk(usage=(5, 1))]])
+def test_llm_rejects_stream_without_finish_reason(items):
+    client = FakeClient(items)
+    with pytest.raises(RuntimeError, match='finish_reason'):
+        list(LLM('m', client=client, system=SYSTEM).stream('q', HITS[:1]))
+    assert client.streams[0].closed
+
+
+def test_unfinished_stream_does_not_remember_turn(env):
+    env.setattr(service, 'Retriever', FakeRetriever)
+    app = service.load_app()
+    llm = LLM('m', client=FakeClient([chunk('partial')]), system=SYSTEM)
+    env.setattr(app.models, 'get', lambda key: (llm, None))
+    remembered = []
+    result = run(app, '해고 예고?', remember=remembered.append)
+    assert result.kind == 'generation'
+    assert result.done is None
+    assert remembered == []
+
+
+def test_llm_keeps_reasoning_separate_from_answer():
+    reasoning = chunk()
+    reasoning.choices[0].delta.model_extra['reasoning'] = 'private reasoning'
+    out = list(
+        LLM(
+            'm',
+            client=FakeClient([reasoning, chunk('answer'), chunk(finish='stop'), chunk(usage=(7, 3))]),
+            system=SYSTEM,
+        ).stream('q', HITS[:1])
+    )
+    assert ''.join(item.text for item in out) == 'answer'
+    assert ''.join(item.reasoning or '' for item in out) == 'private reasoning'
+    assert (out[-1].prompt_tokens, out[-1].generation_tokens) == (7, 3)
+
+
+def test_llm_connect_timeout_is_connection_error():
+    error = openai.APITimeoutError(request=REQ)
+    error.__cause__ = httpx.ConnectTimeout('unreachable', request=REQ)
+    with pytest.raises(ConnectionError):
+        list(LLM('m', client=FakeClient(error=error), system=SYSTEM).stream('q', HITS[:1]))
+
+
 REQ = httpx.Request('POST', 'http://127.0.0.1:9/v1/chat/completions')
 
 
@@ -226,7 +268,7 @@ def status_error(status, body):
             ModelLoadError,
             '모델 폴더 없음',
         ),
-        (status_error(401, {'error': {'message': 'x', 'type': 'authentication_error'}}), ModelServerError, '토큰'),
+        (status_error(401, {'error': {'message': 'x', 'type': 'authentication_error'}}), ModelServerError, 'API_KEY'),
         (
             status_error(
                 404, {'error': {'message': '없는 모델', 'type': 'invalid_request_error', 'code': 'model_not_found'}}

@@ -7,11 +7,8 @@ from concurrent.futures import ThreadPoolExecutor
 import pytest
 from fastapi.testclient import TestClient
 
-from law_calendar.assembly_ingest import import_assembly
 from law_calendar.db import read_database
 from law_calendar.server import create_app
-from test_calendar_assembly import NOW, register
-from test_calendar_sync import scheduled as scheduled
 from test_calendar_workflow import SOURCE, approval, import_one
 from test_calendar_workflow import workflow as workflow
 
@@ -208,50 +205,3 @@ def test_effective_retry_after_overlapping_approval_preserves_new_decision(workf
         assert client.get(f'/api/law-changes/{change_id}').json()['summary'] == '정정한 요약'
     with read_database(database) as conn:
         assert conn.execute("SELECT count(*) FROM review_audit WHERE decision='approve'").fetchone()[0] == 2
-
-
-def test_assembly_retry_after_overlapping_withdrawal_preserves_new_decision(scheduled, headers):
-    (database, home, _, _), state = scheduled
-    snapshot = register(home, state)
-    event = json.loads((home / f'{snapshot}.json').read_text(encoding='utf-8'))
-    import_assembly(database, event['source'], NOW, [event])
-    first = {'snapshot_id': snapshot, 'decision': 'approve', 'reviewer': 'admin', 'note': '공식 일정 확인'}
-    second = {**first, 'decision': 'withdraw', 'note': '정정된 일정 확인 필요'}
-    path = f'{REVIEW_PREFIX}/notice/{snapshot}'
-    with TestClient(create_app(database)) as client:
-        for decision in (first, second, first):
-            assert client.post(path, json=decision, headers=headers).json() == {'ok': True}
-        assert client.get('/api/law-events?month=2026-11&type=notice').json()['total'] == 0
-    with read_database(database) as conn:
-        assert conn.execute('SELECT count(*) FROM assembly_review_audit').fetchone()[0] == 2
-
-
-@pytest.mark.parametrize('decision,total', [('approve', 2), ('reject', 0), ('withdraw', 0)])
-def test_assembly_review_records_each_decision_once(scheduled, headers, decision, total):
-    (database, home, _, _), state = scheduled
-    snapshot = register(home, state)
-    event = json.loads((home / f'{snapshot}.json').read_text(encoding='utf-8'))
-    import_assembly(database, event['source'], NOW, [event])
-    path = f'{REVIEW_PREFIX}/notice/{snapshot}'
-    with TestClient(create_app(database)) as client:
-        response = client.get(path, headers=headers)
-        assert response.status_code == 200
-        data = response.json()
-        assert data['source_url'] == event['context']['source_url']
-        assert data['dates'] == [
-            {'role': 'notice_start', 'date': '2026-11-04'},
-            {'role': 'notice_end', 'date': '2026-11-05'},
-        ]
-        payload = {**data['template'], 'reviewer': 'admin', 'decision': decision, 'note': '공식 원문 검토'}
-        assert client.post(path, headers=headers, json=payload).json() == {'ok': True}
-        assert client.post(path, headers=headers, json=payload).json() == {'ok': True}
-        assert client.get('/api/law-holds?type=notice').json()['total'] == 0
-        assert client.get('/api/law-events?month=2026-11&type=notice').json()['total'] == total
-
-        corrected = register(home, state, revision=2, end='2026-11-07')
-        event = json.loads((home / f'{corrected}.json').read_text(encoding='utf-8'))
-        import_assembly(database, event['source'], NOW, [event])
-        assert client.post(path, headers=headers, json=payload).status_code == 409
-    with read_database(database) as conn:
-        [record] = conn.execute("SELECT decision,reviewer FROM assembly_review_audit WHERE reviewer='admin'").fetchall()
-        assert tuple(record) == (decision, 'admin')

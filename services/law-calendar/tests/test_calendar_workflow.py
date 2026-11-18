@@ -147,6 +147,20 @@ def test_invalid_or_stale_approval_cannot_publish(workflow, edit):
         assert conn.execute('SELECT COUNT(*) FROM review_audit').fetchone()[0] == 0
 
 
+@pytest.mark.parametrize('field', ['source_url', 'evidence_url'])
+def test_notice_url_cannot_be_used_as_review_evidence(workflow, field):
+    db = workflow[0]
+    event_id = import_one(workflow)
+    payload = approval(db, event_id)
+    target = payload if field == 'source_url' else payload['changes'][0]
+    target[field] = 'https://opinion.lawmaking.go.kr/example'
+    with pytest.raises(ValueError, match='official HTTPS evidence URL'):
+        review(db, payload, reviewer='test-reviewer')
+    with sqlite3.connect(db) as conn:
+        assert conn.execute('SELECT COUNT(*) FROM public_changes').fetchone()[0] == 0
+        assert conn.execute('SELECT COUNT(*) FROM review_audit').fetchone()[0] == 0
+
+
 def test_correction_unpublishes_retains_history_and_refuses_old_review(workflow):
     db, home, path, event = workflow
     event_id = import_one(workflow)
@@ -281,3 +295,262 @@ def test_v1_upgrade_backs_up_preserves_public_data_and_refuses_unknown(tmp_path)
         conn.execute('PRAGMA user_version=99')
     with pytest.raises(ValueError):
         migrate(db)
+
+
+@pytest.fixture
+def v8_assembly_database(tmp_path):
+    from law_calendar import db as schema
+
+    database = tmp_path / 'v8.db'
+    with sqlite3.connect(database) as conn:
+        conn.executescript(
+            ''.join(
+                getattr(schema, name)
+                for name in (
+                    'SCHEMA',
+                    'SCHEMA_V2',
+                    'SCHEMA_V3',
+                    'SCHEMA_V4',
+                    'SCHEMA_V5',
+                    'SCHEMA_V6',
+                    'SCHEMA_V7',
+                    'SCHEMA_V8',
+                )
+            )
+            + 'PRAGMA user_version=8;'
+        )
+        conn.execute("INSERT INTO laws VALUES ('law','합성법')")
+        conn.execute(
+            'INSERT INTO change_events(id,law_id,kind,status,review_state,source_url,collected_at,verified_at) '
+            "VALUES ('event','law','effective','개정','approved',?,?,?)",
+            (SOURCE, NOW, NOW),
+        )
+        for change, state in [('public', 'approved'), ('held', 'pending')]:
+            conn.execute(
+                'INSERT INTO article_changes(id,event_id,article,effective_on,summary,review_state,verified_at) '
+                "VALUES (?,'event',?,'2026-11-05','합성 요약',?,?)",
+                (change, change, state, NOW if state == 'approved' else None),
+            )
+        conn.execute("INSERT INTO source_snapshots VALUES ('snapshot','event','{}','{}','test',?,?)", (NOW, NOW))
+        conn.execute("INSERT INTO event_sources VALUES ('event','legalize_law','upstream','snapshot')")
+        conn.execute("INSERT INTO change_versions VALUES ('held','snapshot',NULL,NULL)")
+        conn.execute("INSERT INTO held_changes VALUES ('held','snapshot','확인 필요','test')")
+        conn.execute("INSERT INTO review_audit VALUES (1,'event','public','approve','reviewer',?,'검토')", (NOW,))
+        conn.execute("INSERT INTO review_details VALUES (1,'snapshot','{}')")
+        conn.execute(
+            'INSERT INTO assembly_snapshots VALUES '
+            "('assembly','assembly_notice','upstream',1,'국회','기관','1','진행',?,?, '{}')",
+            ('https://pal.assembly.go.kr/example', NOW),
+        )
+        conn.execute(
+            "INSERT INTO assembly_entries VALUES ('entry','assembly_notice','upstream','assembly','approved',?)",
+            (NOW,),
+        )
+        conn.execute("INSERT INTO assembly_dates VALUES ('assembly','notice_end','2026-11-05')")
+        conn.execute(
+            "INSERT INTO assembly_review_audit VALUES (1,'entry','assembly','approve','reviewer',?,'검토')", (NOW,)
+        )
+        conn.execute("INSERT INTO assembly_collection_status VALUES ('assembly_notice',?)", (NOW,))
+        conn.execute("INSERT INTO assembly_notice_content VALUES ('assembly','원문','https://example.test/file.pdf')")
+        conn.execute("INSERT INTO assembly_notice_attempts VALUES ('assembly',?)", (NOW,))
+        law_error = {'source': 'legalize_law', 'event_id': 'law-failed', 'message': '법령 진단'}
+        retired_errors = [
+            {'source': 'assembly_notice', 'message': 'historic notice diagnostic'},
+            {'source': 'assembly_bill', 'message': 'historic bill diagnostic'},
+        ]
+        conn.executemany(
+            'INSERT INTO import_runs VALUES (?,?,?,?,?,?,?)',
+            [
+                ('assembly-failure', NOW, NOW, 0, 0, 2, json.dumps(retired_errors)),
+                ('law-failure', NOW, NOW, 0, 0, 1, json.dumps([law_error])),
+                ('mixed-failure', NOW, NOW, 1, 0, 3, json.dumps([law_error, *retired_errors])),
+                ('legacy-failure', NOW, NOW, 0, 0, 1, 'invalid json'),
+            ],
+        )
+    return database
+
+
+def test_v9_removes_assembly_and_preserves_law_holds_audits_and_backup(v8_assembly_database):
+    from law_calendar.db import SUPPORTED_VERSIONS
+
+    database = v8_assembly_database
+    with sqlite3.connect(database) as conn:
+        tables = [
+            name
+            for (name,) in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")
+            if not name.startswith('assembly_') and name not in ('import_runs', 'change_events')
+        ]
+        before = {name: conn.execute(f'SELECT * FROM "{name}"').fetchall() for name in tables}
+        public = conn.execute('SELECT id,event_id,event_on,summary FROM public_changes').fetchall()
+        events = conn.execute(
+            'SELECT id,law_id,status,review_state,promulgated_on,source_url,collected_at,verified_at FROM change_events'
+        ).fetchall()
+        holds = conn.execute('SELECT * FROM public_holds').fetchall()
+        law_run = conn.execute("SELECT * FROM import_runs WHERE id='law-failure'").fetchone()
+        legacy_run = conn.execute("SELECT * FROM import_runs WHERE id='legacy-failure'").fetchone()
+    migrate(database)
+    assert CURRENT_VERSION == 9
+    assert tuple(SUPPORTED_VERSIONS) == (9,)
+    with sqlite3.connect(database) as conn:
+        assert conn.execute('PRAGMA user_version').fetchone() == (9,)
+        assert [row[1] for row in conn.execute('PRAGMA table_info(change_events)')] == [
+            'id',
+            'law_id',
+            'status',
+            'review_state',
+            'promulgated_on',
+            'source_url',
+            'collected_at',
+            'verified_at',
+        ]
+        assert conn.execute('PRAGMA quick_check').fetchall() == [('ok',)]
+        assert conn.execute('PRAGMA foreign_key_check').fetchall() == []
+        assert not conn.execute("SELECT name FROM sqlite_master WHERE name LIKE '%assembly%'").fetchall()
+        assert {name: conn.execute(f'SELECT * FROM "{name}"').fetchall() for name in tables} == before
+        assert conn.execute('SELECT id,event_id,event_on,summary FROM public_changes').fetchall() == public
+        assert conn.execute('SELECT * FROM change_events').fetchall() == events
+        assert conn.execute('SELECT * FROM public_holds').fetchall() == holds
+        assert conn.execute('SELECT id FROM public_calendar_events').fetchall() == [('public',)]
+        assert 'assembly_json' not in [row[1] for row in conn.execute('PRAGMA table_info(public_calendar_events)')]
+        assert conn.execute("SELECT * FROM import_runs WHERE id='law-failure'").fetchone() == law_run
+        assert conn.execute("SELECT * FROM import_runs WHERE id='legacy-failure'").fetchone() == legacy_run
+        assert conn.execute("SELECT * FROM import_runs WHERE id='assembly-failure'").fetchone() is None
+        mixed = conn.execute(
+            "SELECT imported,unchanged,failed,errors_json FROM import_runs WHERE id='mixed-failure'"
+        ).fetchone()
+        assert mixed[:3] == (1, 0, 1)
+        assert json.loads(mixed[3]) == json.loads(law_run[-1])
+    backup = database.with_suffix('.db.pre-v9.backup')
+    assert backup.stat().st_mode & 0o777 == 0o600
+    with sqlite3.connect(backup) as conn:
+        assert conn.execute('PRAGMA user_version').fetchone() == (8,)
+        assert conn.execute('SELECT count(*) FROM assembly_snapshots').fetchone() == (1,)
+        assert conn.execute('SELECT count(*) FROM public_changes').fetchone() == (1,)
+        assert conn.execute('SELECT count(*) FROM import_runs').fetchone() == (4,)
+    migrate(database)
+
+
+@pytest.mark.parametrize('problem', ['ddl', 'foreign_key'])
+def test_v9_assembly_migration_rolls_back_every_change(v8_assembly_database, monkeypatch, problem):
+    from law_calendar import db as schema
+
+    database = v8_assembly_database
+    if problem == 'ddl':
+        monkeypatch.setattr(
+            schema, 'SCHEMA_V9', 'DROP VIEW public_calendar_events; SELECT missing_column;', raising=False
+        )
+    else:
+        with sqlite3.connect(database) as conn:
+            conn.execute("UPDATE held_changes SET snapshot_id='missing'")
+    with pytest.raises((sqlite3.Error, ValueError)):
+        migrate(database)
+    with sqlite3.connect(database) as conn:
+        assert conn.execute('PRAGMA user_version').fetchone() == (8,)
+        assert conn.execute('SELECT count(*) FROM assembly_snapshots').fetchone() == (1,)
+        assert conn.execute('SELECT count(*) FROM import_runs').fetchone() == (4,)
+        assert conn.execute('SELECT count(*) FROM public_calendar_events').fetchone() == (2,)
+
+
+def test_v9_new_database_contains_only_law_schema(tmp_path):
+    database = tmp_path / 'new.db'
+    migrate(database)
+    with sqlite3.connect(database) as conn:
+        assert conn.execute('PRAGMA user_version').fetchone() == (9,)
+        assert not conn.execute("SELECT name FROM sqlite_master WHERE name LIKE '%assembly%'").fetchall()
+
+
+def test_v9_fresh_and_upgraded_schemas_match(v8_assembly_database, tmp_path):
+    fresh = tmp_path / 'fresh.db'
+    migrate(fresh)
+    migrate(v8_assembly_database)
+
+    def schema(path):
+        with sqlite3.connect(path) as conn:
+            return [
+                (kind, name, table, ' '.join((sql or '').replace('"', '').split()))
+                for kind, name, table, sql in conn.execute(
+                    'SELECT type,name,tbl_name,sql FROM sqlite_master ORDER BY type,name'
+                )
+            ]
+
+    assert schema(fresh) == schema(v8_assembly_database)
+
+
+@pytest.mark.parametrize('upgraded', [False, True])
+def test_v9_notice_source_cannot_publish(workflow, v8_assembly_database, upgraded):
+    if upgraded:
+        database = v8_assembly_database
+        migrate(database)
+    else:
+        database = workflow[0]
+        event_id = import_one(workflow)
+        review(database, approval(database, event_id), reviewer='test-reviewer')
+    with sqlite3.connect(database) as conn:
+        assert conn.execute('SELECT COUNT(*) FROM public_changes').fetchone()[0] > 0
+        conn.execute('UPDATE change_events SET source_url=?', ('https://opinion.lawmaking.go.kr/example',))
+        assert conn.execute('SELECT COUNT(*) FROM public_changes').fetchone()[0] == 0
+        assert conn.execute('SELECT COUNT(*) FROM public_calendar_events').fetchone()[0] == 0
+
+
+@pytest.mark.parametrize('upgraded', [False, True])
+@pytest.mark.parametrize(
+    ('source_url', 'visible'),
+    [
+        ('https://opinion.lawmaking.go.kr/example', False),
+        ('https://www.law.go.kr/example', True),
+        ('https://law.go.kr/example', True),
+    ],
+)
+def test_v9_public_holds_only_exposes_law_sources(workflow, v8_assembly_database, upgraded, source_url, visible):
+    if upgraded:
+        database = v8_assembly_database
+        migrate(database)
+    else:
+        database = workflow[0]
+        import_one(workflow)
+    with TestClient(create_app(database)) as client:
+        before = client.get('/api/law-holds').json()
+        assert before['total'] > 0
+        with sqlite3.connect(database) as conn:
+            conn.execute('UPDATE change_events SET source_url=?', (source_url,))
+        response = client.get('/api/law-holds')
+        assert response.status_code == 200
+        result = response.json()
+        assert result['total'] == (before['total'] if visible else 0)
+        assert len(result['items']) == result['total']
+        assert all(item['sourceUrl'] == source_url for item in result['items'])
+
+
+def test_v9_migration_checks_integrity_before_its_single_commit(v8_assembly_database, monkeypatch):
+    from law_calendar import db as schema
+
+    database = v8_assembly_database
+    connect = sqlite3.connect
+    statements = []
+
+    def traced_connect(path, *args, **kwargs):
+        conn = connect(path, *args, **kwargs)
+        if path == database.resolve():
+            conn.set_trace_callback(statements.append)
+        return conn
+
+    monkeypatch.setattr(schema.sqlite3, 'connect', traced_connect)
+    migrate(database)
+    statements = [statement.strip().rstrip(';') for statement in statements]
+    assert statements.count('BEGIN IMMEDIATE') == 1
+    assert statements.count('COMMIT') == 1
+    assert statements.index('PRAGMA quick_check') < statements.index('PRAGMA user_version=9')
+    assert statements.index('PRAGMA foreign_key_check') < statements.index('PRAGMA user_version=9')
+    assert statements.index('PRAGMA user_version=9') < statements.index('COMMIT')
+
+
+def test_v9_assembly_backup_is_never_overwritten(v8_assembly_database):
+    database = v8_assembly_database
+    backup = database.with_suffix('.db.pre-v9.backup')
+    backup.write_bytes(b'existing backup')
+    with pytest.raises(FileExistsError):
+        migrate(database)
+    assert backup.read_bytes() == b'existing backup'
+    with sqlite3.connect(database) as conn:
+        assert conn.execute('PRAGMA user_version').fetchone() == (8,)
+        assert conn.execute('SELECT count(*) FROM assembly_snapshots').fetchone() == (1,)

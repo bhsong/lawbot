@@ -18,7 +18,7 @@
 | 의존성 추가 시점 | 처음에 전부 | 쓰는 PR에서 추가. PR 1은 `pyyaml`만. `httpx`·`tenacity`·`lxml`·`pdfplumber`는 PR 2 | PR 1은 HTTP·PDF를 쓰지 않음 |
 | 실행 데이터 | `law-monitor/data`, `logs` | `services/monitor/data/`, `services/monitor/logs/` (git 제외). 환경변수 `LAW_MONITOR_HOME`으로 바꿀 수 있음 | 사용자 지시(폴더 안에서 구현). 루트 `.gitignore`의 `logs/`는 이미 모든 위치에 적용, `services/monitor/data/`만 추가 |
 | `.env` | 프로젝트 루트 | `services/monitor/.env` (+ `.env.example`). 루트 `.gitignore`의 `.env`가 이미 막음 | 웹앱 `.env`와 섞지 않음 |
-| launchd | 템플릿 위치 미정 | `services/monitor/deploy/com.lawbot.monitor.plist.example` | 폴더 안에서 구현. 실제 등록은 운영 작업이라 별도 승인 |
+| launchd | 템플릿 위치 미정 | `services/source-hub/deploy/com.lawbot.monitor.plist.example` | 폴더 안에서 구현. 실제 등록은 운영 작업이라 별도 승인 |
 | `admrules.exact` | 정확한 이름 목록 | `admrules.names`: `{agency, pattern(정규식), category}` | 2절: 연도가 이름에 들어가 해마다 폴더가 새로 생김 |
 | 이벤트 단위 | 파일마다 `last_commit..HEAD` diff 하나 | **대상 파일을 건드린 커밋 하나 = 이벤트 하나** | legalize-kr은 커밋 하나가 개정 하나. 한 실행에 개정 둘이 들어오면 공포일·시행일이 섞이지 않게 |
 | `version_key` (git) | 미정 | 그 커밋에서의 파일 blob 해시 | 내용 기반이라 강제 푸시로 커밋 해시가 바뀌어도 같은 이벤트가 다시 생기지 않음 |
