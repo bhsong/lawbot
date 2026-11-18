@@ -25,7 +25,7 @@ def fixture_file(tmp_path, count=60):
     return path, sha256(raw).hexdigest()
 
 
-def install_transport(monkeypatch, on_post=None, concurrency=(1, 1)):
+def install_transport(monkeypatch, on_post=None, concurrency=(1, 1), versions=('0.31.2', '0.31.2')):
     probes = 0
     requests = []
     client = httpx.Client
@@ -37,10 +37,20 @@ def install_transport(monkeypatch, on_post=None, concurrency=(1, 1)):
         assert request.headers['authorization'] == 'Bearer fixture-token'
         if request.url.path == '/v1/models':
             concurrent = concurrency[min(probes, len(concurrency) - 1)]
+            mlx_lm_version = versions[min(probes, len(versions) - 1)]
             probes += 1
             return httpx.Response(
                 200,
-                json={'data': [{'id': 'pro', 'revision': 'sha256:fixture', 'max_concurrent': concurrent}]},
+                json={
+                    'data': [
+                        {
+                            'id': 'pro',
+                            'revision': 'sha256:fixture',
+                            'max_concurrent': concurrent,
+                            'mlx_lm_version': mlx_lm_version,
+                        }
+                    ]
+                },
             )
         assert request.url.path == '/v1/chat/completions'
         posts += 1
@@ -95,7 +105,7 @@ def test_heldout_router_only_complete_run(monkeypatch, tmp_path):
     assert report['before']['fixture_sha256'] == digest
     assert report['before']['webapp_commit'] == COMMIT
     assert report['before']['model'] == {'id': 'pro', 'revision': 'sha256:fixture'}
-    assert report['before']['generation_server_mlx_lm_version'] is None
+    assert report['before']['generation_server_mlx_lm_version'] == '0.31.2'
     assert report['before']['server_max_concurrent'] == 1
     assert report['inference_posts'] == 2 * len(report['routes']) == 120
     assert all(row['classification_match'] and row['reason'] == 'missing_required' for row in report['routes'])
@@ -208,7 +218,14 @@ def test_new_heldout_fixture_is_pinned_and_valid():
     assert {row['kind'] for row in rows} >= {'calculated', 'missing', 'ambiguous', 'lookup', 'general', 'unsupported'}
 
 
-@pytest.mark.parametrize('card', [{'id': 'other', 'revision': 'sha256:other'}, {'id': 'pro'}])
+@pytest.mark.parametrize(
+    'card',
+    [
+        {'id': 'other', 'revision': 'sha256:other'},
+        {'id': 'pro'},
+        {'id': 'pro', 'revision': 'sha256:fixture', 'max_concurrent': 1},
+    ],
+)
 def test_heldout_requires_generation_id_and_revision_without_loaded(monkeypatch, card):
     monkeypatch.setattr(evaluator.service, 'generation_models', lambda client: [card])
     with pytest.raises(evaluator._HeldoutStop, match='pro_not_ready'):
@@ -223,6 +240,7 @@ def test_external_generation_has_no_revision_or_models_probe(monkeypatch):
     configuration = evaluator._heldout_configuration(object(), 'pro', 'fixture', 'articles', external=True)
     assert configuration['model'] == {'id': 'pro', 'revision': None}
     assert configuration['server_max_concurrent'] is None
+    assert configuration['generation_server_mlx_lm_version'] is None
 
 
 def test_heldout_uses_common_generation_endpoint_and_dedicated_key(monkeypatch):
@@ -251,6 +269,22 @@ def test_heldout_rejects_missing_or_changed_concurrency(monkeypatch, tmp_path, c
     if concurrency[0] is None:
         assert [request.method for request in requests] == ['GET']
     elif concurrency[1] is None:
+        assert report['status'] == 'stopped'
+    else:
+        assert report['stop_reason'] == 'configuration_changed'
+
+
+@pytest.mark.parametrize('versions', [(None, '0.31.2'), ('0.31.2', None), ('0.31.2', '0.32.0')])
+def test_heldout_rejects_missing_or_changed_version(monkeypatch, tmp_path, versions):
+    fixture, digest = fixture_file(tmp_path)
+    output = tmp_path / 'report.json'
+    requests = install_transport(monkeypatch, versions=versions)
+    assert evaluator._live_heldout(fixture, digest, output) == 2
+    report = json.loads(output.read_text())
+    assert report['valid'] is False
+    if versions[0] is None:
+        assert [request.method for request in requests] == ['GET']
+    elif versions[1] is None:
         assert report['status'] == 'stopped'
     else:
         assert report['stop_reason'] == 'configuration_changed'

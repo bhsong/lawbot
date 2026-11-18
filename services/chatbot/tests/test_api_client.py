@@ -267,7 +267,9 @@ def generation_startup(env):
     from lawbot import deploy
 
     state = types.SimpleNamespace(now=0.0, requests=[], sleeps=[], failures=[], models=None)
-    state.models = [{'id': spec.model, 'object': 'model'} for spec in deploy.get_profile().models]
+    state.models = [
+        {'id': spec.model, 'object': 'model', 'mlx_lm_version': '0.31.2'} for spec in deploy.get_profile().models
+    ]
 
     def sleep(seconds):
         state.sleeps.append(seconds)
@@ -309,8 +311,8 @@ def test_load_app_waits_for_generation_ready(generation_startup, failure):
     assert app.llm_mode == 'api'
     assert [when for when, _ in state.requests] == [0, 1, 2]
     assert state.sleeps == [1, 1]
-    assert all(0 < timeout['read'] <= 2.5 - when for when, timeout in state.requests)
-    assert all(0 < timeout['connect'] <= 2.5 - when for when, timeout in state.requests)
+    assert all(timeout['read'] == 5.0 for _, timeout in state.requests)
+    assert all(timeout['connect'] == 5.0 for _, timeout in state.requests)
 
 
 @pytest.mark.parametrize('failure', [401, 'missing', 500])
@@ -328,6 +330,21 @@ def test_load_app_generation_fails_without_retry(generation_startup, failure):
     assert state.sleeps == []
 
 
+@pytest.mark.parametrize('ready', [True, False])
+def test_generation_zero_wait_checks_once(generation_startup, ready):
+    state = generation_startup
+    state.failures = [] if ready else [503]
+    client = service.OpenAI()
+    if ready:
+        models = service._wait_generation_models(client, 0)
+        assert [{key: row[key] for key in state.models[0]} for row in models] == state.models
+    else:
+        with pytest.raises(RuntimeError, match='LAWBOT_MODEL_SERVER_WAIT'):
+            service._wait_generation_models(client, 0)
+    assert len(state.requests) == 1
+    assert state.sleeps == []
+
+
 @pytest.mark.parametrize('failure', [503, 'refused'])
 def test_load_app_generation_wait_expires(generation_startup, failure):
     state = generation_startup
@@ -335,16 +352,16 @@ def test_load_app_generation_wait_expires(generation_startup, failure):
     with pytest.raises(RuntimeError, match=r'생성 서버.*2.5초.*LAWBOT_MODEL_SERVER_WAIT'):
         service.load_app()
     assert state.now == 2.5
-    assert [when for when, _ in state.requests] == [0, 1, 2]
+    assert [when for when, _ in state.requests] == [0, 1, 2, 2.5]
     assert state.sleeps == [1, 1, 0.5]
 
 
-def test_load_app_generation_probe_timeout_stays_within_budget(generation_startup):
+def test_load_app_generation_probe_uses_fixed_timeout(generation_startup):
     state = generation_startup
     state.failures = ['timeout']
     with pytest.raises(RuntimeError, match=r'생성 서버.*2.5초.*LAWBOT_MODEL_SERVER_WAIT'):
         service.load_app()
-    assert state.now == 2.5
+    assert state.now == 5.0
     assert len(state.requests) == 1
     assert state.sleeps == []
 
@@ -381,7 +398,10 @@ def test_missing_models_uses_separate_generation_ids(env):
 
     p = deploy.get_profile()
     available = [{'id': p.emb_model, 'type': 'embedding'}]
-    chat = [{'id': spec.model, 'object': 'model', 'revision': 'chat-revision'} for spec in p.models]
+    chat = [
+        {'id': spec.model, 'object': 'model', 'revision': 'chat-revision', 'mlx_lm_version': '0.31.2'}
+        for spec in p.models
+    ]
     assert service.missing_models(available, p, None, chat_available=chat) == []
     assert service.missing_models(available, p, None, chat_available=chat[:1]) == [('chat', p.models[1].model)]
     assert service.missing_models(available + chat, p, None, chat_available=[]) == [
@@ -554,7 +574,10 @@ def real_server(env):
     async def models():
         return {
             'object': 'list',
-            'data': [{'id': model, 'object': 'model', 'revision': 'synthetic-e2e'} for model in reg.chat],
+            'data': [
+                {'id': model, 'object': 'model', 'revision': 'synthetic-e2e', 'mlx_lm_version': '0.31.2'}
+                for model in reg.chat
+            ],
         }
 
     @generation.post('/v1/chat/completions')

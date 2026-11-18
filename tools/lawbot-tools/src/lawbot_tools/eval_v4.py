@@ -823,6 +823,7 @@ def run_meta(app, model, fmt, split, n, stages):
     except Exception as e:  # 기록용: 실패해도 평가는 계속
         info = {'error': f'{type(e).__name__}: {e}'}
     generation = None
+    mlx_lm_version = None
     try:
         bot, _ = app.models.get(model)
         generation_client = getattr(bot, 'client', None)
@@ -831,6 +832,7 @@ def run_meta(app, model, fmt, split, n, stages):
         elif generation_client is not None:
             cards = service.generation_models(generation_client)
             card = next(card for card in cards if card['id'] == app.models.specs[model].model)
+            mlx_lm_version = card.get('mlx_lm_version')
             generation = {key: card.get(key) for key in ('id', 'revision')}
     except Exception as exc:
         generation = {'error': type(exc).__name__}
@@ -848,7 +850,7 @@ def run_meta(app, model, fmt, split, n, stages):
         'rerank_model': getattr(app.reranker, 'model', None),
         'info': info,
         'generation': generation,
-        'generation_server_mlx_lm_version': None,
+        'generation_server_mlx_lm_version': mlx_lm_version,
         'dataset': manifest.summary(manifest.load(app.profile.articles)),
         'commit': head,
         'dirty': dirty,

@@ -125,7 +125,15 @@ def test_format_follows_model_by_default(env):
 
 
 def test_missing_model_on_generation_server_refuses_start(env, model_server):
-    FakeOpenAI.available = [{'id': 'lawbot-fast-v4', 'object': 'model', 'revision': 'chat-revision'}]
+    FakeOpenAI.available = [
+        {
+            'id': 'lawbot-fast-v4',
+            'object': 'model',
+            'revision': 'chat-revision',
+            'mlx_lm_version': '0.31.2',
+            'max_concurrent': 1,
+        }
+    ]
     with pytest.raises(RuntimeError, match=r'서버에 필요한 모델이 없습니다: chat qwen3\.8-27b-4bit'):
         make_app(env)
     env.setenv('LAWBOT_MODELS', 'fast')  # 이 기기에서 Fast만 쓰면 Pro는 서버에 없어도 됨

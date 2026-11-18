@@ -161,12 +161,15 @@ def generation_models(client, *, timeout=None):
         raise convert_error(exc) from exc
 
 
+PROBE_TIMEOUT = 5.0
+
+
 def _wait_generation_models(client, wait_s):
     """Wait for local generation discovery; authentication and model errors stay fatal."""
     deadline, last = time.monotonic() + wait_s, '모델을 불러오는 중'
-    while (remaining := deadline - time.monotonic()) > 0:
+    while True:
         try:
-            return generation_models(client, timeout=min(5.0, remaining))
+            return generation_models(client, timeout=PROBE_TIMEOUT)
         except ConnectionError as exc:
             last = str(exc)
         except ModelServerError as exc:
@@ -176,12 +179,12 @@ def _wait_generation_models(client, wait_s):
         except ModelServerTimeout as exc:
             last = str(exc)
         remaining = deadline - time.monotonic()
-        if remaining > 0:
-            time.sleep(min(WAIT_INTERVAL, remaining))
-    raise RuntimeError(
-        f'생성 서버가 {wait_s:g}초 안에 준비되지 않았습니다 ({last}). '
-        'LAWBOT_MODEL_SERVER_WAIT로 대기 시간을 늘리거나 생성 서버 로그를 확인하세요.'
-    )
+        if remaining <= 0:
+            raise RuntimeError(
+                f'생성 서버가 {wait_s:g}초 안에 준비되지 않았습니다 ({last}). '
+                'LAWBOT_MODEL_SERVER_WAIT로 대기 시간을 늘리거나 생성 서버 로그를 확인하세요.'
+            )
+        time.sleep(min(WAIT_INTERVAL, remaining))
 
 
 def _record_embeddings(db, release_id, retriever, profile, decree, revision):

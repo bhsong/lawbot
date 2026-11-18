@@ -118,7 +118,8 @@ def test_failure_retains_safe_diagnostics(monkeypatch, tmp_path, capsys, stage):
 
 @pytest.mark.parametrize('external', [False, True])
 @pytest.mark.parametrize('concurrent', [1, 2, None, True, '1', 0])
-def test_snapshot_separates_generation_from_embedding_metadata(monkeypatch, external, concurrent):
+@pytest.mark.parametrize('mlx_lm_version', ['0.31.2', None])
+def test_snapshot_separates_generation_from_embedding_metadata(monkeypatch, external, concurrent, mlx_lm_version):
     cfg = ev.settings.load(
         {
             'LAWBOT_PROFILE': 'v5',
@@ -155,7 +156,17 @@ def test_snapshot_separates_generation_from_embedding_metadata(monkeypatch, exte
         assert request.url.port == 19 and request.url.path == '/v1/models'
         assert request.headers['authorization'] == 'Bearer generation-only-secret'
         return httpx.Response(
-            200, json={'data': [{'id': spec.model, 'revision': 'generation-rev', 'max_concurrent': concurrent}]}
+            200,
+            json={
+                'data': [
+                    {
+                        'id': spec.model,
+                        'revision': 'generation-rev',
+                        'max_concurrent': concurrent,
+                        'mlx_lm_version': mlx_lm_version,
+                    }
+                ]
+            },
         )
 
     class MockClient(original_client):
@@ -169,13 +180,18 @@ def test_snapshot_separates_generation_from_embedding_metadata(monkeypatch, exte
             with pytest.raises(ValueError, match='max_concurrent'):
                 ev.snapshot(cfg, client)
             return
+        if not external and not mlx_lm_version:
+            with pytest.raises(RuntimeError, match='mlx_lm_version'):
+                ev.snapshot(cfg, client)
+            return
         configuration = ev.snapshot(cfg, client)
     assert configuration['models'][-1] == {
         'id': spec.model,
         'revision': None if external else 'generation-rev',
     }
-    assert configuration['generation_server_mlx_lm_version'] is None
+    assert configuration['generation_server_mlx_lm_version'] == (None if external else '0.31.2')
     assert configuration['server_max_concurrent'] == (None if external else concurrent)
     changed = configuration | {'server_max_concurrent': 3}
     assert ev.comparable(configuration) != ev.comparable(changed)
+    assert ev.comparable(configuration) != ev.comparable(configuration | {'generation_server_mlx_lm_version': '0.32.0'})
     assert len(requests) == (2 if external else 3)

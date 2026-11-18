@@ -116,7 +116,13 @@ class FakeOpenAI:
         if models is None:
             profile = deploy.get_profile()
             models = [
-                {'id': spec.model, 'object': 'model', 'revision': 'synthetic-e2e'}
+                {
+                    'id': spec.model,
+                    'object': 'model',
+                    'revision': 'synthetic-e2e',
+                    'mlx_lm_version': '0.31.2',
+                    'max_concurrent': 1,
+                }
                 for spec in profile.models + profile.disabled
             ]
         return types.SimpleNamespace(

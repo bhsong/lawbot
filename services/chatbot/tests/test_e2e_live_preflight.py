@@ -20,7 +20,7 @@ ENV = {
 NOON = datetime.time(12, 0)
 
 
-def server(ready=True, missing=(), error=None, chat_revision='sha256:c', concurrent=1):
+def server(ready=True, missing=(), error=None, chat_revision='sha256:c', concurrent=1, mlx_lm_version='0.31.2'):
     models = [
         {'id': 'emb', 'type': 'embedding', 'loaded': True, 'revision': 'sha256:a'},
         {'id': 'rr', 'type': 'rerank', 'loaded': True, 'revision': 'sha256:b'},
@@ -34,7 +34,15 @@ def server(ready=True, missing=(), error=None, chat_revision='sha256:c', concurr
             return {
                 'data': []
                 if 'chat' in missing
-                else [{'id': 'chat', 'object': 'model', 'revision': chat_revision, 'max_concurrent': concurrent}]
+                else [
+                    {
+                        'id': 'chat',
+                        'object': 'model',
+                        'revision': chat_revision,
+                        'max_concurrent': concurrent,
+                        'mlx_lm_version': mlx_lm_version,
+                    }
+                ]
             }
         if path == '/health':
             return {'ready': ready, 'commit': 'abc'}
@@ -102,8 +110,8 @@ def test_config_hides_secrets(live):
     assert cfg['model_server_commit'] == 'abc'
     assert [model['revision'] for model in cfg['models']] == ['sha256:a', 'sha256:b']
     assert cfg['generation_models'] == [{'id': 'chat', 'object': 'model', 'revision': 'sha256:c'}]
-    assert cfg['generation_server_mlx_lm_version'] is None
-    assert 'management location' in cfg['generation_server_mlx_lm_version_note']
+    assert cfg['generation_server_mlx_lm_version'] == '0.31.2'
+    assert 'generation_server_mlx_lm_version_note' not in cfg
 
 
 def test_comparable_ignores_loaded_but_not_revision(live):
@@ -118,6 +126,13 @@ def test_generation_revision_change_invalidates_run(live):
     before = live(chat_revision='sha256:c').config()
     after = live(chat_revision='sha256:d').config()
     assert comparable(before) != comparable(after)
+
+
+def test_generation_version_required_and_change_invalidates(live):
+    assert 'mlx_lm_version' in live(mlx_lm_version=None).preflight(NOON)[0]
+    with pytest.raises(ValueError, match='mlx_lm_version'):
+        live(mlx_lm_version=None).config()
+    assert comparable(live().config()) != comparable(live(mlx_lm_version='0.32.0').config())
 
 
 @pytest.mark.parametrize('concurrent', [None, True, '1', 0])
