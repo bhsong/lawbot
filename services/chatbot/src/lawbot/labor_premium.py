@@ -39,13 +39,13 @@ _HOLIDAY_SPLIT = {'holiday_within_hours', 'holiday_excess_hours'}
 _HOURS_PER_DAY = 24
 _SPECIAL_SCOPE = re.compile(
     r'(?:제\s*56\s*조|근로시간|휴일)\s*(?:의\s*)?적용\s*제외'
-    r'|감시\s*(?:[·ㆍ/]\s*|및\s*)?단속|감시적|단속적|관리\s*[·ㆍ/]?\s*감독\s*(?:업무|근로)'
+    r'|감시\s*(?:[·ㆍ/]\s*|및\s*)?단속|감시적|단속적|관리\s*+[·ㆍ/]?\s*+감독\s*(?:업무|근로)'
     r'|(?:농업|임업|축산|양잠|수산|기밀)\s*(?:종사|근로|업무)|별도\s*가산\s*(?:제도|규정|적용)'
     r'|단시간[^.!?\n]{0,24}(?:소정(?:근로)?시간[^.!?\n]{0,12}초과|초과근로)'
 )
 _ORDINARY_SCOPE = re.compile(r'제\s*56\s*조(?:가|를|이)?\s*(?:전부\s*)?적용|통상\s*근로자|일반\s*근로자')
 _SCOPE_NEGATION = re.compile(
-    r'\s*(?:적)?\s*(?:(?:근로자?|업무|승인|대상|규정|제도)(?:이|가|을|은|는)?\s*)*(?:아니|아닙|아님|없)'
+    r'\s*+(?:적)?\s*+(?:(?:근로자?|업무|승인|대상|규정|제도)(?:이|가|을|은|는)?\s*)*(?:아니|아닙|아님|없)'
 )
 _STAFF_UNCERTAIN = re.compile(
     r'상시[^.!?\n]{0,24}(?:모르|불명확|미정|추정|가량|정도|사이)'
@@ -55,7 +55,7 @@ _STAFF_UNCERTAIN = re.compile(
 _MULTIPLE_HOLIDAYS = re.compile(
     r'휴일\s*(?:의\s*)?(?:이틀|사흘|나흘|여러\s*날|[두세네]\s*(?:날|번)|(?:[2-9]|[1-9][0-9]+)\s*(?:일|번))'
     r'|휴일\s*마다|휴일\s*(?:근로\s*)?(?:전체|합산|합계|총)|(?:이틀|사흘|나흘)\s*(?:의\s*)?휴일'
-    r'|(?:[두세네]|[2-9]|[1-9][0-9]+)\s*(?:개(?:의)?|번(?:의)?)?\s*휴일'
+    r'|(?:[두세네]|[2-9]|[1-9][0-9]+)\s*+(?:개(?:의)?|번(?:의)?)?\s*+휴일'
 )
 _HOLIDAY_OVERTIME = re.compile(r'휴일\s*(?:근로(?:의)?\s*)?연장|휴일[^.!?\n]{0,40}그\s*중\s*연장')
 _BREAK_INCLUDED = re.compile(r'휴게(?:시간)?[^.!?\n]{0,15}(?:포함|안\s*뺀)')
@@ -63,15 +63,15 @@ _BREAK_EXCLUDED = re.compile(r'휴게(?:시간)?[^.!?\n]{0,8}(?:제외|빼고|(?
 _UNCERTAIN_TIME = re.compile(r'(야간|연장|휴일)[^.!?\n]{0,24}(?:인지|는지)\s*(?:모르|몰라|불명확)')
 _HOURS_NUMBER = r'(?:[0-9０-９]+(?:[.．][0-9０-９]+)?|[영공일이삼사오육칠팔구십백천]+)'
 _HOURS_TOKEN = rf'{_HOURS_NUMBER}\s*(?:시간|분)'
-_HOURS_SEPARATOR = r'\s*(?:은|는|이|가|를|을|에|[:：])?\s*'
-_LABELED_HOURS = rf'\s*(?:실?근로|근무)?\s*(?:시간)?{_HOURS_SEPARATOR}{_HOURS_TOKEN}'
+_HOURS_SEPARATOR = r'\s*+(?:(?:은|는|이|가|를|을|에|[:：])\s*+)?'
+_LABELED_HOURS = rf'\s*+(?:(?:실?근로|근무)\s*+)?(?:시간)?{_HOURS_SEPARATOR}{_HOURS_TOKEN}'
 _HOUR_EVIDENCE = {
     'overtime_hours': re.compile(rf'(?:연장|초과){_LABELED_HOURS}'),
     'night_hours': re.compile(rf'야간{_LABELED_HOURS}'),
     'holiday_hours': re.compile(rf'휴일(?:(?!야간|연장)[^.!?\n,]){{0,22}}?{_HOURS_TOKEN}'),
 }
 _DURATION = rf'(?P<duration>{_HOURS_NUMBER}\s*(?:시간(?:\s*{_HOURS_NUMBER}\s*분)?|분))'
-_WORK_HOURS = r'(?:실제\s*)?(?:(?:실?근로|근무)(?:한)?\s*(?:시간)?|일한\s*시간)'
+_WORK_HOURS = r'(?:실제\s*)?(?:(?:실?근로|근무)(?:한)?\s*+(?:시간)?|일한\s*시간)'
 _TOTAL_MARK = r'(?:총|전체|합계)'
 _DISTINCT_HOURS = r'중복\s*(?:없는|없이|제외한)\s*'
 _TOTAL_HOURS = re.compile(
@@ -81,11 +81,13 @@ _TOTAL_HOURS = re.compile(
 )
 _SINGLE_HOLIDAY_HOURS = re.compile(
     r'(?:휴일\s*(?:하루|한\s*날|[1１]\s*일)|(?:단일|한\s*번의|하루의)\s*휴일)'
-    r'\s*(?:에(?:는|만)?|동안|만|의)?\s*(?:[,，]\s*)?'
-    r'(?:휴게(?:시간)?\s*(?:를|을|은)?\s*(?:제외(?:한|하고)?|빼고)\s*)?'
+    r'\s*+(?:(?:에(?:는|만)?|동안|만|의)\s*+)?(?:[,，]\s*)?'
+    r'(?:휴게(?:시간)?\s*+(?:(?:를|을|은)\s*+)?(?:제외(?:한|하고)?|빼고)\s*)?'
     rf'(?:{_WORK_HOURS}{_HOURS_SEPARATOR})?(?:실제(?:로)?\s*)?{_DURATION}'
 )
-_EXPLICIT_HOLIDAY_SPLIT = re.compile(rf'(?:이내|이하|초과)\s*(?:분|시간|실?근로|근무)?{_HOURS_SEPARATOR}{_HOURS_TOKEN}')
+_EXPLICIT_HOLIDAY_SPLIT = re.compile(
+    rf'(?:이내|이하|초과)\s*+(?:분|시간|실?근로|근무)?{_HOURS_SEPARATOR}{_HOURS_TOKEN}'
+)
 _CHECK_SCOPE = '기본임금을 포함한 총액이 필요한지 확인해 주세요.'
 
 

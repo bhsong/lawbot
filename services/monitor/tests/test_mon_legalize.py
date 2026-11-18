@@ -78,6 +78,119 @@ def test_bootstrap_makes_no_events_and_sets_cursor(tmp_path, legalize, admrule):
     assert git(clone, 'rev-parse', '--is-bare-repository') == 'true'
 
 
+@pytest.mark.parametrize('mode', ['bootstrap', 'force-bootstrap', 'collect', 'rescan'])
+@pytest.mark.parametrize(
+    'metadata',
+    [
+        'unsafe: &cycle [*cycle]',
+        'unsafe: ' + '[' * 64 + '0' + ']' * 64,
+        'unsafe: [' + ', '.join(['0'] * 9998) + ']',
+    ],
+    ids=['alias', 'depth', 'nodes'],
+)
+def test_bad_frontmatter_records_file_failure_and_continues(tmp_path, legalize, admrule, mode, metadata):
+    mon = make_monitor(tmp_path, make_config(legalize, admrule))
+    bootstrap = mode in ('bootstrap', 'force-bootstrap')
+    before = None
+    if mode != 'bootstrap':
+        mon.bootstrap()
+        before = mon.state.items('legalize_law')[LAW_PATH]
+    cursor = mon.state.cursor('legalize-kr')
+    broken = law_md('근로기준법', LABOR_V2).replace('---\n', f'---\n{metadata}\n', 1)
+    files = {
+        LAW_PATH: broken,
+        WAGE_PATH: law_md('최저임금법', {'제1조 (목적)': '정상 개정'}),
+    }
+    if mode == 'rescan':
+        legalize.rewrite_history()
+    legalize.commit(files, '안전하지 않은 머리말과 정상 법령')
+    if mode != 'bootstrap':
+        admrule.commit(
+            {
+                '고용노동부/_본부/고시/2026년 적용 최저임금 고시/본문.md': admrule_md(
+                    '100', '2026년 적용 최저임금 고시', '고용노동부', '정상 고시 개정'
+                ),
+            },
+            '정상 고시',
+        )
+    summary = mon.bootstrap(force=mode == 'force-bootstrap') if bootstrap else mon.collect()
+    assert list(summary.failed) == ['legalize_law']
+    assert LAW_PATH in summary.failed['legalize_law']
+    assert 'legalize_admrule' in summary.ok
+    row = mon.state.last_run()
+    assert row['status'] == 'partial'
+    failure = json.loads(row['summary_json'])['collectors']['legalize_law']['file_failures']
+    assert list(failure) == [LAW_PATH]
+    assert 'frontmatter' in failure[LAW_PATH].lower()
+    assert mon.state.cursor('legalize-kr') == cursor
+    items = mon.state.items('legalize_law')
+    assert WAGE_PATH in items
+    if before is None:
+        assert LAW_PATH not in items
+        assert summary.events == []
+    else:
+        assert items[LAW_PATH] == before
+    if bootstrap:
+        assert summary.events == []
+    else:
+        assert [ev['target']['item_id'] for ev in _law_events(summary)] == [WAGE_PATH]
+        assert any(ev['source'] == 'legalize_admrule' for ev in summary.events)
+    assert mon.state.cursor('admrule-kr') == admrule.head()
+    retry = mon.bootstrap(only='legalize_law', force=mode == 'force-bootstrap') if bootstrap else mon.collect()
+    assert list(retry.failed) == ['legalize_law']
+    assert mon.state.cursor('legalize-kr') == cursor
+    assert retry.events == []
+    assert mon.state.items('legalize_law') == items
+    if bootstrap:
+        legalize.commit({LAW_PATH: law_md('근로기준법', LABOR_V2)}, '머리말 복구')
+        recovered = mon.bootstrap(only='legalize_law', force=mode == 'force-bootstrap')
+        assert recovered.failed == {}
+        assert set(mon.state.items('legalize_law')) == {LAW_PATH, WAGE_PATH}
+        assert mon.state.cursor('legalize-kr') == legalize.head()
+
+
+@pytest.mark.parametrize('bad_snapshot', [False, True], ids=['new-blob', 'old-snapshot'])
+def test_frontmatter_partial_failure_without_other_collectors(tmp_path, legalize, bad_snapshot):
+    mon = make_monitor(tmp_path, make_config(legalize))
+    mon.bootstrap(only='legalize_law')
+    before = mon.state.items('legalize_law')[LAW_PATH]
+    broken = '---\nunsafe: &cycle [*cycle]\n---\nbody'
+    law = law_md('근로기준법', LABOR_V2)
+    if bad_snapshot:
+        (mon.paths.files / f'{before.version_key}.md').write_text(broken, encoding='utf-8')
+        legalize.rewrite_history()
+    else:
+        law = broken
+    legalize.commit(
+        {LAW_PATH: law, WAGE_PATH: law_md('최저임금법', {'제1조 (목적)': '정상 개정'})},
+        '일부 머리말 실패',
+    )
+    summary = mon.collect(only='legalize_law')
+    assert summary.ok == [] and list(summary.failed) == ['legalize_law']
+    assert [ev['target']['item_id'] for ev in summary.events] == [WAGE_PATH]
+    assert mon.state.last_run()['status'] == 'partial'
+    assert mon.state.items('legalize_law')[LAW_PATH] == before
+
+
+def test_replay_frontmatter_failure_preserves_healthy_output(tmp_path, legalize):
+    since = legalize.head()
+    legalize.commit(
+        {
+            LAW_PATH: '---\nunsafe: &cycle [*cycle]\n---\nbody',
+            WAGE_PATH: law_md('최저임금법', {'제1조 (목적)': '정상 개정'}),
+        },
+        '일부 머리말 실패',
+    )
+    mon = make_monitor(tmp_path, make_config(legalize))
+    with pytest.raises(ValueError, match=LAW_PATH):
+        mon.replay('legalize-kr', since, legalize.head())
+    saved = list(mon.paths.replay.glob('**/*.json'))
+    assert len(saved) == 1
+    assert json.loads(saved[0].read_text(encoding='utf-8'))['target']['item_id'] == WAGE_PATH
+    assert mon.state.cursor('legalize-kr') is None
+    assert mon.state.items('legalize_law') == {}
+
+
 @pytest.mark.parametrize('force_bootstrap', [False, True], ids=['keep-cursor', 'force-bootstrap'])
 def test_expanded_legalize_scope_does_not_import_history(tmp_path, legalize, admrule, force_bootstrap):
     added_laws = (

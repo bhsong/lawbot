@@ -3,6 +3,7 @@
 - 한 수집기의 예외는 잡아서 runs.summary_json에 남기고 다음 수집기로 넘어간다.
 - 연속 3회 실패하면 collector_failing 이벤트를 한 번 남긴다 (3단계의 "수집이 멈췄다" 알림용).
 - 같은 날 여러 번 실행해도 이벤트는 내용 기반 event_id로 한 번만 저장된다.
+File failures are persisted alongside healthy events and items as a partial run.
 """
 
 import json
@@ -131,6 +132,9 @@ class Monitor:
                 len(result.events),
                 self.paths.rel(store.base),
             )
+            if result.file_failures:
+                errors = '; '.join(f'{path}: {error}' for path, error in result.file_failures.items())
+                raise ValueError(errors)
         return result.events
 
     def check(self, *, articles_enabled: bool = True) -> list:
@@ -298,8 +302,19 @@ class Monitor:
             for c in chosen:
                 try:
                     results[c.name] = c.collect(ctx)
-                    summary.ok.append(c.name)
-                    per[c.name] = {'status': 'ok', 'events': len(results[c.name].events)}
+                    result = results[c.name]
+                    if result.file_failures:
+                        error = '; '.join(f'{path}: {error}' for path, error in result.file_failures.items())
+                        summary.failed[c.name] = error
+                        per[c.name] = {
+                            'status': 'failed',
+                            'error': error,
+                            'events': len(result.events),
+                            'file_failures': result.file_failures,
+                        }
+                    else:
+                        summary.ok.append(c.name)
+                        per[c.name] = {'status': 'ok', 'events': len(result.events)}
                 except Exception as e:
                     log.exception('%s 실패', c.name)
                     summary.failed[c.name] = f'{type(e).__name__}: {e}'
@@ -335,7 +350,8 @@ class Monitor:
             if baselines_added:
                 details['baselines_added'] = baselines_added
             summary.line += _baseline_suffix(baselines_added)
-            status = 'ok' if not summary.failed else ('partial' if summary.ok else 'failed')
+            partial = summary.ok or any(r.events or r.items or r.removed for r in results.values())
+            status = 'ok' if not summary.failed else ('partial' if partial else 'failed')
             finished = self.now().isoformat(timespec='seconds')
             self.state.apply(
                 cursors={k: v for r in results.values() for k, v in r.cursors.items()},

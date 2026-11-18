@@ -7,16 +7,18 @@ from typing import Annotated, Literal
 
 from fastapi import Depends, FastAPI, HTTPException, Query, Request, Response
 from fastapi.exceptions import RequestValidationError
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from starlette.middleware.trustedhost import TrustedHostMiddleware
+from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from source_hub import news
 from source_hub.config import Target
 from source_hub.store import Conflict, Registry, UnknownTarget
 
 WEB = Path(__file__).with_name('web')
+WRITE_BODY_LIMIT = 16 * 1024
 
 
 class Change(BaseModel):
@@ -54,7 +56,6 @@ def create_app(
     if not username or not password:
         raise ValueError('관리자 사용자와 암호를 설정하세요')
     app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
-    app.add_middleware(TrustedHostMiddleware, allowed_hosts=[host])
     basic = HTTPBasic(realm='Lawbot Collector')
 
     def actor(credentials: Annotated[HTTPBasicCredentials, Depends(basic)]) -> str:
@@ -72,6 +73,43 @@ def create_app(
         if request.headers.get('content-type', '').split(';', 1)[0].strip().lower() != 'application/json':
             raise HTTPException(415, 'JSON 요청이 필요합니다')
         return user
+
+    class WriteGuard:
+        """Authenticate writes before receiving and cap bytes before JSON buffering."""
+
+        def __init__(self, app: ASGIApp):
+            self.app = app
+
+        async def __call__(self, scope: Scope, receive: Receive, send: Send):
+            if scope['type'] != 'http' or scope['method'] not in {'POST', 'PATCH', 'PUT', 'DELETE'}:
+                await self.app(scope, receive, send)
+                return
+
+            request = Request(scope)
+            try:
+                credentials = await basic(request)
+                assert credentials is not None  # HTTPBasic raises when auto_error=True.
+                writer(request, actor(credentials))
+            except HTTPException as exc:
+                response = JSONResponse({'detail': exc.detail}, status_code=exc.status_code, headers=exc.headers)
+                await response(scope, receive, send)
+                return
+
+            received = 0
+
+            async def limited_receive() -> Message:
+                nonlocal received
+                message = await receive()
+                if message['type'] == 'http.request':
+                    received += len(message.get('body', b''))
+                    if received > WRITE_BODY_LIMIT:
+                        raise HTTPException(413, '요청 본문이 너무 큽니다')
+                return message
+
+            await self.app(scope, limited_receive, send)
+
+    app.add_middleware(WriteGuard)
+    app.add_middleware(TrustedHostMiddleware, allowed_hosts=[host])
 
     @app.middleware('http')
     async def headers(request: Request, call_next):

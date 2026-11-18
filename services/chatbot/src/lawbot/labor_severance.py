@@ -58,8 +58,8 @@ _OUTSIDE = re.compile(
     r'퇴직\s*소득세|실수령|세후|중간\s*정산|퇴직\s*연금|(?:확정급여|확정기여)형|\b(?:DB|DC|IRP)\b', re.I
 )
 _VARIABLE_HOURS = re.compile(r'(?:소정\s*(?:근로\s*)?시간|근무\s*시간)[^.!?\n]{0,25}(?:변동|달라|바뀌|늘었|줄었|교대)')
-_HOURS_RANGE = re.compile(r'\d+(?:\.\d+)?\s*(?:시간)?\s*(?:[~～∼–-]|또는)\s*\d+(?:\.\d+)?\s*시간')
-_UNQUALIFIED_END = re.compile(r'(?:퇴직|퇴사)\s*일(?:자)?\s*(?:은|는|이|가|:)?\s*[0-9]')
+_HOURS_RANGE = re.compile(r'\d+(?:\.\d+)?\s*+(?:시간)?\s*+(?:[~～∼–-]|또는)\s*\d+(?:\.\d+)?\s*시간')
+_UNQUALIFIED_END = re.compile(r'(?:퇴직|퇴사)\s*일(?:자)?\s*+(?:(?:은|는|이|가|:)\s*+)?[0-9]')
 _QUALIFIED_END = re.compile(r'첫\s*비재직일|마지막\s*(?:재직|근무)일|근로관계\s*종료\s*다음\s*날')
 FACT_LABELS = {'service_qualifies': '달력상 1년 이상 계속근로 여부'}
 
@@ -83,7 +83,7 @@ def question_issue(question: str, inputs: Mapping[str, str], facts: Mapping[str,
     if _UNQUALIFIED_END.search(question) and not _QUALIFIED_END.search(question):
         return '퇴직일이 마지막 재직일인지 첫 비재직일인지 알려 주세요.'
     if (source := inputs.get('wage_days')) and re.search(
-        rf'(?:실제|소정)\s*(?:근무|근로)\s*일수\s*(?:은|는|이|가|:)?\s*{re.escape(source)}', question
+        rf'(?:실제|소정)\s*(?:근무|근로)\s*일수\s*+(?:(?:은|는|이|가|:)\s*+)?{re.escape(source)}', question
     ):
         return '실제 근무일수가 아닌 평균임금 산정기간의 달력 일수를 알려 주세요.'
     for field, label in (

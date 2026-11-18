@@ -82,6 +82,13 @@ def _summarize(
     checks: list | None = None,
     managed_run: str | None = None,
 ) -> int:
+    if monitor.llm is None:
+        try:
+            config = load_config()
+        except ValueError as exc:
+            raise MissingSecret(f'요약 모델 설정이 없습니다: {exc}') from exc
+        if config is not None:
+            monitor.llm = ChatClient(config)
     result = monitor.summarize(
         events_dir=events_dir,
         run_line=run_line,
@@ -234,10 +241,8 @@ def _run(args, paths: Paths) -> int:
     selection = _daily_selection(source_plan) if source_plan else None
     oc = secrets.law_oc()
     lawgo = LawGoClient(oc) if oc else None
-    llm_config = load_config()
-    llm = ChatClient(llm_config) if llm_config else None
     config = load(args.config)
-    monitor = Monitor(paths, config, lawgo=lawgo, llm=llm)
+    monitor = Monitor(paths, config, lawgo=lawgo)
     if args.command == 'summarize':
         return _summarize(monitor, events_dir=args.events_dir)
     if args.command == 'daily':

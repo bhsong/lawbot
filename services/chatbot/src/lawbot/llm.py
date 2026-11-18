@@ -43,7 +43,7 @@ GEN_FIELDS = (
     'peak_memory',
     'finish_reason',
 )
-TEMPERATURE = 0  # 탐욕적 생성 (평가·웹앱 공통, 모델 서버 기본값과 같음)
+TEMPERATURE = 0  # Greedy generation for evaluation and the web app.
 
 
 def response(text='', **kw):
@@ -73,9 +73,8 @@ def convert_error(e):
 
 
 def responses(chunks):
-    """SSE 청크 → 토큰마다 응답 (받는 즉시: 첫 토큰 시간이 그대로). 끝 청크의 측정값(finish_reason·timings·usage)은
-    마지막에 text가 빈 응답 하나로 붙인다 (service.ask는 마지막 응답의 측정값을 읽음)"""
-    stats, n = {}, 0
+    """Yield token responses immediately, then final metrics; require an explicit finish reason."""
+    stats = {}
     for ch in chunks:
         extra = ch.model_extra or {}
         if ch.usage is not None:
@@ -96,10 +95,10 @@ def responses(chunks):
             text = choice.delta.content
             reasoning = getattr(choice.delta, 'reasoning_content', None) or getattr(choice.delta, 'reasoning', None)
             if text is not None or reasoning is not None:
-                n += 1
                 yield response(text or '', reasoning=reasoning)
-    if stats or not n:
-        yield response('', **stats)
+    if not stats.get('finish_reason'):
+        raise RuntimeError('생성 스트림이 finish_reason 없이 종료되었습니다.')
+    yield response('', **stats)
 
 
 class LLM:
@@ -167,6 +166,8 @@ class LLM:
                     metrics[key] = metrics.get(key, 0) + value
         if not result.choices or result.choices[0].finish_reason == 'length':
             return None
+        if not result.choices[0].finish_reason:
+            raise ModelServerError('계산 라우터 응답에 finish_reason이 없습니다.')
         return result.choices[0].message.content
 
     def stream(self, question, hits, max_tokens=1024, system=None, *, suffix=''):

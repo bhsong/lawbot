@@ -77,7 +77,7 @@ class LawbotApp:
     reranker: object = None  # None: 임베딩 상위 TOP_K개 그대로 (LAWBOT_RERANKER_ENABLED=0, 기본)
     full_system: str | None = None  # '전체(4항목)' system: 프로필 시스템 파일
     decree: object = None  # deploy.DecreeConfig: 시행령·시행규칙 첨부 (None: 법률 3개만, LAWBOT_DECREE_ENABLED=0 기본)
-    llm_mode: str = 'api'  # 생성 위치: 'api'(모델 서버) / 'external'(LAWBOT_LLM_BASE_URL의 외부 API)
+    llm_mode: str = 'api'  # 'api': dedicated local generation server; 'external': external generation API.
     settings: object = None  # lawbot.settings.Settings (load_app이 넣음. 테스트·평가의 가짜 앱은 None)
     dataset_version: str | None = None
     corpus_release_id: str | None = None
@@ -365,7 +365,7 @@ def request_log_path(env=None):
 
 def error_type(e, stage):
     """오류 유형 (로그·화면 안내 공통). stage: 오류가 난 단계 'search'·'rerank'·'load'·'generation'
-    model_server: 모델 서버(생성 API) 연결 실패·토큰 불일치(401)·로딩 중(503). 서버 쪽 연산 오류(500)는 단계로 나눈다
+    model_server: embedding/rerank or generation connection failure, authentication failure (401), or unavailable (503).
     model_load: 답변 모델 불러오기 실패 (서버의 모델 폴더 없음·형식 오류 = ModelLoadError, 웹앱의 system 파일 없음)
     config: 없는 모델 key, 서버에 없는 모델 id(404)
     model_server_timeout: 질문 처리 중 응답 조각 사이가 LAWBOT_MODEL_READ_TIMEOUT을 넘음"""

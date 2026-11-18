@@ -194,6 +194,8 @@ def create_chat_app(token, model, revision, mode, port):
                 yield event({'role': 'assistant', 'reasoning': 'private synthetic reasoning'})
                 for piece in chunks:
                     await asyncio.sleep({'stream': STREAM_S, 'long': STREAM_S, 'slow': SLOW_S}.get(mode, 0))
+                    if mode == 'truncated' and sent == 2:
+                        return
                     if mode == 'chat_error' and sent:
                         yield (
                             'data: '

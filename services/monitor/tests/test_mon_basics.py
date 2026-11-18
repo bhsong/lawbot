@@ -85,6 +85,109 @@ def test_frontmatter_split_and_dates_as_text():
     assert frontmatter.split('머리말 없음') == ({}, '머리말 없음')
 
 
+@pytest.mark.parametrize(
+    'metadata',
+    [
+        'value: &shared text',
+        'value: &shared [text]',
+        'value: &shared {key: text}',
+        '&shared key: text',
+        'value: *missing',
+        'value: &cycle [*cycle]',
+        'value: &root {child: *root}',
+    ],
+)
+def test_frontmatter_rejects_yaml_references_before_loading(monkeypatch, metadata):
+    def unexpected_load(*args, **kwargs):
+        pytest.fail('Rejected YAML reached object construction')
+
+    monkeypatch.setattr(frontmatter.yaml, 'safe_load', unexpected_load)
+    with pytest.raises(ValueError, match='anchors and aliases'):
+        frontmatter.split(f'---\n{metadata}\n---\nbody')
+
+
+def test_frontmatter_rejects_alias_bomb_at_first_anchor(monkeypatch):
+    metadata = ['a0: &a0 [text]']
+    for level in range(1, 40):
+        aliases = ', '.join([f'*a{level - 1}'] * 10)
+        metadata.append(f'a{level}: &a{level} [{aliases}]')
+    parse = frontmatter.yaml.parse
+    parsed = []
+
+    def guarded_parse(*args, **kwargs):
+        for event in parse(*args, **kwargs):
+            parsed.append(event)
+            assert len(parsed) <= 6, 'Alias bomb was not rejected at its first anchor'
+            yield event
+
+    def unexpected_load(*args, **kwargs):
+        pytest.fail('Alias bomb reached object construction')
+
+    monkeypatch.setattr(frontmatter.yaml, 'parse', guarded_parse)
+    monkeypatch.setattr(frontmatter.yaml, 'safe_load', unexpected_load)
+    with pytest.raises(ValueError, match='anchors and aliases'):
+        frontmatter.split('---\n' + '\n'.join(metadata) + '\n---\nbody')
+    assert parsed
+
+
+@pytest.mark.parametrize(
+    ('metadata', 'message'),
+    [
+        ('value: ' + '[' * 2048 + '0' + ']' * 2048, 'depth'),
+        ('value: ' + '[' * 32 + '0' + ']' * 32, 'depth'),
+        ('{key: ' * 64 + '0' + '}' * 64, 'depth'),
+        ('[0, ' * 64 + '0' + ']' * 64, 'depth'),
+        ('value: [' + ', '.join(['0'] * 9998) + ']', 'nodes'),
+        ('\n'.join(f'key{i}: 0' for i in range(5000)), 'nodes'),
+    ],
+)
+def test_frontmatter_bounds_structure_before_loading(monkeypatch, metadata, message):
+    def unexpected_load(*args, **kwargs):
+        pytest.fail('Oversized YAML reached object construction')
+
+    monkeypatch.setattr(frontmatter.yaml, 'safe_load', unexpected_load)
+    with pytest.raises(ValueError, match=message):
+        frontmatter.split(f'---\n{metadata}\n---\nbody')
+
+
+def test_frontmatter_accepts_structure_at_limits():
+    nested = '[' * 31 + '0' + ']' * 31
+    meta, body = frontmatter.split(f'---\nvalue: {nested}\n---\nbody')
+    value = meta['value']
+    for _ in range(31):
+        value = value[0]
+    assert value == 0 and body == 'body'
+    values = ', '.join(['0'] * 9997)
+    meta, body = frontmatter.split(f'---\nvalue: [{values}]\n---\nbody')
+    assert meta == {'value': [0] * 9997} and body == 'body'
+
+
+def test_frontmatter_preserves_normal_metadata_and_literal_reference_text():
+    form = attachment('0001', '근로계약서', seq=10)
+    text = law_md('근로기준법', {'제1조 (목적)': '목적'}, attachments=[form])
+    meta, body = frontmatter.split(text)
+    assert meta == {
+        '제목': '근로기준법',
+        '법령ID': '000001',
+        '소관부처': ['고용노동부'],
+        '공포일자': '2026-01-01',
+        '공포번호': '00001',
+        '시행일자': '2026-01-01',
+        '상태': '시행',
+        '출처': 'https://www.law.go.kr/법령/근로기준법',
+        '첨부파일': [form],
+    }
+    assert body == text.split('\n---\n', 1)[1].lstrip('\n')
+    rule, _ = frontmatter.split(admrule_md('100', '고시', '국세청', '본문', attachments=[form]))
+    assert rule['행정규칙ID'] == '100' and rule['발령일자'] == '2026-01-01'
+    assert rule['첨부파일'] == [form]
+    literal = '---\nquoted: "&anchor *alias"\nblock: |\n  &anchor *alias\n# &ignored *ignored\n---\nbody'
+    assert frontmatter.split(literal) == (
+        {'quoted': '&anchor *alias', 'block': '&anchor *alias\n'},
+        'body',
+    )
+
+
 def test_attachment_changes_ignore_links():
     old = [attachment('0001', '근로소득 원천징수영수증', seq=10), attachment('0002', '지급명세서', seq=20)]
     relinked = [attachment('0001', '근로소득 원천징수영수증', seq=99), attachment('0002', '지급명세서', seq=98)]

@@ -171,6 +171,8 @@ class LegalizeGitCollector:
                 baseline_exclusions = set((previous or '').splitlines()) | recovered.keys()
             build.compare_with_head(head, baseline_new_except=baseline_exclusions)
         result = build.result()
+        if result.file_failures:
+            return result
         result.cursors = {self.repo_key: head}
         if rescan and scope is not None:
             result.baselines[scope_marker] = scope
@@ -245,10 +247,15 @@ class LegalizeGitCollector:
         items = [ItemState(self.name, key, v.blob, v.blob, v.path) for key, v in found.items()]
         log.info('%s: 기준점 %s, 대상 파일 %d개', self.repo_key, head[:12], len(items))
         return CollectResult(
-            cursors={self.repo_key: head},
+            cursors={} if build.file_failures else {self.repo_key: head},
             items=items,
-            replace_sources=[self.name],
-            baselines={self.paused_law_marker: '{}'} if isinstance(self.matcher, LawMatcher) else {},
+            replace_sources=[] if build.file_failures else [self.name],
+            baselines=(
+                {self.paused_law_marker: '{}'}
+                if isinstance(self.matcher, LawMatcher) and not build.file_failures
+                else {}
+            ),
+            file_failures=build.file_failures,
         )
 
 
@@ -264,6 +271,7 @@ class _Builder:
     diffs: dict[str, str] = field(default_factory=dict)
     touched: set[str] = field(default_factory=set)
     baselines_added: int = 0
+    file_failures: dict[str, str] = field(default_factory=dict)
 
     @property
     def m(self):
@@ -273,8 +281,16 @@ class _Builder:
         if not path or blob == ZERO:
             return None
         text = self.repo.blob(blob)
-        meta, body = frontmatter.split(text)
+        meta, body = self._split(path, text)
         return Version(path, blob, meta, body, text)
+
+    def _split(self, path: str, text: str) -> tuple[dict, str]:
+        try:
+            return frontmatter.split(text)
+        except frontmatter.FrontmatterError as exc:
+            self.file_failures[path] = str(exc)
+            log.warning('%s: %s', path, exc)
+            raise
 
     def save(self, v: Version) -> str:
         """파일 내용 사본 data/files/<blob>.md (강제 푸시 뒤 비교·이벤트 old/new 파일)."""
@@ -291,18 +307,19 @@ class _Builder:
         except GitError:
             log.warning('%s: 이전 내용을 찾을 수 없음 (%s)', item.item_id, item.version_key[:12])
             return None
-        meta, body = frontmatter.split(text)
+        meta, body = self._split(item.file_path, text)
         return Version(item.file_path, item.version_key, meta, body, text)
 
     def scan(self, rev: str, paths: set[str] | None = None) -> dict[str, Version]:
         out = {}
         for path, blob in self.repo.ls_tree(rev):
-            if (
-                (paths is None or path in paths)
-                and self.m.prefilter(path)
-                and (v := self.version(path, blob))
-                and self.m.categories(v)
-            ):
+            if (paths is not None and path not in paths) or not self.m.prefilter(path):
+                continue
+            try:
+                v = self.version(path, blob)
+            except frontmatter.FrontmatterError:
+                continue
+            if v and self.m.categories(v):
                 out[self.m.item_id(v)] = v
         return out
 
@@ -330,7 +347,10 @@ class _Builder:
             if isinstance(self.m, LawMatcher) and self.m.selected_paths is not None:
                 old_path = old_path if old_path and self.m.prefilter(old_path) else None
                 new_path = new_path if new_path and self.m.prefilter(new_path) else None
-            old, new = self.version(old_path, ch.old_blob), self.version(new_path, ch.new_blob)
+            try:
+                old, new = self.version(old_path, ch.old_blob), self.version(new_path, ch.new_blob)
+            except frontmatter.FrontmatterError:
+                continue
             old = old if old and self.m.categories(old) else None
             new = new if new and self.m.categories(new) else None  # 대상에서 빠지면 제거로 본다
             if old is None and new is None:
@@ -360,7 +380,10 @@ class _Builder:
         missing = [
             key
             for key, item in self.current.items()
-            if key not in found and self.m.prefilter(item.file_path) and (paths is None or item.file_path in paths)
+            if key not in found
+            and item.file_path not in self.file_failures
+            and self.m.prefilter(item.file_path)
+            and (paths is None or item.file_path in paths)
         ]
         for key in missing:
             self.emit(key, None, None, None)
@@ -375,7 +398,10 @@ class _Builder:
         event_id: str | None = None,
     ) -> None:
         if old is None and key in self.current:
-            old = self.from_item(self.current[key])
+            try:
+                old = self.from_item(self.current[key])
+            except frontmatter.FrontmatterError:
+                return
         if old is None and new is None:
             self._forget(key)
             return
@@ -462,6 +488,7 @@ class _Builder:
             items=[self.current[k] for k in sorted(self.touched) if k in self.current],
             removed=[(name, k) for k in sorted(self.touched) if k not in self.current],
             baselines_added=self.baselines_added,
+            file_failures=self.file_failures,
         )
 
 

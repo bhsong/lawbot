@@ -43,9 +43,9 @@ _ABSENCE = re.compile(r'개근(?:을?(?:하지(?:않|못)|못)|이?아니)|미�
 _ATTENDED = re.compile(r'개근|소정근로일(?:을|에)?(?:모두|전부)출근')
 _HOUR_TEXT = r'\d+(?:\.\d+)?\s*시간(?:\s*\d+(?:\.\d+)?\s*분)?'
 _HOUR_EVIDENCE = {
-    'paid_holiday_hours': re.compile(rf'(?:유급\s*)?주휴(?:\s*시간)?\s*(?:은|는|이|:)?\s*({_HOUR_TEXT})'),
+    'paid_holiday_hours': re.compile(rf'(?:유급\s*)?주휴(?:\s*시간)?\s*+(?:(?:은|는|이|:)\s*+)?({_HOUR_TEXT})'),
     'weekly_scheduled_hours': re.compile(
-        rf'주\s*(?:평균\s*)?소정(?:\s*근로)?(?:\s*시간)?\s*(?:은|는|이|:)?\s*({_HOUR_TEXT})'
+        rf'주\s*(?:평균\s*)?소정(?:\s*근로)?(?:\s*시간)?\s*+(?:(?:은|는|이|:)\s*+)?({_HOUR_TEXT})'
     ),
 }
 

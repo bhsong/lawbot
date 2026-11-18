@@ -120,7 +120,7 @@ def error_message(kind, cause, spec):
     name = type(cause).__name__
     if kind == 'model_server_timeout':
         return f'모델 서버 응답이 없습니다 ({cause}). 잠시 뒤 다시 질문하세요.'
-    if kind == 'model_server':  # 모델 서버(생성 API) 연결 실패·토큰 불일치·로딩 중
+    if kind == 'model_server':  # Embedding/rerank or generation connection, authentication, or readiness failure.
         return (
             f'모델 서버가 준비되지 않았습니다 ({name}). 잠시 뒤 다시 질문하고, 계속되면 '
             'uv run python -m lawbot.check_deploy로 모델 서버를 확인하세요.'
@@ -162,8 +162,7 @@ CHAT_CONCURRENCY_LIMIT = 16
 
 
 def chat_concurrency(env=None):
-    """LAWBOT_CHAT_CONCURRENCY: 웹앱이 동시에 처리하는 질문 수 (기본 1). 모델 서버의 LAWBOT_MAX_CONCURRENT와 따로 둔다
-    (서버를 다른 앱과 같이 쓰므로). 서버 상한보다 크면 넘는 질문은 서버에서 기다린다"""
+    """LAWBOT_CHAT_CONCURRENCY limits simultaneous web-app questions (default 1)."""
     env = os.environ if env is None else env
     raw = (env.get('LAWBOT_CHAT_CONCURRENCY') or '1').strip()
     if not raw.isdigit() or not 1 <= int(raw) <= CHAT_CONCURRENCY_LIMIT:

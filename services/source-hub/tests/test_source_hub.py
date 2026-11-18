@@ -1,3 +1,5 @@
+import asyncio
+import json
 import os
 import socket
 import sqlite3
@@ -105,6 +107,119 @@ def test_admin_api_authorization_origin_and_concurrent_settings(registry):
     assert response.headers['cache-control'] == 'no-store'
     assert AUTH[1] not in response.text
     assert client.get('/api/collector/audit', auth=AUTH).json()[0]['actor'] == AUTH[0]
+
+
+def _asgi_write(app, chunks, *, path='/api/collector/sources/legalize_law', method='PATCH', headers=None):
+    scope = {
+        'type': 'http',
+        'asgi': {'version': '3.0', 'spec_version': '2.4'},
+        'http_version': '1.1',
+        'method': method,
+        'scheme': 'http',
+        'path': path,
+        'raw_path': path.encode(),
+        'query_string': b'',
+        'root_path': '',
+        'headers': [(b'host', b'testserver')] + (headers or []),
+        'server': ('testserver', 80),
+        'client': ('127.0.0.1', 12345),
+    }
+    consumed = 0
+    messages = []
+    chunks = iter(chunks)
+
+    async def receive():
+        nonlocal consumed
+        chunk, more = next(chunks)
+        consumed += 1
+        return {'type': 'http.request', 'body': chunk, 'more_body': more}
+
+    async def send(message):
+        messages.append(message)
+
+    asyncio.run(app(scope, receive, send))
+    start = next(message for message in messages if message['type'] == 'http.response.start')
+    body = b''.join(message.get('body', b'') for message in messages if message['type'] == 'http.response.body')
+    return httpx.Response(start['status'], headers=start['headers'], content=body), consumed
+
+
+def _write_headers():
+    request = httpx.Request('PATCH', ORIGIN)
+    request = next(httpx.BasicAuth(*AUTH).auth_flow(request))
+    return [
+        (b'authorization', request.headers['authorization'].encode()),
+        (b'origin', ORIGIN.encode()),
+        (b'content-type', b'application/json'),
+    ]
+
+
+@pytest.mark.parametrize('rejection', ['missing_auth', 'wrong_auth', 'bad_origin', 'missing_origin', 'bad_type'])
+def test_asgi_write_rejects_untrusted_headers_without_receiving_body(registry, rejection):
+    headers = _write_headers()
+    expected = 401
+    if rejection == 'missing_auth':
+        headers = headers[1:]
+    elif rejection == 'wrong_auth':
+        headers[0] = (b'authorization', b'Basic aW52YWxpZDppbnZhbGlk')
+    elif rejection == 'bad_origin':
+        headers[1] = (b'origin', b'https://elsewhere.invalid')
+        expected = 403
+    elif rejection == 'missing_origin':
+        headers = headers[:1]
+        expected = 403
+    else:
+        headers[-1] = (b'content-type', b'text/plain')
+        expected = 415
+    app = create_app(registry, *AUTH, host='testserver')
+    chunks = [(b' ' * 65536, True)] * 4 + [(b'{}', False)]
+    response, consumed = _asgi_write(app, chunks, headers=headers)
+    assert response.status_code == expected
+    assert consumed == 0
+    assert registry.history() == []
+
+
+@pytest.mark.parametrize(
+    ('path', 'method'),
+    [
+        ('/api/collector/sources/legalize_law', 'PATCH'),
+        ('/api/collector/sources/new-source', 'POST'),
+        ('/api/collector/settings/agency/lawgo', 'PATCH'),
+        ('/api/collector/news/reviews', 'POST'),
+        ('/api/collector/news/publication', 'POST'),
+    ],
+)
+@pytest.mark.parametrize('content_length', [None, b'2', b'999999999'])
+def test_asgi_write_caps_actual_chunk_bytes_before_json_parsing(registry, path, method, content_length):
+    headers = _write_headers()
+    if content_length is not None:
+        headers.append((b'content-length', content_length))
+    app = create_app(registry, *AUTH, host='testserver')
+    chunks = [(b' ' * 8192, True), (b' ' * 8192, True), (b' ', True), (b'{}', False)]
+    response, consumed = _asgi_write(app, chunks, path=path, method=method, headers=headers)
+    assert response.status_code == 413
+    assert consumed == 3
+    assert registry.history() == []
+
+
+def test_asgi_write_rejects_an_oversized_first_chunk_immediately(registry):
+    app = create_app(registry, *AUTH, host='testserver')
+    response, consumed = _asgi_write(app, [(b' ' * 65536, True), (b'{}', False)], headers=_write_headers())
+    assert response.status_code == 413
+    assert consumed == 1
+
+
+@pytest.mark.parametrize('body_size', [256, 16384])
+def test_asgi_write_accepts_chunked_json_through_the_limit(registry, body_size):
+    app = create_app(registry, *AUTH, host='testserver')
+    payload = {'version': 0, 'reason': '정상 변경', 'changes': {'enabled': False}}
+    body = json.dumps(payload, ensure_ascii=False).encode()
+    body += b' ' * (body_size - len(body))
+    chunks = [(body[:31], True), (body[31:97], True), (body[97:], False)]
+    response, consumed = _asgi_write(app, chunks, headers=_write_headers())
+    assert response.status_code == 200
+    assert response.json() == {'config_version': 1}
+    assert consumed == 3
+    assert registry.history()[0]['actor'] == AUTH[0]
 
 
 def test_admin_screen_is_private_and_links_local_assets(registry):

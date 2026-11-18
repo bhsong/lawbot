@@ -27,7 +27,7 @@ _MONEY_TOKEN = re.compile(
 )
 _MAX_SAFE_INTEGER = 2**53 - 1
 
-_PARTICLE = r'\s*(?:은|는|이|가|:)?\s*'
+_PARTICLE = r'\s*+(?:(?:은|는|이|가|:)\s*+)?'
 _WEEK_SCOPE = r'(?:매\s*주|1\s*주|주(?:당|간)?)'
 _WEEK_AVERAGE = r'[0-9]+\s*주\s*(?:(?:동안|간)\s*(?:의\s*)?)?평균'
 _SCHEDULED = r'소정(?:\s*근로)?(?:\s*시간(?:\s*수)?)?'
@@ -47,7 +47,7 @@ _COUNT_UNITS = {
     'full_attendance_months': ('개월',),
 }
 _SOURCE_NUMBER = rf'(?:[0-9０-９]+(?:[,，][0-9０-９]+)*(?:[.．][0-9０-９]+)?|(?<![가-힣])[{_DIGITS}]+)'
-_DURATION_JOIN = r'\s*(?:하고|과|및)?\s*'
+_DURATION_JOIN = r'\s*+(?:(?:하고|과|및)\s*+)?'
 _QUANTITY_PATTERNS = {
     'hours': re.compile(rf'{_SOURCE_NUMBER}\s*(?:시간(?:\s*{_SOURCE_NUMBER}\s*분)?|분)'),
     'percent': re.compile(rf'{_SOURCE_NUMBER}\s*[%％]'),
@@ -60,7 +60,7 @@ _QUANTITY_PATTERNS = {
 _UNIT_EXTENSIONS = {
     'hours': re.compile(rf'\s*(?:시간(?:\s*{_ARABIC}\s*분)?|분)'),
     'percent': re.compile(r'\s*[%％]'),
-    'duration': re.compile(rf'\s*(?:년|개월|일)(?:\s*(?:하고|과|및)?\s*[\d{_DIGITS}]+\s*(?:개월|일))*'),
+    'duration': re.compile(rf'\s*(?:년|개월|일)(?:\s*+(?:(?:하고|과|및)\s*+)?[\d{_DIGITS}]+\s*(?:개월|일))*'),
 }
 
 

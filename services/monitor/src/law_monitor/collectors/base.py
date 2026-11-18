@@ -2,6 +2,7 @@
 
 수집기는 상태를 읽고 비교해 CollectResult를 돌려줄 뿐 저장하지 않는다. 실행기가 모든 수집기를 돌린 뒤
 한 트랜잭션으로 저장하므로, 중간에 실패하면 상태가 바뀌지 않아 다음 실행에서 다시 잡힌다.
+File failures preserve healthy results without advancing cursors or replacing baselines.
 """
 
 from collections.abc import Callable
@@ -34,6 +35,7 @@ class CollectResult:
     replace_sources: list[str] = field(default_factory=list)  # bootstrap: 이 source의 기존 items를 지우고 새로
     baselines: dict[str, str] = field(default_factory=dict)
     baselines_added: int = 0
+    file_failures: dict[str, str] = field(default_factory=dict)
 
 
 class Collector(Protocol):

@@ -45,7 +45,6 @@ def local_app(env):
     env.setattr(FakeLLM, 'chunks', CHUNKS)
     env.setattr(service, 'Retriever', FakeRetriever)
     env.setattr(service, 'LLM', FakeLLM)
-    env.setenv('LAWBOT_MAX_RESIDENT', '2')
     return service.load_app()
 
 
@@ -404,6 +403,38 @@ def test_review_dedup_and_overlap(env, tmp_path):
         feedback_review.review([tmp_path / 'dev'], ROOT / 'docs' / 'review.csv', evals=EVALS)
 
 
+@pytest.mark.parametrize('source', ['jsonl', 'db'])
+@pytest.mark.parametrize(
+    'text', ['=1+1', '+1+1', '-1+1', '@SUM(A1)', '\tformula', '\rformula', '평문', "'=1+1", ' =1+1', '']
+)
+def test_review_csv_escapes_external_text_only(tmp_path, source, text):
+    row = fb_row('a', text)
+    row.update(reason=text if source == 'jsonl' else None, model=text, fmt=text, answer_shown=text)
+    row['hits'][0]['law'] = text
+    folder = tmp_path / 'source'
+    write_rows(folder, [row])
+    db = None
+    if source == 'db':
+        db = tmp_path / 'private' / 'lawbot.db'
+        migrate.init(db)
+        with connect(db, write=True) as conn:
+            write_feedback(conn, prepare_feedback(list(folder.glob('*.jsonl'))))
+    keep = tmp_path / 'keep.csv'
+    human = dict(zip(feedback_review.HUMAN, ['맞음', '+정답', '범위 안', '=검수 메모']))
+    pd.DataFrame([{'feedback_id': 'a', **human}]).to_csv(keep, index=False, encoding='utf-8-sig')
+    out = tmp_path / 'review.csv'
+    feedback_review.review([folder], out, keep=keep, evals=[], db=db)
+    reviewed = pd.read_csv(out, dtype=str, keep_default_na=False, encoding='utf-8-sig').iloc[0]
+    expected = "'" + text if text.startswith(('=', '+', '-', '@', '\t', '\r')) else text
+    for column in ('question', 'model', 'fmt', 'answer_shown'):
+        assert reviewed[column] == expected
+    assert reviewed['reason'] == (expected if source == 'jsonl' else '')
+    hit = feedback_review.hit_keys(row)
+    assert reviewed['hits'] == ("'" + hit if hit.startswith(('=', '+', '-', '@', '\t', '\r')) else hit)
+    assert reviewed[list(human)].to_dict() == human
+    assert json.loads(feedback_review.companion(out).read_text(encoding='utf-8')) == row
+
+
 def test_review_real_eval_sets():
     ov = feedback_review.Overlap(feedback_review.eval_sets())
     t = pd.read_csv(ROOT / 'data/v4/qa_full_v4.csv', encoding='utf-8-sig').merge(
@@ -528,6 +559,39 @@ def test_export(env, tmp_path):
     d.reset_index().to_csv(out, index=False, encoding='utf-8-sig')
     with pytest.raises(ValueError, match='h_ok'):
         feedback_export.export(out, tmp_path / 'out', articles=arts)
+
+
+@pytest.mark.parametrize('source', ['jsonl', 'db'])
+@pytest.mark.parametrize('prefix', ['=', '+', '-', '@', '\t', '\r'])
+def test_export_preserves_original_formula_text(tmp_path, source, prefix):
+    from lawbot.llm import build_prompt
+
+    row = fb_row('a', prefix + '질문')
+    row.update(answer_shown=prefix + '표시 답변', answer_raw=prefix + '원문 답변', system=prefix + '시스템')
+    folder = tmp_path / 'source'
+    write_rows(folder, [row])
+    db = None
+    if source == 'db':
+        db = tmp_path / 'private' / 'lawbot.db'
+        migrate.init(db)
+        with connect(db, write=True) as conn:
+            write_feedback(conn, prepare_feedback(list(folder.glob('*.jsonl'))))
+    review_csv = tmp_path / 'review.csv'
+    feedback_review.review([folder], review_csv, evals=[], db=db)
+    reviewed = pd.read_csv(review_csv, dtype=str, keep_default_na=False, encoding='utf-8-sig')
+    assert reviewed.loc[0, 'question'] == "'" + row['question']
+    assert reviewed.loc[0, 'answer_shown'] == "'" + row['answer_shown']
+    reviewed.loc[0, ['h_ok', 'h_gold']] = ['맞음', '근로기준법 제26조']
+    reviewed.to_csv(review_csv, index=False, encoding='utf-8-sig')
+    feedback_export.export(review_csv, tmp_path / 'out')
+    for name in ('fb_questions', 'fb_emb_pairs'):
+        exported = pd.read_csv(tmp_path / 'out' / f'{name}.csv', keep_default_na=False, encoding='utf-8-sig')
+        assert exported.loc[0, 'question'] == row['question']
+    for name in ('fb_sft', 'fb_kto'):
+        exported = pd.read_csv(tmp_path / 'out' / f'{name}.csv', keep_default_na=False, encoding='utf-8-sig')
+        assert exported.loc[0, 'system'] == row['system']
+        assert exported.loc[0, 'prompt'] == build_prompt(row['hits'], row['question'])
+        assert exported.loc[0, 'completion'] == row['answer_raw']
 
 
 @pytest.mark.parametrize(

@@ -1,6 +1,8 @@
 # services/model-server/tests/test_ms_api.py  →  OpenAI 호환 API (가짜 모델 + FastAPI TestClient)
 # 형식은 OpenAI 공식 SDK로도 확인한다 (클라우드와 같은 코드로 쓸 수 있어야 함)
+import asyncio
 import base64
+import json
 import subprocess
 import sys
 import threading
@@ -69,6 +71,92 @@ def test_body_too_large():
     with TestClient(api.create_app(TOKEN, registry(), max_body=100)) as c:
         r = c.post('/v1/embeddings', headers=AUTH, json={'model': 'emb', 'input': 'x' * 200})
         assert r.status_code == 413
+
+
+async def _asgi_post(app, path, chunks, headers):
+    consumed = 0
+    messages = []
+
+    async def receive():
+        nonlocal consumed
+        assert consumed < len(chunks), 'Request consumed an unexpected body chunk'
+        body = chunks[consumed]
+        consumed += 1
+        return {'type': 'http.request', 'body': body, 'more_body': consumed < len(chunks)}
+
+    async def send(message):
+        messages.append(message)
+
+    scope = {
+        'type': 'http',
+        'asgi': {'version': '3.0'},
+        'http_version': '1.1',
+        'method': 'POST',
+        'scheme': 'http',
+        'path': path,
+        'raw_path': path.encode(),
+        'query_string': b'',
+        'headers': headers,
+        'server': ('testserver', 80),
+        'client': ('testclient', 123),
+    }
+    async with app.router.lifespan_context(app):
+        await app(scope, receive, send)
+    status = next(message['status'] for message in messages if message['type'] == 'http.response.start')
+    body = b''.join(message.get('body', b'') for message in messages if message['type'] == 'http.response.body')
+    return status, json.loads(body), consumed
+
+
+@pytest.mark.parametrize('path', ['/v1/embeddings', '/v1/rerank'])
+@pytest.mark.parametrize(
+    'size_headers',
+    [[], [(b'transfer-encoding', b'chunked')], [(b'content-length', b'1')]],
+)
+def test_streamed_body_stops_at_limit(reg, path, size_headers):
+    headers = [(b'authorization', f'Bearer {TOKEN}'.encode()), *size_headers]
+    app = api.create_app(TOKEN, reg, max_body=100)
+    status, body, consumed = asyncio.run(_asgi_post(app, path, [b'x' * 60, b'x' * 41, b'x' * 200], headers))
+    assert status == 413
+    assert body['error']['type'] == 'invalid_request_error'
+    assert '100' in body['error']['message']
+    assert consumed == 2
+    assert not reg.fixed['emb'].calls and not reg.fixed['rr'].calls
+
+
+@pytest.mark.parametrize('authorization', [None, b'Bearer wrong-token-000000'])
+@pytest.mark.parametrize('path', ['/v1/embeddings', '/v1/rerank'])
+def test_streamed_body_authentication_precedes_receive(reg, path, authorization):
+    headers = [(b'transfer-encoding', b'chunked')]
+    if authorization is not None:
+        headers.append((b'authorization', authorization))
+    app = api.create_app(TOKEN, reg, max_body=1)
+    status, body, consumed = asyncio.run(_asgi_post(app, path, [], headers))
+    assert status == 401
+    assert body['error']['type'] == 'authentication_error'
+    assert consumed == 0
+
+
+@pytest.mark.parametrize(
+    'path,payload',
+    [
+        ('/v1/embeddings', {'model': 'emb', 'input': ['질문', '문서']}),
+        ('/v1/rerank', {'model': 'rr', 'query': '질문', 'documents': ['문서']}),
+    ],
+)
+def test_streamed_body_at_limit_preserves_inference(reg, path, payload):
+    data = json.dumps(payload, ensure_ascii=False).encode()
+    headers = [(b'authorization', f'Bearer {TOKEN}'.encode()), (b'transfer-encoding', b'chunked')]
+    app = api.create_app(TOKEN, reg, max_body=len(data))
+    status, body, consumed = asyncio.run(_asgi_post(app, path, [data[:1], b'', data[1:]], headers))
+    assert status == 200
+    assert consumed == 3
+    if path == '/v1/embeddings':
+        assert [item['index'] for item in body['data']] == [0, 1]
+        assert all(len(item['embedding']) == 8 for item in body['data'])
+        assert len(reg.fixed['emb'].calls) == 1
+    else:
+        assert body['results'][0]['index'] == 0
+        assert len(reg.fixed['rr'].calls) == 1
 
 
 def test_no_docs_endpoints(client):
