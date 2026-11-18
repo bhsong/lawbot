@@ -121,6 +121,7 @@ class LegalizeGitCollector:
     def __init__(self, name: str, repo_key: str, matcher: LawMatcher | AdmruleMatcher, enricher=None):
         self.name, self.repo_key, self.matcher = name, repo_key, matcher
         self.enricher = enricher  # law_monitor.enrich.LawGoEnricher (없으면 보강 없이)
+        self.failed_paths_marker = f'{repo_key}-failed-frontmatter-paths'
 
     def has_baseline(self, state: State) -> bool:
         return state.cursor(self.repo_key) is not None
@@ -141,6 +142,7 @@ class LegalizeGitCollector:
         previous = None
         paused: dict[str, str] = {}
         recovered: dict[str, str] = {}
+        failed_paths = set(json.loads(ctx.state.baseline(self.failed_paths_marker) or '[]'))
         if isinstance(self.matcher, LawMatcher):
             scope = '\n'.join(sorted(self.matcher.selected_paths)) if self.matcher.selected_paths is not None else '*'
             previous = ctx.state.baseline(scope_marker)
@@ -150,9 +152,10 @@ class LegalizeGitCollector:
                     paused.setdefault(path, cursor)
             recovered = {path: since for path, since in paused.items() if self.matcher.prefilter(path)}
         rescan = scope is not None and scope != previous and (scope != '*' or previous is not None)
-        if cursor == head and not rescan and not paused:
+        if cursor == head and not rescan and not paused and not failed_paths:
             return CollectResult(cursors={self.repo_key: head})
         build = _Builder(self, ctx.paths, ctx.now, repo, ctx.state.items(self.name))
+        build.deferred_paths.update(failed_paths)
         on_history = bool(cursor and (cursor == head or repo.is_ancestor(cursor, head)))
         if cursor and recovered:
             build.backfill(recovered, cursor if on_history else head)
@@ -170,9 +173,13 @@ class LegalizeGitCollector:
             if rescan and previous != '*':
                 baseline_exclusions = set((previous or '').splitlines()) | recovered.keys()
             build.compare_with_head(head, baseline_new_except=baseline_exclusions)
+        retry_paths = {path for path in failed_paths if self.matcher.prefilter(path)}
+        if retry_paths:
+            build.compare_with_head(head, retry_paths)
         result = build.result()
-        if result.file_failures:
-            return result
+        result.baselines[self.failed_paths_marker] = json.dumps(
+            sorted((build.deferred_paths - retry_paths) | build.file_failures.keys()), ensure_ascii=False
+        )
         result.cursors = {self.repo_key: head}
         if rescan and scope is not None:
             result.baselines[scope_marker] = scope
@@ -245,16 +252,16 @@ class LegalizeGitCollector:
         for v in found.values():
             build.save(v)
         items = [ItemState(self.name, key, v.blob, v.blob, v.path) for key, v in found.items()]
+        items.extend(item for item in ctx.state.items(self.name).values() if item.file_path in build.file_failures)
+        baselines = {self.failed_paths_marker: json.dumps(sorted(build.file_failures), ensure_ascii=False)}
+        if isinstance(self.matcher, LawMatcher):
+            baselines[self.paused_law_marker] = '{}'
         log.info('%s: 기준점 %s, 대상 파일 %d개', self.repo_key, head[:12], len(items))
         return CollectResult(
-            cursors={} if build.file_failures else {self.repo_key: head},
+            cursors={self.repo_key: head},
             items=items,
-            replace_sources=[] if build.file_failures else [self.name],
-            baselines=(
-                {self.paused_law_marker: '{}'}
-                if isinstance(self.matcher, LawMatcher) and not build.file_failures
-                else {}
-            ),
+            replace_sources=[self.name],
+            baselines=baselines,
             file_failures=build.file_failures,
         )
 
@@ -272,6 +279,7 @@ class _Builder:
     touched: set[str] = field(default_factory=set)
     baselines_added: int = 0
     file_failures: dict[str, str] = field(default_factory=dict)
+    deferred_paths: set[str] = field(default_factory=set)
 
     @property
     def m(self):
@@ -315,6 +323,8 @@ class _Builder:
         for path, blob in self.repo.ls_tree(rev):
             if (paths is not None and path not in paths) or not self.m.prefilter(path):
                 continue
+            if paths is None and (path in self.deferred_paths or path in self.file_failures):
+                continue
             try:
                 v = self.version(path, blob)
             except frontmatter.FrontmatterError:
@@ -347,9 +357,14 @@ class _Builder:
             if isinstance(self.m, LawMatcher) and self.m.selected_paths is not None:
                 old_path = old_path if old_path and self.m.prefilter(old_path) else None
                 new_path = new_path if new_path and self.m.prefilter(new_path) else None
+            change_paths = {p for p in (old_path, new_path) if p}
+            if change_paths & (self.deferred_paths | self.file_failures.keys()):
+                self.deferred_paths.update(change_paths)
+                continue
             try:
                 old, new = self.version(old_path, ch.old_blob), self.version(new_path, ch.new_blob)
             except frontmatter.FrontmatterError:
+                self.deferred_paths.update(change_paths)
                 continue
             old = old if old and self.m.categories(old) else None
             new = new if new and self.m.categories(new) else None  # 대상에서 빠지면 제거로 본다
@@ -382,6 +397,7 @@ class _Builder:
             for key, item in self.current.items()
             if key not in found
             and item.file_path not in self.file_failures
+            and (paths is not None or item.file_path not in self.deferred_paths)
             and self.m.prefilter(item.file_path)
             and (paths is None or item.file_path in paths)
         ]

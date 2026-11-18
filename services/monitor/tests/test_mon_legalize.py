@@ -95,7 +95,6 @@ def test_bad_frontmatter_records_file_failure_and_continues(tmp_path, legalize, 
     if mode != 'bootstrap':
         mon.bootstrap()
         before = mon.state.items('legalize_law')[LAW_PATH]
-    cursor = mon.state.cursor('legalize-kr')
     broken = law_md('근로기준법', LABOR_V2).replace('---\n', f'---\n{metadata}\n', 1)
     files = {
         LAW_PATH: broken,
@@ -122,7 +121,7 @@ def test_bad_frontmatter_records_file_failure_and_continues(tmp_path, legalize, 
     failure = json.loads(row['summary_json'])['collectors']['legalize_law']['file_failures']
     assert list(failure) == [LAW_PATH]
     assert 'frontmatter' in failure[LAW_PATH].lower()
-    assert mon.state.cursor('legalize-kr') == cursor
+    assert mon.state.cursor('legalize-kr') == legalize.head()
     items = mon.state.items('legalize_law')
     assert WAGE_PATH in items
     if before is None:
@@ -136,17 +135,68 @@ def test_bad_frontmatter_records_file_failure_and_continues(tmp_path, legalize, 
         assert [ev['target']['item_id'] for ev in _law_events(summary)] == [WAGE_PATH]
         assert any(ev['source'] == 'legalize_admrule' for ev in summary.events)
     assert mon.state.cursor('admrule-kr') == admrule.head()
-    retry = mon.bootstrap(only='legalize_law', force=mode == 'force-bootstrap') if bootstrap else mon.collect()
+    retry = mon.collect()
     assert list(retry.failed) == ['legalize_law']
-    assert mon.state.cursor('legalize-kr') == cursor
+    assert mon.state.cursor('legalize-kr') == legalize.head()
     assert retry.events == []
     assert mon.state.items('legalize_law') == items
     if bootstrap:
         legalize.commit({LAW_PATH: law_md('근로기준법', LABOR_V2)}, '머리말 복구')
-        recovered = mon.bootstrap(only='legalize_law', force=mode == 'force-bootstrap')
+        recovered = mon.collect(only='legalize_law')
         assert recovered.failed == {}
         assert set(mon.state.items('legalize_law')) == {LAW_PATH, WAGE_PATH}
         assert mon.state.cursor('legalize-kr') == legalize.head()
+
+
+@pytest.mark.parametrize('source', ['legalize_law', 'legalize_admrule'])
+@pytest.mark.parametrize('repair_before_collect', [False, True])
+def test_frontmatter_failure_catches_up_from_last_good_item(tmp_path, legalize, admrule, source, repair_before_collect):
+    mon = make_monitor(tmp_path, make_config(legalize, admrule))
+    mon.bootstrap()
+    if source == 'legalize_law':
+        repo, repo_key, path, key = legalize, 'legalize-kr', LAW_PATH, LAW_PATH
+        repaired = law_md('근로기준법', LABOR_V2)
+    else:
+        repo, repo_key = admrule, 'admrule-kr'
+        path, key = '고용노동부/_본부/고시/2026년 적용 최저임금 고시/본문.md', '100'
+        repaired = admrule_md('100', '2026년 적용 최저임금 고시', '고용노동부', '시간급 변경')
+    before = mon.state.items(source)[key]
+    if source == 'legalize_law':
+        other_path = WAGE_PATH
+        other_key = WAGE_PATH
+        other_text = law_md('최저임금법', {'제1조': '정상 개정'})
+    else:
+        other_path = '재정경제부/국세청/고시/원천징수 사무처리 고시/본문.md'
+        other_key = '200'
+        other_text = admrule_md('200', '원천징수 사무처리 고시', '국세청', '정상 개정')
+    repo.commit(
+        {path: repaired.replace('---\n', '---\nunsafe: &cycle [*cycle]\n', 1), other_path: other_text},
+        'broken header and healthy amendment',
+    )
+    if repair_before_collect:
+        repo.commit({path: repaired}, 'repaired header')
+    first = mon.collect(only=source)
+    assert path in first.failed[source]
+    assert mon.state.cursor(repo_key) == repo.head()
+    assert mon.state.items(source)[key] == before
+    assert [event['target']['item_id'] for event in first.events] == [other_key]
+    if not repair_before_collect:
+        retry = mon.collect(only=source)
+        assert path in retry.failed[source]
+        assert retry.events == []
+        assert mon.state.items(source)[key] == before
+        assert mon.state.cursor(repo_key) == repo.head()
+        repo.commit({path: repaired}, 'repaired header')
+    recovered = mon.collect(only=source)
+    assert recovered.failed == {}
+    [event] = recovered.events
+    assert event['target']['item_id'] == key
+    assert event['change_type'].endswith('_amended')
+    assert event['old']['version_key'] == before.version_key
+    assert (mon.paths.home / event['new']['file']).read_text(encoding='utf-8') == repaired
+    assert mon.state.items(source)[key].version_key == event['new']['version_key']
+    again = mon.collect(only=source)
+    assert again.failed == {} and again.events == []
 
 
 @pytest.mark.parametrize('bad_snapshot', [False, True], ids=['new-blob', 'old-snapshot'])
