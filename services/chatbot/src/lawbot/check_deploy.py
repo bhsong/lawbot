@@ -15,6 +15,7 @@ from lawbot import corpus_store, deploy, envfile, manifest, security, service, s
 from lawbot.calc_corpus import calculator_report
 from lawbot.db.migrate import startup_path
 from lawbot.deploy import get_profile
+from lawbot_common.llm_endpoint import endpoint
 
 EXPECTED_ARTICLES = 415  # 법률 조문 수 (매니페스트가 없을 때 기준. 있으면 매니페스트의 법률 수: lawbot-reindex로 바뀜)
 EXPECTED_DECREE = {'시행령': 273, '시행규칙': 124}  # 하위법령을 켰을 때 812조문 CSV의 하위법령 수
@@ -229,14 +230,12 @@ def check_model_server(p, out):
     if url is None:
         return out.append(('FAIL', '모델 서버 주소 없음: .env에 LAWBOT_MODEL_SERVER와 LAWBOT_MODEL_TOKEN을 적으세요'))
     try:
-        llm_url, _, external = security.llm_endpoint(url)
-        out.append(
-            ('OK', f'생성 API: {"외부 " + llm_url + " (질문이 이 맥 밖으로 나감)" if external else "모델 서버"}')
-        )
+        llm_url, llm_key, external = endpoint()
+        out.append(('OK', f'생성 API: {"외부 " if external else ""}{llm_url}'))
     except (ValueError, RuntimeError) as e:
         return out.append(('FAIL', f'생성 API 설정: {e}'))
     try:
-        client = service.ModelServerClient(url, security.model_token())  # 테스트는 service의 이름을 바꿔 끼움
+        client = service.ModelServerClient(url, security.model_token(min_len=16))
         ready = client.ready()
     except (RuntimeError, ConnectionError) as e:  # 토큰 없음·불일치·접속 실패 (토큰 값은 출력하지 않음)
         return out.append(('FAIL', f'모델 서버 {url}: {e}'))
@@ -248,10 +247,28 @@ def check_model_server(p, out):
         rr = deploy.reranker(p)
     except ValueError:  # check_reranker가 FAIL로 알림
         rr = None
-    missing = service.missing_models(available, p, rr, external)
-    out.extend(('FAIL', f'모델 서버에 {kind} 모델 {mid} 없음 (LAWBOT_SERVE_*와 맞추기)') for kind, mid in missing)
-    if not missing:
-        out.append(('OK', '필요한 모델이 모델 서버에 모두 있음'))
+    chat_available = None
+    if not external:
+        try:
+            oa = service.OpenAI(
+                base_url=llm_url,
+                api_key=llm_key,
+                max_retries=0,
+                timeout=service.request_timeout(service.read_timeout()),
+                http_client=service.httpx.Client(trust_env=False),
+            )
+            try:
+                chat_available = service.generation_models(oa)
+            finally:
+                oa.close()
+        except (RuntimeError, OSError, TimeoutError, ValueError) as exc:
+            out.append(('FAIL', f'생성 API {llm_url}: {exc}'))
+    missing = service.missing_models(available, p, rr, chat_available=chat_available)
+    out.extend(
+        ('FAIL', f'{"생성 API" if kind == "chat" else "모델 서버"}에 {kind} 모델 {mid} 없음') for kind, mid in missing
+    )
+    if not missing and (external or chat_available is not None):
+        out.append(('OK', '필요한 모델이 각 서버에 모두 있음'))
     out.append(
         (
             'INFO',

@@ -147,7 +147,6 @@ def test_cancelled(env, log):
         (ModelServerError('x', 503), 'generation', 'model_server'),
         (ModelServerTimeout('x'), 'generation', 'model_server_timeout'),  # 응답 조각 사이가 상한을 넘음
         (ModelServerTimeout('x'), 'rerank', 'model_server_timeout'),
-        (ModelServerError('x', 503, 'server_busy'), 'generation', 'model_server_busy'),  # 서버 대기열이 가득 참
         (ModelServerError('x', 500), 'rerank', 'rerank'),  # 서버 쪽 연산 오류는 단계로
         (ModelLoadError('x'), 'generation', 'model_load'),  # 서버가 첫 요청 때 모델을 못 불러옴
         (ModelServerError('x', 404), 'generation', 'config'),  # 서버에 없는 모델 id
@@ -180,13 +179,13 @@ def test_server_down_is_model_server(env, log):
             '모델 서버 응답이 없습니다',
         ),
         (
-            ModelServerError('대기 중인 생성 요청이 32개', 503, 'server_busy'),
-            'model_server_busy',
-            '모델 서버가 바쁩니다',
+            ModelServerError('생성 API 준비 중', 503),
+            'model_server',
+            '모델 서버가 준비되지 않았습니다',
         ),
     ],
 )
-def test_timeout_and_busy_are_logged_and_shown(env, log, error, kind, shown):
+def test_timeout_and_unavailable_are_logged_and_shown(env, log, error, kind, shown):
     a = local_app(env)
     env.setattr(FakeLLM, 'chunks', [error])
     assert run(a, QUESTION, 'fast', 'full').error.startswith(shown)

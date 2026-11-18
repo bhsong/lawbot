@@ -8,6 +8,7 @@ from pathlib import Path
 from lawbot.auth import AdminCredentials, admin_credentials
 from lawbot.deploy import DecreeConfig, Profile, RerankerConfig
 from lawbot.feedback import Feedback
+from lawbot_common.llm_endpoint import endpoint
 
 
 class SettingsError(ValueError, RuntimeError):
@@ -21,7 +22,7 @@ class Settings:
     decree: DecreeConfig | None
     model_server: str  # http://127.0.0.1:<포트>
     model_token: str
-    llm_url: str  # 생성 API base_url (모델 서버 /v1 또는 외부)
+    llm_url: str  # Dedicated generation API base URL.
     llm_key: str
     llm_external: bool
     server_wait: float  # 시작할 때 모델 서버 준비 대기 (초)
@@ -92,10 +93,9 @@ def load(env=None, web=False):
     url = take('model_server', lambda: security.model_server_url(env))
     if url is None and not any('LAWBOT_MODEL_SERVER' in e for e in errors):
         errors.append(MISSING_SERVER)
-    take('model_token', lambda: security.model_token(env=env))
-    if url:
-        llm = take('llm', lambda: security.llm_endpoint(url, env))
-        got['llm_url'], got['llm_key'], got['llm_external'] = llm or (None, None, None)
+    take('model_token', lambda: security.model_token(min_len=16, env=env))
+    llm = take('llm', lambda: endpoint(env))
+    got['llm_url'], got['llm_key'], got['llm_external'] = llm or (None, None, None)
     take('server_wait', lambda: service.server_wait(env))
     take('read_timeout', lambda: service.read_timeout(env))
     take('request_log', lambda: service.request_log_path(env))

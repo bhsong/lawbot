@@ -208,6 +208,28 @@ def test_llm_no_content_still_yields_one():
     assert len(out) == 1 and out[0].text == '' and out[0].finish_reason == 'stop'
 
 
+def test_llm_keeps_reasoning_separate_from_answer():
+    reasoning = chunk()
+    reasoning.choices[0].delta.model_extra['reasoning'] = 'private reasoning'
+    out = list(
+        LLM(
+            'm',
+            client=FakeClient([reasoning, chunk('answer'), chunk(finish='stop'), chunk(usage=(7, 3))]),
+            system=SYSTEM,
+        ).stream('q', HITS[:1])
+    )
+    assert ''.join(item.text for item in out) == 'answer'
+    assert ''.join(item.reasoning or '' for item in out) == 'private reasoning'
+    assert (out[-1].prompt_tokens, out[-1].generation_tokens) == (7, 3)
+
+
+def test_llm_connect_timeout_is_connection_error():
+    error = openai.APITimeoutError(request=REQ)
+    error.__cause__ = httpx.ConnectTimeout('unreachable', request=REQ)
+    with pytest.raises(ConnectionError):
+        list(LLM('m', client=FakeClient(error=error), system=SYSTEM).stream('q', HITS[:1]))
+
+
 REQ = httpx.Request('POST', 'http://127.0.0.1:9/v1/chat/completions')
 
 
@@ -226,7 +248,7 @@ def status_error(status, body):
             ModelLoadError,
             '모델 폴더 없음',
         ),
-        (status_error(401, {'error': {'message': 'x', 'type': 'authentication_error'}}), ModelServerError, '토큰'),
+        (status_error(401, {'error': {'message': 'x', 'type': 'authentication_error'}}), ModelServerError, 'API_KEY'),
         (
             status_error(
                 404, {'error': {'message': '없는 모델', 'type': 'invalid_request_error', 'code': 'model_not_found'}}

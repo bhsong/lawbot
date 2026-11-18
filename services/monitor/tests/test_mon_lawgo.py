@@ -23,6 +23,7 @@ from mon_helpers import (
     modified,
     units_of,
 )
+from mon_helpers import isolated_monitor_credentials as isolated_monitor_credentials
 
 RULE = 'kr/소득세법/시행규칙.md'
 OLD_MST, NEW_MST = '284987', '286379'  # 소득세법 시행규칙 2026-03-20판, 2026-05-22판

@@ -93,21 +93,13 @@ def searching_stats(app, model_key=None):
     )
 
 
-def loading_text(spec):
-    return f'⏳ {spec.label} 불러오는 중…'
-
-
 def fmt_stats(label, stage, st):
     """측정 칸: 서버 기준 시간 (브라우저 표시 지연은 포함하지 않음)"""
-    if stage == 'load':
-        return f'⏳ {label} 불러오는 중… (모델 전환 대기, 검색 {st["search"]:.2f}초)'
     parts = [label, f'검색 {st["search"]:.2f}초']
     if 'rerank' in st:
         parts.append(f'리랭킹 {st["rerank"]:.2f}초')
     if 'decree_rerank' in st:
         parts.append(f'시행령·시행규칙 {st["decree_search"] + st["decree_rerank"]:.2f}초 ({st["n_decree"]}개 첨부)')
-    if st['load'] is not None:
-        parts.append(f'모델 전환 {st["load"]:.1f}초')
     if 'ttft' in st:
         parts.append(f'첫 토큰 {st["ttft"]:.1f}초')
     if 'first_text' in st:
@@ -128,8 +120,6 @@ def error_message(kind, cause, spec):
     name = type(cause).__name__
     if kind == 'model_server_timeout':
         return f'모델 서버 응답이 없습니다 ({cause}). 잠시 뒤 다시 질문하세요.'
-    if kind == 'model_server_busy':
-        return '모델 서버가 바쁩니다 (대기 중인 질문이 많음). 잠시 뒤 다시 질문하세요.'
     if kind == 'model_server':  # 모델 서버(생성 API) 연결 실패·토큰 불일치·로딩 중
         return (
             f'모델 서버가 준비되지 않았습니다 ({name}). 잠시 뒤 다시 질문하고, 계속되면 '

@@ -210,10 +210,6 @@ def chat_events(app, question, model_key, fmt, remember=None):
             if not sent_sources:
                 sent_sources = True
                 yield 'sources', sources_data(hits)
-            if stage == 'load':
-                yield 'status', {'text': view.loading_text(spec)}
-                yield from changed('stats', {'text': view.fmt_stats(spec.label, stage, st)})
-                continue
             if stage != 'done':
                 text = '' if calculated else render(raw, hits, fmt, done=False)
                 out = (

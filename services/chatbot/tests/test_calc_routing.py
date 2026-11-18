@@ -10,7 +10,6 @@ from lawbot.calc_extract import SELECT_SYSTEM
 from lawbot.calc_gate import is_calculation_question
 from lawbot.calc_numbers import amount_spans, parse_amount, parse_quantity, parse_year
 from lawbot.calc_router import check_conclusion, route_calculation
-from lawbot_common.api import SERVER_BUSY
 
 MEDICAL = 'medical_expense_credit'
 QUESTION = '2026년 의료비 300만 원, 실손보험금 100만 원, 총급여 5천만 원입니다. 의료비 세액공제액은 얼마인가요?'
@@ -151,11 +150,11 @@ def test_router_fails_closed_once(response, reason):
     [
         (ModelServerTimeout('test'), 'timeout'),
         (RouterTimeout(httpx.ReadTimeout('test')), 'read_timeout'),
-        (ModelServerError('test', 503, SERVER_BUSY), 'queue_full'),
+        (ModelServerError('test', 503), 'model_error'),
         (ModelServerError('test', 500, 'server_error'), 'model_error'),
     ],
 )
-def test_router_timeout_and_queue_rejection_without_retry(error, reason):
+def test_router_transport_failure_without_retry(error, reason):
     calls = []
 
     def timeout(question):

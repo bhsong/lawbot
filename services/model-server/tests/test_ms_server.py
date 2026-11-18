@@ -1,4 +1,4 @@
-# services/model-server/tests/test_ms_server.py  →  설정·레지스트리·시작·점검과 실제 HTTP 서버(uvicorn)의 끊김 처리
+# Configuration, resident models, startup checks and authenticated HTTP integration.
 import contextlib
 import threading
 import time
@@ -11,54 +11,28 @@ from lawbot_model_server.config import ModelEntry
 from lawbot_model_server.envfile import ROOT
 from lawbot_model_server.registry import Registry, UnknownModel
 
-from .ms_fakes import AUTH, ENTRIES, TOKEN, FakeChat, registry
+from .ms_fakes import AUTH, ENTRIES, TOKEN, FakeEmbedder, FakeReranker, registry
 
 
 def set_minimal(env, **extra):
     env.setenv('LAWBOT_MODEL_SERVER_PORT', '65535')  # 의미 없는 경계값 (테스트에 실제 포트를 쓰지 않음)
     env.setenv('LAWBOT_MODEL_TOKEN', TOKEN)
-    env.setenv('LAWBOT_SERVE_CHAT', 'qwen3.8-27b-4bit=models/v4/qwen3.8_27b_mlx_4bit, lawbot-fast-v4=/abs/fast')
+    env.setenv('LAWBOT_SERVE_EMBEDDING', 'lawbot-emb-v4=models/v4/emb_v4_fp16')
     for k, v in extra.items():
         env.setenv(k, v)
 
 
 # ---- 설정 ----
 def test_config_minimal(ms_env):
-    set_minimal(ms_env, LAWBOT_SERVE_EMBEDDING='lawbot-emb-v4=models/v4/emb_v4_fp16')
+    set_minimal(ms_env, LAWBOT_SERVE_RERANK='lawbot-rerank-v4=/abs/rerank')
     c = config.load()
-    assert c.port == 65535 and c.token == TOKEN and c.max_resident == 2 and c.max_concurrent == 1
+    assert c.port == 65535 and c.token == TOKEN
     assert [(e.id, e.kind) for e in c.models] == [
-        ('qwen3.8-27b-4bit', 'chat'),
-        ('lawbot-fast-v4', 'chat'),
         ('lawbot-emb-v4', 'embedding'),
+        ('lawbot-rerank-v4', 'rerank'),
     ]
-    assert c.models[0].path == ROOT / 'models/v4/qwen3.8_27b_mlx_4bit' and str(c.models[1].path) == '/abs/fast'
-    assert c.preload == ('qwen3.8-27b-4bit', 'lawbot-fast-v4')  # 기본: chat 앞에서부터 상주 수만큼
-
-
-def test_config_max_concurrent(ms_env):
-    set_minimal(ms_env, LAWBOT_MAX_CONCURRENT='4')
-    assert config.load().max_concurrent == 4
-
-
-def test_config_max_queued(ms_env):
-    set_minimal(ms_env)
-    assert config.load().max_queued == 32  # 기본: 대기 중인 chat 요청 32개까지
-    ms_env.setenv('LAWBOT_MAX_QUEUED', '5')
-    assert config.load().max_queued == 5
-
-
-def test_config_preload_and_resident(ms_env):
-    set_minimal(ms_env, LAWBOT_MAX_RESIDENT='1')
-    assert config.load().preload == ('qwen3.8-27b-4bit',)
-    ms_env.setenv('LAWBOT_SERVE_PRELOAD', '')
-    assert config.load().preload == ()
-    ms_env.setenv('LAWBOT_SERVE_PRELOAD', 'lawbot-fast-v4')
-    assert config.load().preload == ('lawbot-fast-v4',)
-    for bad, msg in (('없음', 'chat 모델이 아닌'), ('qwen3.8-27b-4bit,lawbot-fast-v4', 'LAWBOT_MAX_RESIDENT')):
-        ms_env.setenv('LAWBOT_SERVE_PRELOAD', bad)
-        with pytest.raises(ValueError, match=msg):
-            config.load()
+    assert c.models[0].path == ROOT / 'models/v4/emb_v4_fp16'
+    assert str(c.models[1].path) == '/abs/rerank'
 
 
 @pytest.mark.parametrize(
@@ -67,17 +41,10 @@ def test_config_preload_and_resident(ms_env):
         ('LAWBOT_MODEL_SERVER_PORT', '', RuntimeError, 'LAWBOT_MODEL_SERVER_PORT를 적으세요'),
         ('LAWBOT_MODEL_SERVER_PORT', '1023', ValueError, '1024–65535'),
         ('LAWBOT_MODEL_TOKEN', 'short', RuntimeError, '16자 미만'),
-        ('LAWBOT_SERVE_CHAT', 'no-path', ValueError, "'id=경로'"),
-        ('LAWBOT_SERVE_CHAT', 'bad id=/x', ValueError, "'id=경로'"),
-        ('LAWBOT_SERVE_CHAT', 'a=/x,a=/y', ValueError, '겹칩니다'),
-        ('LAWBOT_SERVE_CHAT', '', RuntimeError, '제공할 모델이 없습니다'),
-        ('LAWBOT_MAX_RESIDENT', '0', ValueError, 'LAWBOT_MAX_RESIDENT'),
-        ('LAWBOT_MAX_CONCURRENT', '0', ValueError, 'LAWBOT_MAX_CONCURRENT는 1–16'),
-        ('LAWBOT_MAX_CONCURRENT', '17', ValueError, 'LAWBOT_MAX_CONCURRENT는 1–16'),
-        ('LAWBOT_MAX_CONCURRENT', 'x', ValueError, 'LAWBOT_MAX_CONCURRENT는 1–16'),
-        ('LAWBOT_MAX_QUEUED', '0', ValueError, 'LAWBOT_MAX_QUEUED는 1–1024'),
-        ('LAWBOT_MAX_QUEUED', '1025', ValueError, 'LAWBOT_MAX_QUEUED는 1–1024'),
-        ('LAWBOT_MAX_QUEUED', 'x', ValueError, 'LAWBOT_MAX_QUEUED는 1–1024'),
+        ('LAWBOT_SERVE_EMBEDDING', 'no-path', ValueError, "'id=경로'"),
+        ('LAWBOT_SERVE_EMBEDDING', 'bad id=/x', ValueError, "'id=경로'"),
+        ('LAWBOT_SERVE_EMBEDDING', 'a=/x,a=/y', ValueError, '겹칩니다'),
+        ('LAWBOT_SERVE_EMBEDDING', '', RuntimeError, '제공할 모델이 없습니다'),
     ],
 )
 def test_config_errors(ms_env, key, value, exc, msg):
@@ -101,66 +68,54 @@ def test_host_is_fixed():
 
 
 # ---- 레지스트리 ----
-def test_registry_lru_and_kinds():
+def test_registry_resident_models_and_kinds():
     loads = []
-    reg = registry(max_resident=1, loads=loads)
-    assert loads == [ENTRIES[2].path, ENTRIES[3].path]  # embedding·rerank는 시작할 때
-    a, s = reg.get('chat-a', 'chat')
-    assert s is not None and reg.get('chat-a', 'chat') == (a, None)  # 두 번째는 불러오지 않음
-    reg.get('chat-b', 'chat')
-    assert list(reg.chat) == ['chat-b'] and not reg.is_loaded('chat-a')
+    reg = registry(loads=loads)
+    assert loads == [entry.path for entry in ENTRIES]
+    assert all(reg.is_loaded(entry.id) for entry in ENTRIES)
+    assert reg.get('emb', 'embedding') is reg.fixed['emb']
+    assert loads == [entry.path for entry in ENTRIES]
     with pytest.raises(UnknownModel):
-        reg.get('emb', 'chat')
+        reg.get('emb', 'rerank')
     with pytest.raises(UnknownModel):
         reg.get('없음', 'embedding')
 
 
-def test_preload_first_failure_stops_rest_warn(capsys):
-    def flaky(path):
-        if path.name == 'b':
-            raise FileNotFoundError(path)
-        return FakeChat(path)
+def test_loading_failure_is_not_hidden():
+    def broken(path):
+        raise FileNotFoundError(path)
 
-    reg = Registry(ENTRIES, {'chat': flaky, 'embedding': FakeChat, 'rerank': FakeChat}, max_resident=2)
-    reg.preload(['chat-a', 'chat-b'])
-    assert list(reg.chat) == ['chat-a'] and '미리 불러오기 실패' in capsys.readouterr().out
+    reg = Registry(ENTRIES, {'embedding': broken, 'rerank': FakeReranker})
     with pytest.raises(FileNotFoundError):
-        Registry(ENTRIES, {'chat': flaky}, 2).preload(['chat-b', 'chat-a'])
+        reg.load_fixed()
 
 
 def test_load_models_sets_registry():
     app = api.create_app(TOKEN)
-    cfg = config.Config(0, TOKEN, ENTRIES, ('chat-a',), 1, 3)
+    cfg = config.Config(0, TOKEN, ENTRIES)
 
     class Reg(Registry):
-        def __init__(self, entries, max_resident):
-            super().__init__(entries, registry().loaders, max_resident)
+        def __init__(self, entries):
+            super().__init__(entries, {'embedding': FakeEmbedder, 'rerank': FakeReranker})
 
     server.load_models(app, cfg, Reg)
-    assert app.state.registry.is_loaded('chat-a') and app.state.registry.is_loaded('emb')
-    assert app.state.scheduler.registry is app.state.registry and app.state.scheduler.max_concurrent == 3
-    assert app.state.scheduler.max_queued == 32  # Config 기본값
+    assert all(app.state.registry.is_loaded(entry.id) for entry in ENTRIES)
 
 
 # ---- 점검 (모델 없이) ----
 def test_check_reports_missing(ms_env, tmp_path):
-    good = tmp_path / 'chat'
+    good = tmp_path / 'rerank'
     good.mkdir()
     (good / 'config.json').write_text('{}')
     emb = tmp_path / 'emb'
     emb.mkdir()
     (emb / 'config.json').write_text('{}')
-    set_minimal(ms_env, LAWBOT_SERVE_CHAT=f'c={good},d={tmp_path / "없음"}', LAWBOT_SERVE_EMBEDDING=f'e={emb}')
+    set_minimal(ms_env, LAWBOT_SERVE_RERANK=f'r={good},missing={tmp_path / "없음"}', LAWBOT_SERVE_EMBEDDING=f'e={emb}')
     out = check.run()
-    assert ('OK', f'chat c: {good}') in out
-    assert any(lv == 'FAIL' and 'chat d: 폴더 없음' in m for lv, m in out)
+    assert ('OK', f'rerank r: {good}') in out
+    assert any(lv == 'FAIL' and 'rerank missing: 폴더 없음' in m for lv, m in out)
     assert any(lv == 'FAIL' and 'config_sentence_transformers.json 없음' in m for lv, m in out)
     assert all(TOKEN not in m for _, m in out)
-    assert ('INFO', '동시 생성 최대 1개 (mlx_lm BatchGenerator)') in out
-    ms_env.setenv('LAWBOT_MAX_CONCURRENT', '4')
-    assert ('INFO', '동시 생성 최대 4개 (mlx_lm BatchGenerator)') in check.run()
-    ms_env.setenv('LAWBOT_MAX_CONCURRENT', '0')
-    assert any(lv == 'FAIL' and 'LAWBOT_MAX_CONCURRENT' in m for lv, m in check.run())
 
 
 def write_safetensors(path, dtype):
@@ -171,7 +126,7 @@ def write_safetensors(path, dtype):
     path.write_bytes(struct.pack('<Q', len(header)) + header + b'\0\0')
 
 
-def fake_mlx(folder, bits=4, hidden=2560, adapter=False, vocab=None):
+def fake_mlx(folder, bits=4, hidden=2560, vocab=None):
     import json
 
     folder.mkdir(parents=True)
@@ -179,14 +134,11 @@ def fake_mlx(folder, bits=4, hidden=2560, adapter=False, vocab=None):
         json.dumps({'model_type': 'qwen3', 'hidden_size': hidden, 'quantization': {'group_size': 64, 'bits': bits}})
     )
     (folder / 'tokenizer.json').write_text(json.dumps({'model': {'vocab': {v: i for i, v in enumerate(vocab or [])}}}))
-    (folder / 'tokenizer_config.json').write_text(json.dumps({'chat_template': '{{ messages }}'}))
     write_safetensors(folder / 'model.safetensors', 'U32')
-    if adapter:
-        (folder / 'adapters.safetensors').write_bytes(b'')
 
 
 def test_check_reports_each_model_folder(ms_env, tmp_path):
-    """챗봇의 이전 check_deploy 모델 폴더 검사: 양자화·크기·어댑터·chat template·query 프롬프트·yes/no 토큰"""
+    """Check embedding precision/prompts and reranker quantization/yes-no vocabulary."""
     import json
 
     emb = tmp_path / 'emb'
@@ -196,25 +148,20 @@ def test_check_reports_each_model_folder(ms_env, tmp_path):
     (emb / 'config_sentence_transformers.json').write_text(json.dumps({'prompts': {'query': 'Instruct: q\nQuery:'}}))
     (emb / 'modules.json').write_text('[]')
     (emb / 'tokenizer.json').write_text('{}')
-    fake_mlx(tmp_path / 'fast')
-    fake_mlx(tmp_path / 'pro', hidden=5120, adapter=True)
     fake_mlx(tmp_path / 'rr', vocab=['yes', 'no'])
     fake_mlx(tmp_path / 'rr8', bits=8, vocab=['a'])
     set_minimal(
         ms_env,
-        LAWBOT_SERVE_CHAT=f'fast={tmp_path / "fast"},pro={tmp_path / "pro"}',
         LAWBOT_SERVE_EMBEDDING=f'emb={emb}',
         LAWBOT_SERVE_RERANK=f'rr={tmp_path / "rr"},rr8={tmp_path / "rr8"}',
     )
     text = '\n'.join(f'{lv} {m}' for lv, m in check.run())
-    assert 'OK chat fast: qwen3 Qwen3-4B' in text and 'chat pro: qwen3 Qwen3-14B' in text
-    assert "FAIL chat pro: 어댑터 파일 남아 있음 ['adapters.safetensors']" in text
     assert "OK embedding emb: dtype {'F16': 1}" in text and "query 프롬프트 'Instruct: q\\nQuery:'" in text
     assert 'OK rerank rr: qwen3 Qwen3-4B' in text and 'OK rerank rr: tokenizer.json yes/no 토큰 있음' in text
     assert 'FAIL rerank rr8: qwen3' in text and 'FAIL rerank rr8: tokenizer.json' in text
 
 
-# ---- 실제 HTTP 서버: 스트림 중 끊김 ----
+# ---- Authenticated HTTP server ----
 @contextlib.contextmanager
 def running(app):
     s = server.build_server(app, 0)
@@ -232,28 +179,6 @@ def running(app):
 
 
 @pytest.mark.integration
-def test_disconnect_stops_generation_and_frees_slot(ms_env):
-    FakeChat.chunks, FakeChat.delay = ['【결론】', '답'] + ['더'] * 2000, 0.002
-    reg = registry()
-    app = api.create_app(TOKEN, reg)
-    body = {'model': 'chat-a', 'messages': [{'role': 'user', 'content': 'q'}], 'stream': True}
-    with running(app) as url, httpx.Client(trust_env=False, timeout=10) as c:
-        with c.stream('POST', f'{url}/v1/chat/completions', headers=AUTH, json=body) as r:
-            assert r.status_code == 200
-            next(r.iter_lines())  # 첫 토큰을 받고 끊음 (정지 버튼)
-        llm = reg.chat['chat-a']
-        deadline = time.monotonic() + 10
-        while not llm.closed and time.monotonic() < deadline:
-            time.sleep(0.01)
-        assert llm.closed and llm.yielded < 2002  # 끝까지 생성하지 않음
-        while app.state.scheduler.pending() and time.monotonic() < deadline:
-            time.sleep(0.01)
-        assert app.state.scheduler.pending() == 0  # 생성 자리가 비었음
-        r = c.post(f'{url}/v1/embeddings', headers=AUTH, json={'model': 'emb', 'input': 'x'}, timeout=5)
-        assert r.status_code == 200  # 다음 요청을 바로 받음
-
-
-@pytest.mark.integration
 def test_real_server_requires_token(ms_env):
     with running(api.create_app(TOKEN, registry())) as url, httpx.Client(trust_env=False) as c:
         assert c.get(f'{url}/health').status_code == 401
@@ -262,4 +187,4 @@ def test_real_server_requires_token(ms_env):
 
 def test_entry_kinds_unique_ids():
     assert len({e.id for e in ENTRIES}) == len(ENTRIES)
-    assert ModelEntry('x', 'chat', ROOT).kind == 'chat'
+    assert ModelEntry('x', 'embedding', ROOT).kind == 'embedding'

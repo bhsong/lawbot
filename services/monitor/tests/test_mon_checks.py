@@ -13,6 +13,7 @@ import pytest
 from law_monitor import checks, cli
 from law_monitor.config import ConfigError
 from law_monitor.paths import Paths
+from mon_helpers import isolated_monitor_credentials as isolated_monitor_credentials
 
 PY = sys.executable
 

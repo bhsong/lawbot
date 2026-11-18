@@ -75,8 +75,6 @@ def error_from_body(status, body):
             kind,
             code,
         )
-    if kind == api.MODEL_LOAD:
-        return ModelLoadError(f'모델 서버 오류 {code}: {msg}')
     return ModelServerError(f'모델 서버 오류 {code or kind or status}: {msg}', status, kind, code)
 
 

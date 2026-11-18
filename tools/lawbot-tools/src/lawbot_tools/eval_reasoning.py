@@ -18,11 +18,13 @@ from pathlib import Path
 from zoneinfo import ZoneInfo
 
 import httpx
+from openai import OpenAI
 
 from lawbot import deploy, envfile, llm, manifest, service, settings
 from lawbot.api_client import REQUEST_ID
 from lawbot.citation import citations, hit_key, refused
 from lawbot.paths import DATA, ROOT
+from lawbot_common.llm_endpoint import generation_model
 
 QUESTIONS = DATA / 'v5' / 'qa_reasoning_val.csv'
 
@@ -42,9 +44,6 @@ def run_questions(app, model, fmt, rows, output):
         try:
             with closing(service.ask(app, row['question'], model, fmt=fmt)) as stream:
                 for stage, hits, raw, stats in stream:
-                    if stage == 'load':
-                        error = 'chat_model_not_loaded'
-                        break
                     if stage == 'done':
                         error = None if raw.strip() else 'empty_answer'
                         break
@@ -94,22 +93,33 @@ def snapshot(cfg, client, *, preflight=False):
     health = client.get('/health?runtime=1')
     health.raise_for_status()
     health = health.json()
-    if not health.get('ready') or not health.get('commit') or health.get('max_concurrent') != 1:
-        raise RuntimeError('모델 서버 준비 상태, 커밋, 동시 생성 상한 1을 확인하세요.')
+    if not health.get('ready') or not health.get('commit'):
+        raise RuntimeError('임베딩 모델 서버 준비 상태와 커밋을 확인하세요.')
     listing = client.get('/v1/models')
     listing.raise_for_status()
     models = {model['id']: model for model in listing.json()['data']}
     profile, rr, dc = cfg.profile, cfg.reranker, cfg.decree
     spec = profile.models[0]
-    missing = service.missing_models(models.values(), profile, rr, False)
+    with OpenAI(
+        base_url=cfg.llm_url,
+        api_key=cfg.llm_key,
+        max_retries=0,
+        timeout=10,
+        http_client=httpx.Client(trust_env=False),
+    ) as generation:
+        chat = None if cfg.llm_external else service.generation_models(generation)
+    missing = service.missing_models(models.values(), profile, rr, chat_available=chat)
     if missing:
         raise RuntimeError('평가에 필요한 모델 id와 종류를 확인하세요.')
     models = [
-        {k: models[mid][k] for k in ('id', 'type', 'loaded', 'revision')}
-        for mid in (profile.emb_model, rr.model, spec.model)
+        {k: models[mid][k] for k in ('id', 'type', 'loaded', 'revision')} for mid in (profile.emb_model, rr.model)
     ]
     if any(not model['revision'] or (preflight and not model['loaded']) for model in models):
-        raise RuntimeError('필요한 모델의 revision과 상주 상태를 확인하세요.')
+        raise RuntimeError('임베딩·리랭커 모델의 revision과 상주 상태를 확인하세요.')
+    chat_model = {} if cfg.llm_external else generation_model(chat, spec.model)
+    if not cfg.llm_external and not chat_model.get('revision'):
+        raise RuntimeError('생성 모델 revision을 확인하세요.')
+    models.append({'id': spec.model, 'revision': chat_model.get('revision')})
     law, combined = deploy.article_paths('v5', {})
     data = manifest.load(combined)
     if not data or not data.get('dataset_version'):
@@ -118,7 +128,8 @@ def snapshot(cfg, client, *, preflight=False):
     return {
         'webapp_commit': subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=ROOT, text=True).strip(),
         'model_server_commit': health['commit'],
-        'server_max_concurrent': health['max_concurrent'],
+        'server_max_concurrent': chat_model.get('max_concurrent'),
+        'generation_server_mlx_lm_version': None,
         'models': models,
         'dataset_version': data['dataset_version'],
         'sha256': {path.name: hashlib.sha256(path.read_bytes()).hexdigest() for path in files},
@@ -162,7 +173,16 @@ def main():
     envfile.load()
     example = ROOT / '.env.dev.example'
     env = envfile.parse(example.read_text(encoding='utf-8'), example.name)
-    connection = {key: os.environ.get(key, '') for key in ('LAWBOT_MODEL_SERVER', 'LAWBOT_MODEL_TOKEN')}
+    connection = {
+        key: os.environ.get(key, '')
+        for key in (
+            'LAWBOT_MODEL_SERVER',
+            'LAWBOT_MODEL_TOKEN',
+            'LAWBOT_LLM_BASE_URL',
+            'LAWBOT_LLM_API_KEY',
+            'LAWBOT_LLM_ALLOW_EXTERNAL',
+        )
+    }
     env.update(connection)
     env.update(LAWBOT_REQUEST_LOG=str(args.output / 'requests.jsonl'), LAWBOT_MODEL_READ_TIMEOUT='300')
     sensitive = tuple(connection.values())
@@ -174,7 +194,7 @@ def main():
     stage, output = '평가 설정 확인', None
     try:
         cfg = replace(settings.load(env), embed_cache=args.output / 'embeddings', server_wait=0)
-        sensitive += (cfg.model_server, cfg.model_token, cfg.llm_key)
+        sensitive += (cfg.model_server, cfg.model_token, cfg.llm_url, cfg.llm_key)
         spec = cfg.profile.models[0]
         if cfg.profile.name != 'v5' or cfg.reranker is None or cfg.decree is None or spec.key not in cfg.decree.models:
             raise RuntimeError('개발 설정 예시의 v5 프로필, 리랭커, 하위법령 첨부를 확인하세요.')
@@ -210,6 +230,7 @@ def main():
     except (
         httpx.HTTPError,
         RuntimeError,
+        ValueError,
         OSError,
         subprocess.CalledProcessError,
         json.JSONDecodeError,

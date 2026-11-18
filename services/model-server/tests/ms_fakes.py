@@ -1,7 +1,6 @@
-# services/model-server/tests/ms_fakes.py  →  가짜 chat·embedding·rerank 모델과 레지스트리 (모델 파일 불필요)
+# Fake embedding/rerank models and registry; no model files are needed.
 import threading
 import time
-import types
 from pathlib import Path
 
 import numpy as np
@@ -34,91 +33,6 @@ class Compute:
     def __exit__(self, *exc):
         with self.lock:
             Compute.running -= 1
-
-
-class FakeChat:
-    """생성 요청 인자(messages·max_tokens·temperature…)를 기록하고 mlx_lm 응답과 같은 속성을 낸다. 받은 인자를 기록하고 mlx_lm 응답과 같은 속성을 낸다
-    chunks의 문자열 하나가 토큰 하나. 요청마다 다르게 하려면 messages 마지막 내용으로 per_prompt에서 찾는다"""
-
-    chunks = ['【결론】', '예고해야', ' 합니다.']
-    per_prompt = {}  # 질문 → chunks
-    delay = 0.0
-    finish = 'stop'
-
-    def __init__(self, path):
-        self.path, self.calls, self.closed, self.yielded = path, [], False, 0
-        self.open = 0  # 진행 중인 스트림 수
-        self.max_open = 0
-        self.engines = []  # engine()에 받은 상한
-
-    def stream(self, messages, **kw):
-        self.calls.append({'messages': messages, **kw})
-        chunks = self.per_prompt.get(messages[-1]['content'], self.chunks)
-        self.open += 1
-        self.max_open = max(self.max_open, self.open)
-        try:
-            for i, c in enumerate(chunks):
-                if isinstance(c, Exception):
-                    raise c
-                with Compute():
-                    time.sleep(self.delay)
-                self.yielded += 1
-                yield types.SimpleNamespace(
-                    text=c,
-                    generation_tps=20.0,
-                    prompt_tokens=11,
-                    prompt_tps=100.0,
-                    generation_tokens=i + 1,
-                    peak_memory=1.5,
-                    finish_reason=self.finish if i == len(chunks) - 1 else None,
-                )
-        finally:
-            self.open -= 1
-            self.closed = True
-
-    def engine(self, max_concurrent):
-        """ChatModel.engine과 같은 자리. 실제는 BatchEngine, 가짜는 stream을 한 토큰씩 진행하는 FakeEngine"""
-        self.engines.append(max_concurrent)
-        return FakeEngine(self)
-
-
-class FakeEngine:
-    """테스트용 순차 엔진: 요청마다 model.stream 반복자를 두고 step마다 한 토큰씩. BatchEngine과 같은 인터페이스
-    이벤트는 (ticket, 'item'|'end'|'error', 값). 한 요청의 오류는 그 요청만 끝낸다"""
-
-    def __init__(self, model):
-        self.model, self.items = model, {}
-
-    def __len__(self):
-        return len(self.items)
-
-    def tickets(self):
-        return list(self.items)
-
-    def add(self, ticket, messages, kw):
-        self.items[ticket] = self.model.stream(messages, **kw)
-
-    def step(self):
-        events = []
-        for ticket, it in list(self.items.items()):
-            try:
-                events.append((ticket, 'item', next(it)))
-            except StopIteration:
-                del self.items[ticket]
-                events.append((ticket, 'end', None))
-            except Exception as e:
-                del self.items[ticket]
-                events.append((ticket, 'error', e))
-        return events
-
-    def remove(self, ticket):
-        it = self.items.pop(ticket, None)
-        if it is not None:
-            it.close()
-
-    def close(self):
-        for t in self.tickets():
-            self.remove(t)
 
 
 class FakeEmbedder:
@@ -154,22 +68,18 @@ class FakeReranker:
 
 
 ENTRIES = (
-    ModelEntry('chat-a', 'chat', Path('/models/a')),
-    ModelEntry('chat-b', 'chat', Path('/models/b')),
     ModelEntry('emb', 'embedding', Path('/models/emb')),
     ModelEntry('rr', 'rerank', Path('/models/rr')),
 )
 
 
 def reset_fakes():
-    FakeChat.chunks, FakeChat.per_prompt = ['【결론】', '예고해야', ' 합니다.'], {}
-    FakeChat.delay, FakeChat.finish = 0.0, 'stop'
     FakeEmbedder.delay = 0.0
     FakeReranker.scores = None
     Compute.reset()
 
 
-def registry(max_resident=1, chat=FakeChat, loads=None):
+def registry(loads=None):
     def load(cls):
         def f(path):
             if loads is not None:
@@ -178,8 +88,6 @@ def registry(max_resident=1, chat=FakeChat, loads=None):
 
         return f
 
-    reg = Registry(
-        ENTRIES, {'chat': load(chat), 'embedding': load(FakeEmbedder), 'rerank': load(FakeReranker)}, max_resident
-    )
+    reg = Registry(ENTRIES, {'embedding': load(FakeEmbedder), 'rerank': load(FakeReranker)})
     reg.load_fixed()
     return reg

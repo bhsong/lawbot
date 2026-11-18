@@ -1,5 +1,5 @@
 # lawbot/service.py  →  UI와 무관한 질의응답 흐름 (웹앱 web.py와 평가가 씀)
-# 모델은 모두 모델 서버(OpenAI 호환 API)에 있다: 임베딩·리랭크는 LAWBOT_MODEL_SERVER, 생성은 같은 서버 또는 LAWBOT_LLM_BASE_URL
+# Embedding and reranking use the model server; chat uses a dedicated generation API.
 # 조문 인덱스·검색·하위법령 필터·프롬프트 조립은 여기(웹앱)에서 한다
 # 이 모듈은 웹 서버(fastapi)를 import하지 않는다 (tests/test_pipeline.py가 검사)
 import json
@@ -33,7 +33,7 @@ from lawbot.calc_corpus import calculator_compatibility, database_calculator_com
 from lawbot.calc_router import check_conclusion, prompt_suffix, route_calculation
 from lawbot.embed_cache import EmbedCache, cache_key, embedding_metadata
 from lawbot.hits import Hit, Timing
-from lawbot.llm import LLM
+from lawbot.llm import LLM, convert_error
 from lawbot.paths import ROOT
 from lawbot.reranker import Reranker
 from lawbot.retriever import Retriever
@@ -54,21 +54,12 @@ class AskError(Exception):
 
 
 class ChatModels:
-    """답변 모델 key → LLM (요청마다 key로 고른다: '현재 모델' 같은 공유 상태가 없음)
-    모델 불러오기·상주(LRU)는 모델 서버가 한다. is_loaded는 서버 /v1/models의 loaded (외부 생성 API는 항상 True)"""
+    """Cache answer clients by model key without tracking server residency."""
 
-    def __init__(self, specs, factory, loaded=None):
+    def __init__(self, specs, factory):
         self.specs = {s.key: s for s in specs}
-        self.factory, self._loaded = factory, loaded
+        self.factory = factory
         self.llms = {}
-
-    def is_loaded(self, key):
-        if self._loaded is None:
-            return True
-        try:
-            return self.specs[key].model in self._loaded()
-        except Exception:  # 확인 실패는 생성 요청에서 같은 오류로 드러남
-            return True
 
     def get(self, key):
         """(LLM, None). 없는 key는 KeyError. 두 번째 값은 이전 인터페이스(로딩 초)와 맞춘 자리 (서버가 첫 요청 때 불러옴)"""
@@ -130,7 +121,7 @@ def server_wait(env=None):
         raise ValueError(f'LAWBOT_MODEL_SERVER_WAIT는 초(숫자): {env["LAWBOT_MODEL_SERVER_WAIT"]!r}') from None
 
 
-READ_TIMEOUT = 300.0  # 질문 처리 중 응답 조각 사이 최대 대기 (27B 교체 로딩·monitor 요약 뒤 대기를 넘는 값)
+READ_TIMEOUT = 300.0  # Maximum wait between response chunks during a question.
 
 
 def read_timeout(env=None):
@@ -147,13 +138,25 @@ def read_timeout(env=None):
     return value
 
 
-def missing_models(available, p, rr, external):
-    """모델 서버 /v1/models에 없는 필요한 모델 [(종류, id)]. 외부 생성 API면 chat 모델은 서버에서 찾지 않음"""
+def missing_models(available, p, rr, *, chat_available=None):
+    """Check typed embedding/reranking models and separate generation model IDs."""
     have = {(m['id'], m.get('type')) for m in available}
-    need = [(p.emb_model, 'embedding')] + ([(rr.model, 'rerank')] if rr else [])
-    if not external:
-        need += [(s.model, 'chat') for s in p.models]
-    return [(kind, mid) for mid, kind in need if (mid, kind) not in have]
+    need = [('embedding', p.emb_model)] + ([('rerank', rr.model)] if rr else [])
+    missing = [(kind, mid) for kind, mid in need if (mid, kind) not in have]
+    if chat_available is not None:
+        chat_ids = {m['id'] for m in chat_available}
+        missing += [('chat', spec.model) for spec in p.models if spec.model not in chat_ids]
+    return missing
+
+
+def generation_models(client):
+    """Read generation model IDs and revisions without requiring residency fields."""
+    import openai
+
+    try:
+        return [row.model_dump() for row in client.models.list().data]
+    except openai.OpenAIError as exc:
+        raise convert_error(exc) from exc
 
 
 def _record_embeddings(db, release_id, retriever, profile, decree, revision):
@@ -191,13 +194,21 @@ def load_app(settings=None):
     wait, limit = cfg.server_wait, request_timeout(cfg.read_timeout)
     log.info(f'모델 서버 {url} 준비 대기 (최대 {wait:g}초)')
     wait_ready(client, wait)
+    oa = OpenAI(
+        base_url=llm_url,
+        api_key=llm_key,
+        max_retries=0,
+        timeout=limit,  # pyright: ignore[reportArgumentType]
+        http_client=httpx.Client(trust_env=external),  # pyright: ignore[reportArgumentType]
+    )
+    chat_available = None if external else generation_models(oa)
     available = client.models()
-    missing = missing_models(available, p, rr, external)
+    missing = missing_models(available, p, rr, chat_available=chat_available)
     if missing:
         raise RuntimeError(
-            '모델 서버에 필요한 모델이 없습니다: '
+            '서버에 필요한 모델이 없습니다: '
             + ', '.join(f'{kind} {mid}' for kind, mid in missing)
-            + ' (모델 서버 .env의 LAWBOT_SERVE_*와 웹앱의 LAWBOT_*_MODEL을 맞추세요)'
+            + ' (임베딩·리랭크는 모델 서버, chat은 생성 API의 모델 id를 확인하세요)'
         )
     revision = embedding_revision(available, p.emb_model)
     t0 = time.perf_counter()
@@ -215,26 +226,14 @@ def load_app(settings=None):
     if release is not None:
         _record_embeddings(cfg.db, release.release_id, retriever, p, dc, revision)
     reranker = Reranker(client, rr.model, rr.candidates, timeout=limit) if rr else None
-    # 외부 API는 셸의 프록시 설정을 따른다. 모델 서버(127.0.0.1)는 프록시를 거치지 않음
-    # openai 3.x는 타입 선언이 httpx2 기준이지만 httpx.Client·httpx.Timeout을 그대로 받아 쓴다 (2026-11-02 확인: 읽기 상한·trust_env 적용)
-    oa = OpenAI(
-        base_url=llm_url,
-        api_key=llm_key,
-        max_retries=0,
-        timeout=limit,  # pyright: ignore[reportArgumentType]
-        http_client=httpx.Client(trust_env=external),  # pyright: ignore[reportArgumentType]
-    )
 
     def factory(spec):  # system 파일이 없으면 FileNotFoundError (화면에서 오류 안내)
         return LLM(spec.model, client=oa, system=system_text(p, spec))
 
-    def loaded():
-        return {m['id'] for m in client.models() if m.get('loaded')}
-
-    models = ChatModels(p.models, factory, None if external else loaded)
+    models = ChatModels(p.models, factory)
     log.info(
         f'프로필 {p.name} · 조문 {len(retriever.ids)}개 · 리랭커 {rr.model if rr else "꺼짐"} · '
-        f'하위법령 {decree_text(dc)} · 생성 {"외부 " + llm_url if external else "모델 서버"} '
+        f'하위법령 {decree_text(dc)} · 생성 {"외부 " if external else ""}{llm_url} '
         f'({", ".join(s.model for s in p.models)})'
     )
     full = p.system_file.read_text(encoding='utf-8').strip()
@@ -369,12 +368,9 @@ def error_type(e, stage):
     model_server: 모델 서버(생성 API) 연결 실패·토큰 불일치(401)·로딩 중(503). 서버 쪽 연산 오류(500)는 단계로 나눈다
     model_load: 답변 모델 불러오기 실패 (서버의 모델 폴더 없음·형식 오류 = ModelLoadError, 웹앱의 system 파일 없음)
     config: 없는 모델 key, 서버에 없는 모델 id(404)
-    model_server_timeout: 질문 처리 중 응답 조각 사이가 LAWBOT_MODEL_READ_TIMEOUT을 넘음
-    model_server_busy: 모델 서버 대기열이 가득 참 (503 server_busy)"""
+    model_server_timeout: 질문 처리 중 응답 조각 사이가 LAWBOT_MODEL_READ_TIMEOUT을 넘음"""
     if isinstance(e, ModelServerTimeout):
         return 'model_server_timeout'
-    if isinstance(e, ModelServerError) and e.status == 503 and e.kind == 'server_busy':
-        return 'model_server_busy'
     if isinstance(e, ConnectionError) or (isinstance(e, ModelServerError) and e.status in (401, 503)):
         return 'model_server'
     if isinstance(e, ModelLoadError):
@@ -474,7 +470,7 @@ def ask(
     calculation_candidate=False,
 ):
     """질문 하나: (단계, 검색 조문, 답변 원문, 측정값)을 차례로 돌려준다
-    단계 'load'(모델 전환 대기) → 'generate'(토큰마다) → 'done'. 조문은 생성 전에 정해짐
+    단계 'generate'(토큰마다) → 'done'. 조문은 생성 전에 정해짐
     fmt: 화면 형식 ('full'/'concise'). 주면 format_system으로 system을 고름 (None이면 모델 기본, 평가 스크립트)
     hits: 법률 k개 + 첨부한 하위법령 (하위법령 첨부 모델일 때만, 없으면 법률 k개만 = 지금과 같은 리스트)
     측정값(초): search, rerank(리랭커가 켜져 있을 때만), decree_search·decree_rerank(하위법령 첨부 모델일 때만), load(이번에 로딩했을 때만), ttft(생성 호출→첫 토큰, 프리필),
@@ -537,8 +533,6 @@ def ask(
         law_hits, decree_hits = retrieve(app, question, k, st, model_key)
         hits = law_hits + decree_hits
         stage = 'load'
-        if not app.models.is_loaded(model_key):
-            yield 'load', hits, '', st
         llm, st['load'] = app.models.get(model_key)
         stage = 'generation'
         system = format_system(app, model_key, fmt)

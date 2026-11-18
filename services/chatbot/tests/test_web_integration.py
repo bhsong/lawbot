@@ -15,7 +15,7 @@ import httpx
 import pytest
 
 from admin_test_data import GOLD, add_feedback, seed_qa
-from conftest import ADMIN_PW, ADMIN_USER, ENV_KEYS, free_port
+from conftest import ADMIN_PW, ADMIN_USER, ENV_KEYS, TEST_LLM_TOKEN, TEST_TOKEN, free_port
 from lawbot import view, web
 from lawbot.db import migrate
 
@@ -44,6 +44,10 @@ def start_server(tmp, *, module_entry=False, **overrides):
         LAWBOT_REQUEST_LOG=str(request_log),
         LAWBOT_CHAT_CONCURRENCY='1',
         LAWBOT_EMBED_CACHE='0',
+        LAWBOT_MODEL_SERVER='http://127.0.0.1:65535',
+        LAWBOT_MODEL_TOKEN=TEST_TOKEN,
+        LAWBOT_LLM_BASE_URL='http://127.0.0.1:65534/v1',
+        LAWBOT_LLM_API_KEY=TEST_LLM_TOKEN,
     )
     env.update(overrides)
     url = f'http://127.0.0.1:{port}'

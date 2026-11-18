@@ -220,10 +220,9 @@ def test_embedding_metadata_failure_only_warns(corpus_db, env, capsys):
         assert conn.execute('SELECT count(*) FROM embedding_sets').fetchone() == (0,)
 
 
-def test_embedding_revision_is_optional_if_lookup_has_no_match(corpus_db, env, model_server):
+def test_embedding_revision_is_optional_when_server_omits_it(corpus_db, env, model_server):
     configure(env, corpus_db)
-    model_server.available = []
-    env.setattr(service, 'missing_models', lambda *args: [])
+    model_server.available = [{'id': deploy.get_profile().emb_model, 'type': 'embedding'}]
     assert service.load_app().corpus_release_id == RELEASE
     with connect(corpus_db) as conn:
         assert conn.execute('SELECT model_revision FROM embedding_sets').fetchall() == [(None,)]
@@ -248,24 +247,20 @@ def test_check_deploy_checks_db_bytes(corpus_db, env, tmp_path):
 
 
 @pytest.mark.parametrize('problem', ['inactive', 'bad-sha'])
-def test_check_deploy_continues_non_corpus_checks_on_db_error(db_path, env, request, problem):
+def test_check_deploy_continues_non_corpus_checks_on_db_error(db_path, env, request, model_server, problem):
     if problem == 'bad-sha':
         assert request.getfixturevalue('corpus_db') == db_path
         corrupt_release(db_path)
     configure(env, db_path, decrees=True)
+    model_server.available = []
     checks = check_deploy.run()
     hint = f'{RELEASE} 조문 CSV의 복원 해시' if problem == 'bad-sha' else '활성 코퍼스 릴리스가 없습니다'
     assert any(level == 'FAIL' and hint in msg for level, msg in checks)
-    for expected in (
-        '기본 system',
-        '임베딩 ',
-        '리랭커 ',
-        '첨부 켜짐',
-        '웹앱 주소',
-        '필요한 모델이 모델 서버에 모두 있음',
-    ):
-        assert any(expected in msg for _, msg in checks), expected
-    assert not any(msg.startswith(('비삭제 ', '매니페스트:', '하위법령 조문 {')) for _, msg in checks)
+    profile = deploy.get_profile()
+    failures = [message for level, message in checks if level == 'FAIL']
+    assert any(profile.emb_model in message for message in failures)
+    assert any(deploy.reranker(profile).model in message for message in failures)
+    assert not any(level == 'PASS' and RELEASE in message for level, message in checks)
 
 
 def test_export_release_is_byte_exact_and_only_overwrites_on_request(corpus_db, tmp_path, capsys):

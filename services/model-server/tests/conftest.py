@@ -8,12 +8,12 @@ from .ms_fakes import reset_fakes
 ENV_KEYS = (
     'LAWBOT_MODEL_SERVER_PORT',
     'LAWBOT_MODEL_TOKEN',
-    'LAWBOT_SERVE_CHAT',
     'LAWBOT_SERVE_EMBEDDING',
     'LAWBOT_SERVE_RERANK',
-    'LAWBOT_SERVE_PRELOAD',
-    'LAWBOT_MAX_RESIDENT',
-    'LAWBOT_MAX_CONCURRENT',
+    'LAWBOT_LLM_BASE_URL',
+    'LAWBOT_LLM_API_KEY',
+    'LAWBOT_LLM_ALLOW_EXTERNAL',
+    'LAWBOT_PRO_MODEL',
     'HTTP_PROXY',
     'HTTPS_PROXY',
     'ALL_PROXY',
@@ -25,12 +25,13 @@ ENV_KEYS = (
 
 @pytest.fixture(autouse=True)
 def ms_env(request, monkeypatch):
-    """개발자 셸의 설정을 지우고 .env를 읽지 않는다. 외부 네트워크 접속은 막는다 (integration은 127.0.0.1만)
-    가짜 모델의 클래스 설정(chunks·delay 등)은 테스트마다 기본값으로"""
+    """Isolate settings and fake state; only explicit models tests may use external networking."""
     reset_fakes()
     for k in ENV_KEYS:
         monkeypatch.delenv(k, raising=False)
     monkeypatch.setenv('LAWBOT_ENV_FILE', '')
+    if request.node.get_closest_marker('models') is not None:
+        return monkeypatch
     local_ok = request.node.get_closest_marker('integration') is not None
     connect, create_connection = socket.socket.connect, socket.create_connection
 
