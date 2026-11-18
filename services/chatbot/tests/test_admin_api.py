@@ -468,21 +468,22 @@ def test_calendar_proxy_filters_paths_and_credentials(db, admin_hash, monkeypatc
             'law-calendar',
             'law-calendar/status',
             'law-events',
-            'law-changes/notice:42',
+            'law-changes/effective:42',
         ):
             res = client.get(ROOT + '/calendar/' + path + '?q=a%2Bb&q=c', headers={'Authorization': 'Bearer fixture'})
             assert (res.status_code, res.content, res.headers['content-type']) == (202, b'fixture-body', 'image/png')
             assert requests[-1].url.path == '/api/' + path
             assert requests[-1].url.query == b'q=a%2Bb&q=c'
             assert 'cookie' not in requests[-1].headers and 'authorization' not in requests[-1].headers
-        res = client.get(ROOT + '/calendar/law-holds?type=notice&page=2&page_size=20')
+        res = client.get(ROOT + '/calendar/law-holds?type=effective&page=2&page_size=20')
         assert (res.status_code, res.content) == (202, b'fixture-body')
         assert requests[-1].url.path == '/api/law-holds'
-        assert requests[-1].url.query == b'type=notice&page=2&page_size=20'
+        assert requests[-1].url.query == b'type=effective&page=2&page_size=20'
         for path in (
             'law-holds/anything',
+            'law-holds/notice/item',
             'law-changes/42/anything',
-            'law-changes/notice:42/notice-comparison/2',
+            'law-changes/effective:42/comparison/2',
             '%2E%2E%2Fsecret',
         ):
             assert client.get(ROOT + '/calendar/' + path).status_code == 404
@@ -537,6 +538,8 @@ def test_calendar_review_post_guards(admin):
         response = admin.post(ROOT + CALENDAR_REVIEW, json=body, headers=headers)
         assert (response.status_code, response.json()['code']) == (403, 'bad_origin')
     assert post(admin, '/calendar/law-holds/other/item', body).status_code == 404
+    assert admin.get(ROOT + '/calendar/law-holds/notice/item').status_code == 404
+    assert post(admin, '/calendar/law-holds/notice/item', body).status_code == 404
     assert post(admin, '/calendar/import-failures', body).status_code == 405
 
 
@@ -573,7 +576,7 @@ def test_calendar_review_proxies_only_service_credentials_and_audits_once(db, ad
         for _ in range(2):
             result = client.post(ROOT + CALENDAR_REVIEW, json=body, headers=headers)
             assert (result.status_code, result.json()) == (200, {'ok': True})
-        conflict = post(client, CALENDAR_REVIEW, body | {'decision': 'reject'})
+        conflict = post(client, CALENDAR_REVIEW, body | {'note': '변경된 메모'})
         assert (conflict.status_code, conflict.json()['code']) == (409, 'idempotency_conflict')
     assert len(requests) == 2
     request = requests[-1]

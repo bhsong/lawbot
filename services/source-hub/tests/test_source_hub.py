@@ -29,7 +29,7 @@ def registry(tmp_path):
 
 def test_seed_includes_all_agencies_and_unverified_boards(registry):
     sources = {row['source_id']: row for row in registry.snapshot()['sources']}
-    assert {row['agency'] for row in sources.values()} == {'lawgo', 'assembly', 'moel', 'mofe', 'nts', 'hometax'}
+    assert {row['agency'] for row in sources.values()} == {'lawgo', 'moel', 'mofe', 'nts', 'hometax'}
     assert {'nts-tax-02', 'hometax-errata', 'existing-erp'} <= sources.keys()
     assert {key for key, row in sources.items() if row['agency'] == 'moel' and row['mode'] == 'rss'} == {
         'moel-rss-notice',

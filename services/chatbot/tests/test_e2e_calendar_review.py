@@ -45,9 +45,7 @@ def calendar_stack(tmp_path, page, request, admin_hash):
         encoding='utf-8',
     )
     assert import_files(calendar_db, tmp_path, [path])['imported'] == 1
-    record_import_failure(
-        calendar_db, 'assembly_notice', 'fixture-failed-notice', ImportInputError('Invalid notice period')
-    )
+    record_import_failure(calendar_db, 'legalize_law', 'fixture-failed-law', ImportInputError('Invalid effective date'))
     web_db = tmp_path / 'private' / 'lawbot.db'
     cli.main(['init', '--db', str(web_db)])
     seed_qa(web_db)
@@ -117,8 +115,8 @@ def test_admin_calendar_hold_approval(calendar_stack, page, width):
     expect(panel.get_by_role('button', name='가상검토법 제1조', exact=False)).to_be_visible()
     panel.get_by_role('button', name='가져오기 실패', exact=True).click()
     failures = page.get_by_role('dialog', name='가져오기 실패')
-    expect(failures.get_by_text('fixture-failed-notice', exact=True)).to_be_visible()
-    expect(failures.get_by_text('Invalid notice period', exact=True)).to_be_visible()
+    expect(failures.get_by_text('fixture-failed-law', exact=True)).to_be_visible()
+    expect(failures.get_by_text('Invalid effective date', exact=True)).to_be_visible()
     with connect(web_db) as conn:
         assert conn.execute("SELECT actor FROM audit_events WHERE action='calendar_review'").fetchall() == [
             (ADMIN_USER,)

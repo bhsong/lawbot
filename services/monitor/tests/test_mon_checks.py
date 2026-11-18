@@ -55,7 +55,7 @@ def test_daily_preserves_article_regeneration_input_and_order(tmp_path, monkeypa
         assert only is None
         head.write_text('updated')
         calls.append('collect')
-        return SimpleNamespace(failed={'assembly_notice': 'unavailable'}, line='partial')
+        return SimpleNamespace(failed={'legalize_admrule': 'unavailable'}, line='partial')
 
     def run(command, **_):
         assert head.read_text() == 'updated'

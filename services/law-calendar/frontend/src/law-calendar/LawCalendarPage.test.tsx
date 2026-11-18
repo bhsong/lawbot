@@ -5,14 +5,14 @@ import LawCalendarPage from './LawCalendarPage'
 import type { CalendarLoader, CalendarSnapshot } from './types'
 
 const change: CalendarChange = {
-  id: 'notice', kind: 'notice', date: '2026-11-05', lawName: '[예시] 가상법', article: '제1조',
-  summary: '예시 변경 요약', status: '예고 중 · 확정 아님', before: '신청은 서면으로 한다.',
-  after: '신청은 전자문서로 한다.', comparable: true, publishedOn: '2026-11-05',
-  promulgatedOn: null, effectiveOn: null, commentDeadline: '2026-12-01', sourceUrl: null,
+  id: 'effective-0', date: '2026-11-05', lawName: '[예시] 가상법', article: '제1조',
+  summary: '예시 변경 요약', status: '시행 예시', before: '신청은 서면으로 한다.',
+  after: '신청은 전자문서로 한다.', comparable: true,
+  promulgatedOn: null, effectiveOn: '2026-11-05', sourceUrl: null,
   collectedAt: null, verifiedAt: null,
 }
 const snapshot: CalendarSnapshot = {
-  changes: [change, { ...change, id: 'effective', kind: 'effective', summary: '예시 시행 요약', status: '시행 예시' }],
+  changes: [change, { ...change, id: 'effective', summary: '예시 시행 요약', status: '시행 예시' }],
   demo: true, delayed: false, collectedAt: null, verifiedAt: null,
 }
 const loader: CalendarLoader = async () => snapshot
@@ -30,12 +30,11 @@ test('public calendar has no chatbot navigation or authentication requests', asy
   }
 })
 
-test('selection updates both panels, empty dates, month navigation and today', async () => {
+test('selection updates articles, empty dates, month navigation and today', async () => {
   render(<LawCalendarPage loader={loader} initialDate="2026-11-05" />)
   expect(await screen.findByText('예시 변경 요약')).toBeInTheDocument()
   expect(screen.getByText('예시 시행 요약')).toBeInTheDocument()
   await userEvent.click(screen.getByRole('button', { name: /^2026년 11월 6일/ }))
-  expect(screen.getByText('이 날짜에 표시할 입법예고가 없습니다.')).toBeInTheDocument()
   expect(screen.getByText('이 날짜에 시행되는 조문이 없습니다.')).toBeInTheDocument()
   await userEvent.click(screen.getByRole('button', { name: '다음 달' }))
   expect(screen.getByRole('heading', { name: '2026년 12월' })).toBeInTheDocument()
@@ -123,6 +122,6 @@ test('long lists paginate instead of silently dropping changes', async () => {
   render(<LawCalendarPage loader={many} initialDate="2026-11-05" />)
   await screen.findByText('예시 / 실제 법령 아님')
   expect(screen.getAllByText('예시 변경 요약')).toHaveLength(8)
-  await userEvent.click(screen.getByRole('button', { name: /입법예고 더 보기/ }))
+  await userEvent.click(screen.getByRole('button', { name: /시행 조문 더 보기/ }))
   expect(screen.getAllByText('예시 변경 요약')).toHaveLength(13)
 })

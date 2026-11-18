@@ -2,7 +2,7 @@
 
 const byId = id => document.getElementById(id)
 const agencies = {
-  lawgo: '국가법령정보센터', assembly: '국회', moel: '고용노동부', mofe: '재정경제부',
+  lawgo: '국가법령정보센터', moel: '고용노동부', mofe: '재정경제부',
   nts: '국세청', hometax: '홈택스',
 }
 const groups = { law: '법령', erp: 'ERP' }

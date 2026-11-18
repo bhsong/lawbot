@@ -11,7 +11,6 @@ import './erp.css'
 import AgencyNews from './AgencyNews'
 import RuleCard from './RuleCard'
 
-const KINDS: CalendarChange['kind'][] = ['notice', 'effective', 'bill']
 const NOTICES = {
   missing: 'ERP 자료가 아직 준비되지 않았습니다.',
   invalid: 'ERP 자료 파일을 확인하지 못했습니다. 법령 캘린더는 그대로 이용할 수 있습니다.',
@@ -54,7 +53,7 @@ function ItemCard({ item, reference = false }: { item: ErpItem; reference?: bool
 function RuleSections({ rules, items, available }: { rules: ErpRule[]; items: ErpItem[]; available: boolean }) {
   const documentKeys = new Set(items.map((item) => item.sourceKey))
   const cards = rules.filter((rule) =>
-    rule.scopes.length > 0 || rule.proposalLinks.length > 0 || !documentKeys.has(rule.sourceKey))
+    rule.scopes.length > 0 || !documentKeys.has(rule.sourceKey))
   const keys = new Set(cards.map((rule) => rule.sourceKey))
   const current = cards.filter((rule) => rule.scopes.some((scope) => scope.currentVersion))
   const upcoming = cards.filter((rule) =>
@@ -179,7 +178,6 @@ export default function ErpPage({ loader = loadErp, ruleLoader = loadErpRules, l
   const upcoming = items.filter((item) => item.effectiveFrom && item.effectiveFrom > today)
   const showRules = ruleFeed && ruleFeed.state !== 'unconfigured'
   const lawChanges = (laws?.changes ?? []).filter((change) => related.includes(change.lawName))
-  const byKind = (kind: CalendarChange['kind']) => lawChanges.filter((change) => change.kind === kind)
 
   return <main className="lc-page">
     <header className="lc-header">
@@ -219,13 +217,12 @@ export default function ErpPage({ loader = loadErp, ruleLoader = loadErpRules, l
             <button type="button" className="lc-more" onClick={() => setMonth(shiftMonth(month, -1))}>이전 달</button>
             <button type="button" className="lc-more" onClick={() => setMonth(shiftMonth(month, 1))}>다음 달</button>
           </div></div>
-        <p className="lc-subtitle">{related.join(', ')}의 입법예고·시행 조문입니다. 항목을 누르면 법령 캘린더의 상세를 엽니다.</p>
+        <p className="lc-subtitle">{related.join(', ')}의 시행 조문입니다. 항목을 누르면 법령 캘린더의 상세를 엽니다.</p>
         {lawsFailed && <p className="lc-warning" role="alert">법령 일정을 불러오지 못했습니다.</p>}
         {!laws && !lawsFailed && <p className="lc-empty" role="status">법령 일정을 불러오는 중입니다.</p>}
-        {laws && lawChanges.length === 0 && <p className="lc-empty">이 달에 관련 법령의 입법예고·시행 조문이 없습니다.</p>}
+        {laws && lawChanges.length === 0 && <p className="lc-empty">이 달에 관련 법령의 시행 조문이 없습니다.</p>}
         {laws && lawChanges.length > 0 && <div className="lc-panels">
-          {KINDS.filter((kind) => byKind(kind).length > 0).map((kind) =>
-            <EventList key={kind} kind={kind} changes={byKind(kind)} onOpen={openChange} />)}
+          <EventList changes={lawChanges} onOpen={openChange} />
         </div>}
       </section>}
     </>}

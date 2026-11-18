@@ -1,6 +1,5 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef } from 'react'
 import type { FormEvent } from 'react'
-import { dateRoleLabel } from '@lawbot/ui'
 import { AdminApiError, adminGet, adminMessage, useAdminMutation, useAdminRead } from './adminApi'
 
 type ChangeReview = {
@@ -14,13 +13,6 @@ type EffectiveReview = {
   }
   evidence_url?: string | null
   changes: { id: string; article: string; before: string | null; after: string | null }[]
-}
-
-const decisionLabels = { approve: '승인', reject: '반려', withdraw: '철회' }
-type NoticeDecision = keyof typeof decisionLabels
-type NoticeReview = {
-  template: { snapshot_id: string; decision: NoticeDecision; note: string }
-  title: string; source_url: string; bill_no: string; dates: { role: string; date: string }[]
 }
 
 function SourceLink({ url, label }: { url: string | null | undefined; label: string }) {
@@ -62,10 +54,9 @@ function EffectiveFields({ data }: { data: EffectiveReview }) {
 }
 
 function HoldForm({ data, path, holdId, onReviewed, onUnauthorized, onReload }: {
-  data: EffectiveReview | NoticeReview; path: string; holdId: string; onReviewed: (date?: string) => void
+  data: EffectiveReview; path: string; holdId: string; onReviewed: (date?: string) => void
   onUnauthorized: () => void; onReload: () => void
 }) {
-  const [decision, setDecision] = useState(data.template.decision)
   const mutation = useAdminMutation(onUnauthorized)
   const alert = useRef<HTMLParagraphElement>(null)
   useEffect(() => { if (mutation.error) alert.current?.focus() }, [mutation.error])
@@ -74,22 +65,15 @@ function HoldForm({ data, path, holdId, onReviewed, onUnauthorized, onReload }: 
     event.preventDefault()
     const form = new FormData(event.currentTarget)
     const value = (name: string) => String(form.get(name) ?? '')
-    let date: string | undefined
-    let payload: Record<string, unknown>
-    if ('changes' in data) {
-      const changes = data.template.changes.map((change, index) => ({
-        ...change, effective_on: value(`effective_on.${index}`), evidence_url: value(`evidence_url.${index}`),
-        summary: value(`summary.${index}`), comparison_verified: form.has(`comparison_verified.${index}`),
-      }))
-      payload = {
-        ...data.template, note: value('note'), source_url: value('source_url'),
-        promulgated_on: value('promulgated_on'), dates_verified: form.has('dates_verified'), changes,
-      }
-      date = changes.find((change) => change.id === holdId)?.effective_on ?? changes[0]?.effective_on
-    } else {
-      payload = { ...data.template, note: value('note'), decision }
-      if (decision === 'approve') date = data.dates.find((item) => item.role === 'notice_start')?.date ?? data.dates[0]?.date
+    const changes = data.template.changes.map((change, index) => ({
+      ...change, effective_on: value(`effective_on.${index}`), evidence_url: value(`evidence_url.${index}`),
+      summary: value(`summary.${index}`), comparison_verified: form.has(`comparison_verified.${index}`),
+    }))
+    const payload = {
+      ...data.template, note: value('note'), source_url: value('source_url'),
+      promulgated_on: value('promulgated_on'), dates_verified: form.has('dates_verified'), changes,
     }
+    const date = changes.find((change) => change.id === holdId)?.effective_on ?? changes[0]?.effective_on
     const response = await mutation.run<{ ok: boolean }>(path, payload)
     if (response?.ok) onReviewed(date)
   }
@@ -98,39 +82,29 @@ function HoldForm({ data, path, holdId, onReviewed, onUnauthorized, onReload }: 
   const stale = failure instanceof AdminApiError && failure.status === 409
   return <form className="admin-editor admin-hold-review" onSubmit={submit} noValidate>
     <fieldset className="admin-edit-fields" disabled={mutation.busy}>
-      {'changes' in data ? <EffectiveFields data={data} /> : <>
-        <p><strong>{data.title}</strong> · 의안번호 {data.bill_no}</p>
-        <p><SourceLink url={data.source_url} label="공식 원문 확인" /></p>
-        <dl className="lc-metadata">
-          {data.dates.map(({ role, date }) => <div key={role}><dt>{dateRoleLabel(role)}</dt><dd>{date}</dd></div>)}
-          {data.dates.length === 0 && <div><dt>공식 일정</dt><dd>확인되지 않음</dd></div>}
-        </dl>
-        <label>검토 결정<select value={decision} onChange={(event) => setDecision(event.target.value as NoticeDecision)}>
-          {Object.entries(decisionLabels).map(([key, label]) => <option key={key} value={key}>{label}</option>)}
-        </select></label>
-      </>}
+      <EffectiveFields data={data} />
       <label>검토 메모<textarea name="note" defaultValue={data.template.note} rows={2} required /></label>
       {mutation.error && <p ref={alert} tabIndex={-1} role="alert" className="admin-error">{mutation.error}</p>}
       <div className="admin-actions">
         {stale ? <button type="button" onClick={onReload}>최신 검토 자료 불러오기</button>
-          : <button type="submit" className="admin-review-submit">{mutation.busy ? '저장 중…' : decisionLabels[decision]}</button>}
+          : <button type="submit" className="admin-review-submit">{mutation.busy ? '저장 중…' : '승인'}</button>}
       </div>
     </fieldset>
   </form>
 }
 
-export function CalendarHoldReview({ kind, holdId, title, reason, onBack, onReviewed, onUnauthorized }: {
-  kind: 'effective' | 'notice'; holdId: string; title: string; reason: string; onBack: () => void
+export function CalendarHoldReview({ holdId, title, reason, onBack, onReviewed, onUnauthorized }: {
+  holdId: string; title: string; reason: string; onBack: () => void
   onReviewed: (date?: string) => void; onUnauthorized: () => void
 }) {
   const heading = useRef<HTMLHeadingElement>(null)
   useEffect(() => { heading.current?.focus() }, [])
-  const path = `/calendar/law-holds/${kind}/${encodeURIComponent(holdId)}`
-  const load = useCallback((signal: AbortSignal) => adminGet<EffectiveReview | NoticeReview>(path, signal), [path])
+  const path = `/calendar/law-holds/effective/${encodeURIComponent(holdId)}`
+  const load = useCallback((signal: AbortSignal) => adminGet<EffectiveReview>(path, signal), [path])
   const { data, error, retry } = useAdminRead(load, onUnauthorized)
 
   return <section>
-    <h3 ref={heading} tabIndex={-1}>{kind === 'effective' ? '시행일 보류 검토' : '입법예고 검토'}</h3>
+    <h3 ref={heading} tabIndex={-1}>시행일 보류 검토</h3>
     <button type="button" onClick={onBack}>보류 목록으로</button>
     <p><strong>{title}</strong> · {reason}</p>
     {error != null ? <p className="admin-error" role="alert">{adminMessage(error)}{' '}

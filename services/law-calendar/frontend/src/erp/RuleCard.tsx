@@ -66,12 +66,6 @@ export default function RuleCard({ rule, children }: { rule: ErpRule; children?:
     <h3 id={titleId}>{rule.title}</h3>
     {rule.scopes.length === 0 && <p>현행 기준 확인 필요</p>}
     {rule.scopes.map((scope) => <ScopeVersions key={scope.scopeId} scope={scope} />)}
-    {rule.proposalLinks.length > 0 && <div className="erp-rule-scope">
-      <h4>검토 중</h4>
-      <ul className="erp-links">{rule.proposalLinks.map((link) =>
-        <li key={link.ruleVersionId}><a href={link.evidenceUrl} target="_blank" rel="noopener noreferrer">검토 중인 공식 원문</a></li>
-      )}</ul>
-    </div>}
     {children}
   </article>
 }

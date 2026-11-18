@@ -182,9 +182,68 @@ DROP TABLE assembly_notice_pages;
 ALTER TABLE assembly_notice_content DROP COLUMN pdf_limit_reason;
 ALTER TABLE assembly_notice_content DROP COLUMN pdf_pending;
 """
-NOTICE_CONTENT_VERSION = 5
-CURRENT_VERSION = 8
-SUPPORTED_VERSIONS = range(4, CURRENT_VERSION + 1)
+LAW_SCHEMA_V9 = """
+DROP VIEW public_changes;
+DROP INDEX event_dates;
+ALTER TABLE change_events DROP COLUMN kind;
+ALTER TABLE change_events DROP COLUMN published_on;
+ALTER TABLE change_events DROP COLUMN comment_deadline;
+CREATE VIEW public_changes AS
+ SELECT c.*,e.status,e.promulgated_on,e.source_url,e.collected_at,
+ e.verified_at AS event_verified_at,l.name AS law_name,c.effective_on AS event_on
+ FROM article_changes c JOIN change_events e ON e.id=c.event_id JOIN laws l ON l.id=e.law_id
+ WHERE e.review_state='approved' AND c.review_state='approved'
+ AND e.verified_at IS NOT NULL AND c.verified_at IS NOT NULL
+ AND julianday(e.verified_at) IS NOT NULL AND julianday(c.verified_at) IS NOT NULL
+ AND julianday(e.collected_at) IS NOT NULL
+ AND date(c.effective_on)=c.effective_on
+ AND (e.source_url GLOB 'https://www.law.go.kr/*'
+ OR e.source_url GLOB 'https://law.go.kr/*')
+ AND c.effective_on IS NOT NULL;
+CREATE VIEW public_calendar_events AS
+ SELECT id,event_id,event_on,law_name,article,summary,status,before_text,after_text,comparable,
+ promulgated_on,effective_on,source_url,collected_at,verified_at
+ FROM public_changes;
+"""
+SCHEMA_V9 = (
+    """
+DROP VIEW public_calendar_events;
+DROP VIEW public_assembly;
+DROP TABLE assembly_notice_attempts;
+DROP TABLE assembly_notice_content;
+DROP TABLE assembly_review_audit;
+DROP TABLE assembly_dates;
+DROP TABLE assembly_entries;
+DROP TABLE assembly_collection_status;
+DROP TABLE assembly_snapshots;
+DELETE FROM import_runs
+ WHERE imported=0 AND unchanged=0
+ AND EXISTS (
+   SELECT 1 FROM json_each(CASE WHEN json_valid(errors_json) THEN errors_json ELSE '[]' END) e
+   WHERE json_extract(errors_json,e.fullkey || '.source') IN ('assembly_bill','assembly_notice')
+ )
+ AND NOT EXISTS (
+   SELECT 1 FROM json_each(CASE WHEN json_valid(errors_json) THEN errors_json ELSE '[]' END) e
+   WHERE COALESCE(json_extract(errors_json,e.fullkey || '.source'),'') NOT IN ('assembly_bill','assembly_notice')
+ );
+UPDATE import_runs AS r
+ SET failed=MAX(0,failed-(
+   SELECT COUNT(*) FROM json_each(r.errors_json) e
+   WHERE json_extract(r.errors_json,e.fullkey || '.source') IN ('assembly_bill','assembly_notice')
+ )),
+ errors_json=(
+   SELECT json_group_array(json_extract(r.errors_json,e.fullkey)) FROM json_each(r.errors_json) e
+   WHERE COALESCE(json_extract(r.errors_json,e.fullkey || '.source'),'') NOT IN ('assembly_bill','assembly_notice')
+ )
+ WHERE EXISTS (
+   SELECT 1 FROM json_each(CASE WHEN json_valid(r.errors_json) THEN r.errors_json ELSE '[]' END) e
+   WHERE json_extract(r.errors_json,e.fullkey || '.source') IN ('assembly_bill','assembly_notice')
+ );
+"""
+    + LAW_SCHEMA_V9
+)
+CURRENT_VERSION = 9
+SUPPORTED_VERSIONS = (CURRENT_VERSION,)
 
 
 def migrate(path: Path) -> None:
@@ -210,6 +269,7 @@ def migrate(path: Path) -> None:
                 5: '.pre-v6.backup',
                 6: '.pre-v7.backup',
                 7: '.pre-v8.backup',
+                8: '.pre-v9.backup',
             }
             backup = path.with_suffix(path.suffix + suffix[version])
             os.close(os.open(backup, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600))
@@ -217,16 +277,29 @@ def migrate(path: Path) -> None:
                 conn.backup(target)
         conn.execute('PRAGMA journal_mode=WAL')
         conn.execute('PRAGMA foreign_keys=ON')
-        # Wipe freed image data in the active database as the obsolete table is removed.
+        # Wipe removed source content from the active database's freed pages.
         conn.execute('PRAGMA secure_delete=ON')
-        script = ''.join(
-            schema
-            for index, schema in enumerate(
-                (SCHEMA, SCHEMA_V2, SCHEMA_V3, SCHEMA_V4, SCHEMA_V5, SCHEMA_V6, SCHEMA_V7, SCHEMA_V8)
+        if version == 0:
+            script = SCHEMA + SCHEMA_V2 + SCHEMA_V3 + LAW_SCHEMA_V9
+        else:
+            script = ''.join(
+                schema
+                for index, schema in enumerate(
+                    (SCHEMA, SCHEMA_V2, SCHEMA_V3, SCHEMA_V4, SCHEMA_V5, SCHEMA_V6, SCHEMA_V7, SCHEMA_V8, SCHEMA_V9)
+                )
+                if version <= index
             )
-            if version <= index
-        )
-        conn.executescript(f'BEGIN IMMEDIATE;\n{script}\nPRAGMA user_version={CURRENT_VERSION}; COMMIT;')
+        try:
+            conn.executescript(f'BEGIN IMMEDIATE;\n{script}')
+            if conn.execute('PRAGMA quick_check').fetchall() != [('ok',)]:
+                raise ValueError('Database integrity check failed; migration rolled back')
+            if conn.execute('PRAGMA foreign_key_check').fetchall():
+                raise ValueError('Database foreign key check failed; migration rolled back')
+            conn.execute(f'PRAGMA user_version={CURRENT_VERSION}')
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
 
 
 @contextmanager

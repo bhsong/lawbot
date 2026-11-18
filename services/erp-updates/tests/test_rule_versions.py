@@ -60,7 +60,7 @@ def edition(identifier, revision, start, value, **overrides):
     }
 
 
-def test_exact_review_keeps_v1_and_separates_future_partial_and_proposed(erp, tmp_path):
+def test_exact_review_keeps_v1_and_separates_future_and_partial(erp, tmp_path):
     run, review, v1, out = erp
     assert run('export', '--out', str(v1)) == 0
     before = v1.read_bytes()
@@ -68,7 +68,7 @@ def test_exact_review_keeps_v1_and_separates_future_partial_and_proposed(erp, tm
     assert review(**edition('new', 2, '2027-01-01', '가상 예정', predecessorId='old')) == 0
     assert review(**edition('later', 2, '2027-07-01', '가상 추가 변경', predecessorId='new')) == 0
     assert review(**edition('part', 2, '2027-02-01', '가상 부분 시행', scopeId='special', scope='일부 가입자')) == 0
-    assert review(**edition('draft', None, None, None, decision='proposed', evidenceKind='proposal')) == 0
+    assert review(**edition('draft', None, None, None, decision='proposed', evidenceKind='proposal')) == 1
     assert review(**edition('unapproved', 3, '2028-01-01', '비공개', predecessorId='later')) == 1
     assert review(**edition('forged', 2, '2028-01-01', '가짜 근거', evidenceUrl='https://law.go.kr.example/')) == 1
     assert run('export-rules', '--out', str(out)) == 0
@@ -87,7 +87,6 @@ def test_exact_review_keeps_v1_and_separates_future_partial_and_proposed(erp, tm
         assert [v['ruleVersionId'] for v in scopes['standard']['scheduledChanges']] == ['new', 'later']
         assert scopes['special']['currentVersion'] is None
         assert scopes['special']['scheduledChanges'][0]['ruleVersionId'] == 'part'
-        assert [link['ruleVersionId'] for link in rule['proposalLinks']] == ['draft']
         assert client.get(BASE, params={'asOf': '20261113'}).status_code == 422
 
 

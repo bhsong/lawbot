@@ -2,9 +2,7 @@
 
 export interface CalendarDay {
   event_on: string
-  notice_count: number
   effective_count: number
-  bill_count?: number
 }
 
 export interface CalendarMonth {
@@ -18,8 +16,6 @@ export interface CalendarStatus {
   verifiedAt: string | null
   delayed: boolean
   timezone: "Asia/Seoul"
-  billCollectedAt?: string | null
-  noticeCollectedAt?: string | null
 }
 
 export interface ChangePage {
@@ -82,12 +78,6 @@ export interface ErpRule {
   sourceKey: string
   title: string
   scopes: (ErpRuleScope)[]
-  proposalLinks: (ErpRuleProposal)[]
-}
-
-export interface ErpRuleProposal {
-  ruleVersionId: string
-  evidenceUrl: string
 }
 
 export interface ErpRuleScope {
@@ -124,17 +114,8 @@ export interface HeldChange {
   article: string
 }
 
-export interface HeldNotice {
-  id: string
-  lawName: string
-  reason: string
-  sourceUrl: string
-  collectedAt: string
-  billNo: string
-}
-
 export interface HoldPage {
-  items: (HeldChange | HeldNotice)[]
+  items: (HeldChange)[]
   total: number
   page: number
   page_size: number
@@ -149,24 +130,9 @@ export interface NewsItem {
   effectiveOn?: string | null
 }
 
-export interface PublicAssembly {
-  agency: string | null
-  billNo: string
-  dateRole: string
-  noticeStart: string | null
-  noticeEnd: string | null
-  billProposed: string | null
-  billDecided: string | null
-  committeeDecided: string | null
-  committeeResult: string | null
-  judiciaryDecided: string | null
-  judiciaryResult: string | null
-}
-
 export interface PublicChange {
   id: string
   eventId: string
-  kind: "notice" | "effective" | "bill"
   date: string
   lawName: string
   article: string
@@ -175,21 +141,17 @@ export interface PublicChange {
   before: string | null
   after: string | null
   comparable: boolean
-  publishedOn: string | null
   promulgatedOn: string | null
   effectiveOn: string | null
-  commentDeadline: string | null
   sourceUrl: string
   collectedAt: string
   verifiedAt: string
   reviewState: "approved"
-  assembly?: PublicAssembly | null
 }
 
 export interface PublicDetail {
   id: string
   eventId: string
-  kind: "notice" | "effective" | "bill"
   date: string
   lawName: string
   article: string
@@ -198,28 +160,19 @@ export interface PublicDetail {
   before: string | null
   after: string | null
   comparable: boolean
-  publishedOn: string | null
   promulgatedOn: string | null
   effectiveOn: string | null
-  commentDeadline: string | null
   sourceUrl: string
   collectedAt: string
   verifiedAt: string
   reviewState: "approved"
-  assembly?: PublicAssembly | null
   diff: (string)[] | null
-  noticeContent?: PublicNoticeContent | null
 }
 
 export interface PublicNewsBoard {
   name: string
   status: "ok" | "disabled" | "unverified" | "pending" | "delayed" | "blocked" | "error" | "partial"
   lastSuccessAt: string | null
-}
-
-export interface PublicNoticeContent {
-  summary: string | null
-  pdfUrl: string | null
 }
 
 export interface VerifiedErpRuleVersion {

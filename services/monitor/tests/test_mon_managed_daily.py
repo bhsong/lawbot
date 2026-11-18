@@ -16,7 +16,7 @@ def test_managed_daily_uses_one_normal_run_and_respects_law_switch(tmp_path, mon
     calls = []
 
     class Collector:
-        name = 'assembly_bill'
+        name = 'legalize_admrule'
 
         def has_baseline(self, state):
             return True
@@ -43,7 +43,7 @@ def test_managed_daily_uses_one_normal_run_and_respects_law_switch(tmp_path, mon
         json.dumps(
             {
                 'run_id': 'daily-abc',
-                'collectors': ['assembly_bill'],
+                'collectors': ['legalize_admrule'],
                 'law_paths': None,
                 'articles_enabled': articles_enabled,
             }
@@ -52,10 +52,10 @@ def test_managed_daily_uses_one_normal_run_and_respects_law_switch(tmp_path, mon
     selection = cli._daily_selection(plan_file)
     assert cli._daily(monitor, None, selection=selection) == 0
     expected = (
-        ['article_input', 'assembly_bill', 'calendar', 'articles', 'summary']
+        ['article_input', 'legalize_admrule', 'calendar', 'articles', 'summary']
         if articles_enabled
         else [
-            'assembly_bill',
+            'legalize_admrule',
             'calendar',
             'summary',
         ]
@@ -66,7 +66,7 @@ def test_managed_daily_uses_one_normal_run_and_respects_law_switch(tmp_path, mon
     assert row['run_id'] == selection.run_id
     assert json.loads(row['summary_json']) == {
         'managed': True,
-        'collectors': {'assembly_bill': {'status': 'ok', 'events': 0}},
+        'collectors': {'legalize_admrule': {'status': 'ok', 'events': 0}},
         'events': 0,
     }
 
@@ -179,29 +179,3 @@ def test_managed_plan_cannot_select_the_git_collector_with_article_input_off(tmp
     )
     with pytest.raises(ValueError, match='조문 갱신 설정'):
         cli._daily_selection(plan)
-
-
-def test_cli_managed_assembly_selection_initializes_the_client(tmp_path, monkeypatch):
-    assert not load().assembly_enabled
-    monkeypatch.setattr(cli.secrets, 'get', lambda key: 'fixture' if key == 'LAW_ASSEMBLY_KEY' else None)
-    monkeypatch.setattr(cli.secrets, 'law_oc', lambda: None)
-    monkeypatch.setattr(cli, 'load_config', lambda: None)
-    plan = tmp_path / 'plan.json'
-    plan.write_text(
-        json.dumps(
-            {
-                'run_id': 'daily-assembly',
-                'collectors': ['assembly_notice'],
-                'law_paths': None,
-                'articles_enabled': False,
-            }
-        )
-    )
-
-    def inspect(monitor, only, *, selection):
-        assert selection.collectors == ['assembly_notice']
-        assert 'assembly_notice' in {collector.name for collector in monitor.collectors}
-        return 0
-
-    monkeypatch.setattr(cli, '_daily', inspect)
-    assert cli.main(['--home', str(tmp_path), 'daily', '--source-plan', str(plan)]) == 0

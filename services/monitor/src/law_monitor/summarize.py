@@ -13,7 +13,6 @@ import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from law_monitor.assembly import SOURCES
 from law_monitor.llm import ChatClient, LLMError
 
 log = logging.getLogger('law_monitor.summarize')
@@ -42,7 +41,6 @@ CATEGORY_TITLES = {
     1: '법률·시행령·시행규칙',
     2: '별표·서식',
     3: '행정규칙',
-    4: '입법예고·법안',
     5: '전자신고 파일 레이아웃',
     6: '정기 리마인드',
     7: '4대보험·최저임금',
@@ -233,12 +231,10 @@ def write_summary(
     capture: SummaryCapture | None = None,
 ) -> tuple[SummaryResult, list[str]]:
     """요약 md를 쓰고 (결과, 요약을 끝낸 event_id 목록)을 돌려준다."""
-    assembly = [e for e in events if e.get('source') in SOURCES and e.get('change_type') != 'collector_failing']
-    assembly_ids = {e['event_id'] for e in assembly}
-    groups, warnings = group([e for e in events if e['event_id'] not in assembly_ids])
+    groups, warnings = group(events)
     groups.sort(key=lambda g: (_section(g), str((g.head.get('target') or {}).get('law_name'))))
     rendered: list[tuple[int, str]] = []
-    done = [e['event_id'] for e in [*warnings, *assembly]]
+    done = [e['event_id'] for e in warnings]
     calls, failed = 0, None
     for g in groups:
         try:
@@ -282,8 +278,6 @@ def write_summary(
         '행정규칙': sum(e.get('source') == 'legalize_admrule' for e in events),
         '별표서식': sum(e.get('source') in ('lawgo_forms', 'lawgo_admrul') for e in events),
     }
-    if assembly:
-        counts['국회'] = len(assembly)
     md = [
         f'# 법령 변경 요약 {title_date}',
         '',
@@ -305,24 +299,6 @@ def write_summary(
         md += [text]
     if failed:
         md += ['## 요약 실패', '', f'- {failed}', f'- 대기 이벤트 {pending}건: 다음 실행에서 다시 요약합니다', '']
-    if assembly:
-        md += ['## 국회 법률안·입법예고', '']
-        date_labels = {
-            'notice_start': '예고 시작',
-            'notice_end': '예고 종료',
-            'bill_proposed': '제안',
-            'bill_decided': '의결',
-        }
-        for event in assembly:
-            target, context = event['target'], event['context']
-            title, status = html.escape(target['law_name']), html.escape(context['status'])
-            dates = ', '.join(
-                f'{label} {event["dates"][key]}' for key, label in date_labels.items() if key in event['dates']
-            )
-            md.append(
-                f'- {title} · {status}' + (f' · {dates}' if dates else '') + f' · [국회 원문]({context["source_url"]})'
-            )
-        md.append('')
     md += check_lines(checks or [])
     if warnings:
         md += ['## 경고', '']

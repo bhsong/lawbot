@@ -12,7 +12,6 @@ from erp_updates.sources import Source
 from lawbot_common.erp_rules import (
     RULE_FEED_MAX_BYTES,
     Contract,
-    ErpRuleProposal,
     ErpRuleVersion,
     Identifier,
     RuleScope,
@@ -43,8 +42,8 @@ CREATE INDEX IF NOT EXISTS rule_review_version ON rule_reviews(version_id, id);
 class Submission(Contract):
     sourceKey: Identifier
     scope: RuleScope
-    version: ErpRuleVersion | ErpRuleProposal
-    decision: Literal['confirmed', 'proposed', 'recheck_required', 'withdrawn']
+    version: ErpRuleVersion
+    decision: Literal['confirmed', 'recheck_required', 'withdrawn']
     reason: str | None = Field(default=None, max_length=500)
 
 
@@ -54,11 +53,6 @@ def parse(path: Path) -> Submission:
         raise ValueError('Rule review must be a JSON object')
     scope = {field: data.pop(field) for field in RuleScope.model_fields if field in data}
     source, decision, reason = (data.pop(field, None) for field in ('sourceKey', 'decision', 'reason'))
-    if data.get('evidenceKind') == 'proposal':
-        for field in ('evidenceKind', 'effectiveFrom', 'appliesFrom', 'appliesUntil', 'sourceRevisionId', 'valueText'):
-            if field != 'evidenceKind' and data.get(field) is not None:
-                raise ValueError('Proposals may only publish an official link')
-            data.pop(field, None)
     return Submission.model_validate(
         {'sourceKey': source, 'scope': scope, 'version': data, 'decision': decision, 'reason': reason}
     )
@@ -112,11 +106,6 @@ def check_confirmed(conn: sqlite3.Connection, review: Submission, rows: list[sql
 def record_review(conn: sqlite3.Connection, review: Submission, sources: list[Source], reviewer: str) -> None:
     if review.sourceKey not in {source.key for source in sources} or not reviewer.strip():
         raise store.StoreError('Use a registered ERP source key and reviewer')
-    proposal = isinstance(review.version, ErpRuleProposal)
-    if (proposal and review.decision not in ('proposed', 'withdrawn')) or (
-        not proposal and review.decision == 'proposed'
-    ):
-        raise store.StoreError('Proposal links and confirmed versions require distinct decisions')
     if review.decision == 'withdrawn' and not (review.reason or '').strip():
         raise store.StoreError('Provide a reason for withdrawal')
     payload = review.model_dump_json(exclude={'decision', 'reason'})
@@ -127,7 +116,7 @@ def record_review(conn: sqlite3.Connection, review: Submission, sources: list[So
         rows = editions(conn, review.sourceKey, review.scope.scopeId)
         prior = next((row for row in rows if row['version_id'] == version_id), None)
         if prior is None:
-            if review.decision not in ('confirmed', 'proposed'):
+            if review.decision != 'confirmed':
                 raise store.StoreError('Review an existing edition')
             if conn.execute('SELECT 1 FROM rule_editions WHERE version_id=?', (version_id,)).fetchone():
                 raise store.StoreError('Use a unique ERP rule edition ID')
@@ -186,7 +175,6 @@ def build(conn: sqlite3.Connection, sources: list[Source]) -> RuleSnapshot:
             'sourceKey': source.key,
             'title': source.title,
             'scopes': {},
-            'proposalLinks': [],
         }
         for source in sources
     }
@@ -203,13 +191,10 @@ def build(conn: sqlite3.Connection, sources: list[Source]) -> RuleSnapshot:
                     'SELECT reviewed_at AS at,decision FROM rule_reviews WHERE version_id=? ORDER BY id',
                     (record['version_id'],),
                 ).fetchall()
-                if reviews[-1]['decision'] == 'withdrawn':
+                if reviews[-1]['decision'] in ('withdrawn', 'proposed'):
                     continue
-                if reviews[-1]['decision'] == 'proposed':
-                    item['proposalLinks'].append(payload['version'])
-                else:
-                    scope = item['scopes'].setdefault(record['scope_id'], payload['scope'] | {'editions': []})
-                    scope['editions'].append({'version': payload['version'], 'reviews': [dict(row) for row in reviews]})
+                scope = item['scopes'].setdefault(record['scope_id'], payload['scope'] | {'editions': []})
+                scope['editions'].append({'version': payload['version'], 'reviews': [dict(row) for row in reviews]})
     for item in results.values():
         item['scopes'] = list(item['scopes'].values())
     return RuleSnapshot.model_validate(

@@ -96,7 +96,7 @@ $hub --database $collector_db export-news --materials $materials_db --out $news_
 
 ## 통합 일일 실행
 
-`daily`는 하루에 한 번 등록부 설정을 확정하고, 기존 법령 수집·점검, ERP 원문 수집, 활성 기관 소스와 공개 파일을 처리합니다. 기존 스케줄이 실행 중인 운영 환경에서는 전환 전까지 기존 등록을 사용합니다. 명령은 준비된 uv 환경을 사용합니다.
+`daily`는 하루에 한 번 등록부 설정을 확정하고, 법률·시행령·시행규칙과 행정규칙 수집 → 캘린더 sync → 챗봇 조문 점검 → 아침 요약 → ERP 수집·발행 순서로 실행합니다. 고용노동부·재정경제부의 입법·행정예고 게시판을 포함한 활성 기관 소스도 처리합니다. 기존 스케줄이 실행 중인 운영 환경에서는 전환 전까지 기존 등록을 사용합니다. 명령은 준비된 uv 환경을 사용합니다.
 
 ```fish
 $hub --database $collector_db daily --root $PWD --monitor-home $monitor_home \

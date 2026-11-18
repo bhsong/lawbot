@@ -7,7 +7,7 @@
 - 별표·서식: `forms` 대상 법령과 추적 행정규칙은 신·구판의 별표·서식 텍스트를 비교해 바뀐 것만 `lawgo_forms`·`lawgo_admrul` 이벤트로 만들고, 그 서식의 PDF·HWP 원본을 받습니다.
 - 요약(2단계): 요약하지 않은 이벤트를 운영 모델 서버의 `qwen3.8-27b-4bit`로 요약해 `data/summaries/YYYY-MM-DD.md`를 만듭니다 ([계획](../../docs/archives/monitor-summary.md)).
 - 점검: `config/targets.yaml`의 `checks`에 지정된 캘린더 sync와 챗봇 조문 데이터 자동 갱신을 `daily`가 순차 실행합니다.
-- 국회 법률안과 입법예고는 아래 절의 선택 수집기로 연결합니다. 전자신고 파일 레이아웃(지급명세서 전산매체 제출요령)은 3단계 연례 리마인드 대상입니다 ([결정](../../docs/plans/monitor-collector.md) 9절).
+- 전자신고 파일 레이아웃(지급명세서 전산매체 제출요령)은 3단계 연례 리마인드 대상입니다 ([결정](../../docs/plans/monitor-collector.md) 9절).
 
 ## 설치
 
@@ -63,24 +63,6 @@ uv run --project services/law-calendar --locked python -m law_calendar.manage pr
 - 한 수집기가 3번 연속 실패하면 `collector_failing` 이벤트가 한 번 생깁니다.
 - Git 수집에서 `bootstrap --force`를 실행하면 현재 저장소를 새 기준점으로 삼습니다. 새 행정규칙을 현재 상태부터 추적해야 할 때 사용합니다. 설정만 바꾸면 기존 행정규칙은 다음 개정부터 잡힙니다.
 
-## 국회 법률안과 입법예고
-
-`services/monitor/.env`의 `LAW_ASSEMBLY_KEY`를 사용합니다. 공통 법령 범위의 `keywords`와 `config/targets.yaml`의 `prelegislation.assembly.age`에 따라 의안검색·진행 중·종료 예고를 읽습니다. 제목과 키워드를 정규화한 뒤 포함 여부를 검사합니다. [공통 법령 범위](../../packages/lawbot-common/src/lawbot_common/law_scope.json)
-
-배포 전에는 임시 home에서 아래 명령을 사용합니다.
-
-```bash
-uv run law-monitor --home "$MONITOR_HOME" bootstrap --only assembly_bill
-uv run law-monitor --home "$MONITOR_HOME" bootstrap --only assembly_notice
-uv run law-monitor --home "$MONITOR_HOME" collect --only assembly_notice
-```
-
-기준선을 잡은 뒤 첫 정상 예고 수집에서 해당 키워드의 진행 중 예고를 검토 후보로 발행합니다. 이후 의안·예고 변경을 이어서 추적합니다. 공통 키워드나 국회 대수를 바꿀 때는 다음 정기 실행 전에 `assembly_bill`과 `assembly_notice` 각각에 `bootstrap --only <수집기> --force`를 실행해 기준을 갱신합니다.
-
-강제 bootstrap은 기존 관측 순번을 유지하면서 비교 기준을 갱신합니다. 기준에 흡수된 변경은 이벤트 발행 대상에서 제외됩니다. 정상 수집에서 들어온 변경 예고는 캘린더 sync에서 공식 상세의 의안번호와 기간이 일치하면 자동 공개됩니다. 의안 공개는 수동 검토를 거칩니다.
-
-일일 수집과 예고 자동 공개를 사용하려면 캘린더 DB v8과 두 국회 기준선이 준비된 뒤 Monitor 환경의 `LAW_ASSEMBLY_ENABLED=1`을 사용합니다. 이 값은 YAML 활성화 설정에 우선합니다. 기존 06:30 작업에서 각 국회 수집기 실패를 별도로 기록합니다. 국회 이벤트는 공식 날짜와 상태로 별도 요약하므로 모델 호출 수를 늘리지 않습니다. [캘린더 공개 검토 절차](../law-calendar/README.md#국회-이벤트-공개-검토) · [실제 API 검증 방법](../../docs/evals/2026-11-05-assembly-api-validation-guide.md)
-
 ## 요약 (2단계)
 
 - 대상: `state.db`의 `events`에서 `processed_at`이 빈 것. 요약이 끝나면 `processed_at`을 적습니다.
@@ -133,9 +115,9 @@ uv run law-monitor --home "$MONITOR_HOME" collect --only assembly_notice
 
 ## 추적 대상 바꾸기
 
-법률·시행령·시행규칙 수집은 공통 법령 범위의 `folder`에 해당하는 Legalize KR `kr/<폴더>/`를 추적합니다. `category`는 수집 분류이며 `keywords`는 국회 제목 필터에 사용합니다. [공통 법령 범위](../../packages/lawbot-common/src/lawbot_common/law_scope.json)
+법률·시행령·시행규칙 수집은 공통 법령 범위의 `folder`에 해당하는 Legalize KR `kr/<폴더>/`를 추적합니다. `category`는 수집 분류입니다. [공통 법령 범위](../../packages/lawbot-common/src/lawbot_common/law_scope.json)
 
-별표·서식, 행정규칙, 수집기 설정과 점검 명령은 `config/targets.yaml` 또는 `--config`로 지정한 YAML에서 관리합니다. 이전 설정의 `laws`와 `prelegislation.keywords`는 실행 오류가 되므로 YAML에서 제거하고 공통 법령 범위에 반영합니다. 부가가치세법은 법령과 별표·서식 수집 범위 및 국회 제목 키워드에서 제외했습니다. 행정규칙은 아래 규칙으로 별도 추적합니다.
+별표·서식, 행정규칙, 수집기 설정과 점검 명령은 `config/targets.yaml` 또는 `--config`로 지정한 YAML에서 관리합니다. 이전 설정의 `laws`는 실행 오류가 되므로 YAML에서 제거하고 공통 법령 범위에 반영합니다. 부가가치세법은 법령과 별표·서식 수집 범위에서 제외했습니다. 행정규칙은 아래 규칙으로 별도 추적합니다.
 
 - `admrules.names`: 소관부처명 + 행정규칙명 정규식. 최저임금처럼 이름에 연도가 들어가는 고시는 `^\d{4}년 적용 최저임금(안)? 고시$`처럼 씁니다.
 - `admrules.keyword_rules`: 소관부처명 + 이름 키워드 (하나라도 들어 있으면 대상).

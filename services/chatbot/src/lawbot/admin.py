@@ -31,7 +31,7 @@ from lawbot_common.logs import logger
 STATUSES = ('pending', 'reviewed', 'hold', 'rejected', 'quarantined', 'promoted', 'all')
 REASONS = ('retrieval', 'answer', 'false_refusal', 'other')
 CALENDAR_PATH = re.compile(r'(?:law-calendar(?:/status)?|law-events|law-holds|law-changes/[A-Za-z0-9_:-]+)')
-CALENDAR_REVIEW_PATH = re.compile(r'law-holds/(effective|notice)/([A-Za-z0-9_:-]+)')
+CALENDAR_REVIEW_PATH = re.compile(r'law-holds/effective/[A-Za-z0-9_:-]+')
 CALENDAR_TIMEOUT = 10
 log = logger('lawbot', 'lawbot')
 
@@ -129,7 +129,7 @@ def _save_calendar_review(db, mutation, kind, hold_id, decision):
         if receipt := mutation.receipt(conn):
             return receipt
         at = datetime.now(UTC).isoformat()
-        summary = {'decision': decision} if decision in ('approve', 'reject', 'withdraw') else None
+        summary = {'decision': decision} if decision == 'approve' else None
         audit_store.record_action(conn, at, mutation.actor, 'calendar_review', kind, hold_id, summary=summary)
         result = {'ok': True}
         mutation.save(conn, 200, result, at)
