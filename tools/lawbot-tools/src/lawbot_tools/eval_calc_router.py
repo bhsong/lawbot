@@ -126,7 +126,7 @@ def _configuration(cfg, client):
         response.raise_for_status()
         health = response.json()
     except httpx.HTTPError, ValueError:
-        raise SystemExit('공유 모델 서버의 준비 상태를 확인할 수 없습니다.') from None
+        raise SystemExit('임베딩·리랭크 모델 서버의 준비 상태를 확인할 수 없습니다.') from None
     if not health.get('ready'):
         raise SystemExit('임베딩 모델 서버가 준비되어야 합니다.')
     pro = next(spec for spec in cfg.profile.models if spec.key == 'pro')

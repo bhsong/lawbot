@@ -492,6 +492,35 @@ def test_v9_notice_source_cannot_publish(workflow, v8_assembly_database, upgrade
         assert conn.execute('SELECT COUNT(*) FROM public_calendar_events').fetchone()[0] == 0
 
 
+@pytest.mark.parametrize('upgraded', [False, True])
+@pytest.mark.parametrize(
+    ('source_url', 'visible'),
+    [
+        ('https://opinion.lawmaking.go.kr/example', False),
+        ('https://www.law.go.kr/example', True),
+        ('https://law.go.kr/example', True),
+    ],
+)
+def test_v9_public_holds_only_exposes_law_sources(workflow, v8_assembly_database, upgraded, source_url, visible):
+    if upgraded:
+        database = v8_assembly_database
+        migrate(database)
+    else:
+        database = workflow[0]
+        import_one(workflow)
+    with TestClient(create_app(database)) as client:
+        before = client.get('/api/law-holds').json()
+        assert before['total'] > 0
+        with sqlite3.connect(database) as conn:
+            conn.execute('UPDATE change_events SET source_url=?', (source_url,))
+        response = client.get('/api/law-holds')
+        assert response.status_code == 200
+        result = response.json()
+        assert result['total'] == (before['total'] if visible else 0)
+        assert len(result['items']) == result['total']
+        assert all(item['sourceUrl'] == source_url for item in result['items'])
+
+
 def test_v9_migration_checks_integrity_before_its_single_commit(v8_assembly_database, monkeypatch):
     from law_calendar import db as schema
 

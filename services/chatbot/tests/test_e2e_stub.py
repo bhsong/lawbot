@@ -514,13 +514,16 @@ def test_error_timeout(stack, ui):
     assert [r['error_type'] for r in new_log_rows(stack, before)] == ['model_server_timeout']
 
 
-def test_error_generation(stack, ui):
-    stack.ensure('chat_error')
+@pytest.mark.parametrize('mode', ['chat_error', 'truncated'])
+def test_error_generation(stack, ui, mode):
+    stack.ensure(mode)
     before = len(e2e.request_log(stack.request_log))
     e2e.ask(ui, QUESTION)
     alert(ui, '답변을 생성하지 못했습니다')
-    assert [r['error_type'] for r in new_log_rows(stack, before)] == ['generation']
+    (row,) = new_log_rows(stack, before)
+    assert (row['status'], row['error_type']) == ('error', 'generation')
     assert FAKE_ANSWER not in e2e.answer(ui).inner_text()
+    expect(ui.get_by_role('button', name='좋아요', exact=True)).to_have_count(0)
 
 
 def test_error_server_down(stack, ui):

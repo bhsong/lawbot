@@ -393,7 +393,7 @@ git push origin vX.Y.Z
 
 개발에서는 [.env.dev.example](../.env.dev.example)의 v5 설정을 적용합니다. 기본 조문은 `data/v5`의 두 CSV와 각 매니페스트입니다. 기존 설정에서 `LAWBOT_EMB_MODEL`은 `lawbot-emb-v5b`로 바꾸고, 이전 `LAWBOT_PRO_SYSTEM`과 인코딩 길이 재지정을 비우면 v5의 기본 간결형과 인코딩 설정을 씁니다. 전체 답변 형식은 별도의 `data/v5/system_v5.txt`를 씁니다.
 
-운영 반영 승인 후 운영 worktree에서 기존 `.env`와 HEAD를 보관합니다. 공유 모델 서버의 모델 목록에서 `lawbot-emb-v5b`, `qwen3-reranker-4b`, `qwen3.8-27b-4bit`의 id와 revision을 확인합니다. 조문 전환과 별개로 현재 운영 HEAD에서 반영할 커밋까지의 변경과 필요한 배포 단계를 확인합니다.
+운영 반영 승인 후 운영 worktree에서 기존 `.env`와 HEAD를 보관합니다. 임베딩·리랭크 모델 서버의 모델 목록에서 `lawbot-emb-v5b`, `qwen3-reranker-4b`의 id와 revision을 확인하고, 별도 생성 서버의 `/v1/models`에서 `qwen3.8-27b-4bit`의 id와 revision을 확인합니다. 조문 전환과 별개로 현재 운영 HEAD에서 반영할 커밋까지의 변경과 필요한 배포 단계를 확인합니다.
 
 ```zsh
 LAWBOT_PROFILE=v5 uv run lawbot-articles-update --init
@@ -413,6 +413,8 @@ uv run python -m lawbot_tools.log_summary --caller lawbot-app  # 평가 실행 �
 ```
 
 오류 유형은 화면 안내와 같습니다. `model_server`(생성 서버 또는 임베딩·리랭크 서버 연결 실패·토큰 불일치·미준비)는 "모델 서버가 준비되지 않았습니다", `model_load`(모델 폴더·system 파일 오류)는 "모델을 불러오지 못했습니다"로 안내합니다. `model_server_timeout`(질문 처리 중 응답 조각 사이가 `LAWBOT_MODEL_READ_TIMEOUT`을 넘음)은 "모델 서버 응답이 없습니다"로 안내합니다. 생성 대기열 한도 오류 분류는 없습니다. 요청 로그의 `mode`는 `api`(로컬 단독 생성 서버) 또는 `external`(외부 생성 API)입니다. `search`·`rerank`·`generation` 오류는 각각 "조문을 검색하지 못했습니다"·"조문 순위를 매기지 못했습니다"·"답변을 생성하지 못했습니다"로 안내하고, 임베딩 순위로 되돌리지 않습니다.
+
+생성 스트림의 종료 `finish_reason`이 없으면 `generation` 오류로 처리하며, 부분 답변을 정상 턴이나 피드백 대상으로 저장하지 않습니다.
 
 ## 관리자 계정 (선택)
 
@@ -543,7 +545,7 @@ uv run pyright             # 타입 검사 (웹앱 런타임·모델 서버·mon
 (cd services/chatbot/frontend && npm run typecheck && npm test)   # 화면: tsc, Vitest
 ```
 
-브라우저 E2E는 두 층입니다. `e2e_stub`(기본 실행·CI 포함)는 임베딩·리랭크·답변 생성 세 호출을 모두 가짜 모델로 바꾼 것이라 **실제 모델 연결 확인이 아닙니다**. 설정은 `.env.example`(운영 구성)과 같게 띄우고, 실패한 테스트만 `results/e2e_stub/<시각>-<테스트>/`에 스크린샷·화면 HTML·프로세스 출력·요청 로그를 남깁니다(성공하면 남기지 않음, 진단 후 지움). 실제 공유 모델 서버로 하는 `e2e_live`는 승인 후 맥 미니의 개발 worktree에서만 실행합니다([계획](archives/e2e-playwright.md)).
+브라우저 E2E는 두 층입니다. `e2e_stub`(기본 실행·CI 포함)는 임베딩·리랭크·답변 생성 세 호출을 모두 가짜 모델로 바꾼 것이라 **실제 모델 연결 확인이 아닙니다**. 설정은 `.env.example`(운영 구성)과 같게 띄우고, 실패한 테스트만 `results/e2e_stub/<시각>-<테스트>/`에 스크린샷·화면 HTML·프로세스 출력·요청 로그를 남깁니다(성공하면 남기지 않음, 진단 후 지움). 실제 공유 임베딩·리랭크 모델 서버와 별도 생성 서버로 하는 `e2e_live`는 승인 후 맥 미니의 개발 worktree에서만 실행합니다([계획](archives/e2e-playwright.md)).
 
 브라우저 E2E를 새로 쓰거나 고칠 때:
 

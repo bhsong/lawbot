@@ -6,17 +6,47 @@ import yaml
 
 ATTACHMENT_KEY = ('별표구분', '별표번호', '별표가지번호')
 SKIP_META = ('첨부파일',)  # 첨부는 attachment_changes로 따로 비교 (링크는 개정마다 전부 바뀜)
+_MAX_YAML_DEPTH = 32
+_MAX_YAML_NODES = 10_000
+
+
+class FrontmatterError(ValueError):
+    """Invalid or resource-intensive YAML metadata."""
 
 
 def split(text: str) -> tuple[dict, str]:
+    """Split metadata, rejecting YAML references or structures over 32 levels/10,000 nodes."""
     if not text.startswith('---\n'):
         return {}, text
     end = text.find('\n---\n', 4)
     if end < 0:
         return {}, text
-    meta = yaml.safe_load(text[4:end]) or {}
+    source = text[4:end]
+    try:
+        _check_structure(source)
+        meta = yaml.safe_load(source) or {}
+    except (yaml.YAMLError, ValueError) as exc:
+        raise FrontmatterError(f'Invalid frontmatter: {exc}') from exc
     plain = _plain(meta)
     return (plain if isinstance(plain, dict) else {}), text[end + 5 :].lstrip('\n')
+
+
+def _check_structure(source: str) -> None:
+    """Inspect the event stream before recursive composition or value conversion."""
+    depth = nodes = 0
+    for event in yaml.parse(source, Loader=yaml.SafeLoader):
+        if isinstance(event, yaml.events.NodeEvent):
+            if isinstance(event, yaml.events.AliasEvent) or event.anchor is not None:
+                raise ValueError('YAML anchors and aliases are not allowed')
+            nodes += 1
+            if nodes > _MAX_YAML_NODES:
+                raise ValueError(f'YAML nodes exceed {_MAX_YAML_NODES}')
+        if isinstance(event, yaml.events.CollectionStartEvent):
+            depth += 1
+            if depth > _MAX_YAML_DEPTH:
+                raise ValueError(f'YAML depth exceeds {_MAX_YAML_DEPTH}')
+        elif isinstance(event, yaml.events.CollectionEndEvent):
+            depth -= 1
 
 
 def _plain(value):

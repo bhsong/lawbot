@@ -121,6 +121,7 @@ class LegalizeGitCollector:
     def __init__(self, name: str, repo_key: str, matcher: LawMatcher | AdmruleMatcher, enricher=None):
         self.name, self.repo_key, self.matcher = name, repo_key, matcher
         self.enricher = enricher  # law_monitor.enrich.LawGoEnricher (없으면 보강 없이)
+        self.failed_paths_marker = f'{repo_key}-failed-frontmatter-paths'
 
     def has_baseline(self, state: State) -> bool:
         return state.cursor(self.repo_key) is not None
@@ -141,6 +142,7 @@ class LegalizeGitCollector:
         previous = None
         paused: dict[str, str] = {}
         recovered: dict[str, str] = {}
+        failed_paths = set(json.loads(ctx.state.baseline(self.failed_paths_marker) or '[]'))
         if isinstance(self.matcher, LawMatcher):
             scope = '\n'.join(sorted(self.matcher.selected_paths)) if self.matcher.selected_paths is not None else '*'
             previous = ctx.state.baseline(scope_marker)
@@ -150,9 +152,10 @@ class LegalizeGitCollector:
                     paused.setdefault(path, cursor)
             recovered = {path: since for path, since in paused.items() if self.matcher.prefilter(path)}
         rescan = scope is not None and scope != previous and (scope != '*' or previous is not None)
-        if cursor == head and not rescan and not paused:
+        if cursor == head and not rescan and not paused and not failed_paths:
             return CollectResult(cursors={self.repo_key: head})
         build = _Builder(self, ctx.paths, ctx.now, repo, ctx.state.items(self.name))
+        build.deferred_paths.update(failed_paths)
         on_history = bool(cursor and (cursor == head or repo.is_ancestor(cursor, head)))
         if cursor and recovered:
             build.backfill(recovered, cursor if on_history else head)
@@ -170,7 +173,13 @@ class LegalizeGitCollector:
             if rescan and previous != '*':
                 baseline_exclusions = set((previous or '').splitlines()) | recovered.keys()
             build.compare_with_head(head, baseline_new_except=baseline_exclusions)
+        retry_paths = {path for path in failed_paths if self.matcher.prefilter(path)}
+        if retry_paths:
+            build.compare_with_head(head, retry_paths)
         result = build.result()
+        result.baselines[self.failed_paths_marker] = json.dumps(
+            sorted((build.deferred_paths - retry_paths) | build.file_failures.keys()), ensure_ascii=False
+        )
         result.cursors = {self.repo_key: head}
         if rescan and scope is not None:
             result.baselines[scope_marker] = scope
@@ -243,12 +252,17 @@ class LegalizeGitCollector:
         for v in found.values():
             build.save(v)
         items = [ItemState(self.name, key, v.blob, v.blob, v.path) for key, v in found.items()]
+        items.extend(item for item in ctx.state.items(self.name).values() if item.file_path in build.file_failures)
+        baselines = {self.failed_paths_marker: json.dumps(sorted(build.file_failures), ensure_ascii=False)}
+        if isinstance(self.matcher, LawMatcher):
+            baselines[self.paused_law_marker] = '{}'
         log.info('%s: 기준점 %s, 대상 파일 %d개', self.repo_key, head[:12], len(items))
         return CollectResult(
             cursors={self.repo_key: head},
             items=items,
             replace_sources=[self.name],
-            baselines={self.paused_law_marker: '{}'} if isinstance(self.matcher, LawMatcher) else {},
+            baselines=baselines,
+            file_failures=build.file_failures,
         )
 
 
@@ -264,6 +278,8 @@ class _Builder:
     diffs: dict[str, str] = field(default_factory=dict)
     touched: set[str] = field(default_factory=set)
     baselines_added: int = 0
+    file_failures: dict[str, str] = field(default_factory=dict)
+    deferred_paths: set[str] = field(default_factory=set)
 
     @property
     def m(self):
@@ -273,8 +289,16 @@ class _Builder:
         if not path or blob == ZERO:
             return None
         text = self.repo.blob(blob)
-        meta, body = frontmatter.split(text)
+        meta, body = self._split(path, text)
         return Version(path, blob, meta, body, text)
+
+    def _split(self, path: str, text: str) -> tuple[dict, str]:
+        try:
+            return frontmatter.split(text)
+        except frontmatter.FrontmatterError as exc:
+            self.file_failures[path] = str(exc)
+            log.warning('%s: %s', path, exc)
+            raise
 
     def save(self, v: Version) -> str:
         """파일 내용 사본 data/files/<blob>.md (강제 푸시 뒤 비교·이벤트 old/new 파일)."""
@@ -291,18 +315,21 @@ class _Builder:
         except GitError:
             log.warning('%s: 이전 내용을 찾을 수 없음 (%s)', item.item_id, item.version_key[:12])
             return None
-        meta, body = frontmatter.split(text)
+        meta, body = self._split(item.file_path, text)
         return Version(item.file_path, item.version_key, meta, body, text)
 
     def scan(self, rev: str, paths: set[str] | None = None) -> dict[str, Version]:
         out = {}
         for path, blob in self.repo.ls_tree(rev):
-            if (
-                (paths is None or path in paths)
-                and self.m.prefilter(path)
-                and (v := self.version(path, blob))
-                and self.m.categories(v)
-            ):
+            if (paths is not None and path not in paths) or not self.m.prefilter(path):
+                continue
+            if paths is None and (path in self.deferred_paths or path in self.file_failures):
+                continue
+            try:
+                v = self.version(path, blob)
+            except frontmatter.FrontmatterError:
+                continue
+            if v and self.m.categories(v):
                 out[self.m.item_id(v)] = v
         return out
 
@@ -330,7 +357,15 @@ class _Builder:
             if isinstance(self.m, LawMatcher) and self.m.selected_paths is not None:
                 old_path = old_path if old_path and self.m.prefilter(old_path) else None
                 new_path = new_path if new_path and self.m.prefilter(new_path) else None
-            old, new = self.version(old_path, ch.old_blob), self.version(new_path, ch.new_blob)
+            change_paths = {p for p in (old_path, new_path) if p}
+            if change_paths & (self.deferred_paths | self.file_failures.keys()):
+                self.deferred_paths.update(change_paths)
+                continue
+            try:
+                old, new = self.version(old_path, ch.old_blob), self.version(new_path, ch.new_blob)
+            except frontmatter.FrontmatterError:
+                self.deferred_paths.update(change_paths)
+                continue
             old = old if old and self.m.categories(old) else None
             new = new if new and self.m.categories(new) else None  # 대상에서 빠지면 제거로 본다
             if old is None and new is None:
@@ -360,7 +395,11 @@ class _Builder:
         missing = [
             key
             for key, item in self.current.items()
-            if key not in found and self.m.prefilter(item.file_path) and (paths is None or item.file_path in paths)
+            if key not in found
+            and item.file_path not in self.file_failures
+            and (paths is not None or item.file_path not in self.deferred_paths)
+            and self.m.prefilter(item.file_path)
+            and (paths is None or item.file_path in paths)
         ]
         for key in missing:
             self.emit(key, None, None, None)
@@ -375,7 +414,10 @@ class _Builder:
         event_id: str | None = None,
     ) -> None:
         if old is None and key in self.current:
-            old = self.from_item(self.current[key])
+            try:
+                old = self.from_item(self.current[key])
+            except frontmatter.FrontmatterError:
+                return
         if old is None and new is None:
             self._forget(key)
             return
@@ -462,6 +504,7 @@ class _Builder:
             items=[self.current[k] for k in sorted(self.touched) if k in self.current],
             removed=[(name, k) for k in sorted(self.touched) if k not in self.current],
             baselines_added=self.baselines_added,
+            file_failures=self.file_failures,
         )
 
 

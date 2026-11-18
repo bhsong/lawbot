@@ -61,8 +61,6 @@ def validation_message(e):
 
 async def parse(request, model):
     body = await request.body()
-    if len(body) > request.app.state.max_body:
-        raise ApiError(413, f'요청 본문이 {request.app.state.max_body}바이트를 넘습니다')
     try:
         return model.model_validate_json(body or b'null')
     except ValidationError as e:
@@ -134,7 +132,7 @@ async def rerank(request: Request):
     return res.model_dump(exclude_none=True)  # document는 return_documents일 때만
 
 
-# ---- 인증·크기 제한·로그 (ASGI 미들웨어: 스트림과 끊김을 그대로 전달) ----
+# ---- Authentication, receive-time body limits, and logging ----
 class Guard:
     def __init__(self, app, token, max_body):
         self.app, self.token, self.max_body = app, f'Bearer {token}'.encode(), max_body
@@ -164,7 +162,18 @@ class Guard:
             if resp is not None:
                 await resp(scope, receive, send_status)
             else:
-                await self.app(scope, receive, send_status)
+                received = 0
+
+                async def receive_limited():
+                    nonlocal received
+                    message = await receive()
+                    if message['type'] == 'http.request':
+                        received += len(message.get('body', b''))
+                        if received > self.max_body:
+                            raise ApiError(413, f'요청 본문이 {self.max_body}바이트를 넘습니다')
+                    return message
+
+                await self.app(scope, receive_limited, send_status)
         finally:
             if scope['path'] != '/health':
                 model = scope['state'].get('model') or '-'
@@ -196,7 +205,6 @@ def create_app(token, registry=None, max_body=MAX_BODY, commit=None):
     app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None, lifespan=lifespan)
     app.state.registry = None
     app.state.worker = ThreadPoolExecutor(max_workers=1, thread_name_prefix='model-inference')
-    app.state.max_body = max_body
     app.state.commit = commit
     if registry is not None:
         set_registry(app, registry)

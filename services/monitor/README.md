@@ -68,6 +68,7 @@ uv run --project services/law-calendar --locked python -m law_calendar.manage pr
 - 대상: `state.db`의 `events`에서 `processed_at`이 빈 것. 요약이 끝나면 `processed_at`을 적습니다.
 - 법령·행정규칙 이벤트 하나에 모델 호출 하나입니다. 같은 개정의 별표서식 이벤트(`parent_event_id`)는 그 호출에 함께 넣습니다. 입력은 호출당 약 12,000자이고, 넘치면 뒤를 자르고 내용을 못 넣은 서식은 제목만 넣습니다.
 - 생성 설정은 웹앱과 같은 필수 `LAWBOT_LLM_BASE_URL`·`LAWBOT_LLM_API_KEY`입니다. 환경변수 → `services/monitor/.env` → 레포 최상위 `.env` 순서로 읽습니다. 로컬 주소도 전용 키 16자 이상이 필요하며 모델 서버 토큰은 쓰지 않습니다. 외부 API는 https와 `LAWBOT_LLM_ALLOW_EXTERNAL=1`이 필요합니다. 모델 id는 `LAW_MONITOR_SUMMARY_MODEL`(기본 `qwen3.8-27b-4bit`, 환경변수나 `services/monitor/.env`에만)입니다. `services/monitor/.env`에는 `LAW_*`·`DATA_GO_KR_*`와 위 생성 설정 세 항목만 허용합니다. 생성 설정은 temperature 0, 최대 800토큰, thinking 끔입니다.
+- 생성 설정은 요약 단계에서만 검증합니다. URL·키 누락이나 짧은 키는 요약 실패로 보고하며, `daily`에서 앞서 실행한 수집·캘린더 sync·조문 갱신과 수집 기록을 되돌리지 않습니다. `bootstrap`·`collect`·`check`·`replay`는 생성 설정을 검증하지 않습니다.
 - 생성 서버 관리·재시작 위치는 저장소 밖 `~/Services/qwen27b`입니다. 전용 Bearer 토큰을 붙여 `<LAWBOT_LLM_BASE_URL>/models`의 허용 모델 id·revision을 확인합니다. 토큰·Host 검사, CORS 없음, 허용 id 제한과 `HF_HUB_OFFLINE=1`은 [운영 문서](../../docs/operations.md#단독-생성-서버-외부-의존-서비스)를 따릅니다. 다른 앱도 같은 전용 토큰과 허용 모델 id를 사용해야 합니다.
 - md 구성: 머리(실행 시각·수집 요약 줄·이벤트 수) → 한눈에 보기 번호별 절 → 법령마다 모델 요약 + 바뀐 별표서식 목록 + 원문 이벤트 경로·법제처 링크 → 경고(수집기 연속 실패). 새 이벤트가 없으면 "새 변경 없음".
 - 파일 날짜는 **요약을 실행한 날**입니다. 내용은 "지난 요약 실행(처음이면 bootstrap) ~ 이번 실행" 사이에 저장소에 새로 들어와 감지된 변경이고, md 머리의 `대상:` 줄에 그 구간을 적습니다. 공포일은 항목마다 따로 나옵니다 (legalize-kr은 커밋 날짜가 공포일이라 오늘 들어온 개정이 과거 공포일일 수 있음).

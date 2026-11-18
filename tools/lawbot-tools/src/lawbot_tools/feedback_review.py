@@ -6,6 +6,7 @@
 #    Exclude val overlaps because val guides tuning and selection of models trained on feedback.
 #    Report IDs without printing question text.
 # 3. 검수 CSV(엑셀·Numbers용 utf-8-sig) + 같은 이름의 .jsonl(내보내기가 읽는 전체 기록)을 쓴다. 둘 다 권한 600
+#    Escape formula-leading external text only in the review CSV; the JSONL retains training originals.
 #    사람이 채울 열: h_ok(맞음/틀림/모름), h_gold(정답 조문 '법령명 제N조', 여러 개면 ;), h_scope(범위 안/범위 밖), h_note
 # 출력 파일에는 질문 원문이 있다: 레포 안이면 .gitignore에 걸리는 경로만 허용 (feedback_review_*는 gitignore)
 import argparse
@@ -119,6 +120,11 @@ def hit_keys(r):
     return '; '.join(f'{h.get("law") + " " if h.get("law") else ""}{h["article_id"]}' for h in r.get('hits') or [])
 
 
+def _csv_text(value):
+    """Keep spreadsheet formulas inert without changing the source record."""
+    return "'" + value if isinstance(value, str) and value.startswith(('=', '+', '-', '@', '\t', '\r')) else value
+
+
 def review_frame(rows, keep=None):
     """검수 CSV 표. keep: 이전 검수 CSV(feedback_id로 사람이 채운 열을 이어받음)"""
     prev = {}
@@ -129,8 +135,12 @@ def review_frame(rows, keep=None):
     for r in rows:
         p = prev.get(r['feedback_id'], {})
         out.append(
-            {c: r.get(c) for c in COLUMNS if c not in HUMAN and c != 'hits'}
-            | {'hits': hit_keys(r)}
+            {
+                c: _csv_text(r.get(c)) if c in ('reason', 'model', 'fmt', 'question', 'answer_shown') else r.get(c)
+                for c in COLUMNS
+                if c not in HUMAN and c != 'hits'
+            }
+            | {'hits': _csv_text(hit_keys(r))}
             | {h: p.get(h, '') for h in HUMAN}
         )
     return pd.DataFrame(out, columns=list(COLUMNS))

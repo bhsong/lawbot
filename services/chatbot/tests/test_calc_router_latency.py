@@ -39,6 +39,30 @@ def test_router_inherits_configured_read_limit():
     assert requests[0].extensions['timeout']['read'] == 90
 
 
+def test_router_rejects_completion_without_finish_reason():
+    def reply(request):
+        return httpx.Response(
+            200,
+            json={
+                'id': 'route',
+                'object': 'chat.completion',
+                'created': 0,
+                'model': 'pro',
+                'choices': [{'index': 0, 'message': {'role': 'assistant', 'content': 'lookup'}, 'finish_reason': None}],
+            },
+        )
+
+    with openai.OpenAI(
+        base_url='http://127.0.0.1:9/v1',
+        api_key='fixture',
+        max_retries=0,
+        http_client=httpx.Client(transport=httpx.MockTransport(reply)),
+    ) as client:
+        outcome = route_calculation('질문', LLM('pro', client, 'system').route_calculation, {})
+    assert outcome.reason == 'model_error'
+    assert outcome.payload['status'] == 'none'
+
+
 @pytest.mark.parametrize(
     ('error_type', 'reason'),
     [

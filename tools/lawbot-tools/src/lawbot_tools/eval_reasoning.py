@@ -163,7 +163,9 @@ def report_failure(stage, exc, output, sensitive):
 
 
 def main():
-    parser = argparse.ArgumentParser(description='v5 법률 추론 회귀 검증 val (공유 모델 서버, 사전 승인 필요)')
+    parser = argparse.ArgumentParser(
+        description='v5 법률 추론 회귀 검증 val (임베딩·리랭크 및 별도 생성 서버, 사전 승인 필요)'
+    )
     parser.add_argument('--output', type=Path, required=True, help='결과를 쓸 새 디렉터리 (부모 디렉터리 필요)')
     args = parser.parse_args()
     rows = load_questions()

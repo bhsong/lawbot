@@ -34,10 +34,10 @@ _LABELS = {
 _MONTH_BASIS_LABEL = r'(?:월(?:간)?|(?:1\s*)?개월(?:의)?)\s*(?:최저임금\s*)?적용\s*기준\s*시간(?:\s*수)?'
 _HOUR_TEXT = r'\d+(?:\.\d+)?\s*시간(?:\s*\d+(?:\.\d+)?\s*분)?'
 _MONTH_BASIS = re.compile(
-    rf'{_MONTH_BASIS_LABEL}\s*(?:은|는|이|:)?\s*({_HOUR_TEXT})|({_HOUR_TEXT})\s*(?:이|을|가)?\s*{_MONTH_BASIS_LABEL}'
+    rf'{_MONTH_BASIS_LABEL}\s*+(?:(?:은|는|이|:)\s*+)?({_HOUR_TEXT})|({_HOUR_TEXT})\s*+(?:(?:이|을|가)\s*+)?{_MONTH_BASIS_LABEL}'
 )
 _MONTH_BASIS_RANGE = re.compile(
-    rf'{_MONTH_BASIS_LABEL}\s*(?:은|는|이|:)?\s*\d+(?:\.\d+)?\s*(?:시간)?\s*(?:또는|혹은|[~∼–-])\s*{_HOUR_TEXT}'
+    rf'{_MONTH_BASIS_LABEL}\s*+(?:(?:은|는|이|:)\s*+)?\d+(?:\.\d+)?\s*+(?:시간)?\s*+(?:또는|혹은|[~∼–-])\s*{_HOUR_TEXT}'
 )
 _SPECIAL_CONDITIONS = re.compile(
     r'수습|감액|적용\s*제외|가사\s*사용인|동거\s*친족|선원|도급|산입|미달|체불|최저임금\s*위반'

@@ -208,6 +208,26 @@ def test_llm_no_content_still_yields_one():
     assert len(out) == 1 and out[0].text == '' and out[0].finish_reason == 'stop'
 
 
+@pytest.mark.parametrize('items', [[], [chunk('partial')], [chunk('partial'), chunk(usage=(5, 1))]])
+def test_llm_rejects_stream_without_finish_reason(items):
+    client = FakeClient(items)
+    with pytest.raises(RuntimeError, match='finish_reason'):
+        list(LLM('m', client=client, system=SYSTEM).stream('q', HITS[:1]))
+    assert client.streams[0].closed
+
+
+def test_unfinished_stream_does_not_remember_turn(env):
+    env.setattr(service, 'Retriever', FakeRetriever)
+    app = service.load_app()
+    llm = LLM('m', client=FakeClient([chunk('partial')]), system=SYSTEM)
+    env.setattr(app.models, 'get', lambda key: (llm, None))
+    remembered = []
+    result = run(app, '해고 예고?', remember=remembered.append)
+    assert result.kind == 'generation'
+    assert result.done is None
+    assert remembered == []
+
+
 def test_llm_keeps_reasoning_separate_from_answer():
     reasoning = chunk()
     reasoning.choices[0].delta.model_extra['reasoning'] = 'private reasoning'

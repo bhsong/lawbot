@@ -184,6 +184,7 @@ ALTER TABLE assembly_notice_content DROP COLUMN pdf_pending;
 """
 LAW_SCHEMA_V9 = """
 DROP VIEW public_changes;
+DROP VIEW public_holds;
 DROP INDEX event_dates;
 ALTER TABLE change_events DROP COLUMN kind;
 ALTER TABLE change_events DROP COLUMN published_on;
@@ -200,6 +201,15 @@ CREATE VIEW public_changes AS
  AND (e.source_url GLOB 'https://www.law.go.kr/*'
  OR e.source_url GLOB 'https://law.go.kr/*')
  AND c.effective_on IS NOT NULL;
+CREATE VIEW public_holds AS
+ SELECT c.id,l.name AS law_name,c.article,h.reason,e.source_url,e.collected_at
+ FROM held_changes h JOIN article_changes c ON c.id=h.change_id
+ JOIN change_events e ON e.id=c.event_id JOIN laws l ON l.id=e.law_id
+ JOIN event_sources s ON s.event_id=e.id AND s.snapshot_id=h.snapshot_id
+ JOIN change_versions v ON v.change_id=c.id AND v.snapshot_id=h.snapshot_id
+ WHERE c.review_state='pending' AND e.review_state IN ('pending','approved')
+ AND (e.source_url GLOB 'https://www.law.go.kr/*'
+ OR e.source_url GLOB 'https://law.go.kr/*');
 CREATE VIEW public_calendar_events AS
  SELECT id,event_id,event_on,law_name,article,summary,status,before_text,after_text,comparable,
  promulgated_on,effective_on,source_url,collected_at,verified_at
