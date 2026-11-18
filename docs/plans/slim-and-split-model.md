@@ -15,7 +15,7 @@
    - 홈택스 링크와 국가법령정보센터는 그대로 둔다.
 4. qwen3.8-27b를 lawbot에서 분리해 단독 서비스로 운영한다.
    - 맥 미니 안의 다른 앱도 호출할 수 있게 한다. 무선망에는 열지 않는다.
-   - git 없는 `~/Services/qwen27b/`에서 `mlx_lm.server`로 실행한다. 요청은 먼저 온 순서대로 처리한다.
+   - git 없는 `~/Services/qwen27b/`에서 lawbot의 검증된 chat 서버 코드를 옮긴 범용 서버로 실행한다(B안, `mlx_lm.server`는 쓰지 않음). 요청은 먼저 온 순서대로 처리한다.
    - lawbot 모델 서버는 임베딩과 리랭커만 맡는다.
 5. 삭제 후보는 Claude가 판단한다(§6).
 6. `docs/`의 과거 기록(`docs/evals`, `docs/archives`)은 남긴다. 운영 문서(`docs/operations.md`, 서비스 README, 루트 README)의 설명만 지운다.
@@ -178,35 +178,24 @@
 
 | 구분 | 지금 | 바꾼 뒤 |
 | --- | --- | --- |
-| 답변 생성(qwen3.8-27b) | lawbot 모델 서버(`chat.py`, BatchGenerator) | 단독 서비스 `mlx_lm.server`(lawbot 밖) |
+| 답변 생성(qwen3.8-27b) | lawbot 모델 서버(`chat.py`, BatchGenerator) | 단독 생성 서버(lawbot 밖, lawbot chat 서버 코드를 옮긴 범용 서버) |
 | 임베딩·리랭커 | lawbot 모델 서버 | lawbot 모델 서버(그대로) |
 | 가중치 | `lawbot-prod/models/v4/qwen_27b_mlx_4bit` | `~/Models/qwen3.8-27b-4bit` |
 | 호출하는 곳 | 웹앱 답변, 계산 라우터, 하위법령 판단, monitor 아침 요약 | 같은 곳 + 맥 미니 안의 다른 앱 |
 
-### 단독 서비스 (git 밖, 운영 반영 때 Claude가 만든다)
+### 단독 생성 서버 (git 밖 `~/Services/qwen27b/`, B안 — 사용자 결정 2026-11-18)
 
-- 실행 폴더 `~/Services/qwen27b/`
-  - uv 프로젝트 하나. `mlx-lm` 버전은 `uv.lock`으로 고정한다(지금 lawbot과 같은 0.32.2에서 시작).
-  - `.env`(포트)와 실행 스크립트를 둔다.
-- 실행
-  - `mlx_lm.server --model ~/Models/qwen3.8-27b-4bit --host 127.0.0.1 --port <.env> --decode-concurrency 1 --prompt-concurrency 1`
-- 실행 스크립트 `qwen27b_server.py`(사용자 결정 2026-11-18)
-  - `mlx_lm.server.APIHandler`를 같은 프로세스 안에서 상속해 보호를 넣는다. 별도 중계 서버를 두지 않아 검사를 우회할 포트가 없다.
-  - 왜 필요한가(설치된 0.32.2 소스로 확인)
-    - 요청의 `model`·`adapters`·`draft_model`이 올린 모델과 다르면 지금 모델을 내리고 그 이름으로 다시 로드(필요하면 Hugging Face 다운로드)를 시도한다.
-    - 인증이 없고, CORS 기본값이 `*`이며, `Host`를 검사하지 않는다. 맥 미니의 다른 프로그램이나 악성 웹페이지(DNS 리바인딩)가 생성을 쓰거나 모델을 내리게 할 수 있다.
-    - `/v1/models`가 가중치 폴더 절대 경로를 id로 돌려주고 revision이 없다.
-  - 보호
-    - 토큰(`Authorization: Bearer`, 생성 서버 전용, lawbot은 `LAWBOT_LLM_API_KEY`), `Host` 검사(`127.0.0.1`·`localhost` + 포트), CORS 헤더 없음
-    - 허용 모델 id(`qwen3.8-27b-4bit`)만 받고 `adapters`·`draft_model` 거부, `/v1/models`는 허용 id와 가중치 지문(revision)만 응답
-    - `HF_HUB_OFFLINE=1`, `--trust-remote-code` 사용 안 함, 로그 INFO(DEBUG는 요청 본문을 남김)
-  - 내부 API 의존: `mlx_lm.server.run()`이 바꾼 핸들러를 넘기지 않아 `_run_http_server`를 직접 부른다. `mlx-lm`은 `uv.lock`으로 고정하고, 버전을 올릴 때 실행 스크립트 테스트로 먼저 확인한다.
-  - 구현과 테스트는 omp가 `~/Services/qwen27b/`에서 가짜 생성기로 한다(실제 27B는 운영 반영 때만 올린다).
-- lawbot 설정: 생성 서버 주소는 기존 `LAWBOT_LLM_BASE_URL`을 필수로 바꿔 쓰고 토큰은 `LAWBOT_LLM_API_KEY`로 받는다(아래 `LAWBOT_CHAT_SERVER`는 만들지 않는다. 같은 역할의 설정이 이미 있어서).
-  - 생각 끄기는 `--chat-template-args '{"enable_thinking": false}'`를 기본으로 한다. 요청별 지정이 되는지는 구현 때 확인한다.
-  - 프롬프트 캐시 메모리 상한(`--prompt-cache-bytes`)을 둔다.
+처음에는 `mlx_lm.server`(mlx-lm에 들어 있는 예시용 서버)를 실행 스크립트로 감싸려 했다. 리뷰에서 그 서버에 운영용 마감이 없어 생기는 결함(인증·CORS·Host 없음, 잘못된 `stop` 값이나 프롬프트 캐시 완전 일치로 생성 스레드가 죽음, 이미지 URL 다운로드, 문자열 오류 형식 등)이 계속 나와 방향을 바꿨다. mlx-lm은 생성 라이브러리로만 쓰고, 서버는 lawbot 모델 서버에서 운영 검증된 chat 서버 코드(단계 5 직전 `e4c5595`의 `services/model-server`)를 옮겨 범용으로 만든다.
+
+- 가져오는 것: 토큰 인증(Bearer), 127.0.0.1 고정, `mlx_lm` BatchGenerator 생성 엔진, 생각 숨김, 동시 생성 수·대기열 상한(가득 차면 503 busy), OpenAI 오류 형식, 가중치 지문(revision)
+- 걷어내는 것: 임베딩·리랭커, 여러 chat 모델 상주 교체(27B 하나 고정), `lawbot_common` 의존(필요한 작은 부분만 복사), `LAWBOT_` 설정 이름
+- 함께 넣는 것: 보안 리뷰 S05(chunked 본문 누적 상한)
+- 계약(lawbot이 쓰는 그대로): `POST /v1/chat/completions`(스트리밍·usage·`chat_template_kwargs`), `GET /v1/models` → `id`, `revision`, `max_concurrent`. 허용하지 않은 모델 id는 404. 토큰은 lawbot `LAWBOT_LLM_API_KEY`와 같은 값
+- 실행 폴더: uv 프로젝트, `mlx-lm`은 `uv.lock`으로 고정(0.32.2), `.env`(포트·토큰·가중치 경로·모델 id)와 `.env`를 읽어 실행하는 시작 스크립트. `HF_HUB_OFFLINE=1`
+- 구현과 테스트는 omp가 가짜 생성 엔진으로 한다(실제 27B는 운영 반영 때만 올린다). 끝나면 Astra(high)로 소프트웨어·보안 리뷰를 한다.
+- lawbot 설정: 생성 서버 주소는 기존 `LAWBOT_LLM_BASE_URL`을 필수로 바꿔 쓰고 토큰은 `LAWBOT_LLM_API_KEY`로 받는다(`LAWBOT_CHAT_SERVER`는 만들지 않는다). 대기열 상한 때문에 503 busy가 다시 생기므로 lawbot의 "모델 서버가 바쁩니다" 안내를 되살린다.
 - 상시 실행
-  - `~/Library/LaunchAgents/` 아래 plist. 레이블은 lawbot과 겹치지 않게 `local.qwen27b`로 한다.
+  - `~/Library/LaunchAgents/` 아래 plist. 레이블은 lawbot과 겹치지 않게 `local.qwen27b`로 한다. 비밀값·포트는 plist에 넣지 않는다.
   - 로그는 `~/Library/Logs/qwen27b/`에 둔다.
 - 운영 문서: `docs/operations.md`에 외부 의존 서비스로 주소 설정, 상태 확인, 재시작, 가중치 위치를 적는다. 포트와 토큰은 적지 않는다.
 
