@@ -537,7 +537,7 @@ uv run python -m lawbot_tools.migrate_csv_to_sqlite verify --db "$migration_db" 
 
 ```bash
 uv run pytest              # 기본 테스트 전체 (모델 불필요)
-uv run pytest -m models services/model-server   # 실제 모델 스모크 테스트 (models/ 필요, 기본 실행에서 제외)
+(set -a; . ./.env; set +a; uv run pytest -m models services/model-server)   # 실제 모델 스모크 (models/ 필요, 기본 실행 제외). 생성 시험은 셸 환경의 LAWBOT_LLM_*·LAWBOT_PRO_MODEL을 씀
 uv run pytest -m e2e_stub  # 브라우저 E2E (대역)만: Playwright → 실제 웹앱 → 실제 모델 서버 앱 + 가짜 모델 (약 30초)
 uv run ruff check          # 린트 (규칙은 pyproject.toml의 [tool.ruff])
 uv run ruff format         # 포맷 (작은따옴표, 120자)
@@ -553,11 +553,12 @@ uv run pyright             # 타입 검사 (웹앱 런타임·모델 서버·mon
 - 브라우저는 `services/chatbot/tests/conftest.py`의 모듈 범위 픽스처를 씁니다. `pytest-playwright`는 쓰지 않습니다(세션 내내 이벤트 루프를 열어 두어 뒤 테스트의 `asyncio.run()`을 깨뜨림).
 
 ```bash
-uv run pytest -m e2e_live services/chatbot/tests/test_e2e_live.py   # 레포 .env의 모델 서버로 질문 3개 (순서대로, 재시도 없음)
+(set -a; . ./.env; set +a; uv run pytest -m e2e_live services/chatbot/tests/test_e2e_live.py)   # 질문 3개 (순서대로, 재시도 없음)
 ```
 
-- 실행 전에 확인합니다. 06:20–06:50(조문 자동 갱신)이 아닌지, 서버가 ready인지, 필요한 모델이 있는지, **Pro chat 모델이 이미 올라 있는지**, 인증된 `/health?runtime=1`에서 실행 중인 서버의 동시 생성 상한을 확인할 수 있는지 봅니다. 확인 항목 하나라도 실패하면 질문을 보내기 전에 중단합니다(모델 교체로 운영 응답이 느려지지 않게).
+- 시험은 레포 `.env`를 직접 읽지 않고 셸 환경의 `LAWBOT_*`만 씁니다. 위처럼 서브셸에서 개발 `.env`를 내보내 실행합니다.
+- 실행 전에 확인합니다. 06:20–06:50(조문 자동 갱신)이 아닌지, 모델 서버가 ready인지, 임베딩·리랭크 모델이 모델 서버에 있는지, chat 모델이 생성 서버 `/v1/models`에 있고 `revision`·`mlx_lm_version`·`max_concurrent`를 읽을 수 있는지 봅니다. 확인 항목 하나라도 실패하면 질문을 보내기 전에 중단합니다(모델 교체로 운영 응답이 느려지지 않게).
 - 웹앱은 이 worktree 코드로 빈 포트에 띄우고, 요청 로그·피드백은 임시 폴더로 보냅니다(운영 기록에 섞이지 않음).
-- 실행 구성(웹앱·모델 서버 커밋, 모델 `revision`, 조문 `dataset_version`·sha256, system sha256, temperature·max_tokens, 검색 설정, 서버가 보고한 동시 생성 상한. 비밀값·모델 서버 주소·포트 제외)을 시작 전·후에 읽어 `results/e2e_live/<시각>.json`에 남깁니다. 둘이 다르면 결과는 무효입니다. 결과는 `docs/evals/`에 옮겨 적고 JSON은 지웁니다.
+- 실행 구성(웹앱·모델 서버 커밋, 모델 `revision`, 생성 서버 mlx-lm 버전, 조문 `dataset_version`·sha256, system sha256, temperature·max_tokens, 검색 설정, 서버가 보고한 동시 생성 상한. 비밀값·모델 서버 주소·포트 제외)을 시작 전·후에 읽어 `results/e2e_live/<시각>.json`에 남깁니다. 둘이 다르면 결과는 무효입니다. 결과는 `docs/evals/`에 옮겨 적고 JSON은 지웁니다.
 
 GitHub Actions(`.github/workflows/ci.yml`)가 `main` 푸시와 모든 pull request에서 macOS(Apple Silicon) 러너로 `uv sync --locked`, 문법 검사(`compileall`), 린트·포맷 검사(`ruff check`·`ruff format --check`), 타입 검사(`pyright`), Chromium 설치, `uv run pytest`를 실행합니다. 비밀정보는 쓰지 않으며, `-m models` 테스트와 평가 스크립트는 CI에서 실행하지 않습니다. 결과는 PR의 체크와 Actions 로그, `pytest-report` 아티팩트(e2e_stub가 실패하면 `results/e2e_stub/` 포함)에서 볼 수 있습니다.
