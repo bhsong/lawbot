@@ -184,11 +184,23 @@ def test_scores_in_unit_interval_and_instruction_used(make_reranker):
     assert len(make_reranker.loads) == 1  # 채점마다 다시 불러오지 않음
 
 
-def test_bad_scores_raise(make_reranker):
+def test_score_clears_mlx_cache(make_reranker):
     r = make_reranker()
-    r._no_yes_logits = lambda ids: mx.array([float('nan'), 0.0])
+    mx.clear_cache()
+    r.score('질문', ['a', 'b' * 128, 'c' * 1024])
+    mx.synchronize()
+    assert mx.get_cache_memory() == 0
+
+
+def test_bad_scores_raise_and_clear_mlx_cache(make_reranker):
+    r = make_reranker()
+    logits = r._no_yes_logits
+    r._no_yes_logits = lambda ids: logits(ids) * float('nan')
+    mx.clear_cache()
     with pytest.raises(RuntimeError, match='점수가 올바르지 않습니다'):
         r.score('질문', ['a'])
+    mx.synchronize()
+    assert mx.get_cache_memory() == 0
 
 
 def test_rerank_load_errors(tmp_path, make_reranker):
