@@ -250,6 +250,28 @@ def test_malformed_addresses_are_reported_as_configuration_errors():
         digest.Settings(PAGE, 'sender@example.test', {'first': 'user@@example.test'})
 
 
+def test_busy_enrichment_reports_failure_without_retry(tmp_path, caplog):
+    from source_hub.digest_model import Model
+
+    requests = []
+
+    def busy(request):
+        requests.append(request)
+        return httpx.Response(
+            503, json={'error': {'type': 'server_busy', 'code': 'queue_full', 'message': 'Synthetic queue full'}}
+        )
+
+    snapshot = published(
+        tmp_path / 'public.json', [NEWS | {'id': 'erp:one', 'kind': 'erp', 'excerpt': '새 안내서가 공개되었습니다.'}]
+    )
+    with httpx.Client(transport=httpx.MockTransport(busy)) as http:
+        model = Model(http, 'http://127.0.0.1:9/v1', 'generation-only-secret')
+        assert model.summarize(snapshot) == {}
+    assert len(requests) == 1
+    assert 'ERP enrichment failed: HTTP 503' in caplog.text
+    assert 'generation-only-secret' not in caplog.text
+
+
 @pytest.mark.parametrize('failure', [None, 'missing_model', 'missing_concurrency', 'unauthorized'])
 def test_digest_generation_readiness_and_enrichment(tmp_path, monkeypatch, failure):
     from source_hub import digest_model

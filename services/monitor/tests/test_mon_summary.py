@@ -34,7 +34,10 @@ class FakeLLM:
         self.headers.append(request.headers)
         if self.fail:
             self.fail -= 1
-            return httpx.Response(self.status, json={'error': {'message': 'busy'}})
+            return httpx.Response(
+                self.status,
+                json={'error': {'message': 'busy', 'type': 'server_busy', 'code': 'queue_full'}},
+            )
         name = next(line for line in body['messages'][-1]['content'].splitlines() if line.startswith('이름:'))
         content = f'**무엇이 바뀌었나**\n- 가짜 요약 ({name})\n\n**시행일**\n- 원문 확인 필요'
         return httpx.Response(
@@ -229,6 +232,34 @@ def test_failure_keeps_events_pending(tmp_path, legalize):
     mon.llm = FakeLLM().client()
     later = mon.summarize()
     assert later.events == 3 and later.calls == 1 and mon.state.pending_count() == 0
+
+
+@pytest.mark.parametrize('fail', [3, 1])
+def test_busy_summary_retries_before_failing_or_succeeding(tmp_path, legalize, monkeypatch, fail):
+    busy = FakeLLM(fail=fail, status=503)
+    waits = []
+    monkeypatch.setattr(
+        'law_monitor.llm.HttpClient',
+        lambda **kw: HttpClient(transport=httpx.MockTransport(busy.handler), sleep=waits.append, **kw),
+    )
+    client = ChatClient(LLMConfig('http://127.0.0.1:9/v1', TOKEN, 'synthetic'))
+    mon = monitor_with_events(tmp_path, legalize, client)
+    result = mon.summarize()
+    md = result.path.read_text(encoding='utf-8')
+    if fail == 3:
+        assert result.failed and 'HTTP 503' in result.failed
+        assert result.calls == 0
+        assert mon.state.pending_count() == 3
+        assert '요약 실패' in md and '대기 이벤트 3건' in md
+        assert len(busy.bodies) == 3
+        assert waits == [5, 10]
+    else:
+        assert not result.failed
+        assert result.events == 3 and result.calls == 1
+        assert mon.state.pending_count() == 0
+        assert '가짜 요약' in md and '요약 실패' not in md
+        assert len(busy.bodies) == 2
+        assert waits == [5]
 
 
 def test_collector_failing_is_warning_without_model(tmp_path):

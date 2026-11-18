@@ -366,11 +366,14 @@ def request_log_path(env=None):
 def error_type(e, stage):
     """오류 유형 (로그·화면 안내 공통). stage: 오류가 난 단계 'search'·'rerank'·'load'·'generation'
     model_server: embedding/rerank or generation connection failure, authentication failure (401), or unavailable (503).
+    model_server_busy: generation queue full (503 with error.type server_busy).
     model_load: 답변 모델 불러오기 실패 (서버의 모델 폴더 없음·형식 오류 = ModelLoadError, 웹앱의 system 파일 없음)
     config: 없는 모델 key, 서버에 없는 모델 id(404)
     model_server_timeout: 질문 처리 중 응답 조각 사이가 LAWBOT_MODEL_READ_TIMEOUT을 넘음"""
     if isinstance(e, ModelServerTimeout):
         return 'model_server_timeout'
+    if isinstance(e, ModelServerError) and e.status == 503 and e.kind == 'server_busy':
+        return 'model_server_busy'
     if isinstance(e, ConnectionError) or (isinstance(e, ModelServerError) and e.status in (401, 503)):
         return 'model_server'
     if isinstance(e, ModelLoadError):

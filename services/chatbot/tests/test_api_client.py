@@ -355,6 +355,43 @@ def test_external_llm_skips_server_chat_models(env, model_server):
     assert llm.client.kw['api_key'] == TEST_LLM_TOKEN and llm.client.kw['http_client']._trust_env is True
 
 
+@pytest.mark.parametrize('call', ['stream', 'router'])
+@pytest.mark.parametrize(
+    'status,kind,expected',
+    [
+        (503, 'server_busy', 'model_server_busy'),
+        (503, 'server_not_ready', 'model_server'),
+        (500, 'server_busy', 'generation'),
+    ],
+)
+def test_generation_http_busy_classification(call, status, kind, expected):
+    from lawbot.llm import LLM
+
+    requests = []
+
+    def handle(request):
+        requests.append(request)
+        return httpx.Response(
+            status, json={'error': {'type': kind, 'code': 'queue_full', 'message': 'Synthetic queue full'}}
+        )
+
+    with OpenAI(
+        base_url='http://127.0.0.1:9/v1',
+        api_key=TEST_LLM_TOKEN,
+        max_retries=0,
+        http_client=httpx.Client(transport=httpx.MockTransport(handle)),
+    ) as client:
+        llm = LLM('synthetic', client, 'system')
+        with pytest.raises(ac.ModelServerError) as error:
+            if call == 'stream':
+                list(llm.stream('question', []))
+            else:
+                llm.route_calculation('question')
+    assert service.error_type(error.value, 'generation') == expected
+    assert (error.value.status, error.value.kind, error.value.code) == (status, kind, 'queue_full')
+    assert len(requests) == 1
+
+
 # Separate generation HTTP fake and the real embedding/rerank app with fake models.
 
 

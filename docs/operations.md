@@ -412,7 +412,7 @@ uv run python -m lawbot_tools.log_summary                      # 상태별 건�
 uv run python -m lawbot_tools.log_summary --caller lawbot-app  # 평가 실행 제외
 ```
 
-오류 유형은 화면 안내와 같습니다. `model_server`(생성 서버 또는 임베딩·리랭크 서버 연결 실패·토큰 불일치·미준비)는 "모델 서버가 준비되지 않았습니다", `model_load`(모델 폴더·system 파일 오류)는 "모델을 불러오지 못했습니다"로 안내합니다. `model_server_timeout`(질문 처리 중 응답 조각 사이가 `LAWBOT_MODEL_READ_TIMEOUT`을 넘음)은 "모델 서버 응답이 없습니다"로 안내합니다. 생성 대기열 한도 오류 분류는 없습니다. 요청 로그의 `mode`는 `api`(로컬 단독 생성 서버) 또는 `external`(외부 생성 API)입니다. `search`·`rerank`·`generation` 오류는 각각 "조문을 검색하지 못했습니다"·"조문 순위를 매기지 못했습니다"·"답변을 생성하지 못했습니다"로 안내하고, 임베딩 순위로 되돌리지 않습니다.
+오류 유형은 화면 안내와 같습니다. `model_server`(생성 서버 또는 임베딩·리랭크 서버 연결 실패·토큰 불일치·미준비)는 "모델 서버가 준비되지 않았습니다", `model_load`(모델 폴더·system 파일 오류)는 "모델을 불러오지 못했습니다"로 안내합니다. `model_server_timeout`(질문 처리 중 응답 조각 사이가 `LAWBOT_MODEL_READ_TIMEOUT`을 넘음)은 "모델 서버 응답이 없습니다"로 안내합니다. `model_server_busy`(생성 서버 대기열 가득 참: HTTP `503`, `error.type=server_busy`)는 "모델 서버가 바쁩니다 (대기 중인 질문이 많음). 잠시 뒤 다시 질문하세요."로 안내합니다. 계산 라우터에서도 busy가 발생하면 추가 생성을 하지 않고 같은 오류로 안내하며, 생성 요청은 자동 재시도하지 않습니다. monitor 아침 요약은 실패와 대기 이벤트를 기록하고, ERP 메일 보강은 HTTP 실패를 경고 로그에 남긴 뒤 기존 원문 표시를 유지합니다. 요청 로그의 `mode`는 `api`(로컬 단독 생성 서버) 또는 `external`(외부 생성 API)입니다. `search`·`rerank`·`generation` 오류는 각각 "조문을 검색하지 못했습니다"·"조문 순위를 매기지 못했습니다"·"답변을 생성하지 못했습니다"로 안내하고, 임베딩 순위로 되돌리지 않습니다.
 
 생성 스트림의 종료 `finish_reason`이 없으면 `generation` 오류로 처리하며, 부분 답변을 정상 턴이나 피드백 대상으로 저장하지 않습니다.
 

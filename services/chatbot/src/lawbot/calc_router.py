@@ -239,7 +239,9 @@ def route_calculation(
         error = exc.reason
     except ModelServerTimeout:
         error = 'timeout'
-    except ModelServerError:
+    except ModelServerError as exc:
+        if exc.status == 503 and exc.kind == 'server_busy':
+            raise
         error = 'model_error'
     except ModelLoadError, ConnectionError:
         error = 'model_error'

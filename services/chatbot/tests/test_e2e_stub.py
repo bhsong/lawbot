@@ -506,6 +506,19 @@ def test_phone_sources_sheet(stack, browser, request):
 
 
 # ---- 오류 안내 ----
+@pytest.mark.parametrize('question', [QUESTION, '2026년 총급여 5천만 원, 의료비 300만 원이면 세액공제액은 얼마인가요?'])
+def test_error_generation_busy(stack, ui, question):
+    stack.ensure('busy')
+    before = len(e2e.request_log(stack.request_log))
+    e2e.ask(ui, question)
+    alert(ui, '모델 서버가 바쁩니다 (대기 중인 질문이 많음). 잠시 뒤 다시 질문하세요.')
+    (row,) = new_log_rows(stack, before)
+    assert (row['status'], row['error_type']) == ('error', 'model_server_busy')
+    assert stack.chat.output().splitlines().count('e2e chat busy') == 1
+    assert FAKE_ANSWER not in e2e.answer(ui).inner_text()
+    expect(ui.get_by_role('button', name='좋아요', exact=True)).to_have_count(0)
+
+
 def test_error_timeout(stack, ui):
     stack.ensure('slow')
     before = len(e2e.request_log(stack.request_log))
