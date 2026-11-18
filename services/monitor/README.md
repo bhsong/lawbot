@@ -124,22 +124,6 @@ uv run --project services/law-calendar --locked python -m law_calendar.manage pr
 - `agency`는 파일 머리말 `소관부처명`과 정확히 같아야 합니다 (국세청 고시는 경로가 `재정경제부/국세청/...`이지만 소관부처명은 `국세청`).
 - `forms`: 별표·서식을 비교할 법령(머리말 `제목`, 띄어쓰기 있음)과 구분(`별표`·`서식`). 추적 행정규칙의 별지·별표는 설정 없이 모두 비교합니다.
 
-## launchd 등록 (매일 06:30)
-
-템플릿은 `law-monitor daily`(수집 → 캘린더 import → 기존 챗봇 점검 → 요약)를 실행합니다. 캘린더는 독립 Python 환경의 하위 프로세스로 실행하며 monitor가 calendar 패키지를 import하지 않습니다. 기본 설정에서 캘린더 점검이 실패해도 뒤 점검과 요약은 이어집니다.
-
-등록 전에 캘린더 환경을 `uv sync --project services/law-calendar --locked`로 준비하고, [캘린더 사용법](../law-calendar/README.md)에 따라 별도 DB를 초기화/마이그레이션합니다. `deploy/com.lawbot.monitor.plist.example`의 `__UV__`·`__PROD_DIR__`·`__LOG_DIR__`·`__CALENDAR_DB__`를 채워 `~/Library/LaunchAgents/com.lawbot.monitor.plist`로 복사합니다. `__CALENDAR_DB__`는 캘린더 DB 절대 경로이고, `__UV__`는 `LAW_MONITOR_UV` 환경변수에도 사용합니다. 스케줄은 Mac 시스템 시간대가 KST일 때 매일 06:30입니다.
-
-직접 점검하는 경우에도 프로세스 환경에 `LAW_CALENDAR_DB`를 지정합니다. `{uv}`는 `LAW_MONITOR_UV` 또는 PATH에서 찾은 uv를 사용하고 `{root}`는 저장소 루트입니다. 스케줄은 사전 설치된 캘린더 환경을 `--no-sync`로 실행합니다. 아래 launchctl 명령은 실제 운영 등록/실행/해제 작업입니다.
-
-```bash
-launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.lawbot.monitor.plist
-launchctl kickstart gui/$(id -u)/com.lawbot.monitor     # 바로 한 번 실행해 보기
-launchctl bootout gui/$(id -u)/com.lawbot.monitor       # 해제
-```
-
-등록 전에 같은 worktree에서 `uv run law-monitor bootstrap`을 한 번 실행해야 합니다 (안 하면 collect가 종료 코드 2로 거부).
-
 ## 테스트·린트
 
 ```bash
