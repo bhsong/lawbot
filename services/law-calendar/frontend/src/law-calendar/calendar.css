@@ -27,7 +27,7 @@
 .lc-results { margin-top: 32px; }
 .lc-selected h2 { margin: 0; font-size: 20px; }
 .lc-selected p { color: var(--muted); font-size: 13px; }
-.lc-panels { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 24px; margin-top: 16px; }
+.lc-panels { margin-top: 16px; }
 .lc-tax-list { margin-top: 16px; }
 .lc-tax-list li { padding: 14px 18px; }
 .lc-tax-list li p { margin: 4px 0; font-size: 13px; }
@@ -41,5 +41,4 @@
   .lc-disclaimer { padding: 14px; }
   .lc-selected { align-items: flex-start; flex-direction: column; gap: 4px; }
   .lc-selected p { margin: 0; }
-  .lc-panels { grid-template-columns: minmax(0, 1fr); gap: 16px; }
 }

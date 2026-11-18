@@ -65,7 +65,6 @@ def change_data(row) -> dict:
     item = {
         'id': row['id'],
         'eventId': row['event_id'],
-        'kind': row['kind'],
         'date': row['event_on'],
         'lawName': row['law_name'],
         'article': row['article'],
@@ -74,10 +73,8 @@ def change_data(row) -> dict:
         'before': row['before_text'],
         'after': row['after_text'],
         'comparable': bool(row['comparable']),
-        'publishedOn': row['published_on'],
         'promulgatedOn': row['promulgated_on'],
         'effectiveOn': row['effective_on'],
-        'commentDeadline': row['comment_deadline'],
         'sourceUrl': row['source_url'],
         'collectedAt': row['collected_at'],
         'verifiedAt': row['verified_at'],
@@ -126,9 +123,7 @@ def create_app(
         start, end = month_bounds(month)
         with read_database(database) as conn:
             rows = conn.execute(
-                """SELECT event_on,
-                COUNT(DISTINCT CASE WHEN kind='notice' THEN event_id END) AS notice_count,
-                SUM(CASE WHEN kind='effective' THEN 1 ELSE 0 END) AS effective_count
+                """SELECT event_on, COUNT(*) AS effective_count
                 FROM public_calendar_events WHERE event_on BETWEEN ? AND ? GROUP BY event_on ORDER BY event_on""",
                 (start, end),
             ).fetchall()
@@ -139,7 +134,7 @@ def create_app(
     def events(
         date: str | None = None,
         month: str | None = None,
-        type: Literal['all', 'notice', 'effective'] = 'all',
+        type: Literal['effective'] = 'effective',
         page: int = Query(1, ge=1, le=100000),
         page_size: int = Query(100, ge=1, le=100),
     ):
@@ -148,13 +143,10 @@ def create_app(
         start, end = month_bounds(month) if month is not None else (civil_date(date or ''),) * 2
         where = 'event_on BETWEEN ? AND ?'
         params: list = [start, end]
-        if type != 'all':
-            where += ' AND kind=?'
-            params.append(type)
         with read_database(database) as conn:
             total = conn.execute(f'SELECT COUNT(*) FROM public_calendar_events WHERE {where}', params).fetchone()[0]
             rows = conn.execute(
-                f'SELECT * FROM public_calendar_events WHERE {where} ORDER BY event_on,kind,event_id,id LIMIT ? OFFSET ?',
+                f'SELECT * FROM public_calendar_events WHERE {where} ORDER BY event_on,event_id,id LIMIT ? OFFSET ?',
                 [*params, page_size, (page - 1) * page_size],
             ).fetchall()
         return {'items': [change_data(row) for row in rows], 'total': total, 'page': page, 'page_size': page_size}

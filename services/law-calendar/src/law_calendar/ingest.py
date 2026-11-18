@@ -220,10 +220,10 @@ def import_event(database: Path, home: Path, path: Path) -> tuple[bool, str]:
                 (audit.lastrowid, prior['id'], json.dumps({'next_snapshot': snapshot_id})),
             )
         conn.execute(
-            """INSERT INTO change_events(id,law_id,kind,status,collected_at,source_url)
-            VALUES (?,?,'effective','확인 필요',?,?) ON CONFLICT(id) DO UPDATE SET
-            status='확인 필요',review_state='pending',verified_at=NULL,published_on=NULL,promulgated_on=NULL,
-            comment_deadline=NULL,collected_at=excluded.collected_at,source_url=excluded.source_url""",
+            """INSERT INTO change_events(id,law_id,status,collected_at,source_url)
+            VALUES (?,?,'확인 필요',?,?) ON CONFLICT(id) DO UPDATE SET
+            status='확인 필요',review_state='pending',verified_at=NULL,promulgated_on=NULL,
+            collected_at=excluded.collected_at,source_url=excluded.source_url""",
             (event_id, law_id, event.detected_at, event.context.source_url),
         )
         conn.execute(

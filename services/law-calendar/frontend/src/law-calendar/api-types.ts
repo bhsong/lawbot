@@ -2,7 +2,6 @@
 
 export interface CalendarDay {
   event_on: string
-  notice_count: number
   effective_count: number
 }
 
@@ -134,7 +133,6 @@ export interface NewsItem {
 export interface PublicChange {
   id: string
   eventId: string
-  kind: "notice" | "effective"
   date: string
   lawName: string
   article: string
@@ -143,10 +141,8 @@ export interface PublicChange {
   before: string | null
   after: string | null
   comparable: boolean
-  publishedOn: string | null
   promulgatedOn: string | null
   effectiveOn: string | null
-  commentDeadline: string | null
   sourceUrl: string
   collectedAt: string
   verifiedAt: string
@@ -156,7 +152,6 @@ export interface PublicChange {
 export interface PublicDetail {
   id: string
   eventId: string
-  kind: "notice" | "effective"
   date: string
   lawName: string
   article: string
@@ -165,10 +160,8 @@ export interface PublicDetail {
   before: string | null
   after: string | null
   comparable: boolean
-  publishedOn: string | null
   promulgatedOn: string | null
   effectiveOn: string | null
-  commentDeadline: string | null
   sourceUrl: string
   collectedAt: string
   verifiedAt: string

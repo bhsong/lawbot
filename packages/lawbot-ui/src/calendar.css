@@ -1,6 +1,4 @@
 .lc-page {
-  --lc-blue: #1759ab;
-  --lc-blue-bg: #eef5ff;
   --lc-orange: #a34806;
   --lc-orange-bg: #fff3e8;
 }
@@ -22,7 +20,6 @@
 }
 .lc-month button:hover, .lc-more:hover { background: var(--soft); }
 .lc-legend { display: flex; flex-wrap: wrap; gap: 12px; font-size: 12px; margin: 12px 0 16px; }
-.lc-page .lc-notice { color: var(--lc-blue); }
 .lc-page .lc-effective { color: var(--lc-orange); }
 .lc-page .lc-tax { color: #a11929; }
 .lc-month table { width: 100%; table-layout: fixed; border-collapse: collapse; }
@@ -34,7 +31,6 @@
 .lc-day-number { font-size: 14px; font-variant-numeric: tabular-nums; }
 .lc-today { font-size: 10px; margin-left: 5px; }
 .lc-day-counts { display: flex; flex-wrap: wrap; gap: 3px 6px; margin-top: 10px; font-size: 11px; font-weight: 600; }
-.lc-day-counts .lc-notice { background: var(--lc-blue-bg); }
 .lc-day-counts .lc-effective { background: var(--lc-orange-bg); }
 .lc-day-counts .lc-tax { background: #ffeaed; }
 .lc-day-counts > span { padding: 1px 5px; border-radius: 4px; }
@@ -76,7 +72,7 @@
 .lc-metadata dd { margin: 3px 0 0; overflow-wrap: anywhere; }
 
 @media (prefers-color-scheme: dark) {
-  .lc-page { --lc-blue: #a9ccff; --lc-blue-bg: #1d3552; --lc-orange: #ffd1a9; --lc-orange-bg: #493122; }
+  .lc-page { --lc-orange: #ffd1a9; --lc-orange-bg: #493122; }
   .lc-comparison del { background: #542a2a; color: #ffcccc; }
   .lc-comparison ins { background: #1d4635; color: #b7f0d5; }
 }

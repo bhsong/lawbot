@@ -34,9 +34,9 @@ const feed: ErpUpdates = {
   ],
 }
 const change: CalendarChange = {
-  id: 'related', kind: 'effective', date: '2026-11-20', lawName: '[예시] 가상법 시행령', article: '제189조',
-  summary: '관련 시행 요약', status: '시행', before: null, after: null, comparable: false, publishedOn: null,
-  promulgatedOn: null, effectiveOn: '2026-11-20', commentDeadline: null, sourceUrl: null, collectedAt: null, verifiedAt: null,
+  id: 'related', date: '2026-11-20', lawName: '[예시] 가상법 시행령', article: '제189조',
+  summary: '관련 시행 요약', status: '시행', before: null, after: null, comparable: false,
+  promulgatedOn: null, effectiveOn: '2026-11-20', sourceUrl: null, collectedAt: null, verifiedAt: null,
 }
 const lawLoader: CalendarLoader = async (month) => ({
   changes: month === '2026-11' ? [change, { ...change, id: 'other', lawName: '[예시] 무관법', summary: '무관 요약' }] : [],
@@ -79,7 +79,7 @@ test('related law schedule keeps only laws named by the feed', async () => {
   expect(await within(related).findByText('관련 시행 요약')).toBeInTheDocument()
   expect(within(related).queryByText('무관 요약')).not.toBeInTheDocument()
   await userEvent.click(within(related).getByRole('button', { name: '다음 달' }))
-  expect(await within(related).findByText('이 달에 관련 법령의 입법예고·시행 조문이 없습니다.')).toBeInTheDocument()
+  expect(await within(related).findByText('이 달에 관련 법령의 시행 조문이 없습니다.')).toBeInTheDocument()
 })
 
 test('history button lists what was collected and when', async () => {

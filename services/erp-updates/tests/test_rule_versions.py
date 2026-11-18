@@ -82,7 +82,6 @@ def test_exact_review_keeps_v1_and_separates_future_and_partial(erp, tmp_path):
         assert len(rules) == 6 and rules['TAX-01']['scopes'] == []
         rule = rules['INS-01']
         assert rule['ruleId'] == 'INS-01'
-        assert 'proposalLinks' not in rule
         scopes = {scope['scopeId']: scope for scope in rule['scopes']}
         assert scopes['standard']['currentVersion']['ruleVersionId'] == 'old'
         assert [v['ruleVersionId'] for v in scopes['standard']['scheduledChanges']] == ['new', 'later']

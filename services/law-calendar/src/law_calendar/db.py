@@ -182,10 +182,27 @@ DROP TABLE assembly_notice_pages;
 ALTER TABLE assembly_notice_content DROP COLUMN pdf_limit_reason;
 ALTER TABLE assembly_notice_content DROP COLUMN pdf_pending;
 """
-PUBLIC_CALENDAR_EVENTS = """
+LAW_SCHEMA_V9 = """
+DROP VIEW public_changes;
+DROP INDEX event_dates;
+ALTER TABLE change_events DROP COLUMN kind;
+ALTER TABLE change_events DROP COLUMN published_on;
+ALTER TABLE change_events DROP COLUMN comment_deadline;
+CREATE VIEW public_changes AS
+ SELECT c.*,e.status,e.promulgated_on,e.source_url,e.collected_at,
+ e.verified_at AS event_verified_at,l.name AS law_name,c.effective_on AS event_on
+ FROM article_changes c JOIN change_events e ON e.id=c.event_id JOIN laws l ON l.id=e.law_id
+ WHERE e.review_state='approved' AND c.review_state='approved'
+ AND e.verified_at IS NOT NULL AND c.verified_at IS NOT NULL
+ AND julianday(e.verified_at) IS NOT NULL AND julianday(c.verified_at) IS NOT NULL
+ AND julianday(e.collected_at) IS NOT NULL
+ AND date(c.effective_on)=c.effective_on
+ AND (e.source_url GLOB 'https://www.law.go.kr/*'
+ OR e.source_url GLOB 'https://law.go.kr/*')
+ AND c.effective_on IS NOT NULL;
 CREATE VIEW public_calendar_events AS
- SELECT id,event_id,kind,event_on,law_name,article,summary,status,before_text,after_text,comparable,
- published_on,promulgated_on,effective_on,comment_deadline,source_url,collected_at,verified_at
+ SELECT id,event_id,event_on,law_name,article,summary,status,before_text,after_text,comparable,
+ promulgated_on,effective_on,source_url,collected_at,verified_at
  FROM public_changes;
 """
 SCHEMA_V9 = (
@@ -223,7 +240,7 @@ UPDATE import_runs AS r
    WHERE json_extract(r.errors_json,e.fullkey || '.source') IN ('assembly_bill','assembly_notice')
  );
 """
-    + PUBLIC_CALENDAR_EVENTS
+    + LAW_SCHEMA_V9
 )
 CURRENT_VERSION = 9
 SUPPORTED_VERSIONS = (CURRENT_VERSION,)
@@ -263,7 +280,7 @@ def migrate(path: Path) -> None:
         # Wipe removed source content from the active database's freed pages.
         conn.execute('PRAGMA secure_delete=ON')
         if version == 0:
-            script = SCHEMA + SCHEMA_V2 + SCHEMA_V3 + PUBLIC_CALENDAR_EVENTS
+            script = SCHEMA + SCHEMA_V2 + SCHEMA_V3 + LAW_SCHEMA_V9
         else:
             script = ''.join(
                 schema

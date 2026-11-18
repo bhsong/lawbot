@@ -47,8 +47,7 @@ function CalendarDetail({ changeId, onClose, onUnauthorized }: {
   const { data, error, retry } = useAdminRead(load, onUnauthorized)
   if (error != null) return readError(error, retry, onClose)
   if (!data) return <p role="status">법령 변경 상세를 불러오는 중입니다.</p>
-  const header = data.kind === 'notice' ? '입법예고 · 게시일 기준' : '시행 조문 · 시행일 기준'
-  return <Modal header={header} closeLabel="변경 상세 닫기" labelledBy={`${id}-title`} describedBy={`${id}-description`} onClose={onClose}>
+  return <Modal header="시행 조문 · 시행일 기준" closeLabel="변경 상세 닫기" labelledBy={`${id}-title`} describedBy={`${id}-description`} onClose={onClose}>
     <ChangeView change={data} demo={false} titleId={`${id}-title`} descriptionId={`${id}-description`} />
   </Modal>
 }
@@ -180,13 +179,7 @@ export function CalendarPanel({ onUnauthorized }: { onUnauthorized: () => void }
       <MonthCalendar selected={date} changes={changes} totals={data?.counts} onSelect={select} />
       {data && <>
         <h3>{dateLabel(date)}</h3>
-        <div className="admin-grid">
-          {(['notice', 'effective'] as const).map((kind) => {
-            const events = selected.filter((change) => change.kind === kind)
-            return <EventList key={`${date}-${kind}`} kind={kind} changes={events}
-              onOpen={(change) => setChangeId(change.id)} />
-          })}
-        </div>
+        <EventList key={date} changes={selected} onOpen={(change) => setChangeId(change.id)} />
       </>}
       {changeId && <CalendarDetail key={changeId} changeId={changeId} onClose={() => setChangeId(null)} onUnauthorized={onUnauthorized} />}
     </>}

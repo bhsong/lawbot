@@ -82,7 +82,7 @@ def test_tax_schedule_is_visible_and_keyboard_accessible(dataset, tmp_path, cale
     page.clock.install(time=datetime.datetime(2026, 11, 29, tzinfo=datetime.UTC))
     with support.serve(tmp_path, development=False, database=dataset, daily_feed=feed) as (url, _):
         page.goto(url)
-        day = page.get_by_role('button', name='2026년 11월 30일, 입법예고 0건, 시행 0건, 세무일정 1건')
+        day = page.get_by_role('button', name='2026년 11월 30일, 시행 0건, 세무일정 1건')
         expect(day.get_by_text('세무 1')).to_be_visible()
         page.get_by_role('button', pressed=True).focus()
         page.keyboard.press('ArrowRight')
@@ -139,16 +139,10 @@ def test_date_selection_and_dialog_focus(demo, width):
     current = demo.get_by_role('button', pressed=True)
     current.focus()
     demo.keyboard.press('ArrowRight')
-    expect(demo.get_by_text('이 날짜에 표시할 입법예고가 없습니다.')).to_be_visible()
     expect(demo.get_by_text('이 날짜에 시행되는 조문이 없습니다.')).to_be_visible()
     demo.get_by_role('button', name='오늘', exact=True).click()
-    notice = demo.get_by_role('region', name='입법예고 10건')
     effective = demo.get_by_role('region', name='시행 조문 4건')
-    if width == 390:
-        assert effective.bounding_box()['y'] > notice.bounding_box()['y']
-    else:
-        assert effective.bounding_box()['x'] > notice.bounding_box()['x']
-    opener = notice.get_by_role('button').first
+    opener = effective.get_by_role('button').first
     opener.click()
     dialog = demo.get_by_role('dialog')
     expect(dialog).to_be_visible()
@@ -167,9 +161,6 @@ def test_date_selection_and_dialog_focus(demo, width):
     demo.keyboard.press('Escape')
     expect(dialog).not_to_be_visible()
     expect(opener).to_be_focused()
-    expect(demo.get_by_role('button', name='입법예고 더 보기', exact=False)).to_be_visible()
-    demo.get_by_role('button', name='입법예고 더 보기', exact=False).click()
-    assert notice.get_by_role('button').count() == 10
     effective.get_by_role('button', name='비교 원문 확인', exact=False).click()
     expect(demo.get_by_role('dialog').get_by_text('비교 불가', exact=False)).to_be_visible()
     demo.get_by_role('button', name='상세 닫기').click()
@@ -184,7 +175,7 @@ def test_preview_loading_error_and_delay_states(demo):
     scenario.select_option('error')
     expect(demo.get_by_role('alert')).to_contain_text('불러오지 못했습니다')
     demo.get_by_role('button', name='다시 시도').click()
-    expect(demo.get_by_role('region', name='입법예고 10건')).to_be_visible()
+    expect(demo.get_by_role('region', name='시행 조문 4건')).to_be_visible()
     scenario.select_option('delayed')
     expect(demo.get_by_role('status').filter(has_text='갱신이 지연')).to_be_visible()
 
@@ -195,7 +186,7 @@ def test_database_to_public_calendar_and_comparison(dataset, tmp_path, calendar_
     with support.serve(tmp_path, development=False, database=dataset) as (url, _):
         page.goto(url)
         expect(page.get_by_text('예시 요약').first).to_be_visible()
-        expect(page.get_by_role('button', pressed=True)).to_contain_text('예고 1')
+        expect(page.get_by_role('button', pressed=True)).to_contain_text('시행 1')
         page.get_by_role('region', name='시행 조문 1건').get_by_role('button').click()
         detail = page.get_by_role('dialog')
         expect(detail.get_by_text('원문 이전', exact=True)).to_be_visible()

@@ -46,6 +46,8 @@ uv run --no-project --python 3.14 --with-editable ./services/law-calendar --with
 
 독립 API의 Python 버전·의존성은 이 폴더의 pyproject.toml·uv.lock을 따른다. DB 경로는 직접 지정한다.
 
+캘린더는 조문별 시행일 기준의 법령 변경만 제공한다. 월별 건수는 시행 조문 수이며, 목록·상세에는 공포일과 시행일을 표시한다. v9 DB는 이벤트 종류 없이 시행 조문을 저장하고, 검토 입력도 공포일·조문별 시행일과 원문 근거를 받는다.
+
 ```fish
 uv sync --project services/law-calendar --locked
 uv run --project services/law-calendar python -m law_calendar.db services/law-calendar/data/calendar.db
@@ -120,7 +122,7 @@ uv run --project services/law-calendar python -m law_calendar.manage --database 
 
 `decision`은 `approve`, `reject`, `withdraw`다. 반려·철회에는 현재 `event_id`, `snapshot_id`, `note`, `decision`만 있는 JSON을 사용할 수 있다. 수정한 원천을 재입력하면 새 snapshot으로 다시 판정하며 이전 snapshot의 검토 파일은 거절된다. 명시적으로 반려·철회한 이벤트는 재입력으로 자동 공개하지 않는다. 검토 이력과 원문 버전은 DB에 보존한다.
 
-동일 파일 재입력은 중복을 만들지 않는다. import 실패가 하나라도 있으면 종료 코드 1을 반환하고 `runs`에 원인을 기록한다. 수정 후 같은 명령을 다시 실행할 수 있다. 수집 시각은 가져온 원천의 감지 시각이며 import 실행 시각으로 갱신하지 않는다. 입법예고·행정규칙·서식 이벤트는 이 어댑터가 지원하지 않는다.
+동일 파일 재입력은 중복을 만들지 않는다. import 실패가 하나라도 있으면 종료 코드 1을 반환하고 `runs`에 원인을 기록한다. 수정 후 같은 명령을 다시 실행할 수 있다. 수집 시각은 가져온 원천의 감지 시각이며 import 실행 시각으로 갱신하지 않는다. 행정규칙·서식 이벤트는 이 어댑터가 지원하지 않는다.
 
 ## 06:30 모니터링과 정기 import
 

@@ -18,14 +18,14 @@ test('literal markup in source text cannot inject HTML', () => {
 })
 
 const storedChange: CalendarChange = {
-  id: 'effective', kind: 'effective', date: '2026-12-08', lawName: '[예시] 가상법', article: '제2조',
+  id: 'effective', date: '2026-12-08', lawName: '[예시] 가상법', article: '제2조',
   summary: '제2조 삭제', status: '시행일 자동 확인 · 비교 미확인', before: '##### 제2조\n\n종전 원문\n',
-  after: '##### 제2조\n\n삭제 <2026.4.7>\n', comparable: false, publishedOn: null, promulgatedOn: '2026-04-07',
-  effectiveOn: '2026-12-08', commentDeadline: null, sourceUrl: null, collectedAt: null, verifiedAt: null,
+  after: '##### 제2조\n\n삭제 <2026.4.7>\n', comparable: false, promulgatedOn: '2026-04-07',
+  effectiveOn: '2026-12-08', sourceUrl: null, collectedAt: null, verifiedAt: null,
 }
 
 function renderChange(change: CalendarChange) {
-  return render(<ChangeView change={change} demo={false} titleId="lc-detail-title" descriptionId="lc-detail-notice" />)
+  return render(<ChangeView change={change} demo={false} titleId="lc-detail-title" descriptionId="lc-detail-description" />)
 }
 
 test('shows both stored originals with highlighting and separate verification status', () => {

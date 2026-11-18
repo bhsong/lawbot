@@ -56,7 +56,6 @@ def test_sync_imports_registered_law_events_even_if_model_summary_already_proces
     with TestClient(create_app(calendar_db)) as client:
         assert client.get('/api/law-holds').json()['total'] == 3
         assert client.get('/api/law-calendar/status').json()['collectedAt'] == FINISHED
-        assert client.get('/api/law-events?month=2026-11&type=notice').json()['total'] == 0
 
 
 def test_managed_run_skips_intentionally_disabled_law_import(scheduled):
@@ -292,30 +291,6 @@ def test_cli_failure_is_a_failed_check_not_a_warning(scheduled):
     assert result.returncode == 2 and 'calendar sync failed' in result.stderr
 
 
-def test_v9_sync_ignores_retired_collectors_and_has_only_law_counters(scheduled):
-    (database, home, _, _), state = scheduled
-    with sqlite3.connect(state) as conn:
-        conn.execute(
-            "UPDATE runs SET summary_json=? WHERE mode='normal'",
-            (
-                json.dumps(
-                    {
-                        'collectors': {
-                            'legalize_law': {'status': 'ok'},
-                            'assembly_bill': {'status': 'failed'},
-                            'assembly_notice': {'status': 'failed'},
-                        }
-                    }
-                ),
-            ),
-        )
-        conn.execute(
-            'INSERT INTO events VALUES (?,?,?,?,?,?)',
-            ('retired', 'assembly_notice', 'assembly_notice_observed', 'missing.json', NOW, None),
-        )
-    assert synchronize(database, home) == {'imported': 1, 'unchanged': 0, 'failed': 0, 'skipped': 0}
-
-
 @pytest.mark.parametrize('failed,expected', [(0, 0), (1, 2)])
 def test_v9_sync_exit_code_depends_only_on_law_failures(scheduled, monkeypatch, capsys, failed, expected):
     from law_calendar import sync
@@ -330,7 +305,6 @@ def test_v9_sync_exit_code_depends_only_on_law_failures(scheduled, monkeypatch, 
             'unchanged': 0,
             'failed': failed,
             'skipped': 0,
-            'notice_pending': 1,
         },
     )
     assert sync.main() == expected

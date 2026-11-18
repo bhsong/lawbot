@@ -41,7 +41,7 @@ def law_news(database: Path, names: list[str], as_of: date | None = None) -> tup
                   FROM public_changes WHERE event_id=e.id
                     HAVING COUNT(*)=(SELECT COUNT(*) FROM article_changes WHERE event_id=e.id)) AS effective_on
                FROM change_events e JOIN laws l ON l.id=e.law_id
-               WHERE e.kind='effective' AND e.promulgated_on <= ?
+               WHERE e.promulgated_on <= ?
                  AND e.promulgated_on = date(e.promulgated_on)
                  AND l.name IN (SELECT value FROM json_each(?))
                  AND EXISTS (SELECT 1 FROM public_changes WHERE event_id=e.id)

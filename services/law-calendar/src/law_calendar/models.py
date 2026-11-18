@@ -26,7 +26,6 @@ class ErpNews(BaseModel):
 class PublicChange(BaseModel):
     id: str
     eventId: str
-    kind: Literal['notice', 'effective']
     date: str
     lawName: str
     article: str
@@ -35,10 +34,8 @@ class PublicChange(BaseModel):
     before: str | None
     after: str | None
     comparable: bool
-    publishedOn: str | None
     promulgatedOn: str | None
     effectiveOn: str | None
-    commentDeadline: str | None
     sourceUrl: str
     collectedAt: str
     verifiedAt: str
@@ -58,7 +55,6 @@ class ChangePage(BaseModel):
 
 class CalendarDay(BaseModel):
     event_on: str
-    notice_count: int
     effective_count: int
 
 

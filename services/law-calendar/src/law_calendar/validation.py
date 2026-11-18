@@ -3,7 +3,7 @@
 from datetime import date, datetime
 from urllib.parse import urlsplit
 
-HOSTS = {'www.law.go.kr', 'law.go.kr', 'opinion.lawmaking.go.kr'}
+HOSTS = {'www.law.go.kr', 'law.go.kr'}
 
 
 class StaleSnapshotError(ValueError):

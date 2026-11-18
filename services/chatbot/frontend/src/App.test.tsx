@@ -402,7 +402,7 @@ test('calendar events, law details and holds use the admin proxy', async () => {
   stubDialog()
   const date = new Intl.DateTimeFormat('sv-SE', { timeZone: 'Asia/Seoul' }).format(new Date())
   const change = {
-    id: 'cal-id', kind: 'effective', date, lawName: '합성 법령', article: '제1조', summary: '시행 요약',
+    id: 'cal-id', date, lawName: '합성 법령', article: '제1조', summary: '시행 요약',
     status: '공개', comparable: true, before: '이전 원문', after: '이후 원문',
   }
   const s = server({

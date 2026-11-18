@@ -24,7 +24,7 @@ uv sync
 
 운영 반영 승인 후 등록된 캘린더 DB 경로와 쓰기 작업을 확인합니다. 같은 DB를 사용하는 sync와 검토 쓰기가 없는 배포 창을 잡고, 먼저 SQLite 사본에서 `uv run --project services/law-calendar --locked python -m law_calendar.db "$CALENDAR_DB"`를 실행합니다.
 
-v8에서 올리면 `.pre-v9.backup`이 생성됩니다. 마이그레이션은 제거된 수집원의 테이블과 공개 뷰를 한 트랜잭션에서 정리합니다. 새 DB는 v9로 초기화합니다. `PRAGMA user_version`, `PRAGMA quick_check`, `PRAGMA foreign_key_check`와 공개 법령 변경 수, 보류·감사 기록의 보존을 확인합니다. 양쪽 화면을 빌드한 뒤 공개 캘린더와 관리자 보류 검토를 확인합니다.
+v8에서 올리면 `.pre-v9.backup`이 생성됩니다. 마이그레이션은 제거된 수집원의 테이블과 공개 뷰를 정리하고, 법령 변경 이벤트의 종류·게시일·의견 마감 컬럼과 전용 인덱스를 삭제한 뒤 시행 조문 기준의 공개 뷰를 다시 만듭니다. 모두 한 트랜잭션에서 처리하며 새 DB도 같은 v9 스키마로 초기화합니다. `PRAGMA user_version`, `PRAGMA quick_check`, `PRAGMA foreign_key_check`와 공개 법령 변경 수, 보류·감사 기록의 보존을 확인합니다. 양쪽 화면을 빌드한 뒤 공개 캘린더와 관리자 보류 검토를 확인합니다.
 
 백업에는 제거 전 자료가 포함되므로 접근 권한과 보존 기간을 정합니다. 복구가 필요하면 새 쓰기를 멈추고 현재 DB와 WAL을 보존한 뒤, 백업 사본의 정합성과 버전을 확인해 승인된 이전 코드와 DB 경로로 되돌립니다.
 
