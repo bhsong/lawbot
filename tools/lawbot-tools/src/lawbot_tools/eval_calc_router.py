@@ -27,6 +27,7 @@ from lawbot.llm import LLM, TEMPERATURE
 from lawbot.paths import ROOT
 from lawbot_common.api import HEALTH_PATH
 from lawbot_common.llm_endpoint import endpoint as llm_endpoint
+from lawbot_common.llm_endpoint import generation_model
 
 VAL = ROOT / 'services/chatbot/tests/fixtures/calc_router_val.json'
 FIXTURES = VAL.parent
@@ -142,12 +143,13 @@ def _configuration(cfg, client):
     model_ids = (cfg.profile.emb_model,) + ((cfg.reranker.model,) if cfg.reranker else ())
     if missing or any(not advertised[model]['loaded'] for model in model_ids):
         raise SystemExit('평가에 필요한 임베딩·리랭커 상주 상태와 생성 모델 id를 확인하세요.')
-    chat_model = next((model for model in chat or () if model['id'] == pro.model), {})
+    chat_model = {} if cfg.llm_external else generation_model(chat, pro.model)
     if not cfg.llm_external and not chat_model.get('revision'):
         raise SystemExit('생성 모델 revision을 확인하세요.')
     return {
         'webapp_commit': subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=ROOT, text=True).strip(),
         'model_server_commit': health.get('commit'),
+        'server_max_concurrent': chat_model.get('max_concurrent'),
         'generation_server_mlx_lm_version': None,
         'profile': cfg.profile.name,
         'dataset_version': (manifest.load(cfg.profile.articles) or {}).get('dataset_version'),
@@ -411,12 +413,13 @@ def _webapp_commit():
 
 def _heldout_configuration(client, model, fixture_sha256, articles_sha256, *, external=False):
     try:
-        revision = None
+        revision = concurrent = None
         if not external:
             cards = service.generation_models(client)
             pro = next((card for card in cards if card['id'] == model), None)
             if pro is None or not pro.get('revision'):
                 raise _HeldoutStop('pro_not_ready')
+            concurrent = generation_model(cards, model)['max_concurrent']
             revision = pro['revision']
         webapp_commit = _webapp_commit()
     except ModelServerError, httpx.HTTPError, OSError, ValueError, subprocess.SubprocessError:
@@ -425,6 +428,7 @@ def _heldout_configuration(client, model, fixture_sha256, articles_sha256, *, ex
         'webapp_commit': webapp_commit,
         'generation_server_mlx_lm_version': None,
         'model': {'id': model, 'revision': revision},
+        'server_max_concurrent': concurrent,
         'fixture_sha256': fixture_sha256,
         'articles_sha256': articles_sha256,
         'router_sha256': _router_sha256(),

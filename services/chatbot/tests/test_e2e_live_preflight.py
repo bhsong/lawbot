@@ -20,7 +20,7 @@ ENV = {
 NOON = datetime.time(12, 0)
 
 
-def server(ready=True, missing=(), error=None, chat_revision='sha256:c'):
+def server(ready=True, missing=(), error=None, chat_revision='sha256:c', concurrent=1):
     models = [
         {'id': 'emb', 'type': 'embedding', 'loaded': True, 'revision': 'sha256:a'},
         {'id': 'rr', 'type': 'rerank', 'loaded': True, 'revision': 'sha256:b'},
@@ -31,7 +31,11 @@ def server(ready=True, missing=(), error=None, chat_revision='sha256:c'):
             raise error
         if generation:
             assert path == '/models'
-            return {'data': [] if 'chat' in missing else [{'id': 'chat', 'object': 'model', 'revision': chat_revision}]}
+            return {
+                'data': []
+                if 'chat' in missing
+                else [{'id': 'chat', 'object': 'model', 'revision': chat_revision, 'max_concurrent': concurrent}]
+            }
         if path == '/health':
             return {'ready': ready, 'commit': 'abc'}
         assert path == '/v1/models'
@@ -114,3 +118,32 @@ def test_generation_revision_change_invalidates_run(live):
     before = live(chat_revision='sha256:c').config()
     after = live(chat_revision='sha256:d').config()
     assert comparable(before) != comparable(after)
+
+
+@pytest.mark.parametrize('concurrent', [None, True, '1', 0])
+def test_generation_concurrency_required(live, concurrent):
+    stack = live(concurrent=concurrent)
+    assert 'max_concurrent' in stack.preflight(NOON)[0]
+    with pytest.raises(ValueError, match='max_concurrent'):
+        stack.config()
+
+
+def test_generation_concurrency_recorded_and_change_invalidates(live):
+    before = live(concurrent=1).config()
+    after = live(concurrent=2).config()
+    assert before['server_max_concurrent'] == 1
+    assert comparable(before) != comparable(after)
+
+
+def test_external_generation_skips_metadata_probe(tmp_path, env):
+    original = server()
+
+    def get(self, path, *, generation=False):
+        assert not generation
+        return original(self, path)
+
+    env.setattr(Live, 'get', get)
+    config = ENV | {'LAWBOT_LLM_BASE_URL': 'https://generation.example/v1', 'LAWBOT_LLM_ALLOW_EXTERNAL': '1'}
+    stack = Live(tmp_path, config)
+    assert stack.preflight(NOON) == []
+    assert stack.config()['server_max_concurrent'] is None

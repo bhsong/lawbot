@@ -17,6 +17,7 @@ import e2e_support as e2e
 from conftest import free_port
 from lawbot import deploy, llm, manifest
 from lawbot.paths import ROOT
+from lawbot_common.llm_endpoint import endpoint, generation_model
 from lawbot_model_server import revision
 
 pytestmark = pytest.mark.e2e_live
@@ -78,11 +79,17 @@ class Live:
         if not (self.generation_server and self.generation_token):
             return ['LAWBOT_LLM_BASE_URL·LAWBOT_LLM_API_KEY가 없음']
         try:
+            external = endpoint(self.env)[2]
+        except (RuntimeError, ValueError) as exc:
+            return [str(exc)]
+        try:
             health = self.get('/health')
             if not health.get('ready'):
                 return ['서버 미준비: /health ready가 아님']
             models = {m['id']: m for m in self.get('/v1/models')['data']}
-            generation_models = {model['id']: model for model in self.get('/models', generation=True)['data']}
+            generation_models = (
+                {} if external else {model['id']: model for model in self.get('/models', generation=True)['data']}
+            )
         except httpx.HTTPError as e:
             return [f'서버 미준비: {type(e).__name__}']
         profile = deploy.get_profile(self.env)
@@ -91,22 +98,32 @@ class Live:
         if rr:
             need.append(rr.model)
         reasons = [f'모델 없음: {m}' for m in need if m and m not in models]
+        if external:
+            return reasons
         if self.chat_model not in generation_models:
             reasons.append(f'생성 모델 없음: {self.chat_model}')
         elif not generation_models[self.chat_model].get('revision'):
             reasons.append(f'생성 모델 revision 없음: {self.chat_model}')
+        else:
+            try:
+                generation_model(generation_models.values(), self.chat_model)
+            except ValueError as exc:
+                reasons.append(str(exc))
         return reasons
 
     def config(self):
         """실행 구성 (비밀값 제외). 시작 전·후를 비교해 다르면 결과 무효"""
         health, models = self.get('/health'), self.get('/v1/models')['data']
-        generation_models = self.get('/models', generation=True)['data']
+        external = endpoint(self.env)[2]
+        generation_models = [] if external else self.get('/models', generation=True)['data']
+        chat_model = {} if external else generation_model(generation_models, self.chat_model)
         profile = deploy.get_profile(self.env)
         rr, dc = deploy.reranker(profile, self.env), deploy.decree(profile, self.env)
         m = manifest.load(profile.articles) or {}
         return {
             'webapp_commit': revision.git_commit(ROOT),
             'model_server_commit': health.get('commit'),
+            'server_max_concurrent': chat_model.get('max_concurrent'),
             'generation_server_mlx_lm_version': None,
             'generation_server_mlx_lm_version_note': 'Confirm manually at the generation server management location.',
             'generation_models': [

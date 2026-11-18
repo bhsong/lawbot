@@ -32,3 +32,14 @@ def endpoint(env=None):
     if len(key) < 16:
         raise RuntimeError('LAWBOT_LLM_API_KEY가 너무 짧아 실행을 거부합니다 (16자 이상)')
     return value, key, external
+
+
+def generation_model(models, model_id):
+    """Select a generation model; reject missing or invalid concurrency metadata."""
+    model = next((row for row in models if row['id'] == model_id), None)
+    if model is None:
+        raise ValueError(f'생성 모델 없음: {model_id}')
+    concurrent = model.get('max_concurrent')
+    if type(concurrent) is not int or concurrent < 1:
+        raise ValueError(f'생성 모델 max_concurrent는 양의 정수여야 합니다: {model_id}')
+    return model

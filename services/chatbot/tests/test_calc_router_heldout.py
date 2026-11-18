@@ -25,19 +25,22 @@ def fixture_file(tmp_path, count=60):
     return path, sha256(raw).hexdigest()
 
 
-def install_transport(monkeypatch, on_post=None):
+def install_transport(monkeypatch, on_post=None, concurrency=(1, 1)):
+    probes = 0
     requests = []
     client = httpx.Client
     posts = 0
 
     def reply(request):
-        nonlocal posts
+        nonlocal posts, probes
         requests.append(request)
         assert request.headers['authorization'] == 'Bearer fixture-token'
         if request.url.path == '/v1/models':
+            concurrent = concurrency[min(probes, len(concurrency) - 1)]
+            probes += 1
             return httpx.Response(
                 200,
-                json={'data': [{'id': 'pro', 'revision': 'sha256:fixture'}]},
+                json={'data': [{'id': 'pro', 'revision': 'sha256:fixture', 'max_concurrent': concurrent}]},
             )
         assert request.url.path == '/v1/chat/completions'
         posts += 1
@@ -93,6 +96,7 @@ def test_heldout_router_only_complete_run(monkeypatch, tmp_path):
     assert report['before']['webapp_commit'] == COMMIT
     assert report['before']['model'] == {'id': 'pro', 'revision': 'sha256:fixture'}
     assert report['before']['generation_server_mlx_lm_version'] is None
+    assert report['before']['server_max_concurrent'] == 1
     assert report['inference_posts'] == 2 * len(report['routes']) == 120
     assert all(row['classification_match'] and row['reason'] == 'missing_required' for row in report['routes'])
     assert [req.method for req in requests] == ['GET', *(['POST'] * 120), 'GET']
@@ -218,6 +222,7 @@ def test_external_generation_has_no_revision_or_models_probe(monkeypatch):
     monkeypatch.setattr(evaluator, '_webapp_commit', lambda: COMMIT)
     configuration = evaluator._heldout_configuration(object(), 'pro', 'fixture', 'articles', external=True)
     assert configuration['model'] == {'id': 'pro', 'revision': None}
+    assert configuration['server_max_concurrent'] is None
 
 
 def test_heldout_uses_common_generation_endpoint_and_dedicated_key(monkeypatch):
@@ -233,3 +238,19 @@ def test_heldout_uses_common_generation_endpoint_and_dedicated_key(monkeypatch):
     monkeypatch.setenv('LAWBOT_LLM_API_KEY', 'generation-only-secret')
     monkeypatch.setenv('LAWBOT_MODEL_TOKEN', 'embedding-only-secret')
     assert evaluator._heldout_settings() == ('http://127.0.0.1:19/v1', 'generation-only-secret', 'pro', False)
+
+
+@pytest.mark.parametrize('concurrency', [(None, 1), (1, None), (1, 2)])
+def test_heldout_rejects_missing_or_changed_concurrency(monkeypatch, tmp_path, concurrency):
+    fixture, digest = fixture_file(tmp_path)
+    output = tmp_path / 'report.json'
+    requests = install_transport(monkeypatch, concurrency=concurrency)
+    assert evaluator._live_heldout(fixture, digest, output) == 2
+    report = json.loads(output.read_text())
+    assert report['valid'] is False
+    if concurrency[0] is None:
+        assert [request.method for request in requests] == ['GET']
+    elif concurrency[1] is None:
+        assert report['status'] == 'stopped'
+    else:
+        assert report['stop_reason'] == 'configuration_changed'

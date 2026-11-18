@@ -117,7 +117,8 @@ def test_failure_retains_safe_diagnostics(monkeypatch, tmp_path, capsys, stage):
 
 
 @pytest.mark.parametrize('external', [False, True])
-def test_snapshot_separates_generation_from_embedding_metadata(monkeypatch, external):
+@pytest.mark.parametrize('concurrent', [1, 2, None, True, '1', 0])
+def test_snapshot_separates_generation_from_embedding_metadata(monkeypatch, external, concurrent):
     cfg = ev.settings.load(
         {
             'LAWBOT_PROFILE': 'v5',
@@ -153,7 +154,9 @@ def test_snapshot_separates_generation_from_embedding_metadata(monkeypatch, exte
         assert not external
         assert request.url.port == 19 and request.url.path == '/v1/models'
         assert request.headers['authorization'] == 'Bearer generation-only-secret'
-        return httpx.Response(200, json={'data': [{'id': spec.model, 'revision': 'generation-rev'}]})
+        return httpx.Response(
+            200, json={'data': [{'id': spec.model, 'revision': 'generation-rev', 'max_concurrent': concurrent}]}
+        )
 
     class MockClient(original_client):
         def __init__(self, **kwargs):
@@ -162,11 +165,17 @@ def test_snapshot_separates_generation_from_embedding_metadata(monkeypatch, exte
     monkeypatch.setattr(ev.httpx, 'Client', MockClient)
     monkeypatch.setattr(ev.subprocess, 'check_output', lambda *args, **kwargs: 'webapp-commit')
     with MockClient(base_url=cfg.model_server, headers={'Authorization': f'Bearer {cfg.model_token}'}) as client:
+        if not external and (type(concurrent) is not int or concurrent < 1):
+            with pytest.raises(ValueError, match='max_concurrent'):
+                ev.snapshot(cfg, client)
+            return
         configuration = ev.snapshot(cfg, client)
     assert configuration['models'][-1] == {
         'id': spec.model,
         'revision': None if external else 'generation-rev',
     }
     assert configuration['generation_server_mlx_lm_version'] is None
-    assert 'server_max_concurrent' not in configuration
+    assert configuration['server_max_concurrent'] == (None if external else concurrent)
+    changed = configuration | {'server_max_concurrent': 3}
+    assert ev.comparable(configuration) != ev.comparable(changed)
     assert len(requests) == (2 if external else 3)

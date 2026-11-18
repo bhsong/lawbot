@@ -24,6 +24,7 @@ from lawbot import deploy, envfile, llm, manifest, service, settings
 from lawbot.api_client import REQUEST_ID
 from lawbot.citation import citations, hit_key, refused
 from lawbot.paths import DATA, ROOT
+from lawbot_common.llm_endpoint import generation_model
 
 QUESTIONS = DATA / 'v5' / 'qa_reasoning_val.csv'
 
@@ -115,7 +116,7 @@ def snapshot(cfg, client, *, preflight=False):
     ]
     if any(not model['revision'] or (preflight and not model['loaded']) for model in models):
         raise RuntimeError('임베딩·리랭커 모델의 revision과 상주 상태를 확인하세요.')
-    chat_model = next((model for model in chat or () if model['id'] == spec.model), {})
+    chat_model = {} if cfg.llm_external else generation_model(chat, spec.model)
     if not cfg.llm_external and not chat_model.get('revision'):
         raise RuntimeError('생성 모델 revision을 확인하세요.')
     models.append({'id': spec.model, 'revision': chat_model.get('revision')})
@@ -127,6 +128,7 @@ def snapshot(cfg, client, *, preflight=False):
     return {
         'webapp_commit': subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=ROOT, text=True).strip(),
         'model_server_commit': health['commit'],
+        'server_max_concurrent': chat_model.get('max_concurrent'),
         'generation_server_mlx_lm_version': None,
         'models': models,
         'dataset_version': data['dataset_version'],
@@ -228,6 +230,7 @@ def main():
     except (
         httpx.HTTPError,
         RuntimeError,
+        ValueError,
         OSError,
         subprocess.CalledProcessError,
         json.JSONDecodeError,
