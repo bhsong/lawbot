@@ -16,6 +16,13 @@ const STATUS: Record<PublicNewsBoard['status'], string> = {
   delayed: '수집 지연', blocked: '접근 제한', error: '수집 실패', partial: '일부 수집 실패',
 }
 
+// Agencies whose copyright policy requires naming the source when their posts are listed.
+const COPYRIGHT_POLICY: Partial<Record<Agency, string>> = {
+  moel: 'https://www.moel.go.kr/site/copyright/copyrightList.do',
+  mofe: 'https://mofe.go.kr/mn/siteguide/drmp.do?menuNo=2030000',
+  nts: 'https://www.nts.go.kr/nts/cm/cntnts/cntntsView.do?mi=6791&cntntsId=8169',
+}
+
 const HOMETAX: ErpNews = {
   agency: 'hometax', state: 'link_only', officialHome: 'https://www.hometax.go.kr/',
   navigation: '전체메뉴 → 기타 → 고객센터 → 자료실',
@@ -75,6 +82,10 @@ function NewsContent({ agency }: { agency: Agency }) {
     </details>}
     <p><a href={result.officialHome} target="_blank" rel="noopener noreferrer">{AGENCIES[agency]} 누리집 열기 ↗</a></p>
     {result.navigation && <p>{result.navigation}</p>}
+    {COPYRIGHT_POLICY[agency] && <p className="lc-caption">
+      <span>출처: {AGENCIES[agency]} ({result.officialHome})</span>{' · '}
+      <a href={COPYRIGHT_POLICY[agency]} target="_blank" rel="noopener noreferrer">{AGENCIES[agency]} 저작권정책</a>
+    </p>}
   </>
 }
 

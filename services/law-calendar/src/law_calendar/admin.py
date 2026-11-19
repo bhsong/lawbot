@@ -12,6 +12,7 @@ from law_calendar.db import read_database
 from law_calendar.import_failures import list_import_failures
 from law_calendar.review import held_review_template, review
 from law_calendar.validation import StaleSnapshotError
+from lawbot_common.edge import via_cloudflare
 
 
 def _validation_detail(exc: ValidationError) -> str:
@@ -45,6 +46,8 @@ def router(database: Path) -> APIRouter:
     expected = f'Bearer {token}'.encode()
 
     async def require_service_token(request: Request) -> None:
+        if via_cloudflare(request.headers):
+            raise HTTPException(404, 'Not Found')
         if not token:
             raise HTTPException(503, 'Calendar admin service token is not configured')
         if not hmac.compare_digest(request.headers.get('authorization', '').encode(), expected):

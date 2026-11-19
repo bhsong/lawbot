@@ -272,7 +272,7 @@ Colab 실험(transformers fp16)과의 순위 일치는 리랭커 도입 때 val�
 
 | 프로세스 | 포트 | 실행 위치 | 외부 노출 |
 | --- | --- | --- | --- |
-| 운영 웹앱 | `<운영 포트>` | 운영 worktree | `tailscale serve`로 이 포트만 |
+| 운영 웹앱 | `<운영 포트>` | 운영 worktree | `tailscale serve`, 선택 시 Cloudflare Tunnel + Access(관리자 경로 제외) |
 | 개발 웹앱 | `<개발 포트>` | 개발 레포 | 없음 |
 | 모델 서버 | `<모델 서버 포트>` | 운영 worktree | 없음 (127.0.0.1 고정) |
 | 단독 생성 서버 | `<생성 서버 포트>` | `~/Services/qwen27b` | 없음 (127.0.0.1 고정) |
@@ -326,6 +326,39 @@ Colab 실험(transformers fp16)과의 순위 일치는 리랭커 도입 때 val�
    tailscale serve --bg <운영 포트>
    tailscale serve status
    ```
+
+6. (선택) Tailscale을 설치할 수 없는 브라우저에서는 Cloudflare Tunnel + Access로 운영 챗봇과 캘린더에 접속합니다. 맥 미니가 Cloudflare로 나가는 연결만 맺으며 공유기 포트는 열지 않습니다. Access는 허용한 이메일 하나만 통과시키고, 챗봇의 앱 로그인은 그대로 둡니다. **관리자 기능은 Tailscale(또는 맥 미니 로컬)에서만 씁니다.** 웹앱과 캘린더 서버는 Cloudflare를 거친 요청(`CF-Connecting-IP` 헤더)의 `/api/admin` 경로를 404로 막고, 챗봇은 그 요청의 관리자 사용자명을 없는 사용자명으로 취급합니다(`lawbot_common.edge`). 모델 서버·생성 서버·Source Hub는 터널에 연결하지 않습니다.
+
+   순서가 중요합니다. **Access 앱을 먼저 만든 뒤** DNS를 연결해 Access 없이 열리는 순간이 없게 합니다.
+
+   1. Cloudflare Zero Trust에서 로그인 방법으로 One-time PIN을 켭니다. Access 애플리케이션(Self-hosted)에 챗봇·캘린더 호스트를 넣고, 정책은 Allow + 본인 이메일 하나로 둡니다.
+   2. 터널을 만들고 두 호스트를 DNS에 연결합니다. 명령 형식은 `cloudflared --help`로 확인합니다.
+
+      ```zsh
+      brew install cloudflared
+      cloudflared tunnel login
+      cloudflared tunnel create lawbot
+      cloudflared tunnel route dns lawbot <챗봇 호스트>
+      cloudflared tunnel route dns lawbot <캘린더 호스트>
+      ```
+
+   3. 레포 밖 `~/.cloudflared/config.yml`(권한 600)에 다음을 적습니다. 관리자 경로는 터널에서도 404로 보냅니다(앱 차단과 이중). 마지막 규칙이 나머지 호스트를 모두 404로 막습니다.
+
+      ```yaml
+      tunnel: <터널 ID>
+      credentials-file: <홈>/.cloudflared/<터널 ID>.json
+      ingress:
+        - {hostname: <챗봇 호스트>, path: ^/api/admin, service: http_status:404}
+        - {hostname: <챗봇 호스트>, service: http://127.0.0.1:<운영 포트>}
+        - {hostname: <캘린더 호스트>, path: ^/api/admin, service: http_status:404}
+        - {hostname: <캘린더 호스트>, service: http://127.0.0.1:<캘린더 포트>}
+        - service: http_status:404
+      ```
+
+   4. `cloudflared tunnel ingress validate`로 설정을 검사하고 `cloudflared tunnel run lawbot`으로 직접 확인한 뒤, `cloudflared service install`로 상시 실행합니다.
+   5. 외부 브라우저에서 확인합니다: Access 인증 → 챗봇 로그인과 질문 1건, 캘린더 조회, 두 호스트의 `/api/admin` 404, 관리자 계정 로그인 거부, 로그인 쿠키의 `Secure`. tailnet에서는 관리자 기능이 그대로 동작해야 합니다.
+
+   외부 접속을 끄려면 cloudflared 서비스를 중지합니다(`cloudflared service uninstall`). Tailscale 접속은 영향을 받지 않습니다. 호스트명·이메일·터널 ID·포트는 문서와 커밋에 적지 않습니다.
 
 이 구조의 제약:
 
@@ -425,6 +458,8 @@ uv run python -m lawbot.auth hash
 ```
 
 비밀번호를 두 번 입력한 뒤 출력된 한 줄을 `.env`의 `LAWBOT_ADMIN_PW_HASH`에 작은따옴표로 감싸 붙여 넣습니다. 해시에는 `$`가 포함됩니다. `.env`는 Git에서 제외하고 권한을 600으로 제한합니다. 관리자도 기존 로그인 화면을 사용합니다. 두 관리자 변수를 모두 비우면 기존 일반 로그인만 사용합니다.
+
+관리자 로그인과 관리자 API는 Tailscale·로컬 접속에서만 동작합니다. Cloudflare Tunnel을 거친 요청에서는 관리자 사용자명을 없는 사용자명과 똑같이 처리하고(같은 검증 시간과 잠금, 감사 기록 없음) 관리자 API는 404를 반환합니다. 로그인 실패 횟수는 터널 경유와 Tailscale·로컬을 따로 세므로 외부 시도가 tailnet 로그인을 잠그지 않습니다.
 
 관리자 계정을 사용하면 사용자명별로 15분 안에 로그인에 5번 실패했을 때 15분 동안 추가 로그인이 제한됩니다. 관리자 로그인 결과는 `audit_events`에 기록되며, 비밀번호·해시·쿠키·세션 ID는 기록하지 않습니다.
 

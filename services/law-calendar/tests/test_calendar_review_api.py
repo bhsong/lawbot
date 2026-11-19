@@ -205,3 +205,15 @@ def test_effective_retry_after_overlapping_approval_preserves_new_decision(workf
         assert client.get(f'/api/law-changes/{change_id}').json()['summary'] == '정정한 요약'
     with read_database(database) as conn:
         assert conn.execute("SELECT count(*) FROM review_audit WHERE decision='approve'").fetchone()[0] == 2
+
+
+def test_cloudflare_requests_cannot_reach_admin_routes(workflow, headers):
+    import_one(workflow)
+    external = {**headers, 'CF-Connecting-IP': '203.0.113.7'}
+    with TestClient(create_app(workflow[0])) as client:
+        path = effective_path(client)
+        assert client.get(path, headers=external).status_code == 404
+        assert client.post(path, headers=external, json={}).status_code == 404
+        assert client.get(FAILURES, headers=external).status_code == 404
+        assert client.get('/api/law-holds', headers=external).json()['total'] == 3
+        assert client.get(FAILURES, headers=headers).json()['items'] == []

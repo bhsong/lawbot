@@ -32,6 +32,7 @@ from lawbot.decree import is_decree
 from lawbot.hits import Timing
 from lawbot.paths import ROOT
 from lawbot.service import AskError, ask, load_app, log_request
+from lawbot_common.edge import via_cloudflare
 from lawbot_common.logs import logger
 
 log = logger('lawbot', 'lawbot')
@@ -59,6 +60,7 @@ COOKIE = 'lawbot_session'
 SESSION_TTL = 7 * 24 * 3600  # 초. 서버를 다시 띄워도 세션이 사라진다 (메모리)
 MAX_SESSIONS = 200
 MAX_QUESTION = 2000
+EDGE_ATTEMPTS = b'cloudflare:'  # attempt-window key prefix for tunnel requests
 LOGIN_FAIL_DELAY = 1.0  # 초. 비밀번호 대입을 느리게
 LOGIN_ATTEMPT_CAPACITY = 1024
 JSON_BODY_LIMIT = ADMIN_BODY_LIMIT = 64 * 1024
@@ -316,6 +318,12 @@ async def require_admin_post_rate(request: Request, who: AdminWho):
     limit.record(sid)
 
 
+def tailnet_only(request: Request):
+    """Hide administrator routes from requests that came through the Cloudflare tunnel."""
+    if via_cloudflare(request.headers):
+        raise HTTPException(404, 'Not Found')
+
+
 def require_json(request: Request):
     """POST는 JSON만 (SameSite=Strict 쿠키와 함께 다른 사이트의 폼 전송을 막는다)"""
     if request.headers.get('content-type', '').split(';')[0].strip().lower() != 'application/json':
@@ -412,7 +420,9 @@ def create_app(
     api.state.admin_post_limit = auth_logic.AttemptWindow(30, 60, MAX_SESSIONS)
     user_b, pw_b = auth[0].encode(), auth[1].encode()
     admin_b = admin.user.encode() if admin is not None else None
-    reserved = (hashlib.sha256(name).hexdigest() for name in (user_b, admin_b) if name is not None)
+    # Edge requests count separately; only the general user is reserved there so the admin name looks unknown.
+    reserved = [hashlib.sha256(name).hexdigest() for name in (user_b, admin_b) if name is not None]
+    reserved.append(hashlib.sha256(EDGE_ATTEMPTS + user_b).hexdigest())
     failures = auth_logic.AttemptWindow(
         5, 15 * 60, LOGIN_ATTEMPT_CAPACITY, cooldown=True, reserved=reserved, clock=lambda: time.monotonic()
     )
@@ -426,10 +436,18 @@ def create_app(
         """둘 다 비교한다 (어느 쪽이 틀렸는지 시간으로 드러나지 않게)"""
         return hmac.compare_digest(user.encode(), user_b) & hmac.compare_digest(pw.encode(), pw_b)
 
-    async def verify_login(user: str, pw: object, role: auth_logic.Role | None):
+    async def verify_login(user: str, pw: object, role: auth_logic.Role | None, external: bool):
         encoded_user = user.encode()
-        is_admin = admin_b is not None and hmac.compare_digest(encoded_user, admin_b)
-        key = hashlib.sha256(encoded_user).hexdigest()
+        # Outside, the admin name is just an unknown name: same dummy-hash work, lockout and no audit.
+        is_admin = not external and admin_b is not None and hmac.compare_digest(encoded_user, admin_b)
+        key = hashlib.sha256((EDGE_ATTEMPTS if external else b'') + encoded_user).hexdigest()
+        role, blocked = await check_attempts(key, is_admin, pw, role)
+        if is_admin and admin is not None and db is not None:
+            async with audit_lock:
+                await anyio.to_thread.run_sync(audit_store.record_login, db, admin.user, role == 'admin')
+        return role, blocked
+
+    async def check_attempts(key: str, is_admin: bool, pw: object, role: auth_logic.Role | None):
         async with login_lock:
             blocked = not failures.allowed(key)
             if blocked:
@@ -444,9 +462,6 @@ def create_app(
                     failures.record(key)
                 else:
                     failures.clear(key)
-        if is_admin and admin is not None and db is not None:
-            async with audit_lock:
-                await anyio.to_thread.run_sync(audit_store.record_login, db, admin.user, role == 'admin')
         return role, blocked
 
     @api.post('/api/login', dependencies=[Depends(require_json)])
@@ -458,7 +473,7 @@ def create_app(
         )
         blocked = False
         if isinstance(user, str):
-            role, blocked = await verify_login(user, pw, role)
+            role, blocked = await verify_login(user, pw, role, via_cloudflare(request.headers))
         if role is None:
             await asyncio.sleep(LOGIN_FAIL_DELAY)
             if blocked:
@@ -561,7 +576,8 @@ def create_app(
         from lawbot.admin import router
 
         api.include_router(
-            router(db, app, protected=protected, calendar_url=calendar_url, calendar_token=calendar_token)
+            router(db, app, protected=protected, calendar_url=calendar_url, calendar_token=calendar_token),
+            dependencies=[Depends(tailnet_only)],
         )
 
         @api.exception_handler(StarletteHTTPException)

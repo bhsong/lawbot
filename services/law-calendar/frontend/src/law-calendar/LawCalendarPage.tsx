@@ -131,7 +131,15 @@ export default function LawCalendarPage({ loader = loadCalendar, initialDate }: 
     <footer className="lc-footer">
       <h2>공식 원문을 먼저 확인하세요</h2>
       <p>본 서비스는 공개된 법령 자료를 수집·가공하여 제공하며, 수집 지연, 누락, 해석 또는 요약 오류가 발생할 수 있습니다. 법령의 적용 여부는 개별 조항의 시행일, 부칙, 경과조치 및 사실관계에 따라 달라질 수 있습니다. 중요한 법적 판단이나 조치를 하기 전 공식 법령 원문을 직접 확인하고, 필요하면 전문가의 검토를 받으시기 바랍니다. 이 서비스는 개별 사건에 대한 법률 자문을 대신하지 않습니다.</p>
-      <nav aria-label="공식 출처"><a href="https://www.law.go.kr/" target="_blank" rel="noopener noreferrer">국가법령정보센터 ↗</a></nav>
+      <nav aria-label="공식 출처">
+        <a href="https://www.law.go.kr/" target="_blank" rel="noopener noreferrer">국가법령정보센터 ↗</a>
+        <span>
+          <a href="https://github.com/legalize-kr/legalize-kr" target="_blank" rel="noopener noreferrer">legalize-kr ↗</a>
+          {' · '}
+          <a href="https://github.com/legalize-kr/admrule-kr" target="_blank" rel="noopener noreferrer">admrule-kr ↗</a>
+          {' '}(원문: 공공저작물, 메타데이터 MIT)
+        </span>
+      </nav>
     </footer>
     {opened && <ChangeDialog change={opened} demo={snapshot?.demo ?? false} onClose={() => setOpened(null)} />}
     {holdsOpen && <HoldDialog demo={snapshot?.demo ?? false} onClose={() => setHoldsOpen(false)} />}

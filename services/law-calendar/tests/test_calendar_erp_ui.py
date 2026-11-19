@@ -277,6 +277,10 @@ def test_agency_news_overlays_erp_and_supports_mouse_keyboard_and_touch(dataset,
             expect(link).to_have_attribute('href', news['agencies']['moel']['items'][0]['officialUrl'])
             expect(panel.get_by_text('게시일 미확인', exact=False)).to_be_visible()
             expect(panel.get_by_text('공지 · 일부 수집 실패')).to_be_visible()
+            expect(panel.get_by_text('출처: 고용노동부 (https://www.moel.go.kr/)')).to_be_visible()
+            expect(panel.get_by_role('link', name='고용노동부 저작권정책')).to_have_attribute(
+                'href', 'https://www.moel.go.kr/site/copyright/copyrightList.do'
+            )
             link.hover()
             expect(panel).to_be_visible()
             assert page.get_by_role('main').bounding_box()['width'] == width
