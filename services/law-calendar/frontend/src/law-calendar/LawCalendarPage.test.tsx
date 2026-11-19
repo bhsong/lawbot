@@ -30,6 +30,18 @@ test('public calendar has no chatbot navigation or authentication requests', asy
   }
 })
 
+test('footer credits the statute repository and its metadata license', async () => {
+  render(<LawCalendarPage loader={loader} initialDate="2026-11-05" />)
+  const sources = await screen.findByRole('navigation', { name: '공식 출처' })
+  expect(within(sources).getByRole('link', { name: /legalize-kr/ })).toHaveAttribute(
+    'href', 'https://github.com/legalize-kr/legalize-kr',
+  )
+  expect(within(sources).getByRole('link', { name: /admrule-kr/ })).toHaveAttribute(
+    'href', 'https://github.com/legalize-kr/admrule-kr',
+  )
+  expect(within(sources).getByText(/메타데이터 MIT/)).toBeInTheDocument()
+})
+
 test('selection updates articles, empty dates, month navigation and today', async () => {
   render(<LawCalendarPage loader={loader} initialDate="2026-11-05" />)
   expect(await screen.findByText('예시 변경 요약')).toBeInTheDocument()

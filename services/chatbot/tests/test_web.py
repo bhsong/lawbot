@@ -253,6 +253,25 @@ def test_admin_login_audit_records_only_safe_fields(admin_app, admin_hash, env):
     )
 
 
+def test_cloudflare_requests_cannot_use_admin(admin_app):
+    app, path = admin_app
+    external = {'CF-Connecting-IP': '203.0.113.7'}
+    with TestClient(app) as c:
+        assert c.get('/api/admin/feedbacks', headers=external).status_code == 404
+        for _ in range(6):
+            res = c.post('/api/login', json={'user': ADMIN_USER, 'password': ADMIN_PW}, headers=external)
+            assert res.status_code == 401
+        assert login(c, ADMIN_USER, ADMIN_PW).status_code == 200
+        assert c.get('/api/admin/feedbacks').status_code == 200
+        assert c.get('/api/admin/feedbacks', headers=external).status_code == 404
+        user = c.post('/api/login', json={'user': USER, 'password': PW}, headers=external)
+        assert user.status_code == 200
+        assert c.get('/api/me', headers=external).json()['role'] == 'user'
+    with connection.connect(path) as conn:
+        actions = [row[0] for row in conn.execute('SELECT action FROM audit_events ORDER BY event_id')]
+    assert actions == ['login_fail'] * 6 + ['login_ok']
+
+
 def test_admin_audit_failure_does_not_block_login(admin_app, admin_hash, caplog):
     app, path = admin_app
     with connection.connect(path, write=True) as conn:

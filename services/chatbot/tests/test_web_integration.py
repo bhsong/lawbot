@@ -190,7 +190,11 @@ def test_admin_review_and_promotion_in_server_process(tmp_path, admin_hash, modu
         ) as running,
         httpx.Client(base_url=running.url, timeout=WAIT_LIMIT) as session,
     ):
+        external = {'CF-Connecting-IP': '203.0.113.7'}
+        outside = session.post('/api/login', json={'user': ADMIN_USER, 'password': ADMIN_PW}, headers=external)
+        assert outside.status_code == 401
         assert session.post('/api/login', json={'user': ADMIN_USER, 'password': ADMIN_PW}).status_code == 200
+        assert session.get('/api/admin/feedbacks', headers=external).status_code == 404
         calendar = session.get('/api/admin/calendar/law-calendar/status')
         assert (calendar.status_code, calendar.json().get('code')) == (503, 'calendar_not_configured')
         prefix = '/api/admin/feedbacks'
