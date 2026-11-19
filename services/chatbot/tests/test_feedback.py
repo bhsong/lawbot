@@ -552,6 +552,42 @@ def test_export(env, tmp_path):
         feedback_export.export(out, tmp_path / 'out', articles=arts)
 
 
+def test_export_stale_count_ignores_definition_excerpts(tmp_path):
+    excerpt = '6. "평균임금"이란 지급된 임금의 평균이다.'
+    definition = dict(
+        law='근로기준법',
+        article_id='제2조',
+        title='정의',
+        doc=f'근로기준법 제2조(정의)\n{excerpt}',
+        definition_item='6',
+    )
+    unchanged = fb_row('current', '질문A')
+    article = unchanged['hits'][0]
+    unchanged['hits'].append(definition)
+    changed = fb_row(
+        'changed', '질문B', hits=[article | {'doc': article['doc'].replace('본문', '이전 본문')}, definition]
+    )
+    write_rows(tmp_path / 'fb', [unchanged, changed])
+    review = tmp_path / 'review.csv'
+    feedback_review.review([tmp_path / 'fb'], review, evals=[])
+    reviewed = pd.read_csv(review, encoding='utf-8-sig').fillna('')
+    reviewed['h_ok'] = '맞음'
+    reviewed.to_csv(review, index=False, encoding='utf-8-sig')
+    articles = tmp_path / 'articles.csv'
+    pd.DataFrame(
+        [
+            dict(law='근로기준법', article_id='제26조', title='해고의 예고', deleted=0, text='본문'),
+            dict(law='근로기준법', article_id='제2조', title='정의', deleted=0, text=f'① 정의 전문\n{excerpt}'),
+        ]
+    ).to_csv(articles, index=False, encoding='utf-8-sig')
+
+    out = tmp_path / 'out'
+    summary = feedback_export.export(review, out, articles=articles)
+    assert '다른 기록 1건' in '\n'.join(summary)
+    sft = pd.read_csv(out / 'fb_sft.csv', encoding='utf-8-sig').set_index('feedback_id')
+    assert excerpt in sft.loc['current', 'prompt']
+
+
 @pytest.mark.parametrize('source', ['jsonl', 'db'])
 @pytest.mark.parametrize('prefix', ['=', '+', '-', '@', '\t', '\r'])
 def test_export_preserves_original_formula_text(tmp_path, source, prefix):

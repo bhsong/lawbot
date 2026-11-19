@@ -114,7 +114,7 @@ def export(review_csv, out, articles=None, frac=VAL_FRAC):
         r, sp = records[f], split[f]
         docs = docs_by_profile[r['profile']]
         hits = r['hits']
-        stale += any(docs.get((h.get('law'), h['article_id'])) != h['doc'] for h in hits)
+        stale += any(docs.get((h.get('law'), h['article_id'])) != h['doc'] for h in hits if 'definition_item' not in h)
         qs.append(
             {'feedback_id': f, 'split': sp, 'question': r['question'], 'label': r['label'], 'reason': r['reason']}
             | {c: row[c] for c in ('h_ok', 'h_gold', 'h_scope', 'h_note')}

@@ -38,3 +38,10 @@
 | 품질 평가 | 실행 안 함 — 승인 후 Claude가 계획서 검증 단계로 실행 |
 
 남은 검증: 일반 val 발동 빈도, 추론 val 32문항 생성 및 기준선 대비 하락 확인, 일반 val 표본 생성과 발동 문항 완료 지연 측정.
+
+## PR #185 리뷰 반영 검증
+
+- Red: 관리자 상세에서 정의 발췌가 `changed`에 들어갔고, CSV 내보내기에서 실제 변경 1건이 2건으로 집계됐다.
+- Green: 정의 발췌는 두 비교에서 제외됐다. 관리자 응답의 원본 `hits`와 CSV의 학습 프롬프트에는 남고, 실제 변경 1건은 계속 집계된다.
+- `uv run ruff check && uv run ruff format --check`: 통과(577개 포맷 일치). `uv run pyright`: 오류 0. `(cd services/chatbot/frontend && npm run build)`: 통과.
+- `LAWBOT_ENV_FILE= uv run pytest -q`: 단위·계약·통합·대역 E2E를 포함해 2,776개 통과, 기본 마커로 10개 제외. 실제 모델 E2E·모델 스모크·품질 평가는 실행하지 않았다.

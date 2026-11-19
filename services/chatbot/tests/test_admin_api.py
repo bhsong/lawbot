@@ -41,11 +41,11 @@ def db(tmp_path):
 @pytest.fixture
 def app(db, admin_hash):
     retriever = SimpleNamespace(
-        ids=['제26조'],
-        laws=['근로기준법'],
-        titles=['해고 예고'],
-        kinds=['법률'],
-        docs=['근로기준법 제26조(해고 예고)\n현재 본문'],
+        ids=['제26조', '제2조'],
+        laws=['근로기준법', '근로기준법'],
+        titles=['해고 예고', '정의'],
+        kinds=['법률', '법률'],
+        docs=['근로기준법 제26조(해고 예고)\n현재 본문', '근로기준법 제2조(정의)\n① 정의 전문\n6. 평균임금'],
         articles_sha256='new-hash',
     )
     return web.create_app(
@@ -173,6 +173,22 @@ def test_detail_reads_in_memory_corpus_and_previous_review(db, admin):
     }
     assert admin.get(ROOT + '/articles', params={'q': '제26조'}).json()['items'] == [
         {'law': '근로기준법', 'article_no': '제26조', 'title': '해고 예고', 'kind': '법률'}
+    ]
+
+
+def test_detail_excludes_definition_excerpt_from_corpus_checks(db, admin):
+    article = dict(law='근로기준법', article_id='제26조', doc='근로기준법 제26조(해고 예고)\n현재 본문')
+    definition = dict(
+        law='근로기준법', article_id='제2조', doc='근로기준법 제2조(정의)\n6. 평균임금', definition_item='6'
+    )
+    add_feedback(db, 'f1', hits=[article, definition])
+
+    response = admin.get(ROOT + '/feedbacks/f1')
+    assert response.status_code == 200
+    detail = response.json()
+    assert detail['feedback']['hits'] == [article, definition]
+    assert detail['checks']['corpus']['changed_hits'] == [
+        {'law': '근로기준법', 'article_id': '제26조', 'status': 'same'}
     ]
 
 
