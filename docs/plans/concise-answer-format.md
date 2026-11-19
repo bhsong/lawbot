@@ -12,7 +12,7 @@
 - `/api/chat`은 `format`을 읽지 않는다. `/api/config`의 `formats` 목록과 모델별 `format`을 뺀다.
 - 생성: 모델마다 자기 기본 system 하나로 생성한다. v5 Pro는 지금 간결형과 같은 `system_v5_concise.txt`다. 간결형 모델이 "전체"에서 4항목 system으로 바꿔 생성하던 경로를 없앤다.
 - 표시: 모델 원문은 항상 간결형 후처리(`answer_format.concise`)를 거친다. 4항목으로 학습한 v4 Fast도 지금의 "간결" 선택과 같은 결론·근거 표시가 된다.
-- 요청 로그에서 `fmt` 필드를 뺀다(읽는 곳 없음). 피드백 기록의 `fmt`는 피드백 내보내기와 학습 스냅샷의 필수 열이라 남기고 `concise`로 기록한다. 기존 기록의 `full` 값은 그 답변을 만든 형식이므로 바꾸지 않는다.
+- 요청 로그에서 `fmt` 필드를 뺀다(읽는 곳 없음). 피드백 기록의 `fmt`는 피드백 내보내기와 학습 스냅샷의 필수 열이라 이번 PR에서는 남기고 `concise`로 기록한다. 이 열과 두 도구의 필수 열 처리는 다음 PR(Fast 제거, omp 구현)에서 지운다. 기존 기록의 `full` 값은 그 답변을 만든 형식이므로 바꾸지 않는다.
 - 평가 도구: `eval_v4 --fmt`와 결과 tag의 형식 부분, `eval_reasoning` 구성 기록의 `format`을 뺀다.
 - 설정·데이터: 전체 형식 전용 `data/v5/system_v5.txt`, `LAWBOT_V5_SYSTEM`과 `paths.V5_SYSTEM`을 지운다. v5 프로필의 기본 system은 Pro와 같은 간결형 파일이다. 모델 설정의 `fmt` 속성도 지운다. Fast 모델은 더 이상 쓰지 않으므로 v4 프로필의 Fast와 4항목 system(`LAWBOT_V4_SYSTEM`)은 다음 PR에서 제거한다(구현은 omp, 계획·검토·병합·운영 반영은 Claude). 이번 PR은 Fast 관련 코드를 그대로 둔다.
 
