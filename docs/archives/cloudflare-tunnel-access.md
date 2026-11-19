@@ -56,3 +56,7 @@ Cloudflare가 프록시한 요청에는 항상 `CF-Connecting-IP` 헤더가 붙�
 2. 사용자가 Cloudflare 계정·도메인을 준비하면 operations.md 절차로 터널·Access 설정.
 3. 확인: 외부 브라우저에서 Access 인증 → 챗봇 로그인·질문 1건, 캘린더 조회, 두 호스트의 `/api/admin` 404, 관리자 로그인 거부. tailnet에서는 관리자 기능 정상. 로그인 쿠키 `Secure` 확인.
 4. 결과를 `docs/evals/`에 기록한다.
+
+## 결과 (2026-11-19)
+
+코드 변경은 v6.3.2(#178), Access·터널 설정은 같은 날 반영했다. 캘린더 화면의 `credentials: 'omit'` 문제는 v6.4.1(#187)에서 고쳤다. [반영 기록](../evals/2026-11-19-external-access-tunnel.md)
