@@ -276,7 +276,7 @@ DC = deploy.DecreeConfig(0.9, 2, ('pro',))
 def make(dc=DC, ret=None):
     p = deploy.get_profile()
     models = service.ChatModels(p.models, Bot)
-    return service.LawbotApp(p, ret or DecRet(decree=dc is not None), models, RR(), 'FULL', dc)
+    return service.LawbotApp(p, ret or DecRet(decree=dc is not None), models, RR(), dc)
 
 
 def ask(a, q, model, **kw):
@@ -569,18 +569,18 @@ def test_eval_answers_and_refusal_with_decree(rr, tmp_path):
         ]
     )
     rr.setattr(ev, 'keywords', lambda *a: pd.DataFrame(columns=['must_include']))
-    ev.run_answers(on, 'pro', 'concise', t, tmp_path / 'answers_dec.csv')
+    ev.run_answers(on, 'pro', t, tmp_path / 'answers_dec.csv')
     a = pd.read_csv(tmp_path / 'answers_dec.csv', keep_default_na=False, **E)
     assert a['top3'].str.count(r'\|').eq(2).all() and a['decrees'].str.len().gt(0).all()
     assert {'decree_search', 'decree_rerank', 'n_decree', 'prompt_tokens'} <= set(a.columns)
     assert ev.hit_table(on) == ev.hit_table(off) and len(ev.hit_table(on)) == 4  # refusal·retrieval은 법률만
     sub = t.iloc[2:]  # 다른 법률 조문이 3개 이상인 문항 (가짜 법률 4개)
     assert ev.refusal_cases(on, sub, n=2) == ev.refusal_cases(off, sub, n=2)
-    ev.run_answers(off, 'pro', 'concise', t.head(2), tmp_path / 'answers_x.csv')  # 꺼짐: 지금과 같은 열
+    ev.run_answers(off, 'pro', t.head(2), tmp_path / 'answers_x.csv')  # 꺼짐: 지금과 같은 열
     assert 'decrees' not in pd.read_csv(tmp_path / 'answers_x.csv', **E)
     with pytest.raises(SystemExit, match='없는 열'):  # 열이 다른 기존 파일에 이어 쓰지 않음
-        ev.run_answers(on, 'pro', 'concise', t, tmp_path / 'answers_x.csv')
-    ev.run_answers(off, 'pro', 'concise', t, tmp_path / 'answers_x.csv')  # 같은 구성은 이어서 실행
+        ev.run_answers(on, 'pro', t, tmp_path / 'answers_x.csv')
+    ev.run_answers(off, 'pro', t, tmp_path / 'answers_x.csv')  # 같은 구성은 이어서 실행
     assert len(pd.read_csv(tmp_path / 'answers_x.csv', **E)) == 4
     ev.run_retrieval(on, t, tmp_path / 'retrieval_dec.csv', decree=True)
     r = pd.read_csv(tmp_path / 'retrieval_dec.csv', **E)
@@ -614,7 +614,7 @@ def test_eval_decree_stage(rr, tmp_path):
     on = make()
     for _ in range(2):  # 두 번째는 이어서 실행 (건너뜀)
         ev.run_decree_retrieval(on, 'pro', dq, tmp_path / 'dqretrieval_t.csv')
-        ev.run_decree_answers(on, 'pro', 'concise', dq, tmp_path / 'dqanswers_t.csv')
+        ev.run_decree_answers(on, 'pro', dq, tmp_path / 'dqanswers_t.csv')
     r = pd.read_csv(tmp_path / 'dqretrieval_t.csv', **E)
     a = pd.read_csv(tmp_path / 'dqanswers_t.csv', keep_default_na=False, **E)
     assert len(r) == 4 and r['in_cands'].all() and (r['n_att'] <= 2).all() and len(a) == 3

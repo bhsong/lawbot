@@ -34,7 +34,7 @@ def load_questions():
         return list(csv.DictReader(source))
 
 
-def run_questions(app, model, fmt, rows, output):
+def run_questions(app, model, rows, output):
     """Record every response and stop on a request failure without retrying."""
     groups = defaultdict(Counter)
     overall = Counter()
@@ -42,7 +42,7 @@ def run_questions(app, model, fmt, rows, output):
         result = {k: row[k] for k in ('id', 'error_type', 'question', 'article_ids')}
         error = 'missing_completion'
         try:
-            with closing(service.ask(app, row['question'], model, fmt=fmt)) as stream:
+            with closing(service.ask(app, row['question'], model)) as stream:
                 for stage, hits, raw, stats in stream:
                     if stage == 'done':
                         error = None if raw.strip() else 'empty_answer'
@@ -136,7 +136,6 @@ def snapshot(cfg, client, *, preflight=False):
         'dataset_version': data['dataset_version'],
         'sha256': {path.name: hashlib.sha256(path.read_bytes()).hexdigest() for path in files},
         'profile': profile.name,
-        'format': spec.fmt,
         'temperature': llm.TEMPERATURE,
         'max_tokens': 1024,
         'read_timeout': cfg.read_timeout,
@@ -225,7 +224,7 @@ def main():
                 app = service.load_app(cfg)
                 stage = '질문 평가'
                 with (args.output / 'answers.jsonl').open('x', encoding='utf-8') as answers:
-                    summary = run_questions(app, spec.key, spec.fmt, rows, answers)
+                    summary = run_questions(app, spec.key, rows, answers)
             finally:
                 previous_stage, stage = stage, '실행 후 구성 확인'
                 after = snapshot(cfg, client)

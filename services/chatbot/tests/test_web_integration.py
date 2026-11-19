@@ -98,9 +98,9 @@ def client(server):
         yield c
 
 
-def stream_events(c, question=view.EXAMPLES[0], fmt='full'):
+def stream_events(c, question=view.EXAMPLES[0]):
     """채팅 스트림을 읽으며 (도착 시각, 이벤트, 데이터)를 차례로"""
-    body = {'question': question, 'model': 'fast', 'format': fmt}
+    body = {'question': question, 'model': 'fast'}
     with c.stream('POST', '/api/chat', json=body) as r:
         assert r.status_code == 200
         event = None
@@ -119,7 +119,7 @@ def log_rows(server):
 def test_login_required_over_http(server):
     with httpx.Client(base_url=server.url, timeout=10) as c:
         assert c.get('/api/config').status_code == 401
-        r = c.post('/api/chat', json={'question': 'x', 'model': 'fast', 'format': 'full'})
+        r = c.post('/api/chat', json={'question': 'x', 'model': 'fast'})
         assert r.status_code == 401
         assert c.post('/api/login', json={'user': USER, 'password': 'wrong'}).status_code == 401
     assert not server.calls.exists() or 'start' not in server.calls.read_text()
@@ -159,12 +159,11 @@ def test_second_question_waits_for_first(server):
     assert kinds == ['start', 'end'] * (len(kinds) // 2) and times == sorted(times)  # 생성이 겹치지 않음
 
 
-@pytest.mark.parametrize('fmt', ['full', 'concise'])
-def test_disconnect_marks_request_cancelled(server, fmt):
+def test_disconnect_marks_request_cancelled(server):
     """간결형은 결론 뒤 토큰이 화면 글을 바꾸지 않아 보낼 조각이 없다: 그 사이에도 끊김을 알아채야 한다"""
     before = len(log_rows(server))
     with client(server) as c:
-        for _, event, data in stream_events(c, fmt=fmt):
+        for _, event, data in stream_events(c):
             if event == 'answer' and '합니다' in data['text']:
                 break  # 결론이 다 보인 뒤 끊는다 (화면의 중지 버튼). 간결형은 남은 토큰이 화면 글을 바꾸지 않음
     deadline = time.monotonic() + WAIT_LIMIT

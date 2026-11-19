@@ -178,8 +178,7 @@ def check_system(p, out):
         out.append(
             (
                 'INFO',
-                f'{spec.label}: 기본 답변 형식 {spec.fmt} · system '
-                f'{spec.system_file.name if spec.system_file else "기본"}',
+                f'{spec.label}: system {spec.system_file.name if spec.system_file else "기본"}',
             )
         )
 

@@ -28,9 +28,9 @@ test('send streams one turn to done', async () => {
   const fetch = vi.fn().mockResolvedValue(sseResponse(DONE).res)
   vi.stubGlobal('fetch', fetch)
   const { result } = renderHook(() => useChatStream({ onUnauthorized: vi.fn() }))
-  await act(() => result.current.send('질문', 'pro', 'concise'))
+  await act(() => result.current.send('질문', 'pro'))
   expect(fetch).toHaveBeenCalledWith('/api/chat', expect.objectContaining({ method: 'POST' }))
-  expect(JSON.parse(fetch.mock.calls[0][1].body)).toEqual({ question: '질문', model: 'pro', format: 'concise' })
+  expect(JSON.parse(fetch.mock.calls[0][1].body)).toEqual({ question: '질문', model: 'pro' })
   expect(result.current.turns).toHaveLength(1)
   expect(result.current.turns[0]).toMatchObject({ question: '질문', text: '답변', done: true })
   expect(result.current.busy).toBe(false)
@@ -46,7 +46,7 @@ test('stop aborts the request and marks the turn stopped', async () => {
   const { result } = renderHook(() => useChatStream({ onUnauthorized: vi.fn() }))
   let pending: Promise<void>
   act(() => {
-    pending = result.current.send('질문', 'pro', 'concise')
+    pending = result.current.send('질문', 'pro')
   })
   await waitFor(() => expect(result.current.turns.at(0)?.text).toBe('부분'))
   await act(async () => {
@@ -65,14 +65,14 @@ test('synchronous sends share one active request and allow another after it ends
   const { result } = renderHook(() => useChatStream({ onUnauthorized: vi.fn() }))
   const pending: Promise<void>[] = []
   act(() => {
-    pending.push(result.current.send('첫 질문', 'pro', 'full'))
-    pending.push(result.current.send('중복 질문', 'pro', 'full'))
+    pending.push(result.current.send('첫 질문', 'pro'))
+    pending.push(result.current.send('중복 질문', 'pro'))
   })
   held.close()
   await act(async () => { await Promise.all(pending) })
   expect(fetch).toHaveBeenCalledTimes(1)
   expect(result.current.turns.map((t) => t.question)).toEqual(['첫 질문'])
-  await act(() => result.current.send('다음 질문', 'pro', 'full'))
+  await act(() => result.current.send('다음 질문', 'pro'))
   expect(fetch).toHaveBeenCalledTimes(2)
 })
 
@@ -85,7 +85,7 @@ test('unmount aborts the pending stream', async () => {
   vi.stubGlobal('fetch', fetch)
   const { result, unmount } = renderHook(() => useChatStream({ onUnauthorized: vi.fn() }))
   let pending: Promise<void>
-  act(() => { pending = result.current.send('질문', 'pro', 'full') })
+  act(() => { pending = result.current.send('질문', 'pro') })
   unmount()
   const aborted = fetch.mock.calls[0][1].signal!.aborted
   if (!aborted) held.close()
@@ -101,7 +101,7 @@ test('a malformed event cancels the response body', async () => {
   })
   vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(body)))
   const { result } = renderHook(() => useChatStream({ onUnauthorized: vi.fn() }))
-  await act(() => result.current.send('질문', 'pro', 'full'))
+  await act(() => result.current.send('질문', 'pro'))
   expect(cancel).toHaveBeenCalledOnce()
   expect(result.current.turns[0]).toMatchObject({ done: true, error: expect.any(String) })
 })
@@ -114,23 +114,23 @@ test('401 calls onUnauthorized, 400 shows the server message', async () => {
     .mockResolvedValueOnce(new Response('{"detail": "질문을 입력해 주세요."}', { status: 400 }))
   vi.stubGlobal('fetch', fetch)
   const { result } = renderHook(() => useChatStream({ onUnauthorized }))
-  await act(() => result.current.send('q', 'pro', 'full'))
+  await act(() => result.current.send('q', 'pro'))
   expect(onUnauthorized).toHaveBeenCalledOnce()
-  await act(() => result.current.send('q', 'pro', 'full'))
+  await act(() => result.current.send('q', 'pro'))
   expect(result.current.turns.at(-1)).toMatchObject({ done: true, error: '질문을 입력해 주세요.' })
 })
 
 test('network failure becomes an error message', async () => {
   vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new TypeError('Failed to fetch')))
   const { result } = renderHook(() => useChatStream({ onUnauthorized: vi.fn() }))
-  await act(() => result.current.send('q', 'pro', 'full'))
+  await act(() => result.current.send('q', 'pro'))
   expect(result.current.turns[0].error).toMatch('서버에 연결하지 못했습니다')
 })
 
 test('stream that ends without done is reported', async () => {
   vi.stubGlobal('fetch', vi.fn().mockResolvedValue(sseResponse(['event: answer\ndata: {"text": "부"}\n\n']).res))
   const { result } = renderHook(() => useChatStream({ onUnauthorized: vi.fn() }))
-  await act(() => result.current.send('q', 'pro', 'full'))
+  await act(() => result.current.send('q', 'pro'))
   expect(result.current.turns[0]).toMatchObject({ done: true, text: '부' })
   expect(result.current.turns[0].error).toMatch('연결이 끊겼습니다')
 })

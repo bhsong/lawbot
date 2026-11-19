@@ -2,9 +2,9 @@ import type { Calculation, CalculationCheck, Sources, Turn } from './types'
 
 let seq = 0
 
-export function newTurn(question: string, model: string, format: string): Turn {
+export function newTurn(question: string, model: string): Turn {
   seq += 1
-  return { id: `t${seq}`, question, model, format, text: '', done: false }
+  return { id: `t${seq}`, question, model, text: '', done: false }
 }
 
 type Data = Record<string, unknown>

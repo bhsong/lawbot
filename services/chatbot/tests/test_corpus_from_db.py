@@ -129,8 +129,7 @@ def test_db_and_csv_use_same_search_and_legacy_cache(corpus_db, tmp_path, env, m
     assert ('근로기준법', '제26조') in admin.articles
     assert admin.sha == expected_sha and admin.version == csv_app.dataset_version
     assert (
-        service.request_record(csv_app, {'model': 'pro', 'request_id': 'csv'}, None, 'ok', None)['corpus_release_id']
-        is None
+        service.request_record(csv_app, {'model': 'pro', 'request_id': 'csv'}, 'ok', None)['corpus_release_id'] is None
     )
 
     with connect(corpus_db) as conn:
@@ -200,11 +199,11 @@ def test_running_app_pins_corpus_for_search_feedback_and_request_log(corpus_db, 
     assert '(데이터 v5)' in view.data_notice(app) and '(데이터 v5-next)' in view.data_notice(restarted)
 
     stats = {'model': 'pro', 'request_id': 'synthetic-request', '_system': 'synthetic system'}
-    record = feedback.turn_record(app, QUESTION, before, '합성 답변', '합성 답변', 'pro', 'concise', stats)
+    record = feedback.turn_record(app, QUESTION, before, '합성 답변', '합성 답변', 'pro', stats)
     assert record['corpus_release_id'] == RELEASE
     assert record['dataset_version'] == app.dataset_version == 'v5'
     assert record['articles_sha256'] == app.articles_sha256 != restarted.articles_sha256
-    assert service.request_record(app, stats, None, 'ok', None)['corpus_release_id'] == RELEASE
+    assert service.request_record(app, stats, 'ok', None)['corpus_release_id'] == RELEASE
 
 
 def test_embedding_metadata_failure_only_warns(corpus_db, env, capsys):

@@ -1,5 +1,5 @@
 # src/lawbot_tools/eval_v4.py  →  uv run lawbot-eval-v4            (전체: retrieval → answers → oos → refusal → summary)
-#                             uv run lawbot-eval-v4 <단계> [--tag 이름] [--n 200] [--fmt concise|full] [--split test|val]
+#                             uv run lawbot-eval-v4 <단계> [--tag 이름] [--n 200] [--split test|val]
 #                             uv run lawbot-eval-v4 compare --base <tag> --new <tag>
 # v4 웹앱 구성(.env 그대로: v4 검색 415조문 + 리랭커 + 답변 모델)을 다시 평가한다 (맥 전용, 모델 필요)
 #   retrieval: 분할 전체(test 2,075 / val 1,110). 임베딩 순위(415조문 중)와 리랭킹 순위(후보 10개 중) → Recall@1·3·10, MRR
@@ -12,7 +12,7 @@
 #              ① 하위법령 정답 val 444(data/decree_exp/qa_decree_v4.csv + split_decree_v4.csv): 정답 하위법령 후보·첨부 포함률
 #              ② 그중 고정 표본 200(data/v4/decree_ctx_dq_val200.csv의 id)을 service.ask로 답하고 정답 하위법령 인용·거절 채점
 #              하위법령을 켜면 retrieval에 '다른 법 하위법령 첨부 비율', answers에 첨부한 하위법령(decrees 열)이 더해지고
-#              기본 tag 끝에 _dec가 붙는다 (예: pro_concise_rr_dec_val). 기존 tag 파일과 열이 섞이지 않게
+#              기본 tag 끝에 _dec가 붙는다 (예: pro_rr_dec_val). 기존 tag 파일과 열이 섞이지 않게
 #   summary  : 위 결과 파일로 지표 표 → results/v4/summary_<tag>.csv, 실패 유형 → results/v4/fail_<tag>.csv
 #   compare  : 두 tag의 summary·실패 유형을 나란히 놓고 report.py 경고 기준으로 나빠진 지표를 경고
 # 결과는 results/v4/<단계>_<tag>.csv에 문항마다 한 행씩 바로 쓴다: 중간에 멈추면 같은 명령으로 이어서 실행
@@ -245,23 +245,20 @@ def resume(path, items, fn, label):
     STAGE_TIMES[label] = {'n': len(todo), 'sec': round(time.perf_counter() - t0, 1)}
 
 
-def answer(app, model, fmt, question):
+def answer(app, model, question):
     """웹앱과 같은 경로 (service.ask): 검색(+리랭킹) → 답변. (근거 조문, 원문, 측정값)"""
     from lawbot.service import ask
 
-    for _, hits, raw, st in ask(app, question, model, fmt=fmt):
+    for _, hits, raw, st in ask(app, question, model):
         pass
     return hits, raw, st
 
 
-def answer_with(app, model, fmt, question, hits):
+def answer_with(app, model, question, hits):
     """검색 없이 주어진 참고 조문으로 답변 (거절 평가)"""
-    from lawbot.service import format_system
-
     llm, _ = app.models.get(model)
-    system = format_system(app, model, fmt)
     t0 = time.perf_counter()
-    raw = ''.join(r.text for r in llm.stream(question, hits, **({'system': system} if system else {})))
+    raw = ''.join(r.text for r in llm.stream(question, hits))
     return raw, time.perf_counter() - t0
 
 
@@ -346,12 +343,12 @@ def run_retrieval(app, test, path, rerank=True, decree=False):
     resume(path, list(zip(test['id'], test['question'], test['article_id'])), one, 'retrieval')
 
 
-def run_answers(app, model, fmt, sample, path):
+def run_answers(app, model, sample, path):
     kw = keywords(DATASET)
     decree = uses_decrees(app, model)
 
     def one(qid, q, gold, cat):
-        hits, raw, st = answer(app, model, fmt, q)
+        hits, raw, st = answer(app, model, q)
         law, dec = split_hits(hits)  # top3·retrieved는 법률 3개 (하위법령을 켜도 같은 뜻)
         return (
             {
@@ -370,12 +367,12 @@ def run_answers(app, model, fmt, sample, path):
     resume(path, list(zip(sample['id'], sample['question'], sample['article_id'], sample['eval_cat'])), one, 'answers')
 
 
-def run_oos(app, model, fmt, path):
+def run_oos(app, model, path):
     items = oos_items()
     decree = uses_decrees(app, model)
 
     def one(qid, q, kind, category, source):
-        hits, raw, st = answer(app, model, fmt, q)
+        hits, raw, st = answer(app, model, q)
         hits, dec = split_hits(hits)
         scope = oos_scope(kind, source)
         law = '근로기준법' if kind == 'control' else scope_map().get(source)
@@ -414,11 +411,11 @@ def refusal_cases(app, sample, n=100):
     return out
 
 
-def run_refusal(app, model, fmt, sample, path):
+def run_refusal(app, model, sample, path):
     table = hit_table(app)
 
     def one(cid, test, q, ctx):
-        raw, sec = answer_with(app, model, fmt, q, [table[k] for k in ctx])
+        raw, sec = answer_with(app, model, q, [table[k] for k in ctx])
         return (
             {'id': cid, 'test': test, 'context': '|'.join(ctx)}
             | score_refusal(raw)
@@ -488,12 +485,12 @@ def decree_sample(dq, n_tax=0):
     return pd.concat(parts).sort_values('id')
 
 
-def run_decree_answers(app, model, fmt, dq, path, n_tax=0):
+def run_decree_answers(app, model, dq, path, n_tax=0):
     """하위법령 정답 표본(decree_sample)을 웹앱 경로(service.ask)로 답하고 채점"""
     sample = decree_sample(dq, n_tax)
 
     def one(qid, q, gold, qtype):
-        hits, raw, st = answer(app, model, fmt, q)
+        hits, raw, st = answer(app, model, q)
         law, dec = split_hits(hits)
         ctx = [key(h) for h in hits]
         return (
@@ -815,7 +812,7 @@ def git_state():
         return None, None
 
 
-def run_meta(app, model, fmt, split, n, stages):
+def run_meta(app, model, split, n, stages):
     """Record separate generation and retrieval metadata for this evaluation."""
     client = getattr(getattr(app.retriever, 'encoder', None), 'client', None)
     try:
@@ -844,7 +841,6 @@ def run_meta(app, model, fmt, split, n, stages):
         'n': n,
         'stages': stages,
         'model': model,
-        'fmt': fmt,
         'model_id': app.models.specs[model].model,
         'emb_model': app.profile.emb_model,
         'rerank_model': getattr(app.reranker, 'model', None),
@@ -1072,7 +1068,6 @@ def main():
     )
     ap.add_argument('--n-tax', type=int, default=100, help='v5: D_tax 답변 표본 수 (법률 정답, 하위법령 정답 각각)')
     ap.add_argument('--model', default=None, help='답변 모델 key (기본: .env의 첫 번째 모델)')
-    ap.add_argument('--fmt', choices=['concise', 'full'], default=None, help='답변 형식 (기본: 그 모델의 기본 형식)')
     ap.add_argument('--no-rerank', action='store_true', help='retrieval 단계에서 리랭킹 순위를 재지 않음')
     ap.add_argument(
         '--concurrency',
@@ -1115,20 +1110,19 @@ def main():
 
     app = load_app(settings=settings.load(dict(os.environ, LAWBOT_CORPUS='csv')))
     model = args.model or app.profile.models[0].key
-    fmt = args.fmt or app.models.specs[model].fmt
     decree = uses_decrees(app, model)
     if args.stage in ('decree', 'decree-retrieval') and not decree:
         raise SystemExit(
             f'decree 단계는 하위법령 첨부 구성에서만: LAWBOT_DECREE_ENABLED=1, LAWBOT_DECREE_MODELS에 {model}'
         )
     tag = args.tag or (
-        f'{model}_{fmt}_{"rr" if app.reranker else "emb"}'
+        f'{model}_{"rr" if app.reranker else "emb"}'
         + ('_dec' if decree else '')
         + ('_val' if args.split == 'val' else '')
     )
     sample = answer_sample(test, args.n, n_tax)
     print(
-        f'[eval_v4] tag {tag} · 모델 {model} · 형식 {fmt} · 리랭커 {"켜짐" if app.reranker else "꺼짐"} · '
+        f'[eval_v4] tag {tag} · 모델 {model} · 리랭커 {"켜짐" if app.reranker else "꺼짐"} · '
         f'하위법령 {"첨부" if decree else "없음"} · '
         f'{args.split} {len(test)} · 표본 {len(sample)} · 동시 {WORKERS}'
     )
@@ -1137,7 +1131,7 @@ def main():
         stages = [s for s in stages if s != 'oos'] + (['decree'] if args.stage == 'all' and decree else [])
     write_run_meta(
         tag,
-        run_meta(app, model, fmt, args.split, args.n, stages)
+        run_meta(app, model, args.split, args.n, stages)
         | {'concurrency': WORKERS, 'eval_dataset': DATASET, 'n_tax': n_tax},
     )
     t0 = time.perf_counter()
@@ -1147,16 +1141,16 @@ def main():
                 app, test, OUT / f'retrieval_{tag}.csv', rerank=not args.no_rerank, decree=decree and not args.no_rerank
             )
         elif s == 'answers':
-            run_answers(app, model, fmt, sample, OUT / f'answers_{tag}.csv')
+            run_answers(app, model, sample, OUT / f'answers_{tag}.csv')
         elif s == 'oos':
-            run_oos(app, model, fmt, OUT / f'oos_{tag}.csv')
+            run_oos(app, model, OUT / f'oos_{tag}.csv')
         elif s == 'refusal':
             # v4 기준선과 같은 문항으로 비교하도록 v4 표본 부분에서만 뽑는다 (v5도)
-            run_refusal(app, model, fmt, sample[sample.eval_cat != 'D_tax'], OUT / f'refusal_{tag}.csv')
+            run_refusal(app, model, sample[sample.eval_cat != 'D_tax'], OUT / f'refusal_{tag}.csv')
         elif s == 'decree':
             dq = load_decree_questions('val', DATASET)
             run_decree_retrieval(app, model, dq, OUT / f'dqretrieval_{tag}.csv')
-            run_decree_answers(app, model, fmt, dq, OUT / f'dqanswers_{tag}.csv', n_tax)
+            run_decree_answers(app, model, dq, OUT / f'dqanswers_{tag}.csv', n_tax)
         elif s == 'decree-retrieval':  # 답변 없이 하위법령 검색만 (첨부 수 고르기: LAWBOT_DECREE_K를 크게)
             run_decree_retrieval(app, model, load_decree_questions('val', DATASET), OUT / f'dqretrieval_{tag}.csv')
     update_last_run(tag, stage_times=STAGE_TIMES)

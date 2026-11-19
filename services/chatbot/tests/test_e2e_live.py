@@ -138,7 +138,6 @@ class Live:
             'dataset_version': m.get('dataset_version'),
             'articles_sha256': sha256(profile.articles),
             'system_sha256': sha256(profile.models[0].system_file),
-            'full_system_sha256': sha256(profile.system_file),
             'temperature': llm.TEMPERATURE,
             'max_tokens': 1024,
             'settings': {

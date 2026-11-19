@@ -1,6 +1,6 @@
 type Item = { value: string; label: string; title?: string; disabled?: boolean }
 
-/** Pill-shaped single choice (radio group) used for model and answer format. */
+/** Pill-shaped single choice (radio group) used for the answer model. */
 export function Segmented({ label, items, value, onChange, disabled }: { label: string; items: Item[]; value: string; onChange: (v: string) => void; disabled?: boolean }) {
   return (
     <div className="seg" role="radiogroup" aria-label={label}>

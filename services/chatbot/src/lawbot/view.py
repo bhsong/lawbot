@@ -29,7 +29,6 @@ ANSWER_NOTICES = {
 }
 DISCLAIMER = '법률 자문이 아닌 참고용 답변입니다.'
 DISABLED_MODEL = '이 기기에서는 사용하지 않는 모델입니다. 다른 답변 모델을 고르세요.'
-FORMATS = [('간결', 'concise'), ('전체 (4항목)', 'full')]
 CITED_LABEL = '✅ 답변에서 인용한 조문'
 # 검색·리랭킹·생성 단계 오류의 화면 안내 (요청 로그 error_type → 문구)
 STAGE_ERRORS = {
