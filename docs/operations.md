@@ -327,7 +327,7 @@ Colab 실험(transformers fp16)과의 순위 일치는 리랭커 도입 때 val�
    tailscale serve status
    ```
 
-6. (선택) Tailscale을 설치할 수 없는 브라우저에서는 Cloudflare Tunnel + Access로 운영 챗봇과 캘린더에 접속합니다. 맥 미니가 Cloudflare로 나가는 연결만 맺으며 공유기 포트는 열지 않습니다. Access는 허용한 이메일 하나만 통과시키고, 챗봇의 앱 로그인은 그대로 둡니다. **관리자 기능은 Tailscale(또는 맥 미니 로컬)에서만 씁니다.** 웹앱과 캘린더 서버는 Cloudflare를 거친 요청(`CF-Connecting-IP` 헤더)의 `/api/admin` 경로를 404로 막고, 챗봇은 그 요청의 관리자 로그인을 거부합니다(`lawbot_common.edge`). 모델 서버·생성 서버·Source Hub는 터널에 연결하지 않습니다.
+6. (선택) Tailscale을 설치할 수 없는 브라우저에서는 Cloudflare Tunnel + Access로 운영 챗봇과 캘린더에 접속합니다. 맥 미니가 Cloudflare로 나가는 연결만 맺으며 공유기 포트는 열지 않습니다. Access는 허용한 이메일 하나만 통과시키고, 챗봇의 앱 로그인은 그대로 둡니다. **관리자 기능은 Tailscale(또는 맥 미니 로컬)에서만 씁니다.** 웹앱과 캘린더 서버는 Cloudflare를 거친 요청(`CF-Connecting-IP` 헤더)의 `/api/admin` 경로를 404로 막고, 챗봇은 그 요청의 관리자 사용자명을 없는 사용자명으로 취급합니다(`lawbot_common.edge`). 모델 서버·생성 서버·Source Hub는 터널에 연결하지 않습니다.
 
    순서가 중요합니다. **Access 앱을 먼저 만든 뒤** DNS를 연결해 Access 없이 열리는 순간이 없게 합니다.
 
@@ -459,7 +459,7 @@ uv run python -m lawbot.auth hash
 
 비밀번호를 두 번 입력한 뒤 출력된 한 줄을 `.env`의 `LAWBOT_ADMIN_PW_HASH`에 작은따옴표로 감싸 붙여 넣습니다. 해시에는 `$`가 포함됩니다. `.env`는 Git에서 제외하고 권한을 600으로 제한합니다. 관리자도 기존 로그인 화면을 사용합니다. 두 관리자 변수를 모두 비우면 기존 일반 로그인만 사용합니다.
 
-관리자 로그인과 관리자 API는 Tailscale·로컬 접속에서만 동작합니다. Cloudflare Tunnel을 거친 요청에서는 관리자 로그인을 실패로 처리하고(감사 기록에는 실패로 남고 로그인 제한 횟수에는 세지 않음) 관리자 API는 404를 반환합니다.
+관리자 로그인과 관리자 API는 Tailscale·로컬 접속에서만 동작합니다. Cloudflare Tunnel을 거친 요청에서는 관리자 사용자명을 없는 사용자명과 똑같이 처리하고(같은 검증 시간과 잠금, 감사 기록 없음) 관리자 API는 404를 반환합니다. 로그인 실패 횟수는 터널 경유와 Tailscale·로컬을 따로 세므로 외부 시도가 tailnet 로그인을 잠그지 않습니다.
 
 관리자 계정을 사용하면 사용자명별로 15분 안에 로그인에 5번 실패했을 때 15분 동안 추가 로그인이 제한됩니다. 관리자 로그인 결과는 `audit_events`에 기록되며, 비밀번호·해시·쿠키·세션 ID는 기록하지 않습니다.
 

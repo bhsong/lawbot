@@ -253,14 +253,40 @@ def test_admin_login_audit_records_only_safe_fields(admin_app, admin_hash, env):
     )
 
 
+def external_login(c, user, pw):
+    return c.post('/api/login', json={'user': user, 'password': pw}, headers={'CF-Connecting-IP': '203.0.113.7'})
+
+
+def test_external_admin_login_looks_like_an_unknown_user(admin_app, env):
+    app, _ = admin_app
+    checked = []
+    verify = web.auth_logic.verify_password
+    env.setattr(web.auth_logic, 'verify_password', lambda pw, stored: checked.append(stored) or verify(pw, stored))
+    with TestClient(app) as c:
+        admin = [external_login(c, ADMIN_USER, ADMIN_PW).status_code for _ in range(6)]
+        unknown = [external_login(c, 'nobody', ADMIN_PW).status_code for _ in range(6)]
+    assert admin == unknown == [401] * 5 + [429]
+    assert checked == [web.auth_logic.DUMMY_HASH] * 10
+
+
+def test_external_lockout_does_not_lock_tailnet_logins(admin_app):
+    app, _ = admin_app
+    with TestClient(app) as c:
+        for user in (ADMIN_USER, USER):
+            for _ in range(5):
+                assert external_login(c, user, 'bad-test-password').status_code == 401
+            assert external_login(c, user, 'bad-test-password').status_code == 429
+        assert login(c).status_code == 200
+        assert login(c, ADMIN_USER, ADMIN_PW).status_code == 200
+
+
 def test_cloudflare_requests_cannot_use_admin(admin_app):
     app, path = admin_app
     external = {'CF-Connecting-IP': '203.0.113.7'}
     with TestClient(app) as c:
         assert c.get('/api/admin/feedbacks', headers=external).status_code == 404
-        for _ in range(6):
-            res = c.post('/api/login', json={'user': ADMIN_USER, 'password': ADMIN_PW}, headers=external)
-            assert res.status_code == 401
+        for _ in range(5):
+            assert external_login(c, ADMIN_USER, ADMIN_PW).status_code == 401
         assert login(c, ADMIN_USER, ADMIN_PW).status_code == 200
         assert c.get('/api/admin/feedbacks').status_code == 200
         assert c.get('/api/admin/feedbacks', headers=external).status_code == 404
@@ -269,7 +295,7 @@ def test_cloudflare_requests_cannot_use_admin(admin_app):
         assert c.get('/api/me', headers=external).json()['role'] == 'user'
     with connection.connect(path) as conn:
         actions = [row[0] for row in conn.execute('SELECT action FROM audit_events ORDER BY event_id')]
-    assert actions == ['login_fail'] * 6 + ['login_ok']
+    assert actions == ['login_ok']
 
 
 def test_admin_audit_failure_does_not_block_login(admin_app, admin_hash, caplog):
