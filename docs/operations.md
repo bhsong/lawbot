@@ -320,18 +320,21 @@ Colab 실험(transformers fp16)과의 순위 일치는 리랭커 도입 때 val�
 
    순서가 중요합니다. **Access 앱을 먼저 만든 뒤** DNS를 연결해 Access 없이 열리는 순간이 없게 합니다.
 
-   1. Cloudflare Zero Trust에서 로그인 방법으로 One-time PIN을 켭니다. Access 애플리케이션(Self-hosted)에 챗봇·캘린더 호스트를 넣고, 정책은 Allow + 본인 이메일 하나로 둡니다.
-   2. 터널을 만들고 두 호스트를 DNS에 연결합니다. 명령 형식은 `cloudflared --help`로 확인합니다.
+   1. Access(Zero Trust 대시보드). 새 조직은 One-time PIN이 기본으로 켜져 있지 않습니다. 대시보드 메뉴 이름은 바뀔 수 있습니다.
+      - **Integrations → Identity providers → Add new identity provider → One-time PIN**을 추가합니다. Cloudflare 계정 로그인(기본 방식)은 회사 PC에 계정 세션을 남기므로 쓰지 않습니다.
+      - **Access controls → Applications → Create new application → Self-hosted and private**에서 public hostname으로 챗봇·캘린더 호스트를 넣습니다. Login methods는 One-time PIN만 고르고 "Accept all available identity providers"는 끕니다. Session duration은 24시간입니다.
+      - 정책은 Action **Allow**, Include **Emails** = 본인 이메일 하나입니다. Everyone·이메일 도메인 전체·Bypass는 쓰지 않습니다.
+   2. 터널을 만들고 두 호스트를 DNS에 연결합니다. `tunnel login`은 브라우저에서 도메인을 골라 Authorize하면 `~/.cloudflared/cert.pem`을 만듭니다.
 
       ```zsh
       brew install cloudflared
       cloudflared tunnel login
-      cloudflared tunnel create lawbot
-      cloudflared tunnel route dns lawbot <챗봇 호스트>
-      cloudflared tunnel route dns lawbot <캘린더 호스트>
+      cloudflared tunnel create <터널 이름>
+      cloudflared tunnel route dns <터널 이름> <챗봇 호스트>
+      cloudflared tunnel route dns <터널 이름> <캘린더 호스트>
       ```
 
-   3. 레포 밖 `~/.cloudflared/config.yml`(권한 600)에 다음을 적습니다. 관리자 경로는 터널에서도 404로 보냅니다(앱 차단과 이중). 마지막 규칙이 나머지 호스트를 모두 404로 막습니다.
+   3. 레포 밖 `~/.cloudflared/config.yml`(권한 600)에 다음을 적습니다. 관리자 경로는 터널에서도 404로 보냅니다(앱 차단과 이중). 마지막 규칙이 나머지 호스트를 모두 404로 막습니다. 터널 인증 파일 `<터널 ID>.json`은 권한 400이며 커밋하지 않습니다.
 
       ```yaml
       tunnel: <터널 ID>
@@ -344,10 +347,20 @@ Colab 실험(transformers fp16)과의 순위 일치는 리랭커 도입 때 val�
         - service: http_status:404
       ```
 
-   4. `cloudflared tunnel ingress validate`로 설정을 검사하고 `cloudflared tunnel run lawbot`으로 직접 확인한 뒤, `cloudflared service install`로 상시 실행합니다.
-   5. 외부 브라우저에서 확인합니다: Access 인증 → 챗봇 로그인과 질문 1건, 캘린더 조회, 두 호스트의 `/api/admin` 404, 관리자 계정 로그인 거부, 로그인 쿠키의 `Secure`. tailnet에서는 관리자 기능이 그대로 동작해야 합니다.
+   4. `cloudflared tunnel ingress validate`와 `cloudflared tunnel ingress rule https://<호스트>/<경로>`로 규칙을 확인하고, `cloudflared tunnel run <터널 이름>`으로 직접 띄워 공개 주소가 Access 로그인으로 302 이동하는지 봅니다. 그다음 `cloudflared service install`로 사용자 LaunchAgent(`~/Library/LaunchAgents/com.cloudflare.cloudflared.plist`)를 만듭니다. 이 명령이 만든 plist에는 실행 인자가 `cloudflared` 하나뿐이라 터널이 뜨지 않으므로, 인자를 고치고 다시 등록합니다. 로그는 `~/Library/Logs/com.cloudflare.cloudflared.err.log`입니다.
 
-   외부 접속을 끄려면 cloudflared 서비스를 중지합니다(`cloudflared service uninstall`). Tailscale 접속은 영향을 받지 않습니다. 호스트명·이메일·터널 ID·포트는 문서와 커밋에 적지 않습니다.
+      ```zsh
+      P=~/Library/LaunchAgents/com.cloudflare.cloudflared.plist
+      plutil -replace ProgramArguments -json '["/opt/homebrew/bin/cloudflared","tunnel","--config","<홈>/.cloudflared/config.yml","run"]' $P
+      launchctl bootout gui/$(id -u) $P; launchctl bootstrap gui/$(id -u) $P
+      launchctl print gui/$(id -u)/com.cloudflare.cloudflared | grep state
+      ```
+
+   5. 외부 브라우저(회사 PC, 와이파이를 끈 휴대폰)에서 확인합니다: Access OTP → 챗봇 로그인과 질문 1건, 캘린더의 법령 시행·ERP·기관 소식 데이터, 두 호스트의 `/api/admin` 404, 관리자 계정 로그인 거부. `/admin`처럼 `api`가 없는 경로는 화면 앱이 같은 `index.html`을 돌려줄 뿐 관리자 화면이 아닙니다. tailnet에서는 관리자 기능이 그대로 동작해야 합니다.
+
+   화면의 API 요청은 Access 쿠키가 함께 가도록 `credentials: 'same-origin'`(브라우저 기본값)을 씁니다. `omit`이면 Access가 데이터 요청을 로그인으로 돌려보내 화면만 뜨고 데이터가 비어 보입니다.
+
+   외부 접속을 끄려면 `launchctl bootout gui/$(id -u) ~/Library/LaunchAgents/com.cloudflare.cloudflared.plist`로 터널 서비스만 내립니다. Tailscale 접속은 영향을 받지 않습니다. 이 서비스도 다른 LaunchAgent처럼 맥 미니에 로그인된 동안 실행됩니다. 호스트명·이메일·터널 ID·포트는 문서와 커밋에 적지 않습니다.
 
 이 구조의 제약:
 
