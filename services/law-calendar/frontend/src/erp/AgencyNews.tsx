@@ -34,7 +34,7 @@ function NewsContent({ agency }: { agency: Agency }) {
   useEffect(() => {
     if (agency === 'hometax') return
     const controller = new AbortController()
-    fetch('/api/erp-news/latest?agency=' + agency, { signal: controller.signal, cache: 'no-store', credentials: 'omit' })
+    fetch('/api/erp-news/latest?agency=' + agency, { signal: controller.signal, cache: 'no-store', credentials: 'same-origin' })
       .then(async (response) => {
         if (!response.ok) throw new Error('News unavailable')
         const data: ErpNews = await response.json()

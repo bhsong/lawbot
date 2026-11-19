@@ -2,7 +2,7 @@ import { loadCalendar } from './data'
 
 afterEach(() => { vi.unstubAllGlobals(); vi.unstubAllEnvs() })
 
-test('all public pages are read without browser credentials', async () => {
+test('all pages are read with same-origin credentials so an access gate cookie reaches the API', async () => {
   vi.stubEnv('DEV', false)
   const fetch = vi.fn(async (url: string) => new Response(JSON.stringify(
     url.includes('status') ? { collectedAt: null, verifiedAt: null, delayed: false }
@@ -13,7 +13,7 @@ test('all public pages are read without browser credentials', async () => {
   const controller = new AbortController()
   const result = await loadCalendar('2026-11', controller.signal)
   expect(result.changes.map(item => item.id)).toEqual(['one', 'two'])
-  expect(fetch).toHaveBeenCalledWith(expect.stringContaining('page=2'), expect.objectContaining({ credentials: 'omit', signal: controller.signal }))
+  expect(fetch).toHaveBeenCalledWith(expect.stringContaining('page=2'), expect.objectContaining({ credentials: 'same-origin', signal: controller.signal }))
 })
 
 test('HTTP errors and truncated pagination do not become an empty or partial month', async () => {
