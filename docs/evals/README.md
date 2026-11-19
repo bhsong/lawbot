@@ -4,6 +4,8 @@
 
 ## 기록 목록
 
+- **운영 반영 v6.3.4 (2026-11-19)** — Fast 모델 제거, 답변 모델 Pro 하나. 운영 `.env`의 `LAWBOT_MODELS`·`LAWBOT_DECREE_MODELS` 삭제, 웹앱만 재시작, `check_deploy` FAIL 0 → [기록](2026-11-19-deploy-v6.3.4.md)
+
 - **Fast 모델 제거 (2026-11-19)** — Pro 단일화·피드백 `fmt` 제거. 기본 Python 2,760개, 프런트엔드 55개 통과 → [기록](2026-11-19-remove-fast-model.md)
 
 - **운영 반영 v6.3.3 (2026-11-19)** — 답변 형식을 간결형 하나로(형식 선택 제거). 웹앱만 재시작, `check_deploy` FAIL 0, 화면에 형식 선택 없음 → [기록](2026-11-19-deploy-v6.3.3.md)
