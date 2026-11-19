@@ -4,6 +4,8 @@
 
 ## 기록 목록
 
+- **정의 조문 연결 (2026-11-19)** — 실제 v5 정의 144개·빈도 제외 용어 16개, 시작 시 약 53ms 추가. 기본 Python 2,774개(대역 E2E 76개) 통과 → [기록](2026-11-19-definition-links.md)
+
 - **운영 반영 v6.3.4 (2026-11-19)** — Fast 모델 제거, 답변 모델 Pro 하나. 운영 `.env`의 `LAWBOT_MODELS`·`LAWBOT_DECREE_MODELS` 삭제, 웹앱만 재시작, `check_deploy` FAIL 0 → [기록](2026-11-19-deploy-v6.3.4.md)
 
 - **Fast 모델 제거 (2026-11-19)** — Pro 단일화·피드백 `fmt` 제거. 기본 Python 2,760개, 프런트엔드 55개 통과 → [기록](2026-11-19-remove-fast-model.md)
