@@ -12,6 +12,7 @@ import pandas as pd
 
 from lawbot.decree import LAW_KIND
 from lawbot.hits import Hit
+from lawbot_common.definition_links import Article, DefinitionLinks
 
 
 def doc_text(law):
@@ -43,6 +44,9 @@ class Retriever:
             raise ValueError(f'하위법령(kind 시행령·시행규칙) 조문이 없습니다: {source}')
         both = pd.concat([law, dec], ignore_index=True)
         self.n_law = len(law)
+        self.definition_links = DefinitionLinks(
+            Article(*row) for row in law[['law', 'article_id', 'title', 'text']].itertuples(index=False, name=None)
+        )
         self.ids = both['article_id'].to_numpy()
         self.titles = both['title'].to_numpy()
         self.laws = both['law'].to_numpy()  # 법령마다 조문 번호가 겹침

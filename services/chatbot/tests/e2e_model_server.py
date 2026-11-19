@@ -17,6 +17,8 @@ def answer_chunks(prompt):
     cite = m.group(1) if m else '근로기준법 제26조'
     if '합성 근거 오류 사례' in prompt:
         cite = '근로기준법 제99999조'
+    elif '합성 정의 인용 사례' in prompt:
+        cite = '근로기준법 제2조 제1항 제6호'
     return ['【결론】', '가짜 모델 ', '답변입니다.', '\n【근거 조문】\n', cite]
 
 

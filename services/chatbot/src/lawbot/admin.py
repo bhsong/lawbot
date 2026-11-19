@@ -170,7 +170,7 @@ class Corpus:
     def checks(self, feedback):
         changed = []
         for hit in feedback.get('hits') or ():
-            if not isinstance(hit, dict):
+            if not isinstance(hit, dict) or 'definition_item' in hit:
                 continue
             law, article_id = hit.get('law'), hit.get('article_id')
             if not isinstance(law, str) or not isinstance(article_id, str):

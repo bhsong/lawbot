@@ -4,17 +4,18 @@ from typing import Any, NotRequired, TypedDict
 
 
 class Hit(TypedDict):
-    """검색 결과 조문 하나 (retriever.search → reranker.rerank → decree.attach → llm.build_prompt·화면)"""
+    """A ranked result or a model-only definition excerpt."""
 
     law: str  # '근로기준법', 하위법령은 '근로기준법 시행령'
     article_id: str  # '제26조'
     title: str
     doc: str  # 검색 문서 문자열 '근로기준법 제26조(해고의 예고)\n본문'
-    score: float  # 임베딩 코사인 유사도
+    score: NotRequired[float]  # Cosine similarity; definition excerpts are not ranked.
     rerank_score: NotRequired[float]  # 리랭커 P(yes) (리랭커를 켰을 때)
     emb_rank: NotRequired[int]  # 리랭킹 전 임베딩 순위 (1부터)
     kind: NotRequired[str]  # 하위법령만: '시행령'·'시행규칙'
     parent_law: NotRequired[str]  # 하위법령만: '근로기준법'
+    definition_item: NotRequired[str]  # Item number for a model-only definition excerpt.
 
 
 class Timing(TypedDict, total=False):
@@ -29,6 +30,7 @@ class Timing(TypedDict, total=False):
     decree_rerank: float
     decree_candidates: list[Hit]
     n_decree: int
+    n_definitions: int
     ttft: float
     first_text: float
     total: float
