@@ -35,7 +35,8 @@ HIT_FIELDS = (
     'emb_rank',
     'kind',
     'parent_law',
-)  # kind·parent_law: 하위법령 hit만
+    'definition_item',
+)
 TIMING_FIELDS = (
     'search',
     'rerank',

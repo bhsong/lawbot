@@ -320,6 +320,42 @@ def retrieve_decrees(app, question, top1_law, st: Timing) -> list[Hit]:
     return att
 
 
+def _model_hits(retriever, law_hits: list[Hit], decree_hits: list[Hit], st: Timing) -> list[Hit]:
+    """Interleave definitions without changing statutory or decree retrieval."""
+    st['n_definitions'] = 0
+    hits = law_hits + decree_hits
+    links = getattr(retriever, 'definition_links', None)
+    if links is None:
+        return hits
+    matches = [links.for_article(hit['law'], hit['article_id']) for hit in law_hits[:TOP_K]]
+    if not any(matches):
+        return hits
+
+    provided = {(hit['law'], hit['article_id']) for hit in hits}
+    attached: set[tuple[str, str, str]] = set()
+    context: list[Hit] = []
+    for hit, items in zip(law_hits, matches):
+        context.append(hit)
+        for item in items:
+            article = (item.law, item.article_id)
+            key = (*article, item.number)
+            if article in provided or key in attached:
+                continue
+            attached.add(key)
+            context.append(
+                Hit(
+                    law=item.law,
+                    article_id=item.article_id,
+                    title=item.title,
+                    doc=f'{item.law} {item.article_id}({item.title})\n{item.text}',
+                    definition_item=item.number,
+                )
+            )
+    st['n_definitions'] = len(attached)
+    context.extend(hits[len(matches) :])
+    return context
+
+
 def log_timing(st):
     """질문마다 단계별 시간 한 줄 (질문 내용은 남기지 않음)"""
     parts = [
@@ -396,6 +432,7 @@ def request_record(app, st, status, error):
         'reranker': app.reranker is not None,
         'decree': getattr(app, 'decree', None) is not None,
         'n_decree': st.get('n_decree'),
+        'n_definitions': st.get('n_definitions'),
     }
     rec |= {f'{k}_ms': None if st.get(k) is None else round(st[k] * 1000) for k in MS_FIELDS}
     rec |= {k: st.get(k) for k in ('prompt_tokens', 'gen_tokens', 'peak_gb', 'finish')}
@@ -471,7 +508,7 @@ def ask(
 ):
     """질문 하나: (단계, 검색 조문, 답변 원문, 측정값)을 차례로 돌려준다
     단계 'generate'(토큰마다) → 'done'. 조문은 생성 전에 정해짐
-    hits: 법률 k개 + 첨부한 하위법령 (첨부가 꺼져 있으면 법률 k개만)
+    hits: 검색된 법률·첨부한 하위법령과 모델에 제공하는 정의 항목
     측정값(초): search, rerank, decree_search·decree_rerank(첨부가 켜졌을 때만), ttft(생성 호출→첫 토큰),
     first_text(질문 수신→첫 글자), total / tps, prompt_tokens, prompt_tps(프리필 속도), gen_tokens, peak_gb, finish
     질문마다 요청 로그 한 줄 (log_request): 성공 ok / 오류 error(AskError로 감싸 올림: kind는 요청 로그 error_type과 같고 화면 안내에 씀) /
@@ -528,7 +565,7 @@ def ask(
             stage = 'search'
             REQUEST_ID.set(st['request_id'])
         law_hits, decree_hits = retrieve(app, question, k, st)
-        hits = law_hits + decree_hits
+        hits = _model_hits(app.retriever, law_hits, decree_hits, st)
         stage = 'load'
         llm = app.llm
         stage = 'generation'

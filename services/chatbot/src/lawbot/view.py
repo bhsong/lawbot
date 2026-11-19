@@ -56,8 +56,9 @@ def source_groups(hits, cited=None, refused=False):
     """오른쪽 조문 카드 묶음 [(제목 또는 None, 펼침 여부, 조문 목록)]. cited(답변에서 인용한 검색 결과 조문)를 주면
     인용한 조문은 펼쳐서 먼저, 나머지는 접어서 뒤에. 생성 중이거나(cited=None) 인용을 찾지 못한 답변은 모두 펼친다
     (사용자가 직접 확인할 수 있게). hits 순서(법률 → 첨부한 하위법령)를 묶음 안에서도 지킨다"""
+    hits = [h for h in hits if 'definition_item' not in h]
     if not refused and not cited:
-        return [(None, True, list(hits))]
+        return [(None, True, hits)]
     used = [h for h in hits if h in (cited or [])]
     rest = [h for h in hits if h not in used]
     groups = []

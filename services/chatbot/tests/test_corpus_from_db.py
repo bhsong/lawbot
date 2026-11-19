@@ -1,4 +1,5 @@
 import json
+from types import SimpleNamespace
 
 import numpy as np
 import pytest
@@ -12,11 +13,13 @@ from lawbot import (
     manifest,
     service,
     view,
+    web,
 )
 from lawbot.admin import Corpus
 from lawbot.db import cli
 from lawbot.db.connection import connect, transaction
 from lawbot.db.csv_import import sha256
+from lawbot.llm import build_prompt, response
 from test_migrate_csv_to_sqlite import db_path as db_path
 from test_migrate_csv_to_sqlite import run as migrate
 
@@ -176,6 +179,83 @@ def test_db_startup_errors_precede_model_connection(problem, message, db_path, r
     with pytest.raises((RuntimeError, ValueError), match=message):
         service.load_app()
     assert model_server.instances == []
+
+
+@pytest.mark.parametrize('mode', ['csv', 'db'])
+def test_definition_is_model_evidence_but_not_a_card(corpus_db, tmp_path, env, mode):
+    configure(env, corpus_db, decrees=True, mode=mode)
+    log = tmp_path / 'requests.jsonl'
+    env.setenv('LAWBOT_REQUEST_LOG', str(log))
+    app = service.load_app()
+    source, target = '근로자퇴직급여 보장법', '근로기준법'
+    retriever = app.retriever
+    positions = {(law, no): i for i, (law, no) in enumerate(zip(retriever.laws, retriever.ids))}
+    ranked = [
+        retriever._hit(positions[key], 1.0) for key in [(target, '제26조'), (source, '제8조'), (source, '제11조')]
+    ]
+    decrees = [retriever.search_decrees(QUESTION, k=1)[0]]
+    top_laws = []
+
+    def retrieve_decrees(app, question, top1_law, st):
+        top_laws.append(top1_law)
+        return decrees
+
+    env.setattr(service, 'retrieve_decrees', retrieve_decrees)
+    env.setattr(retriever, 'search', lambda question, k: ranked[:k])
+    env.setattr(app, 'reranker', SimpleNamespace(candidates=10, rerank=lambda question, hits, top_k: hits[:top_k]))
+    prompts, records = [], []
+
+    def stream(question, hits):
+        prompts.append(build_prompt(hits, question))
+        yield response(
+            '【결론】평균임금을 기준으로 합니다.\n【근거 조문】근로기준법 제2조 제1항 제6호', finish_reason='stop'
+        )
+
+    env.setattr(app, 'llm', SimpleNamespace(stream=stream, system='합성 시스템'), raising=False)
+    events = list(web.chat_events(app, QUESTION, records.append))
+    assert top_laws == [target]
+    (prompt,) = prompts
+    assert prompt.index(f'{source} 제8조(') < prompt.index(f'{target} 제2조(정의)') < prompt.index(f'{source} 제11조(')
+    definition = next(block for block in prompt.split('\n\n') if f'{target} 제2조(정의)' in block)
+    header, item, paragraph = definition.splitlines()
+    assert header.endswith('근로기준법 제2조(정의)')
+    assert item.startswith('6. "평균임금"이란') and paragraph.startswith('② 제1항제6호')
+
+    expected_cards = {view.source_title(hit) for hit in [*ranked, *decrees]}
+    for event, data in events:
+        if event == 'sources':
+            assert {item['title'] for group in data['groups'] for item in group['items']} == expected_cards
+    assert events[-1][1]['text'].endswith('근거: 근로기준법 제2조(정의)')
+    (logged,) = map(json.loads, log.read_text(encoding='utf-8').splitlines())
+    assert logged['n_definitions'] == 1 and logged['cite_ok'] == 1
+    (record,) = records
+    (attached,) = [hit for hit in record['hits'] if 'definition_item' in hit]
+    assert (attached['law'], attached['article_id'], attached['definition_item']) == (target, '제2조', '6')
+
+    # If the full article is already supplied, the excerpt must not duplicate it.
+    ranked[2] = retriever._hit(positions[(target, '제2조')], 1.0)
+    _, hits, _, st = list(service.ask(app, QUESTION))[-1]
+    assert hits == [*ranked, *decrees] and st['n_definitions'] == 0
+
+
+def test_definition_does_not_trigger_below_top_three(env):
+    env.setenv('LAWBOT_PROFILE', 'v5')
+    app = service.load_app()
+    retriever = app.retriever
+    positions = {(law, no): i for i, (law, no) in enumerate(zip(retriever.laws, retriever.ids))}
+    ranked = [
+        retriever._hit(positions[key], 1.0)
+        for key in [
+            ('근로기준법', '제26조'),
+            ('근로기준법', '제36조'),
+            ('근로기준법', '제60조'),
+            ('근로자퇴직급여 보장법', '제8조'),
+        ]
+    ]
+    env.setattr(retriever, 'search', lambda question, k: ranked[:k])
+    env.setattr(app, 'llm', SimpleNamespace(stream=lambda *args: [response('합성 답변')]), raising=False)
+    _, hits, _, st = list(service.ask(app, QUESTION, k=4))[-1]
+    assert hits == ranked and st['n_definitions'] == 0
 
 
 def test_running_app_pins_corpus_for_search_feedback_and_request_log(corpus_db, tmp_path, env):

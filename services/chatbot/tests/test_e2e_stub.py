@@ -1,6 +1,7 @@
 # Browser E2E: the real web app, a protected generation HTTP fake, and fake embedding/rerank models.
 # These tests never load real models and are not evidence of real-model E2E success.
 # 화면 요소는 역할·라벨·테스트 id로 찾는다 (e2e_support). 접속은 127.0.0.1만
+import csv
 import json
 import time
 
@@ -11,6 +12,7 @@ from playwright.sync_api import expect
 import e2e_support as e2e
 from admin_test_data import add_feedback, seed_qa
 from conftest import ADMIN_PW, ADMIN_USER
+from lawbot import manifest
 from lawbot.db import cli
 from lawbot.db.connection import connect
 from lawbot.deploy import article_paths
@@ -587,3 +589,60 @@ def test_v5_answers_in_the_single_concise_format(v5_ui):
     expect(answer).to_contain_text('근로소득 세금, 4대보험')
     expect(answer).not_to_contain_text('가짜 모델의 전체 설명')
     assert len(e2e.law_cards(page)) == 3
+
+
+@pytest.fixture
+def definition_stack(tmp_path, page, request):
+    path = tmp_path / 'law.csv'
+    source, target = '근로자퇴직급여 보장법', '근로기준법'
+    rows = [
+        (source, '제2조', '정의', '4. "평균임금"이란 「근로기준법」 제2조제1항제6호에 따른 임금이다.'),
+        (target, '제2조', '정의', '6. "평균임금"이란 지급된 임금의 평균이다.'),
+        (source, '제8조', '퇴직금', '평균임금에 따른다. ' + '퇴직금 적용 기준을 정한다. ' * 20),
+        (source, '제9조', '지급', '퇴직금 지급 기준을 정한다. ' * 20),
+        (source, '제10조', '시효', '퇴직금 시효 기준을 정한다. ' * 20),
+        *((source, f'제{i}조', '기타', '별도 규정이다.') for i in range(11, 66)),
+    ]
+    with path.open('w', encoding='utf-8', newline='') as f:
+        writer = csv.writer(f)
+        writer.writerow(('law', 'article_id', 'title', 'text', 'deleted'))
+        writer.writerows((*row, 0) for row in rows)
+    path.with_name('manifest.json').write_text(
+        json.dumps(
+            {
+                'articles_file': path.name,
+                'articles_sha256': manifest.sha256(path),
+                'articles_total': len(rows),
+                'dataset_version': 'synthetic',
+                'reference_date': '2026-01-01',
+            }
+        ),
+        encoding='utf-8',
+    )
+    stack = e2e.Stack(
+        tmp_path,
+        read_timeout=READ_TIMEOUT_S,
+        LAWBOT_PROFILE='v5',
+        LAWBOT_V5_ARTICLES=str(path),
+        LAWBOT_RERANKER_ENABLED='1',
+        LAWBOT_RERANKER_CANDIDATES='3',
+        LAWBOT_DECREE_ENABLED='0',
+    )
+    try:
+        yield stack
+    finally:
+        try:
+            e2e.keep_on_failure(request, 'e2e_stub', stack.logs(), page)
+        finally:
+            stack.stop()
+
+
+def test_definition_citation_has_no_source_card(definition_stack, page):
+    e2e.login(page, definition_stack.url)
+    e2e.ask(page, '합성 정의 인용 사례: 퇴직금은 어떻게 정하나요?')
+    e2e.wait_done(page)
+    expect(e2e.answer(page)).to_contain_text('근거: 근로기준법 제2조(정의)')
+    cards = e2e.sources(page).get_by_test_id('source-card')
+    expect(cards).to_have_count(3)
+    expect(cards.filter(has_text='근로자퇴직급여 보장법 제8조')).to_have_count(1)
+    expect(cards.filter(has_text='근로기준법 제2조')).to_have_count(0)
