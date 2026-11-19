@@ -174,7 +174,7 @@ def answer_verdict(raw, st: Timing, used, unknown, refused, *, calculated):
     return 'shown'
 
 
-def chat_events(app, question, model_key, remember=None):
+def chat_events(app, question, remember=None):
     """질문 하나 → (이벤트, 데이터)를 차례로. remember(턴 기록) → turn_id (피드백이 꺼져 있으면 None)
     이벤트: status → sources(모두 펼침) → answer·stats… → sources(인용/검색만 구분) → stats → done, 실패하면 error
     생성 단계에서 화면 글이 그대로면(간결형의 근거·설명 토큰) TICK을 낸다: 받는 쪽이 토큰마다 연결 끊김을 확인하게"""
@@ -184,8 +184,8 @@ def chat_events(app, question, model_key, remember=None):
     def report(st, status, error):
         outcomes.append((st, status, error))
 
-    spec = app.models.specs[model_key]
-    yield 'status', {'text': view.searching_stats(app, model_key)}
+    spec = app.profile.model
+    yield 'status', {'text': view.searching_stats(app)}
     sent_sources, last = False, {}
     calculated = False
 
@@ -199,7 +199,6 @@ def chat_events(app, question, model_key, remember=None):
         for stage, hits, raw, st in ask(
             app,
             question,
-            model_key,
             report=report,
             calculation_candidate=is_calculation_question(question),
         ):
@@ -230,7 +229,7 @@ def chat_events(app, question, model_key, remember=None):
             tid = None
             if remember is not None and notice is None:
                 try:
-                    tid = remember(feedback.turn_record(app, question, hits, raw, text, model_key, st))
+                    tid = remember(feedback.turn_record(app, question, hits, raw, text, st))
                 except Exception as e:  # 피드백 기록 실패는 답변을 막지 않는다
                     log.warning(f'경고: 피드백용 턴 기록 실패 ({type(e).__name__})')
             check = st.get('calculation_metrics', {}).get('calculation_check')
@@ -337,20 +336,16 @@ async def read_json(request):
         raise HTTPException(400, 'JSON 형식이 아닙니다.') from e
 
 
-def valid_chat(app, body):
-    """요청 본문 → (질문, 모델 key). 틀리면 400"""
+def valid_chat(body):
+    """Read and validate the question from a chat request."""
     if not isinstance(body, dict):
         raise HTTPException(400, '요청 형식이 틀렸습니다.')
-    question, model_key = body.get('question'), body.get('model')
+    question = body.get('question')
     if not isinstance(question, str) or not question.strip():
         raise HTTPException(400, '질문을 입력해 주세요.')
     if len(question) > MAX_QUESTION:
         raise HTTPException(400, f'질문이 너무 깁니다 (최대 {MAX_QUESTION}자).')
-    if any(s.key == model_key for s in app.profile.disabled):
-        raise HTTPException(400, view.DISABLED_MODEL)
-    if not isinstance(model_key, str) or model_key not in app.models.specs:
-        raise HTTPException(400, '알 수 없는 답변 모델입니다.')
-    return question, model_key
+    return question
 
 
 def config_data(app, fb):
@@ -359,9 +354,6 @@ def config_data(app, fb):
         'title': view.page_title(app),
         'intro': view.intro_text(app) + view.DISCLAIMER,
         'notice': view.data_notice(app),
-        'models': [{'key': s.key, 'label': s.label, 'info': s.info} for s in app.models.specs.values()],
-        'disabled': [{'key': s.key, 'label': s.label} for s in p.disabled],
-        'default_model': p.models[0].key,
         'examples': view.V5_EXAMPLES if p.name == 'v5' else view.EXAMPLES,
         'sources_title': view.sources_title(app),
         'feedback': {
@@ -497,9 +489,9 @@ def create_app(
     @api.post('/api/chat', dependencies=[Depends(require_json)])
     async def chat(request: Request, who: Who):
         body = await read_json(request)
-        question, model_key = valid_chat(app, body)
+        question = valid_chat(body)
         remember = partial(fb.remember_turn, who[1]) if fb is not None else None
-        events = chat_events(app, question, model_key, remember)
+        events = chat_events(app, question, remember)
         return ChatResponse(stream(events))
 
     class ChatResponse(StreamingResponse):

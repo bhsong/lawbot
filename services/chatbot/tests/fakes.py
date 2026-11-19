@@ -44,7 +44,7 @@ class FakeLLM:
     created = 0
     chunks = ['【결론】', '예고해야', ' 합니다.']
 
-    def __init__(self, path, client=None, **kw):  # path: API 모델 id (service가 LLM(spec.model, client=…)로 만든다)
+    def __init__(self, path, client=None, **kw):
         FakeLLM.created += 1
         self.path, self.client, self.kw = path, client, kw
         self.system = kw.get('system')
@@ -117,13 +117,12 @@ class FakeOpenAI:
             profile = deploy.get_profile()
             models = [
                 {
-                    'id': spec.model,
+                    'id': profile.model.model,
                     'object': 'model',
                     'revision': 'synthetic-e2e',
                     'mlx_lm_version': '0.31.2',
                     'max_concurrent': 1,
                 }
-                for spec in profile.models + profile.disabled
             ]
         return types.SimpleNamespace(
             data=[types.SimpleNamespace(**model, model_dump=lambda row=model: dict(row)) for model in models]

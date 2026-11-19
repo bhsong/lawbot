@@ -397,6 +397,8 @@ def test_unverified_draft_is_replaced_at_completion(stack, ui):
 
 
 def test_sources_and_stats_shown(stack, ui):
+    for label in ('답변 모델', '답변 형식'):
+        expect(ui.get_by_role('radiogroup', name=label)).to_have_count(0)
     e2e.ask(ui, QUESTION)
     e2e.wait_done(ui)
     st = e2e.stats(ui).inner_text()

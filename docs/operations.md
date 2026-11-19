@@ -114,7 +114,7 @@ uv run lawbot-app            # 터미널 2: 모델 서버가 준비될 때까지
 
 - `.env`는 `.gitignore`에 들어 있어 Git에 올라가지 않습니다. `.env.example`에는 비밀번호를 적지 마세요.
 - 셸에서 `export`한 변수가 있으면 그 값이 `.env`보다 우선합니다. 한 번만 다르게 실행할 때는 `LAWBOT_RERANKER_ENABLED=0 uv run lawbot-app`처럼 앞에 붙입니다.
-- 다른 파일을 쓰려면 `LAWBOT_ENV_FILE=.env.small uv run lawbot-app`(예: 소형 맥의 Fast 4B 설정), 파일을 읽지 않으려면 `LAWBOT_ENV_FILE=`.
+- 다른 파일을 쓰려면 `LAWBOT_ENV_FILE=<설정 파일 경로> uv run lawbot-app`, 파일을 읽지 않으려면 `LAWBOT_ENV_FILE=`.
 - 화면을 고치는 중에는 `lawbot-app`을 띄운 채 `services/chatbot/frontend`에서 `LAWBOT_WEB_URL=http://127.0.0.1:<웹앱 포트> npm run dev`로 Vite 개발 서버를 띄웁니다. `/api`는 웹앱으로 넘어가고 화면은 고치는 즉시 바뀝니다. 다 고친 뒤 `npm run build`를 해야 `lawbot-app`이 새 화면을 냅니다.
 - `.env`에는 `LAWBOT_*`만 적을 수 있습니다. 서버 주소는 바꿀 수 없고, 웹앱 포트는 `LAWBOT_PORT`로 정합니다(아래 참고).
 - 값에 공백이나 ` #`이 들어가면 작은따옴표로 감쌉니다: `LAWBOT_PW='a b#c'`.
@@ -129,13 +129,7 @@ LAWBOT_PW="$(security find-generic-password -a lawbot -s lawbot -w)" uv run lawb
 
 조문 CSV나 system 파일이 없으면 모델 서버에 접속하기 전에 실행을 거부하고 안내합니다.
 
-v5의 답변 모델은 Pro입니다. v4 프로필에서 `LAWBOT_MODELS=fast,pro`를 설정하면 화면에서 Fast와 Pro를 고를 수 있습니다.
-
-답변 형식은 간결형(결론 + 실제 인용 조문) 하나입니다. 화면에서 형식을 고르지 않습니다. v5 Pro는 `data/v5/system_v5_concise.txt`로 생성하고, 4항목으로 답하는 v4 Fast의 원문도 화면에서는 결론·근거로 보여 줍니다. [형식 비교](evals/2026-11-19-reasoning-format-definitions.md)
-
-| 모델 | 구성 | 답변 형식 |
-| --- | --- | --- |
-| Lawbot Pro | 단독 생성 서버에 상주하는 Qwen3.8-27B 4비트 (`qwen3.8-27b-4bit`), 간결형 system(`data/v5/system_v5_concise.txt`) | 간결: 결론 + `근거: 실제 인용 조문` |
+v4·v5의 답변 모델은 Lawbot Pro 하나입니다. v4는 `data/v4/system_v4_concise.txt`, v5는 `data/v5/system_v5_concise.txt`를 기본 프롬프트로 씁니다. 화면은 결론과 실제 인용 조문을 표시합니다. [형식 비교](evals/2026-11-19-reasoning-format-definitions.md)
 
 화면 아래 측정 줄에 검색·첫 토큰·첫 글자·생성 속도·완료 시간이 표시됩니다. 시작 시 로컬 생성 서버의 연결 실패·503 `server_not_ready`는 `LAWBOT_MODEL_SERVER_WAIT` 한도 안에서 1초 간격으로 다시 확인합니다. 토큰 오류나 `/v1/models`의 필요한 모델 id 누락은 즉시 시작을 거부합니다. 외부 생성 API는 준비 확인을 생략하고, `check_deploy`는 한 번만 조회합니다. 생성 서버는 모델 교체 요청을 받지 않습니다.
 
@@ -155,13 +149,12 @@ v5의 답변 모델은 Pro입니다. v4 프로필에서 `LAWBOT_MODELS=fast,pro`
 | `LAWBOT_MODEL_TOKEN` | 예 | 모델 서버 토큰 (16자 이상, `openssl rand -hex 32`). 웹앱과 모델 서버가 같은 값 |
 | `LAWBOT_MODEL_SERVER_WAIT` | 아니요 | 시작할 때 임베딩·리랭크 모델 서버와 로컬 생성 서버 각각의 준비를 기다리는 최대 초 (기본 `300`) |
 | `LAWBOT_MODEL_READ_TIMEOUT` | 아니요 | 질문 처리 중(질문 임베딩·리랭크·생성) 응답 조각 사이 최대 대기 초 (기본 `300`). 넘으면 "모델 서버 응답이 없습니다", 요청 로그 `model_server_timeout`. 시작할 때 조문 인덱스 인코딩에는 걸지 않음 |
-| `LAWBOT_PROFILE` | 아니요 | `v4` (생략 시 기본값) 또는 `v5` (노동·소득세법 전체와 세금·4대보험 선택 범위, Pro 전용) |
+| `LAWBOT_PROFILE` | 아니요 | `v4` (생략 시 기본값) 또는 `v5` (노동·소득세법 전체와 세금·4대보험 선택 범위) |
 | `LAWBOT_EMB_MODEL` | 아니요 | 검색 임베딩 모델 id (v4 기본 `lawbot-emb-v4`, v5 기본 `lawbot-emb-v6`. v6.0.0 전에는 `lawbot-emb-v5b`) |
-| `LAWBOT_FAST_MODEL` / `LAWBOT_PRO_MODEL` | 아니요 | 답변 모델 id (기본 `lawbot-fast-v4` / `qwen3.8-27b-4bit`). 외부 API면 그쪽 모델 이름 |
-| `LAWBOT_MODELS` | 아니요 | 쓸 답변 모델 key를 쉼표로 (`pro`, `fast`, `fast,pro`). 첫 번째가 기본 선택. 비우면 프로필이 지원하는 모델 모두 |
+| `LAWBOT_PRO_MODEL` | 아니요 | 답변 모델 id (기본 `qwen3.8-27b-4bit`). 외부 API면 그쪽 모델 이름 |
 | `LAWBOT_ENV_FILE` | 아니요 | 읽을 설정 파일 (기본 레포 최상위 `.env`, 없으면 안 읽음). 빈 값이면 읽지 않음. 셸에서만 지정 |
-| `LAWBOT_PRO_SYSTEM` | 아니요 | Pro 간결형 system 파일. v4 기본 `data/v4/system_v4_concise.txt`, v5 기본 `data/v5/system_v5_concise.txt`(v5 프로필의 기본 system도 이 파일) |
-| `LAWBOT_V4_ARTICLES` / `LAWBOT_V4_SYSTEM` | 아니요 | v4 조문 CSV / 4B system 파일 (기본 `data/v4/articles_v4.csv`, `data/v4/system_v4.txt`) |
+| `LAWBOT_PRO_SYSTEM` | 아니요 | Pro 간결형 system 파일. v4 기본 `data/v4/system_v4_concise.txt`, v5 기본 `data/v5/system_v5_concise.txt` |
+| `LAWBOT_V4_ARTICLES` | 아니요 | v4 조문 CSV (기본 `data/v4/articles_v4.csv`) |
 | `LAWBOT_V5_ARTICLES` / `LAWBOT_V5_DECREE_ARTICLES` | 아니요 | v5 법률 / 법률·하위법령 CSV (기본 `data/v5/articles_v5.csv`, `data/v5/law_articles_v5_decree.csv`). 각 매니페스트 필수 |
 | `LAWBOT_MAX_SEQ` / `LAWBOT_DECREE_MAX_SEQ` | 아니요 | 법률 / 하위법령의 인코딩 최대 토큰 (v4 2,304 / 3,072, v5 4,352 / 5,120) |
 | `LAWBOT_RERANKER_ENABLED` | 아니요 | `1`이면 임베딩 상위 후보를 Qwen3-Reranker-4B로 다시 정렬해 상위 3개를 씀 (기본 `0`: 기존 임베딩 상위 3개). |
@@ -170,7 +163,6 @@ v5의 답변 모델은 Pro입니다. v4 프로필에서 `LAWBOT_MODELS=fast,pro`
 | `LAWBOT_DECREE_ENABLED` | 아니요 | `1`이면 시행령·시행규칙을 따로 찾아 법률 3개 뒤에 붙임 (기본 `0`: 법률 3개만). 리랭커 필요 |
 | `LAWBOT_DECREE_TAU` | 아니요 | 법률 1위와 다른 법의 하위법령이 붙을 리랭커 점수 (기본 `0.9`, val로 고른 값) |
 | `LAWBOT_DECREE_K` | 아니요 | 붙일 하위법령 최대 수 (기본 `2`) |
-| `LAWBOT_DECREE_MODELS` | 아니요 | 하위법령을 붙일 답변 모델 key (기본 `pro`. Fast는 참고 조문 3개로 학습했고 첨부를 평가하지 않음) |
 | `LAWBOT_V4_DECREE_ARTICLES` | 아니요 | 하위법령을 켰을 때 쓰는 812조문 CSV (기본 `data/v4/law_articles_v4_decree.csv`). 켜면 `LAWBOT_V4_ARTICLES` 대신 이 파일 |
 | `LAWBOT_LLM_BASE_URL` | 예 | 생성 API 주소 `http://127.0.0.1:<생성 서버 포트>/v1`. 모델 서버로 되돌아가지 않음 |
 | `LAWBOT_LLM_API_KEY` | 예 | 생성 서버 전용 키(로컬도 16자 이상). 모델 서버 토큰으로 대신하지 않음 |
@@ -201,7 +193,7 @@ v5의 답변 모델은 Pro입니다. v4 프로필에서 `LAWBOT_MODELS=fast,pro`
 
 ## 리랭커 (선택)
 
-켜면 검색 흐름이 `임베딩 상위 10개 → Qwen3-Reranker-4B(튜닝 없음) → 리랭킹 상위 3개 → 답변 모델`이 됩니다. Fast·Pro가 같은 리랭킹 결과를 참고하고, 리랭커는 모델 서버가 시작할 때 올려 상주합니다. 끄면(기본) 웹앱이 리랭커를 부르지 않고 이전과 같은 임베딩 상위 3개를 씁니다. 채점 방식(프롬프트, 최대 2,560토큰, yes/no 로짓)은 v4 리랭커 실험 노트북과 같고(`services/model-server/src/lawbot_model_server/rerank.py`), 작업 설명(instruction)과 정렬(동점은 임베딩 순위)은 웹앱이 정합니다(`services/chatbot/src/lawbot/reranker.py`). 모델 서버는 리랭크 요청이 끝날 때마다 MLX 버퍼 캐시를 비워 캐시로 인한 메모리 증가를 막습니다.
+켜면 검색 흐름이 `임베딩 상위 10개 → Qwen3-Reranker-4B(튜닝 없음) → 리랭킹 상위 3개 → 답변 모델`이 됩니다. 리랭커는 모델 서버가 시작할 때 올려 상주합니다. 끄면(기본) 웹앱이 리랭커를 부르지 않고 이전과 같은 임베딩 상위 3개를 씁니다. 채점 방식(프롬프트, 최대 2,560토큰, yes/no 로짓)은 v4 리랭커 실험 노트북과 같고(`services/model-server/src/lawbot_model_server/rerank.py`), 작업 설명(instruction)과 정렬(동점은 임베딩 순위)은 웹앱이 정합니다(`services/chatbot/src/lawbot/reranker.py`). 모델 서버는 리랭크 요청이 끝날 때마다 MLX 버퍼 캐시를 비워 캐시로 인한 메모리 증가를 막습니다.
 
 `.env.example`에는 켜져 있습니다(`LAWBOT_RERANKER_ENABLED=1`). 모델 준비는 위 "모델 준비"의 변환 명령을 씁니다.
 
@@ -224,7 +216,6 @@ LAWBOT_RERANKER_ENABLED=0 uv run lawbot-app    # 한 번만 끄고 실행
 ```
 
 - 통과한 하위법령이 없으면 붙이지 않고, 프롬프트는 꺼짐과 글자 단위로 같습니다. 참고 조문 형식은 법률과 같은 `[n] 법령명 제N조(제목)`입니다(예: `[4] 근로기준법 시행령 제2조(…)`).
-- 첨부는 `LAWBOT_DECREE_MODELS`의 모델만(기본 Pro) 받습니다. Fast는 하위법령을 찾지도 않으므로 지금과 같습니다.
 - 법률과 하위법령은 별도로 인코딩합니다. 최대 길이는 v5에서 4,352·5,120토큰, v4에서 2,304·3,072토큰입니다.
 - 리랭커가 꺼져 있으면 모델 서버에 접속하기 전에 실행을 거부합니다. 하위법령 리랭킹 오류도 법률과 같이 화면에 오류로 표시합니다(되돌리지 않음).
 - 화면: 하위법령 카드는 `〔시행령〕`·`〔시행규칙〕` 표시와 함께 법률 카드 뒤에 놓이고, 인용한 조문은 펼치고 나머지는 접습니다. 간결형 근거 줄·경고는 법률과 같은 규칙입니다. 측정 줄에 하위법령 시간과 첨부 수, 요청 로그에 `decree_search_ms`·`decree_rerank_ms`·`decree`·`n_decree`가 남습니다.

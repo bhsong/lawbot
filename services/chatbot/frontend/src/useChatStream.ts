@@ -22,15 +22,15 @@ export function useChatStream({ onUnauthorized }: { onUnauthorized: () => void }
   }, [])
 
   const send = useCallback(
-    async (question: string, model: string) => {
+    async (question: string) => {
       if (abort.current) return
-      const turn = newTurn(question, model)
+      const turn = newTurn(question)
       const ctrl = new AbortController()
       abort.current = ctrl
       setTurns((all) => [...all, turn])
       setBusy(true)
       try {
-        await api.chat({ question, model }, ctrl.signal, (e, d) => {
+        await api.chat({ question }, ctrl.signal, (e, d) => {
           if (!ctrl.signal.aborted) update(turn.id, (t) => applyEvent(t, e, d))
         })
         ctrl.signal.throwIfAborted()

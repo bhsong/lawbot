@@ -220,7 +220,7 @@ def test_unfinished_stream_does_not_remember_turn(env):
     env.setattr(service, 'Retriever', FakeRetriever)
     app = service.load_app()
     llm = LLM('m', client=FakeClient([chunk('partial')]), system=SYSTEM)
-    env.setattr(app.models, 'get', lambda key: (llm, None))
+    env.setattr(app, 'make_llm', lambda: llm)
     remembered = []
     result = run(app, '해고 예고?', remember=remembered.append)
     assert result.kind == 'generation'
@@ -378,16 +378,16 @@ def test_app_launches_local_only(web, env):
 
 
 def test_app_loads_models_via_service(web, env):
-    # main은 service.load_app으로 만든 검색기·모델(LAWBOT_FAST_MODEL 반영)을 API에 넘긴다
+    # main은 service.load_app으로 만든 검색기·모델(LAWBOT_PRO_MODEL 반영)을 API에 넘긴다
     set_auth(env)
     env.setattr(web, 'require_build', lambda dist: None)
-    env.setenv('LAWBOT_FAST_MODEL', 'lawbot-fast-8bit')
+    env.setenv('LAWBOT_PRO_MODEL', 'lawbot-pro-8bit')
     create, apps = web.create_app, []
     env.setattr(web, 'create_app', lambda a, *rest, **kwargs: apps.append(a) or create(a, *rest, **kwargs))
     web.main([])
     [a] = apps
     assert isinstance(a.retriever, FakeRetriever)
-    assert a.models.get('fast')[0].path == 'lawbot-fast-8bit'  # FakeLLM의 첫 인자 = API 모델 id
+    assert a.llm.path == 'lawbot-pro-8bit'  # FakeLLM의 첫 인자 = API 모델 id
     assert len(web.launched) == 1
 
 
@@ -395,7 +395,7 @@ def test_chat_streams_answer_with_sources(web, env):
     cite = '\n\n【근거 조문】\n근로기준법 제26조'
     env.setattr(FakeLLM, 'chunks', [*FakeLLM.chunks, cite])
     lawbot = service.load_app()
-    r = run(lawbot, '수습 기간에도 해고 예고?', 'fast')
+    r = run(lawbot, '수습 기간에도 해고 예고?')
     # 먼저 처리 중 문구, 조문, 그다음 간결형 결론이 늘어나고, 끝나면 실제 인용한 근거 줄이 붙는다
     assert r.events[0] == ('status', {'text': '⏳ 조문 검색 중…'})
     assert [d['text'] for e, d in r.events if e == 'answer'] == ['예고해야', '예고해야 합니다.']
@@ -406,14 +406,14 @@ def test_chat_streams_answer_with_sources(web, env):
     assert '30일 전에 예고' in r.src
     assert r.src.count('제26조 해고의 예고') == 1  # 조문 본문 첫 줄(제목 줄)은 중복 표시 안 함
     assert lawbot.retriever.query == '수습 기간에도 해고 예고?'
-    assert lawbot.models.llms['fast'].args == ('수습 기간에도 해고 예고?', HITS)
-    assert r.stats.startswith('Lawbot Fast · 검색') and '완료' in r.stats
+    assert lawbot.llm.args == ('수습 기간에도 해고 예고?', HITS)
+    assert r.stats.startswith('Lawbot Pro · 검색') and '완료' in r.stats
 
 
 def test_chat_generation_failure_is_not_hidden(web, capsys):
     # 생성 실패를 빈 답변이나 부분 답변으로 끝내지 않고 안내 문구로 알린다. 원래 예외는 서버 로그에
     FakeLLM.chunks = ['【결론】', RuntimeError('generation failed')]
-    r = run(service.load_app(), '질문', 'fast')
+    r = run(service.load_app(), '질문')
     assert r.error.startswith('답변을 생성하지 못했습니다') and r.done is None
     out = capsys.readouterr().out
     assert 'generation failed' in out and 'Traceback' in out

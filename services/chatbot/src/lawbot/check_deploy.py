@@ -85,16 +85,13 @@ def check_decree(p, out, release=None, *, skip_articles=False):
         return out.append(('INFO', '시행령·시행규칙 첨부 꺼짐 (LAWBOT_DECREE_ENABLED=1이면 812조문 CSV도 검사)'))
     part = release.combined if release else None
     source = 'DB 코퍼스 확인 실패' if skip_articles else f'조문 CSV {part.name if part else p.articles.name}'
-    unknown = [k for k in dc.models if k not in {s.key for s in p.models}]
     out.append(
         (
             'OK',
             f'시행령·시행규칙 첨부 켜짐: τ {dc.tau:g} · 최대 {dc.k}개 · 후보 {dc.candidates}개 · '
-            f'인코딩 max_seq {dc.max_seq} · 첨부 모델 {list(dc.models)} · {source}',
+            f'인코딩 max_seq {dc.max_seq} · {source}',
         )
     )
-    if unknown:
-        out.append(('INFO', f'첨부 모델 {unknown}은 이 기기에서 쓰지 않음 (LAWBOT_MODELS)'))
     if skip_articles or (part is None and not p.articles.is_file()):
         return
     law = _read_articles(part.data if part else p.articles)
@@ -157,7 +154,7 @@ def check_manifest(p, out, part=None):
 
 def check_system_file(name, f, out):
     if not f.is_file():
-        return out.append(('FAIL', f'{name} system 파일 없음: {f} (학습 노트북의 system 원문을 글자 그대로 저장)'))
+        return out.append(('FAIL', f'{name} system 파일 없음: {f}'))
     text = f.read_text(encoding='utf-8').strip()
     if not text:
         return out.append(('FAIL', f'{name} system 파일이 비어 있습니다: {f}'))
@@ -171,16 +168,7 @@ def check_system_file(name, f, out):
 
 
 def check_system(p, out):
-    check_system_file('기본', p.system_file, out)
-    for spec in p.models:  # 모델별 system (Pro 간결형)
-        if spec.system_file:
-            check_system_file(spec.label, spec.system_file, out)
-        out.append(
-            (
-                'INFO',
-                f'{spec.label}: system {spec.system_file.name if spec.system_file else "기본"}',
-            )
-        )
+    check_system_file(p.model.label, p.system_file, out)
 
 
 def check_reranker(p, out):
@@ -201,10 +189,7 @@ def check_reranker(p, out):
 
 def check_models(p, out):
     out.append(('INFO', f'임베딩 {p.emb_model} · 조문 인코딩 max_seq_length {p.max_seq}'))
-    for spec in p.models:
-        out.append(('INFO', f'{spec.label}: 모델 {spec.model}'))
-    for spec in p.disabled:  # LAWBOT_MODELS에서 뺀 모델은 검사하지 않음 (화면에 비활성 표시)
-        out.append(('INFO', f'{spec.label}: 이 기기에서 사용 안 함 (LAWBOT_MODELS)'))
+    out.append(('INFO', f'{p.model.label}: 모델 {p.model.model}'))
 
 
 def check_ports(out):

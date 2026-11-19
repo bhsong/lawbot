@@ -68,8 +68,8 @@ def events(r):
     return out
 
 
-def chat(c, question=QUESTION, model='fast'):
-    return c.post('/api/chat', json={'question': question, 'model': model})
+def chat(c, question=QUESTION):
+    return c.post('/api/chat', json={'question': question})
 
 
 def names(evs):
@@ -90,10 +90,10 @@ def test_api_requires_login(client, env):
     calls = []
     env.setattr(web, 'ask', lambda *a, **kw: calls.append(a) or iter(()))
     for method, path in PROTECTED:
-        r = client.request(method, path, json={'question': QUESTION, 'model': 'fast'})
+        r = client.request(method, path, json={'question': QUESTION})
         assert r.status_code == 401, (method, path)
         assert r.headers.get('cache-control') == 'no-store'
-        assert '노동법' not in r.text and 'fast' not in r.text  # 설정·모델 정보가 나가지 않음
+        assert '노동법' not in r.text and 'Lawbot Pro' not in r.text  # 설정·모델 정보가 나가지 않음
     assert calls == []
 
 
@@ -342,8 +342,8 @@ def test_admin_scrypt_does_not_block_other_users_chat(admin_app, env):
     asyncio.run(exercise())
 
 
-def test_chat_needs_no_format_and_shows_concise_answer(authed):
-    r = authed.post('/api/chat', json={'question': QUESTION, 'model': 'fast'})
+def test_chat_needs_no_model_or_format_and_shows_concise_answer(authed):
+    r = authed.post('/api/chat', json={'question': QUESTION})
     done = events(r)[-1]
     assert done[0] == 'done' and done[1]['text'].startswith('예고해야 합니다.') and '【결론】' not in done[1]['text']
 
@@ -353,10 +353,7 @@ def test_config(authed, lawbot):
     cfg = authed.get('/api/config').json()
     assert cfg['title'] == 'Lawbot'
     assert cfg['intro'].endswith(view.DISCLAIMER) and cfg['notice'] == view.data_notice(lawbot)
-    assert [m['key'] for m in cfg['models']] == list(lawbot.models.specs)
-    first = lawbot.profile.models[0]
-    assert cfg['default_model'] == first.key
-    assert 'formats' not in cfg and all('format' not in m for m in cfg['models'])
+    assert not {'models', 'disabled', 'default_model', 'formats'} & cfg.keys()
     assert cfg['examples'] == [
         '해고 예고 없이 갑자기 해고되면 어떻게 하나요?',
         '최저임금보다 적게 주기로 한 근로계약은 효력이 있나요?',
@@ -377,16 +374,6 @@ def test_v5_config_has_cache_labor_and_tax_examples(lawbot, env):
         '해고 예고 없이 갑자기 해고되면 어떻게 하나요?',
         '총급여 5천만 원, 본인 병원비 300만 원, 실손보험금 100만 원이면 의료비 세액공제액은 얼마인가요?',
     ]
-
-
-def test_config_lists_disabled_models(env, lawbot):
-    env.setenv('LAWBOT_MODELS', 'fast')
-    app = service.load_app()
-    with make_client(app) as c:
-        login(c)
-        cfg = c.get('/api/config').json()
-    assert [m['key'] for m in cfg['models']] == ['fast']
-    assert [m['key'] for m in cfg['disabled']] == ['pro']
 
 
 # ---- 채팅 ----
@@ -448,11 +435,11 @@ def test_chat_empty_answer(authed, env):
 @pytest.mark.parametrize(
     'body',
     [
-        {'question': '  ', 'model': 'fast'},
-        {'question': QUESTION, 'model': 'nope'},
-        *[{'question': QUESTION, 'model': model} for model in ([], {}, 3, None)],
-        {'question': 3, 'model': 'fast'},
-        {'question': 'x' * (web.MAX_QUESTION + 1), 'model': 'fast'},
+        {'question': '  '},
+        {},
+        [],
+        {'question': 3},
+        {'question': 'x' * (web.MAX_QUESTION + 1)},
     ],
 )
 def test_chat_invalid_inputs(authed, env, body):
@@ -466,7 +453,7 @@ def test_chat_invalid_inputs(authed, env, body):
 def test_chat_rejects_body_over_the_limit_before_processing(authed, env):
     calls = []
     env.setattr(web, 'ask', lambda *a, **kw: calls.append(a) or iter(()))
-    chunks = iter([b'{"unused":"', b'x' * (64 * 1024), b'","question":"q","model":"fast","format":"full"}'])
+    chunks = iter([b'{"unused":"', b'x' * (64 * 1024), b'","question":"q"}'])
     response = authed.post('/api/chat', content=chunks, headers={'Content-Type': 'application/json'})
     assert response.status_code == 413
     assert calls == []
@@ -529,14 +516,6 @@ def test_chat_bounds_waiters_and_keeps_waiting_past_thirty_seconds(lawbot, env):
     assert calls == ['first', 'second', 'next']
 
 
-def test_chat_disabled_model(env, lawbot):
-    env.setenv('LAWBOT_MODELS', 'fast')
-    with make_client(service.load_app()) as c:
-        login(c)
-        r = chat(c, model='pro')
-    assert r.status_code == 400 and r.json()['detail'] == view.DISABLED_MODEL
-
-
 @pytest.mark.parametrize(
     ('exc', 'kind', 'text'),
     [
@@ -569,7 +548,7 @@ def test_hidden_tokens_still_yield_ticks(lawbot, env):
         'chunks',
         ['【결론】\n예고해야 합니다.', '\n【근거 조문】\n', '근로기준법 제26조', '\n【설명】\n', '- 설명'],
     )
-    evs = list(web.chat_events(lawbot, QUESTION, 'fast'))
+    evs = list(web.chat_events(lawbot, QUESTION))
     generate = [e for e, _ in evs if e in ('answer', 'status', 'stats', web.TICK)]
     assert generate.count(web.TICK) >= 3
     assert evs[-1][0] == 'done'
@@ -606,7 +585,8 @@ def test_feedback_like_and_flag(fb_client):
     rows = saved(folder)
     assert [(x['label'], x['reason']) for x in rows] == [('like', None), ('flag', 'retrieval')]
     assert rows[0]['turn_id'] == tid and rows[0]['question'] == QUESTION
-    assert rows[0]['answer_shown'] == done['text'] and rows[0]['model'] == 'fast' and rows[0]['fmt'] == 'concise'
+    assert rows[0]['answer_shown'] == done['text'] and rows[0]['model'] == 'pro'
+    assert 'fmt' not in rows[0]
     assert set(rows[0]) >= {'hits', 'system', 'answer_raw', 'citations', 'timing', 'request_id', 'commit'}
 
 

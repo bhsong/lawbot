@@ -34,7 +34,7 @@ def load_questions():
         return list(csv.DictReader(source))
 
 
-def run_questions(app, model, rows, output):
+def run_questions(app, rows, output):
     """Record every response and stop on a request failure without retrying."""
     groups = defaultdict(Counter)
     overall = Counter()
@@ -42,7 +42,7 @@ def run_questions(app, model, rows, output):
         result = {k: row[k] for k in ('id', 'error_type', 'question', 'article_ids')}
         error = 'missing_completion'
         try:
-            with closing(service.ask(app, row['question'], model)) as stream:
+            with closing(service.ask(app, row['question'])) as stream:
                 for stage, hits, raw, stats in stream:
                     if stage == 'done':
                         error = None if raw.strip() else 'empty_answer'
@@ -99,7 +99,7 @@ def snapshot(cfg, client, *, preflight=False):
     listing.raise_for_status()
     models = {model['id']: model for model in listing.json()['data']}
     profile, rr, dc = cfg.profile, cfg.reranker, cfg.decree
-    spec = profile.models[0]
+    spec = profile.model
     with OpenAI(
         base_url=cfg.llm_url,
         api_key=cfg.llm_key,
@@ -126,7 +126,7 @@ def snapshot(cfg, client, *, preflight=False):
     data = manifest.load(combined)
     if not data or not data.get('dataset_version'):
         raise RuntimeError('v5 조문 매니페스트를 확인하세요.')
-    files = (law, combined, spec.system_file or profile.system_file, QUESTIONS, Path(__file__))
+    files = (law, combined, profile.system_file, QUESTIONS, Path(__file__))
     return {
         'webapp_commit': subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=ROOT, text=True).strip(),
         'model_server_commit': health['commit'],
@@ -198,8 +198,7 @@ def main():
     try:
         cfg = replace(settings.load(env), embed_cache=args.output / 'embeddings', server_wait=0)
         sensitive += (cfg.model_server, cfg.model_token, cfg.llm_url, cfg.llm_key)
-        spec = cfg.profile.models[0]
-        if cfg.profile.name != 'v5' or cfg.reranker is None or cfg.decree is None or spec.key not in cfg.decree.models:
+        if cfg.profile.name != 'v5' or cfg.reranker is None or cfg.decree is None:
             raise RuntimeError('개발 설정 예시의 v5 프로필, 리랭커, 하위법령 첨부를 확인하세요.')
         stage = '실행 폴더 준비'
         with (
@@ -224,7 +223,7 @@ def main():
                 app = service.load_app(cfg)
                 stage = '질문 평가'
                 with (args.output / 'answers.jsonl').open('x', encoding='utf-8') as answers:
-                    summary = run_questions(app, spec.key, rows, answers)
+                    summary = run_questions(app, rows, answers)
             finally:
                 previous_stage, stage = stage, '실행 후 구성 확인'
                 after = snapshot(cfg, client)

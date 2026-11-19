@@ -250,7 +250,7 @@ def test_heldout_uses_common_generation_endpoint_and_dedicated_key(monkeypatch):
     monkeypatch.setattr(
         evaluator.deploy,
         'get_profile',
-        lambda: SimpleNamespace(name='v5', models=[SimpleNamespace(key='pro', model='pro')]),
+        lambda: SimpleNamespace(name='v5', model=SimpleNamespace(key='pro', model='pro')),
     )
     monkeypatch.setenv('LAWBOT_LLM_BASE_URL', 'http://127.0.0.1:19/v1')
     monkeypatch.setenv('LAWBOT_LLM_API_KEY', 'generation-only-secret')

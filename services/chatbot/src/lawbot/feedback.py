@@ -133,13 +133,6 @@ def turn_id(session, n, request_id):
     return hashlib.sha256(f'{session}:{n}:{request_id}'.encode()).hexdigest()[:16]
 
 
-def model_system(app, model_key):
-    """이번 요청에 쓴 system 전문: 모델·프로필 system 파일 (service.load_app의 factory와 같은 순서)"""
-    from lawbot import service
-
-    return service.system_text(app.profile, app.models.specs[model_key])
-
-
 def cite_details(app, raw, hits):
     """B1 판정: [{law, article_id, verdict}] (판정에 실패하면 None)"""
     try:
@@ -158,19 +151,20 @@ def jsonable(v):
     return v.item() if hasattr(v, 'item') else v
 
 
-def decree_settings(app, model_key):
-    """이 답에 하위법령 첨부가 켜졌으면 {tau, k}, 아니면 None (service.uses_decrees와 같은 판단)"""
+def decree_settings(app):
     dc = getattr(app, 'decree', None)
-    return {'tau': dc.tau, 'k': dc.k} if dc is not None and model_key in dc.models else None
+    return {'tau': dc.tau, 'k': dc.k} if dc is not None else None
 
 
-def turn_record(app, question, hits, raw, shown, model_key, st):
+def turn_record(app, question, hits, raw, shown, st):
     """저장할 한 턴 (label·reason·feedback_id·ts·turn_id는 저장할 때 붙인다)"""
     release_id = getattr(app, 'corpus_release_id', None)
     m = manifest.for_app(app)
     system = st.get('_system')
     if system is None:
-        system = model_system(app, model_key)
+        from lawbot.service import system_text
+
+        system = system_text(app.profile)
     articles_sha = getattr(app.retriever, 'articles_sha256', None)
     if release_id:
         articles_sha = app.articles_sha256
@@ -182,13 +176,12 @@ def turn_record(app, question, hits, raw, shown, model_key, st):
         'system': system,
         'answer_raw': raw,
         'answer_shown': shown,
-        'model': model_key,
-        'fmt': 'concise',  # Every shown answer is the concise view; exports require the column.
+        'model': app.profile.model.key,
         'refused': st.get('refused'),
         'n_cited': st.get('n_cited'),
         'citations': cite_details(app, raw, hits),
         'timing': {k: st.get(k) for k in TIMING_FIELDS},
-        'decree': decree_settings(app, model_key),
+        'decree': decree_settings(app),
         'n_decree': st.get('n_decree'),
         'instance': security.instance_name(),
         'mode': getattr(app, 'llm_mode', 'api'),
@@ -199,7 +192,7 @@ def turn_record(app, question, hits, raw, shown, model_key, st):
         'articles_sha256': articles_sha,
         'emb_model': app.profile.emb_model,
         'rerank_model': getattr(app.reranker, 'model', None),
-        'chat_model': app.models.specs[model_key].model,
+        'chat_model': app.profile.model.model,
         'system_sha256': hashlib.sha256(system.encode()).hexdigest(),
         'corpus_release_id': release_id,
     }

@@ -17,7 +17,7 @@ class SettingsError(ValueError, RuntimeError):
 
 @dataclass(frozen=True)
 class Settings:
-    profile: Profile  # LAWBOT_MODELS로 고른 답변 모델 포함
+    profile: Profile
     reranker: RerankerConfig | None
     decree: DecreeConfig | None
     model_server: str  # http://127.0.0.1:<포트>

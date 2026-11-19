@@ -5,10 +5,10 @@ import types
 from lawbot import web
 
 
-def run(app, question, model='fast', remember=None):
+def run(app, question, remember=None):
     """→ text(마지막 화면 글), sources(묶음 목록), src(조문 카드 글), stats, status, error(안내 문구), kind, done, events"""
     r = types.SimpleNamespace(text='', sources=None, stats='', status=None, error=None, kind=None, done=None, events=[])
-    for event, data in web.chat_events(app, question, model, remember):
+    for event, data in web.chat_events(app, question, remember):
         r.events.append((event, data))
         if event in ('answer', 'done'):
             r.text = data['text']

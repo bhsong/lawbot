@@ -100,7 +100,7 @@ def client(server):
 
 def stream_events(c, question=view.EXAMPLES[0]):
     """채팅 스트림을 읽으며 (도착 시각, 이벤트, 데이터)를 차례로"""
-    body = {'question': question, 'model': 'fast'}
+    body = {'question': question}
     with c.stream('POST', '/api/chat', json=body) as r:
         assert r.status_code == 200
         event = None
@@ -119,7 +119,7 @@ def log_rows(server):
 def test_login_required_over_http(server):
     with httpx.Client(base_url=server.url, timeout=10) as c:
         assert c.get('/api/config').status_code == 401
-        r = c.post('/api/chat', json={'question': 'x', 'model': 'fast'})
+        r = c.post('/api/chat', json={'question': 'x'})
         assert r.status_code == 401
         assert c.post('/api/login', json={'user': USER, 'password': 'wrong'}).status_code == 401
     assert not server.calls.exists() or 'start' not in server.calls.read_text()

@@ -16,7 +16,6 @@ BASE = {
     'LAWBOT_PORT': '27000',
     'LAWBOT_RERANKER_ENABLED': '1',
     'LAWBOT_DECREE_ENABLED': '1',
-    'LAWBOT_MODELS': 'pro',
 }
 
 
@@ -24,11 +23,20 @@ def test_load_reads_given_mapping_only(env):
     env.setenv('LAWBOT_PORT', 'x')  # 셸 환경이 틀려도 넘긴 값만 읽는다
     s = settings.load(BASE, web=True)
     assert s.port == 27000 and s.auth == ('tester', 'test-only-pw') and s.model_server == 'http://127.0.0.1:65535'
-    assert s.profile.name == 'v4' and [m.key for m in s.profile.models] == ['pro']
-    assert s.reranker.candidates == 10 and s.decree.tau == 0.9 and s.decree.models == ('pro',)
+    assert s.profile.name == 'v4' and s.profile.model.key == 'pro'
+    assert s.reranker.candidates == 10 and s.decree.tau == 0.9
     assert (s.llm_url, s.llm_key, s.llm_external) == ('http://127.0.0.1:65534/v1', TEST_LLM_TOKEN, False)
     assert (s.server_wait, s.read_timeout, s.chat_concurrency, s.instance) == (300.0, 300.0, 1, None)
     assert s.feedback is None and s.request_log is not None
+
+
+@pytest.mark.parametrize('profile', ['v4', 'v5'])
+def test_profile_uses_pro_and_ignores_removed_model_selection(profile):
+    config = BASE | {'LAWBOT_PROFILE': profile}
+    expected = settings.load(config).profile
+    assert expected.system_file == ROOT / 'data' / profile / f'system_{profile}_concise.txt'
+    assert expected.model.key == 'pro'
+    assert settings.load(config | {'LAWBOT_MODELS': 'fast'}).profile == expected
 
 
 def test_all_errors_at_once_without_values(env):
@@ -149,7 +157,7 @@ def test_load_app_uses_given_settings(env):
     env.setenv('LAWBOT_MODEL_READ_TIMEOUT', '5')  # load_app은 받은 설정을 쓴다
     a = service.load_app(settings=s)
     assert a.settings is s and a.retriever.args[0][0].query_timeout.read == 90
-    assert list(a.models.specs) == ['pro']
+    assert a.profile.model.key == 'pro'
 
 
 @pytest.mark.parametrize(
@@ -174,4 +182,4 @@ def test_retired_and_unknown_settings_do_not_block_web_start(env, key, value):
         assert response.status_code == 200
         response = client.get('/api/config')
         assert response.status_code == 200
-        assert response.json()['default_model'] == 'pro'
+        assert 'models' not in response.json()

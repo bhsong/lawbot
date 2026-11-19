@@ -107,8 +107,6 @@ function AdminSession({ config, onSignedOut, logout }: { config: Config; onSigne
 }
 
 function Chat({ config, onSignedOut, logout }: { config: Config; onSignedOut: () => void; logout?: LogoutAction }) {
-  const first = config.models.find((m) => m.key === config.default_model) ?? config.models[0]
-  const [model, setModel] = useState(first.key)
   const [selected, setSelected] = useState<string | null>(null) // null: follow the latest answer
   const [sheet, setSheet] = useState<string | null>(null)
   const chat = useChatStream({ onUnauthorized: onSignedOut })
@@ -124,7 +122,7 @@ function Chat({ config, onSignedOut, logout }: { config: Config; onSignedOut: ()
 
   function send(q: string) {
     setSelected(null)
-    chat.send(q, model)
+    chat.send(q)
   }
 
   async function feedback(t: Turn, fb: Feedback) {
@@ -138,11 +136,6 @@ function Chat({ config, onSignedOut, logout }: { config: Config; onSignedOut: ()
     }
   }
 
-  const modelItems = [
-    ...config.models.map((m) => ({ value: m.key, label: m.label, title: m.info })),
-    ...config.disabled.map((m) => ({ value: m.key, label: m.label, title: '이 기기에서 사용하지 않는 모델', disabled: true })),
-  ]
-
   return (
     <div className="app">
       <main className="chat">
@@ -152,13 +145,6 @@ function Chat({ config, onSignedOut, logout }: { config: Config; onSignedOut: ()
             <p className="notice">{config.notice}</p>
           </div>
           <div className="controls">
-            <Segmented
-              label="답변 모델"
-              items={modelItems}
-              value={model}
-              disabled={chat.busy}
-              onChange={setModel}
-            />
             {logout && <LogoutControl action={logout} />}
           </div>
         </header>

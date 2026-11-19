@@ -245,20 +245,19 @@ def resume(path, items, fn, label):
     STAGE_TIMES[label] = {'n': len(todo), 'sec': round(time.perf_counter() - t0, 1)}
 
 
-def answer(app, model, question):
+def answer(app, question):
     """웹앱과 같은 경로 (service.ask): 검색(+리랭킹) → 답변. (근거 조문, 원문, 측정값)"""
     from lawbot.service import ask
 
-    for _, hits, raw, st in ask(app, question, model):
+    for _, hits, raw, st in ask(app, question):
         pass
     return hits, raw, st
 
 
-def answer_with(app, model, question, hits):
+def answer_with(app, question, hits):
     """검색 없이 주어진 참고 조문으로 답변 (거절 평가)"""
-    llm, _ = app.models.get(model)
     t0 = time.perf_counter()
-    raw = ''.join(r.text for r in llm.stream(question, hits))
+    raw = ''.join(r.text for r in app.llm.stream(question, hits))
     return raw, time.perf_counter() - t0
 
 
@@ -292,12 +291,6 @@ def stats_cols(st, decree=False):
 def split_hits(hits):
     """(법률 hit, 첨부한 하위법령 hit)"""
     return [h for h in hits if not is_decree(h)], [h for h in hits if is_decree(h)]
-
-
-def uses_decrees(app, model):
-    from lawbot.service import uses_decrees as f
-
-    return f(app, model)
 
 
 # ---- 단계 ----
@@ -343,12 +336,12 @@ def run_retrieval(app, test, path, rerank=True, decree=False):
     resume(path, list(zip(test['id'], test['question'], test['article_id'])), one, 'retrieval')
 
 
-def run_answers(app, model, sample, path):
+def run_answers(app, sample, path):
     kw = keywords(DATASET)
-    decree = uses_decrees(app, model)
+    decree = getattr(app, 'decree', None) is not None
 
     def one(qid, q, gold, cat):
-        hits, raw, st = answer(app, model, q)
+        hits, raw, st = answer(app, q)
         law, dec = split_hits(hits)  # top3·retrieved는 법률 3개 (하위법령을 켜도 같은 뜻)
         return (
             {
@@ -367,12 +360,12 @@ def run_answers(app, model, sample, path):
     resume(path, list(zip(sample['id'], sample['question'], sample['article_id'], sample['eval_cat'])), one, 'answers')
 
 
-def run_oos(app, model, path):
+def run_oos(app, path):
     items = oos_items()
-    decree = uses_decrees(app, model)
+    decree = getattr(app, 'decree', None) is not None
 
     def one(qid, q, kind, category, source):
-        hits, raw, st = answer(app, model, q)
+        hits, raw, st = answer(app, q)
         hits, dec = split_hits(hits)
         scope = oos_scope(kind, source)
         law = '근로기준법' if kind == 'control' else scope_map().get(source)
@@ -411,11 +404,11 @@ def refusal_cases(app, sample, n=100):
     return out
 
 
-def run_refusal(app, model, sample, path):
+def run_refusal(app, sample, path):
     table = hit_table(app)
 
     def one(cid, test, q, ctx):
-        raw, sec = answer_with(app, model, q, [table[k] for k in ctx])
+        raw, sec = answer_with(app, q, [table[k] for k in ctx])
         return (
             {'id': cid, 'test': test, 'context': '|'.join(ctx)}
             | score_refusal(raw)
@@ -441,7 +434,7 @@ def score_dq(gold, raw, ctx):
     }
 
 
-def run_decree_retrieval(app, model, dq, path):
+def run_decree_retrieval(app, dq, path):
     """하위법령 정답 문항: 법률 검색·리랭킹(1위 법령) → 하위법령 후보 → 리랭킹 → 필터. 웹앱과 같은 service.retrieve"""
     from lawbot.service import retrieve
 
@@ -449,7 +442,7 @@ def run_decree_retrieval(app, model, dq, path):
 
     def one(qid, q, gold, qtype):
         st = {}
-        law, att = retrieve(app, q, 3, st, model)
+        law, att = retrieve(app, q, 3, st)
         order, att = [key(h) for h in st['decree_candidates']], [key(h) for h in att]
         return {
             'id': qid,
@@ -485,12 +478,12 @@ def decree_sample(dq, n_tax=0):
     return pd.concat(parts).sort_values('id')
 
 
-def run_decree_answers(app, model, dq, path, n_tax=0):
+def run_decree_answers(app, dq, path, n_tax=0):
     """하위법령 정답 표본(decree_sample)을 웹앱 경로(service.ask)로 답하고 채점"""
     sample = decree_sample(dq, n_tax)
 
     def one(qid, q, gold, qtype):
-        hits, raw, st = answer(app, model, q)
+        hits, raw, st = answer(app, q)
         law, dec = split_hits(hits)
         ctx = [key(h) for h in hits]
         return (
@@ -812,7 +805,7 @@ def git_state():
         return None, None
 
 
-def run_meta(app, model, split, n, stages):
+def run_meta(app, split, n, stages):
     """Record separate generation and retrieval metadata for this evaluation."""
     client = getattr(getattr(app.retriever, 'encoder', None), 'client', None)
     try:
@@ -822,13 +815,12 @@ def run_meta(app, model, split, n, stages):
     generation = None
     mlx_lm_version = None
     try:
-        bot, _ = app.models.get(model)
-        generation_client = getattr(bot, 'client', None)
+        generation_client = getattr(app.llm, 'client', None)
         if app.llm_mode == 'external':
-            generation = {'id': app.models.specs[model].model, 'revision': None}
+            generation = {'id': app.profile.model.model, 'revision': None}
         elif generation_client is not None:
             cards = service.generation_models(generation_client)
-            card = next(card for card in cards if card['id'] == app.models.specs[model].model)
+            card = next(card for card in cards if card['id'] == app.profile.model.model)
             mlx_lm_version = card.get('mlx_lm_version')
             generation = {key: card.get(key) for key in ('id', 'revision')}
     except Exception as exc:
@@ -840,8 +832,8 @@ def run_meta(app, model, split, n, stages):
         'split': split,
         'n': n,
         'stages': stages,
-        'model': model,
-        'model_id': app.models.specs[model].model,
+        'model': app.profile.model.key,
+        'model_id': app.profile.model.model,
         'emb_model': app.profile.emb_model,
         'rerank_model': getattr(app.reranker, 'model', None),
         'info': info,
@@ -856,8 +848,6 @@ def run_meta(app, model, split, n, stages):
         else {
             'tau': app.decree.tau,
             'k': app.decree.k,
-            'models': list(app.decree.models),
-            'applied': uses_decrees(app, model),
         },
         'argv': sys.argv[1:],
     }
@@ -1054,7 +1044,7 @@ def main():
         help='생략하면 all (네 단계를 차례로 실행한 뒤 요약. 하위법령 구성 + val이면 decree도)',
     )
     ap.add_argument(
-        '--tag', default=None, help='결과 파일 이름 (기본: <모델 key>_<형식>_rr 또는 _emb, val은 끝에 _val)'
+        '--tag', default=None, help='결과 파일 이름 (기본: rr 또는 emb, 하위법령 첨부 시 _dec, val은 끝에 _val)'
     )
     ap.add_argument(
         '--split', choices=SPLITS, default='test', help='문항 분할 (기본 test: 평가 전용. 설정·규칙 선택은 val로)'
@@ -1067,7 +1057,6 @@ def main():
         '--dataset', choices=['v4', 'v5'], default='v4', help='v5: 세금·보험 문항(D_tax)을 더한다. 결과는 results/v5'
     )
     ap.add_argument('--n-tax', type=int, default=100, help='v5: D_tax 답변 표본 수 (법률 정답, 하위법령 정답 각각)')
-    ap.add_argument('--model', default=None, help='답변 모델 key (기본: .env의 첫 번째 모델)')
     ap.add_argument('--no-rerank', action='store_true', help='retrieval 단계에서 리랭킹 순위를 재지 않음')
     ap.add_argument(
         '--concurrency',
@@ -1109,20 +1098,15 @@ def main():
     from lawbot.service import load_app
 
     app = load_app(settings=settings.load(dict(os.environ, LAWBOT_CORPUS='csv')))
-    model = args.model or app.profile.models[0].key
-    decree = uses_decrees(app, model)
+    decree = getattr(app, 'decree', None) is not None
     if args.stage in ('decree', 'decree-retrieval') and not decree:
-        raise SystemExit(
-            f'decree 단계는 하위법령 첨부 구성에서만: LAWBOT_DECREE_ENABLED=1, LAWBOT_DECREE_MODELS에 {model}'
-        )
+        raise SystemExit('decree 단계는 하위법령 첨부 구성에서만: LAWBOT_DECREE_ENABLED=1')
     tag = args.tag or (
-        f'{model}_{"rr" if app.reranker else "emb"}'
-        + ('_dec' if decree else '')
-        + ('_val' if args.split == 'val' else '')
+        ('rr' if app.reranker else 'emb') + ('_dec' if decree else '') + ('_val' if args.split == 'val' else '')
     )
     sample = answer_sample(test, args.n, n_tax)
     print(
-        f'[eval_v4] tag {tag} · 모델 {model} · 리랭커 {"켜짐" if app.reranker else "꺼짐"} · '
+        f'[eval_v4] tag {tag} · 모델 {app.profile.model.key} · 리랭커 {"켜짐" if app.reranker else "꺼짐"} · '
         f'하위법령 {"첨부" if decree else "없음"} · '
         f'{args.split} {len(test)} · 표본 {len(sample)} · 동시 {WORKERS}'
     )
@@ -1131,8 +1115,7 @@ def main():
         stages = [s for s in stages if s != 'oos'] + (['decree'] if args.stage == 'all' and decree else [])
     write_run_meta(
         tag,
-        run_meta(app, model, args.split, args.n, stages)
-        | {'concurrency': WORKERS, 'eval_dataset': DATASET, 'n_tax': n_tax},
+        run_meta(app, args.split, args.n, stages) | {'concurrency': WORKERS, 'eval_dataset': DATASET, 'n_tax': n_tax},
     )
     t0 = time.perf_counter()
     for s in stages:
@@ -1141,18 +1124,18 @@ def main():
                 app, test, OUT / f'retrieval_{tag}.csv', rerank=not args.no_rerank, decree=decree and not args.no_rerank
             )
         elif s == 'answers':
-            run_answers(app, model, sample, OUT / f'answers_{tag}.csv')
+            run_answers(app, sample, OUT / f'answers_{tag}.csv')
         elif s == 'oos':
-            run_oos(app, model, OUT / f'oos_{tag}.csv')
+            run_oos(app, OUT / f'oos_{tag}.csv')
         elif s == 'refusal':
             # v4 기준선과 같은 문항으로 비교하도록 v4 표본 부분에서만 뽑는다 (v5도)
-            run_refusal(app, model, sample[sample.eval_cat != 'D_tax'], OUT / f'refusal_{tag}.csv')
+            run_refusal(app, sample[sample.eval_cat != 'D_tax'], OUT / f'refusal_{tag}.csv')
         elif s == 'decree':
             dq = load_decree_questions('val', DATASET)
-            run_decree_retrieval(app, model, dq, OUT / f'dqretrieval_{tag}.csv')
-            run_decree_answers(app, model, dq, OUT / f'dqanswers_{tag}.csv', n_tax)
+            run_decree_retrieval(app, dq, OUT / f'dqretrieval_{tag}.csv')
+            run_decree_answers(app, dq, OUT / f'dqanswers_{tag}.csv', n_tax)
         elif s == 'decree-retrieval':  # 답변 없이 하위법령 검색만 (첨부 수 고르기: LAWBOT_DECREE_K를 크게)
-            run_decree_retrieval(app, model, load_decree_questions('val', DATASET), OUT / f'dqretrieval_{tag}.csv')
+            run_decree_retrieval(app, load_decree_questions('val', DATASET), OUT / f'dqretrieval_{tag}.csv')
     update_last_run(tag, stage_times=STAGE_TIMES)
     for label, t in STAGE_TIMES.items():
         if t['n'] and t['sec']:

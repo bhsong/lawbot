@@ -8,8 +8,9 @@ import sys
 import threading
 import time
 import uuid
+from collections.abc import Callable
 from dataclasses import dataclass
-from functools import partial
+from functools import cached_property, partial
 from pathlib import Path
 from typing import cast
 
@@ -42,7 +43,7 @@ from lawbot_common.logs import logger
 
 log = logger('lawbot', 'lawbot')
 
-TOP_K = 3  # 답변 근거로 넘기는 조문 수 (Fast·Pro 공통)
+TOP_K = 3  # Number of statutory articles passed to the answer model, excluding decree attachments.
 # 테스트는 Retriever·Reranker·LLM·ModelServerClient·OpenAI를 이 모듈의 속성으로 바꿔 끼운다 (load_app이 호출 때 읽음)
 
 
@@ -54,27 +55,11 @@ class AskError(Exception):
         self.kind, self.stage = kind, stage
 
 
-class ChatModels:
-    """Cache answer clients by model key without tracking server residency."""
-
-    def __init__(self, specs, factory):
-        self.specs = {s.key: s for s in specs}
-        self.factory = factory
-        self.llms = {}
-
-    def get(self, key):
-        """(LLM, None). 없는 key는 KeyError. 두 번째 값은 이전 인터페이스(로딩 초)와 맞춘 자리 (서버가 첫 요청 때 불러옴)"""
-        spec = self.specs[key]
-        if key not in self.llms:  # system 파일이 없으면 FileNotFoundError (화면에서 오류 안내)
-            self.llms[key] = self.factory(spec)
-        return self.llms[key], None
-
-
 @dataclass
 class LawbotApp:
     profile: deploy.Profile
     retriever: object
-    models: ChatModels
+    make_llm: Callable[[], LLM]
     reranker: object = None  # None: 임베딩 상위 TOP_K개 그대로 (LAWBOT_RERANKER_ENABLED=0, 기본)
     decree: object = None  # deploy.DecreeConfig: 시행령·시행규칙 첨부 (None: 법률 3개만, LAWBOT_DECREE_ENABLED=0 기본)
     llm_mode: str = 'api'  # 'api': dedicated local generation server; 'external': external generation API.
@@ -85,16 +70,14 @@ class LawbotApp:
     articles_sha256: str | None = None
     calculator_dependencies: dict[str, tuple[str, ...]] | None = None
 
+    @cached_property
+    def llm(self) -> LLM:
+        """Cache the answer client on first use without loading the model on the server."""
+        return self.make_llm()
 
-def uses_decrees(app, model_key):
-    """이 답변 모델에 하위법령을 붙이는지 (LAWBOT_DECREE_MODELS, 기본 Pro만)"""
-    dc = getattr(app, 'decree', None)
-    return dc is not None and model_key in dc.models
 
-
-def system_text(profile, spec):
-    """모델별 system 파일 → 프로필 system 파일 순서"""
-    return (spec.system_file or profile.system_file).read_text(encoding='utf-8').strip()
+def system_text(profile):
+    return profile.system_file.read_text(encoding='utf-8').strip()
 
 
 def check_profile_files(p, corpus=None):
@@ -143,9 +126,8 @@ def missing_models(available, p, rr, *, chat_available=None):
     have = {(m['id'], m.get('type')) for m in available}
     need = [('embedding', p.emb_model)] + ([('rerank', rr.model)] if rr else [])
     missing = [(kind, mid) for kind, mid in need if (mid, kind) not in have]
-    if chat_available is not None:
-        chat_ids = {m['id'] for m in chat_available}
-        missing += [('chat', spec.model) for spec in p.models if spec.model not in chat_ids]
+    if chat_available is not None and not any(m['id'] == p.model.model for m in chat_available):
+        missing.append(('chat', p.model.model))
     return missing
 
 
@@ -202,7 +184,7 @@ def _record_embeddings(db, release_id, retriever, profile, decree, revision):
 
 
 def load_app(settings=None):
-    """웹앱·평가용 LawbotApp: 조문 인덱스(임베딩은 모델 서버) + 켜져 있으면 리랭커 + 답변 모델(Fast/Pro) 레지스트리
+    """웹앱·평가용 LawbotApp: 조문 인덱스(임베딩은 모델 서버) + 켜져 있으면 리랭커 + 답변 모델
     settings: lawbot.settings.Settings (없으면 지금 환경 변수로 settings.load()). 설정이 틀리면 모델 서버에 접속하기 전에
     SettingsError로 모두 알린다. 서버가 준비될 때까지 기다린 뒤, 필요한 모델 id가 서버 /v1/models에 없으면 시작을 거부한다"""
     from lawbot import settings as settings_mod
@@ -254,19 +236,19 @@ def load_app(settings=None):
         _record_embeddings(cfg.db, release.release_id, retriever, p, dc, revision)
     reranker = Reranker(client, rr.model, rr.candidates, timeout=limit) if rr else None
 
-    def factory(spec):  # system 파일이 없으면 FileNotFoundError (화면에서 오류 안내)
-        return LLM(spec.model, client=oa, system=system_text(p, spec))
+    def make_llm():
+        # Let a missing system prompt surface as a model-load error in the UI.
+        return LLM(p.model.model, client=oa, system=system_text(p))
 
-    models = ChatModels(p.models, factory)
     log.info(
         f'프로필 {p.name} · 조문 {len(retriever.ids)}개 · 리랭커 {rr.model if rr else "꺼짐"} · '
         f'하위법령 {decree_text(dc)} · 생성 {"외부 " if external else ""}{llm_url} '
-        f'({", ".join(s.model for s in p.models)})'
+        f'({p.model.model})'
     )
     return LawbotApp(
         p,
         retriever,
-        models,
+        make_llm,
         reranker,
         dc,
         'external' if external else 'api',
@@ -280,7 +262,7 @@ def load_app(settings=None):
 
 
 def decree_text(dc):
-    return f'켜짐 (τ {dc.tau:g} · 최대 {dc.k}개 · 모델 {",".join(dc.models) or "없음"})' if dc else '꺼짐'
+    return f'켜짐 (τ {dc.tau:g} · 최대 {dc.k}개)' if dc else '꺼짐'
 
 
 def count_call(st: Timing, *stages: str) -> None:
@@ -289,14 +271,18 @@ def count_call(st: Timing, *stages: str) -> None:
             counts[stage] += 1
 
 
-def retrieve(app, question, k, st: Timing, model_key=None) -> tuple[list[Hit], list[Hit]]:
-    """(법률 근거 조문 k개, 첨부할 하위법령 목록). 리랭커가 없으면 기존과 같은 임베딩 상위 k개,
-    있으면 임베딩 상위 reranker.candidates개를 리랭킹해 점수순 k개. 측정값 search·rerank(초)를 st에 적는다
-    model_key가 하위법령 첨부 모델이면(uses_decrees) 하위법령 후보 decree.candidates개를 같은 리랭커로 채점하고
-    decree.attach로 거른다 (측정값 decree_search·decree_rerank, 첨부 수 n_decree, 후보 전체 decree_candidates)
-    법률 부분은 하위법령을 켜도 같은 호출이다: 순위·점수·프롬프트가 지금과 같음
-    리랭커 오류는 임베딩 순위로 몰래 되돌리지 않고 그대로 올린다 (생성 오류와 같이 화면에 오류로 표시):
-    되돌리면 화면의 조문이 어느 방식으로 고른 것인지 알 수 없고, 켜 둔 설정과 다른 결과가 섞인다"""
+def retrieve(app, question, k, st: Timing) -> tuple[list[Hit], list[Hit]]:
+    """Return the top k statutory articles and any attached decrees.
+
+    Use embedding rank when reranking is disabled; otherwise rerank the embedding
+    candidates. Propagate reranker errors so the UI reports a failure rather than
+    showing articles selected by a different ranking method without notice.
+
+    Record elapsed seconds in st['search'] and, when run, st['rerank'].
+    Decree retrieval leaves statutory ranking unchanged and records
+    decree_search and decree_rerank (seconds), n_decree (attachment count),
+    and decree_candidates (all scored decree candidates) in st.
+    """
     st['_stage'] = 'search'
     t0 = time.perf_counter()
     count_call(st, 'embedding', 'search')
@@ -311,7 +297,7 @@ def retrieve(app, question, k, st: Timing, model_key=None) -> tuple[list[Hit], l
     count_call(st, 'rerank')
     hits = app.reranker.rerank(question, candidates, top_k=k)
     st['rerank'] = time.perf_counter() - t1
-    if not uses_decrees(app, model_key):
+    if getattr(app, 'decree', None) is None:
         return hits, []
     return hits, retrieve_decrees(app, question, hits[0]['law'], st)
 
@@ -343,7 +329,6 @@ def log_timing(st):
             ('리랭킹', 'rerank'),
             ('하위법령 검색', 'decree_search'),
             ('하위법령 리랭킹', 'decree_rerank'),
-            ('모델 전환', 'load'),
             ('첫 토큰', 'ttft'),
             ('첫 글자', 'first_text'),
             ('완료', 'total'),
@@ -384,7 +369,7 @@ def error_type(e, stage):
     model_server: embedding/rerank or generation connection failure, authentication failure (401), or unavailable (503).
     model_server_busy: generation queue full (503 with error.type server_busy).
     model_load: 답변 모델 불러오기 실패 (서버의 모델 폴더 없음·형식 오류 = ModelLoadError, 웹앱의 system 파일 없음)
-    config: 없는 모델 key, 서버에 없는 모델 id(404)
+    config: 서버에 없는 모델 id(404)
     model_server_timeout: 질문 처리 중 응답 조각 사이가 LAWBOT_MODEL_READ_TIMEOUT을 넘음"""
     if isinstance(e, ModelServerTimeout):
         return 'model_server_timeout'
@@ -394,7 +379,7 @@ def error_type(e, stage):
         return 'model_server'
     if isinstance(e, ModelLoadError):
         return 'model_load'
-    if isinstance(e, KeyError) or (isinstance(e, ModelServerError) and e.status == 404):
+    if isinstance(e, ModelServerError) and e.status == 404:
         return 'config'
     return 'model_load' if stage == 'load' else stage
 
@@ -409,7 +394,7 @@ def request_record(app, st, status, error):
         'corpus_release_id': getattr(app, 'corpus_release_id', None),
         'model': st['model'],
         'reranker': app.reranker is not None,
-        'decree': uses_decrees(app, st['model']),
+        'decree': getattr(app, 'decree', None) is not None,
         'n_decree': st.get('n_decree'),
     }
     rec |= {f'{k}_ms': None if st.get(k) is None else round(st[k] * 1000) for k in MS_FIELDS}
@@ -478,7 +463,6 @@ def active_calculators(app) -> dict[str, tuple[str, ...]]:
 def ask(
     app,
     question,
-    model_key,
     k=TOP_K,
     *,
     request_id=None,
@@ -487,14 +471,14 @@ def ask(
 ):
     """질문 하나: (단계, 검색 조문, 답변 원문, 측정값)을 차례로 돌려준다
     단계 'generate'(토큰마다) → 'done'. 조문은 생성 전에 정해짐
-    hits: 법률 k개 + 첨부한 하위법령 (하위법령 첨부 모델일 때만, 없으면 법률 k개만 = 지금과 같은 리스트)
-    측정값(초): search, rerank(리랭커가 켜져 있을 때만), decree_search·decree_rerank(하위법령 첨부 모델일 때만), load(이번에 로딩했을 때만), ttft(생성 호출→첫 토큰, 프리필),
+    hits: 법률 k개 + 첨부한 하위법령 (첨부가 꺼져 있으면 법률 k개만)
+    측정값(초): search, rerank, decree_search·decree_rerank(첨부가 켜졌을 때만), ttft(생성 호출→첫 토큰),
     first_text(질문 수신→첫 글자), total / tps, prompt_tokens, prompt_tps(프리필 속도), gen_tokens, peak_gb, finish
     질문마다 요청 로그 한 줄 (log_request): 성공 ok / 오류 error(AskError로 감싸 올림: kind는 요청 로그 error_type과 같고 화면 안내에 씀) /
     중간에 멈춤 cancelled (정지 버튼 등으로 생성기를 닫음)"""
     t0 = time.perf_counter()
     st: Timing = {
-        'model': model_key,
+        'model': app.profile.model.key,
         'load': None,
         'request_id': request_id or uuid.uuid4().hex[:12],
         'call_counts': dict.fromkeys(('embedding', 'search', 'rerank', 'llm'), 0),
@@ -514,13 +498,11 @@ def ask(
         if calculation_candidate:
             stage = 'router'
             route_started = time.perf_counter()
-            classify = None
             router_usage: dict[str, int] = {}
-            if 'pro' in app.models.specs:
-                pro, _ = app.models.get('pro')
-                classify = getattr(pro, 'route_calculation', None)
-                if isinstance(pro, LLM):
-                    classify = partial(pro.route_calculation, metrics=router_usage)
+            llm = app.llm
+            classify = getattr(llm, 'route_calculation', None)
+            if isinstance(llm, LLM):
+                classify = partial(llm.route_calculation, metrics=router_usage)
             if classify is not None:
                 if 'call_counts' in st:
                     st['call_counts']['router'] = 0
@@ -545,10 +527,10 @@ def ask(
                 yield 'calculation', [], '', st
             stage = 'search'
             REQUEST_ID.set(st['request_id'])
-        law_hits, decree_hits = retrieve(app, question, k, st, model_key)
+        law_hits, decree_hits = retrieve(app, question, k, st)
         hits = law_hits + decree_hits
         stage = 'load'
-        llm, st['load'] = app.models.get(model_key)
+        llm = app.llm
         stage = 'generation'
         st['_system'] = getattr(llm, 'system', None)
         raw, last, t_gen = '', None, time.perf_counter()

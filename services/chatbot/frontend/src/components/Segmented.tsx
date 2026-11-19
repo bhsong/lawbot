@@ -1,6 +1,6 @@
-type Item = { value: string; label: string; title?: string; disabled?: boolean }
+type Item = { value: string; label: string; title?: string }
 
-/** Pill-shaped single choice (radio group) used for the answer model. */
+/** Radio group for switching between chat and management in the admin UI. */
 export function Segmented({ label, items, value, onChange, disabled }: { label: string; items: Item[]; value: string; onChange: (v: string) => void; disabled?: boolean }) {
   return (
     <div className="seg" role="radiogroup" aria-label={label}>
@@ -11,7 +11,7 @@ export function Segmented({ label, items, value, onChange, disabled }: { label: 
           role="radio"
           aria-checked={it.value === value}
           title={it.title}
-          disabled={disabled || it.disabled}
+          disabled={disabled}
           onClick={() => onChange(it.value)}
         >
           {it.label}
