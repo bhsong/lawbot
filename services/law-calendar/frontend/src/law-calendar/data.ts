@@ -3,7 +3,7 @@ import type { CalendarLoader, TaxSchedule } from './types'
 import type { CalendarMonth, CalendarStatus, ChangePage, HoldPage, PublicDetail } from './api-types'
 
 async function read<T>(path: string, signal: AbortSignal): Promise<T> {
-  const response = await fetch(path, { signal, credentials: 'omit', cache: 'no-store' })
+  const response = await fetch(path, { signal, credentials: 'same-origin', cache: 'no-store' })
   if (!response.ok) throw new Error('Calendar API unavailable')
   return response.json() as Promise<T>
 }

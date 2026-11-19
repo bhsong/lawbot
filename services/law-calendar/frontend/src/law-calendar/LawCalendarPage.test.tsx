@@ -82,9 +82,9 @@ test('loading, retry, delay and verification absence are explicit', async () => 
   expect(screen.getByText(/검증 시각: 확인되지 않음/)).toBeInTheDocument()
 })
 
-test('production reads only public calendar APIs without credentials', async () => {
+test('production reads only same-origin calendar APIs', async () => {
   vi.stubEnv('DEV', false)
-  const fetch = vi.fn(async (url: string) => new Response(JSON.stringify(
+  const fetch = vi.fn(async (url: string, _init?: RequestInit) => new Response(JSON.stringify(
     url.includes('status') ? { collectedAt: null, verifiedAt: null, delayed: true }
       : url.includes('tax-schedule') ? { items: [], confirmedAt: null }
       : url.includes('law-events') ? { items: [], total: 0, page: 1 } : { days: [] },
@@ -96,6 +96,7 @@ test('production reads only public calendar APIs without credentials', async () 
     await waitFor(() => expect(screen.queryByText(/불러오는 중/)).not.toBeInTheDocument())
     expect(fetch).toHaveBeenCalledTimes(4)
     expect(fetch.mock.calls.every(([url]) => url.startsWith('/api/law-') || url.startsWith('/api/tax-schedule?'))).toBe(true)
+    expect(fetch.mock.calls.every(([, init]) => init?.credentials === 'same-origin')).toBe(true)
     expect(screen.queryByText('예시 변경 요약')).not.toBeInTheDocument()
   } finally {
     vi.unstubAllEnvs()
