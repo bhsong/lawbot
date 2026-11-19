@@ -10,9 +10,9 @@ MAX_SEQ = 2304  # 법률 조문 인코딩 최대 토큰 (v4 최장 2,088토큰�
 
 @dataclass(frozen=True)
 class ModelSpec:
-    key: str
-    label: str
-    model: str
+    key: str  # Stable identifier in request logs and feedback records.
+    label: str  # Display name in the web app.
+    model: str  # Model ID sent in the chat completions request.
 
 
 @dataclass(frozen=True)
@@ -22,7 +22,7 @@ class Profile:
     articles: Path  # 조문 CSV
     emb_model: str  # 검색 임베딩 모델 id (모델 서버 /v1/embeddings)
     max_seq: int  # 조문 인코딩 최대 토큰
-    system_file: Path
+    system_file: Path  # System prompt for the selected corpus profile.
     model: ModelSpec
 
 
@@ -64,7 +64,7 @@ def article_paths(name: str, env=None) -> tuple[Path, Path]:
 
 
 def get_profile(env=None) -> Profile:
-    """Select the retrieval corpus and the Pro system prompt."""
+    """Select the retrieval corpus and the Pro system prompt; default to v4."""
     env = os.environ if env is None else env
     name = profile_name(env)
     law, combined = article_paths(name, env)

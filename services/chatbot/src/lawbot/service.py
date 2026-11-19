@@ -43,7 +43,7 @@ from lawbot_common.logs import logger
 
 log = logger('lawbot', 'lawbot')
 
-TOP_K = 3
+TOP_K = 3  # Number of statutory articles passed to the answer model, excluding decree attachments.
 # 테스트는 Retriever·Reranker·LLM·ModelServerClient·OpenAI를 이 모듈의 속성으로 바꿔 끼운다 (load_app이 호출 때 읽음)
 
 
@@ -72,6 +72,7 @@ class LawbotApp:
 
     @cached_property
     def llm(self) -> LLM:
+        """Cache the answer client on first use without loading the model on the server."""
         return self.make_llm()
 
 
@@ -236,6 +237,7 @@ def load_app(settings=None):
     reranker = Reranker(client, rr.model, rr.candidates, timeout=limit) if rr else None
 
     def make_llm():
+        # Let a missing system prompt surface as a model-load error in the UI.
         return LLM(p.model.model, client=oa, system=system_text(p))
 
     log.info(
@@ -270,7 +272,17 @@ def count_call(st: Timing, *stages: str) -> None:
 
 
 def retrieve(app, question, k, st: Timing) -> tuple[list[Hit], list[Hit]]:
-    """Search and rerank law hits, then attach decrees when enabled."""
+    """Return the top k statutory articles and any attached decrees.
+
+    Use embedding rank when reranking is disabled; otherwise rerank the embedding
+    candidates. Propagate reranker errors so the UI reports a failure rather than
+    showing articles selected by a different ranking method without notice.
+
+    Record elapsed seconds in st['search'] and, when run, st['rerank'].
+    Decree retrieval leaves statutory ranking unchanged and records
+    decree_search and decree_rerank (seconds), n_decree (attachment count),
+    and decree_candidates (all scored decree candidates) in st.
+    """
     st['_stage'] = 'search'
     t0 = time.perf_counter()
     count_call(st, 'embedding', 'search')
