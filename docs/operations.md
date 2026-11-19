@@ -74,8 +74,7 @@ data/v5/
 ├── law_articles_v5_decree.csv          # 법률·하위법령 비삭제 1,859개
 ├── manifest.json
 ├── manifest_law_articles_v5_decree.json
-├── system_v5_concise.txt               # Pro 기본 간결형
-└── system_v5.txt                       # Pro 전체 4항목
+└── system_v5_concise.txt               # Pro 간결형 system (답변 형식은 간결형 하나)
 models/v6/
 └── emb_v6_fp16/                        # v6 Qwen3-Embedding-0.6B (v5b에서 이어 학습), sentence-transformers fp16
 models/v5/
@@ -132,9 +131,9 @@ LAWBOT_PW="$(security find-generic-password -a lawbot -s lawbot -w)" uv run lawb
 
 v5의 답변 모델은 Pro입니다. v4 프로필에서 `LAWBOT_MODELS=fast,pro`를 설정하면 화면에서 Fast와 Pro를 고를 수 있습니다.
 
-v5 Pro는 간결형에 `data/v5/system_v5_concise.txt`를 쓰고, 화면에서 "전체 (4항목)"를 고르면 `data/v5/system_v5.txt`로 생성합니다. v4 Fast는 4항목으로 생성하고, "간결"을 고르면 화면에서 결론·근거를 보여 줍니다.
+답변 형식은 간결형(결론 + 실제 인용 조문) 하나입니다. 화면에서 형식을 고르지 않습니다. v5 Pro는 `data/v5/system_v5_concise.txt`로 생성하고, 4항목으로 답하는 v4 Fast의 원문도 화면에서는 결론·근거로 보여 줍니다. [형식 비교](evals/2026-11-19-reasoning-format-definitions.md)
 
-| 모델 | 구성 | 기본 답변 형식 |
+| 모델 | 구성 | 답변 형식 |
 | --- | --- | --- |
 | Lawbot Pro | 단독 생성 서버에 상주하는 Qwen3.8-27B 4비트 (`qwen3.8-27b-4bit`), 간결형 system(`data/v5/system_v5_concise.txt`) | 간결: 결론 + `근거: 실제 인용 조문` |
 
@@ -161,10 +160,9 @@ v5 Pro는 간결형에 `data/v5/system_v5_concise.txt`를 쓰고, 화면에서 "
 | `LAWBOT_FAST_MODEL` / `LAWBOT_PRO_MODEL` | 아니요 | 답변 모델 id (기본 `lawbot-fast-v4` / `qwen3.8-27b-4bit`). 외부 API면 그쪽 모델 이름 |
 | `LAWBOT_MODELS` | 아니요 | 쓸 답변 모델 key를 쉼표로 (`pro`, `fast`, `fast,pro`). 첫 번째가 기본 선택. 비우면 프로필이 지원하는 모델 모두 |
 | `LAWBOT_ENV_FILE` | 아니요 | 읽을 설정 파일 (기본 레포 최상위 `.env`, 없으면 안 읽음). 빈 값이면 읽지 않음. 셸에서만 지정 |
-| `LAWBOT_PRO_SYSTEM` | 아니요 | Pro 간결형 system 파일. v4 기본 `data/v4/system_v4_concise.txt`, v5 기본 `data/v5/system_v5_concise.txt` |
+| `LAWBOT_PRO_SYSTEM` | 아니요 | Pro 간결형 system 파일. v4 기본 `data/v4/system_v4_concise.txt`, v5 기본 `data/v5/system_v5_concise.txt`(v5 프로필의 기본 system도 이 파일) |
 | `LAWBOT_V4_ARTICLES` / `LAWBOT_V4_SYSTEM` | 아니요 | v4 조문 CSV / 4B system 파일 (기본 `data/v4/articles_v4.csv`, `data/v4/system_v4.txt`) |
 | `LAWBOT_V5_ARTICLES` / `LAWBOT_V5_DECREE_ARTICLES` | 아니요 | v5 법률 / 법률·하위법령 CSV (기본 `data/v5/articles_v5.csv`, `data/v5/law_articles_v5_decree.csv`). 각 매니페스트 필수 |
-| `LAWBOT_V5_SYSTEM` | 아니요 | v5 전체 답변 system (기본 `data/v5/system_v5.txt`) |
 | `LAWBOT_MAX_SEQ` / `LAWBOT_DECREE_MAX_SEQ` | 아니요 | 법률 / 하위법령의 인코딩 최대 토큰 (v4 2,304 / 3,072, v5 4,352 / 5,120) |
 | `LAWBOT_RERANKER_ENABLED` | 아니요 | `1`이면 임베딩 상위 후보를 Qwen3-Reranker-4B로 다시 정렬해 상위 3개를 씀 (기본 `0`: 기존 임베딩 상위 3개). |
 | `LAWBOT_RERANK_MODEL` | 아니요 | 리랭커 모델 id (기본 `qwen3-reranker-4b`) |
@@ -424,7 +422,7 @@ git push origin vX.Y.Z
 
 ## v5 프로필 전환
 
-개발에서는 [.env.dev.example](../.env.dev.example)의 v5 설정을 적용합니다. 기본 조문은 `data/v5`의 두 CSV와 각 매니페스트입니다. 기존 설정에서 `LAWBOT_EMB_MODEL`은 `lawbot-emb-v5b`로 바꾸고, 이전 `LAWBOT_PRO_SYSTEM`과 인코딩 길이 재지정을 비우면 v5의 기본 간결형과 인코딩 설정을 씁니다. 전체 답변 형식은 별도의 `data/v5/system_v5.txt`를 씁니다.
+개발에서는 [.env.dev.example](../.env.dev.example)의 v5 설정을 적용합니다. 기본 조문은 `data/v5`의 두 CSV와 각 매니페스트입니다. 기존 설정에서 `LAWBOT_EMB_MODEL`은 `lawbot-emb-v5b`로 바꾸고, 이전 `LAWBOT_PRO_SYSTEM`과 인코딩 길이 재지정을 비우면 v5의 기본 간결형과 인코딩 설정을 씁니다.
 
 운영 반영 승인 후 운영 worktree에서 기존 `.env`와 HEAD를 보관합니다. 임베딩·리랭크 모델 서버의 모델 목록에서 `lawbot-emb-v5b`, `qwen3-reranker-4b`의 id와 revision을 확인하고, 별도 생성 서버의 `/v1/models`에서 `qwen3.8-27b-4bit`의 id와 revision을 확인합니다. 조문 전환과 별개로 현재 운영 HEAD에서 반영할 커밋까지의 변경과 필요한 배포 단계를 확인합니다.
 

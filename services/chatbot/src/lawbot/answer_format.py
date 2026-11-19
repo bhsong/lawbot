@@ -1,4 +1,4 @@
-# src/lawbot/answer_format.py  →  모델 원문(4섹션)을 화면용 간결형으로 바꾸는 후처리 (웹 서버 미사용)
+# src/lawbot/answer_format.py  →  모델 원문을 화면용 간결형(결론 + 근거)으로 바꾸는 후처리
 # 모델 입력([참고 조문])과 원문 출력은 바꾸지 않는다. 화면 형식만 바꾼다
 import re
 
@@ -66,15 +66,3 @@ def answer_citations(raw, hits: list[Hit]):
     sec = sections(raw)
     used, unknown = cited_hits(sec.get('근거 조문', '') if '결론' in sec else raw, hits)
     return used, unknown, False
-
-
-def render(raw, hits: list[Hit], fmt, done=True):
-    """fmt: 'concise'(간결형) / 'full'(모델 원문 4섹션)
-    전체 형식도 생성이 끝나면 검색 결과에서 확인되지 않은 인용을 원문 아래에 경고한다 (간결형과 같은 문구)"""
-    if fmt == 'concise':
-        return concise(raw, hits, done)
-    if done and not refused(raw):
-        _, unknown, _ = answer_citations(raw, hits)
-        if unknown:
-            return raw + f'\n\n⚠ 검색된 조문에서 확인되지 않은 인용: {", ".join(unknown)}'
-    return raw

@@ -395,16 +395,11 @@ def test_chat_streams_answer_with_sources(web, env):
     cite = '\n\n【근거 조문】\n근로기준법 제26조'
     env.setattr(FakeLLM, 'chunks', [*FakeLLM.chunks, cite])
     lawbot = service.load_app()
-    r = run(lawbot, '수습 기간에도 해고 예고?', 'fast', 'full')
-    # 먼저 처리 중 문구, 조문, 그다음 토큰마다 누적 답변, 끝나면 측정값(완료 시간·tok/s)과 같은 답변
+    r = run(lawbot, '수습 기간에도 해고 예고?', 'fast')
+    # 먼저 처리 중 문구, 조문, 그다음 간결형 결론이 늘어나고, 끝나면 실제 인용한 근거 줄이 붙는다
     assert r.events[0] == ('status', {'text': '⏳ 조문 검색 중…'})
-    assert [d['text'] for e, d in r.events if e == 'answer'] == [
-        '【결론】',
-        '【결론】예고해야',
-        '【결론】예고해야 합니다.',
-        '【결론】예고해야 합니다.' + cite,
-    ]
-    assert r.done['text'] == '【결론】예고해야 합니다.' + cite
+    assert [d['text'] for e, d in r.events if e == 'answer'] == ['예고해야', '예고해야 합니다.']
+    assert r.done['text'] == '예고해야 합니다.\n\n근거: 근로기준법 제26조(해고의 예고)'
     first, final = [d for e, d in r.events if e == 'sources']
     assert first['groups'][0]['label'] is None and final['groups'][0]['label'] == '✅ 답변에서 인용한 조문'
     assert '근로기준법 제26조 해고의 예고 · 유사도 0.912' in r.src
@@ -418,7 +413,7 @@ def test_chat_streams_answer_with_sources(web, env):
 def test_chat_generation_failure_is_not_hidden(web, capsys):
     # 생성 실패를 빈 답변이나 부분 답변으로 끝내지 않고 안내 문구로 알린다. 원래 예외는 서버 로그에
     FakeLLM.chunks = ['【결론】', RuntimeError('generation failed')]
-    r = run(service.load_app(), '질문', 'fast', 'full')
+    r = run(service.load_app(), '질문', 'fast')
     assert r.error.startswith('답변을 생성하지 못했습니다') and r.done is None
     out = capsys.readouterr().out
     assert 'generation failed' in out and 'Traceback' in out

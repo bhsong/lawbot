@@ -76,7 +76,6 @@ class LawbotApp:
     retriever: object
     models: ChatModels
     reranker: object = None  # None: 임베딩 상위 TOP_K개 그대로 (LAWBOT_RERANKER_ENABLED=0, 기본)
-    full_system: str | None = None  # '전체(4항목)' system: 프로필 시스템 파일
     decree: object = None  # deploy.DecreeConfig: 시행령·시행규칙 첨부 (None: 법률 3개만, LAWBOT_DECREE_ENABLED=0 기본)
     llm_mode: str = 'api'  # 'api': dedicated local generation server; 'external': external generation API.
     settings: object = None  # lawbot.settings.Settings (load_app이 넣음. 테스트·평가의 가짜 앱은 None)
@@ -264,13 +263,11 @@ def load_app(settings=None):
         f'하위법령 {decree_text(dc)} · 생성 {"외부 " if external else ""}{llm_url} '
         f'({", ".join(s.model for s in p.models)})'
     )
-    full = p.system_file.read_text(encoding='utf-8').strip()
     return LawbotApp(
         p,
         retriever,
         models,
         reranker,
-        full,
         dc,
         'external' if external else 'api',
         cfg,
@@ -284,15 +281,6 @@ def load_app(settings=None):
 
 def decree_text(dc):
     return f'켜짐 (τ {dc.tau:g} · 최대 {dc.k}개 · 모델 {",".join(dc.models) or "없음"})' if dc else '꺼짐'
-
-
-def format_system(app, model_key, fmt):
-    """화면 형식에 맞춘 이번 요청의 system (None이면 모델 기본 system)
-    간결형이 기본인 모델(튜닝 전 Pro)에서 '전체'를 고르면 4항목 system으로 생성한다 (간결형 출력을 그대로 보여 주지 않음)
-    4항목으로 학습한 Fast는 system을 바꾸지 않는다: 간결형은 화면 후처리(answer_format.concise)"""
-    if fmt == 'full' and app.models.specs[model_key].fmt == 'concise':
-        return app.full_system
-    return None
 
 
 def count_call(st: Timing, *stages: str) -> None:
@@ -411,8 +399,7 @@ def error_type(e, stage):
     return 'model_load' if stage == 'load' else stage
 
 
-def request_record(app, st, fmt, status, error):
-    spec = app.models.specs.get(st['model'])
+def request_record(app, st, status, error):
     rec = {
         'ts': time.strftime('%Y-%m-%dT%H:%M:%S%z'),
         'request_id': st['request_id'],
@@ -421,7 +408,6 @@ def request_record(app, st, fmt, status, error):
         'profile': app.profile.name,
         'corpus_release_id': getattr(app, 'corpus_release_id', None),
         'model': st['model'],
-        'fmt': fmt or (spec.fmt if spec else None),
         'reranker': app.reranker is not None,
         'decree': uses_decrees(app, st['model']),
         'n_decree': st.get('n_decree'),
@@ -458,7 +444,7 @@ def answer_check(app, raw, hits):
 LOG_LOCK = threading.Lock()  # 동시 질문(LAWBOT_CHAT_CONCURRENCY·평가 --concurrency)의 줄이 섞이지 않게
 
 
-def log_request(app, st, fmt, status, error=None):
+def log_request(app, st, status, error=None):
     """JSONL 한 줄. 기록 실패는 답변을 막지 않고 콘솔에 경고만. 경로는 앱의 설정 (가짜 앱이면 지금 환경 변수)"""
     cfg = getattr(app, 'settings', None)
     path = cfg.request_log if cfg is not None else request_log_path()
@@ -468,7 +454,7 @@ def log_request(app, st, fmt, status, error=None):
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
         with LOG_LOCK, path.open('a', encoding='utf-8') as f:
-            f.write(json.dumps(request_record(app, st, fmt, status, error), ensure_ascii=False, default=str) + '\n')
+            f.write(json.dumps(request_record(app, st, status, error), ensure_ascii=False, default=str) + '\n')
     except OSError as e:
         log.warning(f'경고: 요청 로그를 쓰지 못했습니다 ({path}: {type(e).__name__})')
 
@@ -494,7 +480,6 @@ def ask(
     question,
     model_key,
     k=TOP_K,
-    fmt=None,
     *,
     request_id=None,
     report=None,
@@ -502,7 +487,6 @@ def ask(
 ):
     """질문 하나: (단계, 검색 조문, 답변 원문, 측정값)을 차례로 돌려준다
     단계 'generate'(토큰마다) → 'done'. 조문은 생성 전에 정해짐
-    fmt: 화면 형식 ('full'/'concise'). 주면 format_system으로 system을 고름 (None이면 모델 기본, 평가 스크립트)
     hits: 법률 k개 + 첨부한 하위법령 (하위법령 첨부 모델일 때만, 없으면 법률 k개만 = 지금과 같은 리스트)
     측정값(초): search, rerank(리랭커가 켜져 있을 때만), decree_search·decree_rerank(하위법령 첨부 모델일 때만), load(이번에 로딩했을 때만), ttft(생성 호출→첫 토큰, 프리필),
     first_text(질문 수신→첫 글자), total / tps, prompt_tokens, prompt_tps(프리필 속도), gen_tokens, peak_gb, finish
@@ -518,7 +502,7 @@ def ask(
 
     def record(status, error=None):
         if report is None:
-            log_request(app, st, fmt, status, error)
+            log_request(app, st, status, error)
         else:
             report(st, status, error)
 
@@ -566,14 +550,11 @@ def ask(
         stage = 'load'
         llm, st['load'] = app.models.get(model_key)
         stage = 'generation'
-        system = format_system(app, model_key, fmt)
-        st['_system'] = system or getattr(llm, 'system', None)
+        st['_system'] = getattr(llm, 'system', None)
         raw, last, t_gen = '', None, time.perf_counter()
         REQUEST_ID.set(st['request_id'])
         count_call(st, 'llm')
-        options = {'system': system} if system else {}
-        if suffix:
-            options['suffix'] = suffix
+        options = {'suffix': suffix} if suffix else {}
         for r in llm.stream(question, hits, **options):
             if last is None:
                 st['ttft'] = time.perf_counter() - t_gen

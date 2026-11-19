@@ -133,12 +133,11 @@ def turn_id(session, n, request_id):
     return hashlib.sha256(f'{session}:{n}:{request_id}'.encode()).hexdigest()[:16]
 
 
-def model_system(app, model_key, fmt):
-    """이번 요청에 쓴 system 전문: format_system(화면 형식) → 모델·프로필 system 파일
-    service.load_app의 factory와 같은 순서"""
+def model_system(app, model_key):
+    """이번 요청에 쓴 system 전문: 모델·프로필 system 파일 (service.load_app의 factory와 같은 순서)"""
     from lawbot import service
 
-    return service.format_system(app, model_key, fmt) or service.system_text(app.profile, app.models.specs[model_key])
+    return service.system_text(app.profile, app.models.specs[model_key])
 
 
 def cite_details(app, raw, hits):
@@ -165,13 +164,13 @@ def decree_settings(app, model_key):
     return {'tau': dc.tau, 'k': dc.k} if dc is not None and model_key in dc.models else None
 
 
-def turn_record(app, question, hits, raw, shown, model_key, fmt, st):
+def turn_record(app, question, hits, raw, shown, model_key, st):
     """저장할 한 턴 (label·reason·feedback_id·ts·turn_id는 저장할 때 붙인다)"""
     release_id = getattr(app, 'corpus_release_id', None)
     m = manifest.for_app(app)
     system = st.get('_system')
     if system is None:
-        system = model_system(app, model_key, fmt)
+        system = model_system(app, model_key)
     articles_sha = getattr(app.retriever, 'articles_sha256', None)
     if release_id:
         articles_sha = app.articles_sha256
@@ -184,7 +183,7 @@ def turn_record(app, question, hits, raw, shown, model_key, fmt, st):
         'answer_raw': raw,
         'answer_shown': shown,
         'model': model_key,
-        'fmt': fmt,
+        'fmt': 'concise',  # Every shown answer is the concise view; exports require the column.
         'refused': st.get('refused'),
         'n_cited': st.get('n_cited'),
         'citations': cite_details(app, raw, hits),

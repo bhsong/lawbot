@@ -36,29 +36,23 @@ def local_app(env, llm=FakeLLM, resident=2):
 
 def test_one_line_per_question_without_text(env, log):
     a = local_app(env)
-    for fmt in ('full', 'concise'):
-        list(service.ask(a, QUESTION, 'fast', fmt=fmt))
+    for _ in range(2):
+        list(service.ask(a, QUESTION, 'fast'))
     rows = lines(log)
     assert len(rows) == 2 and len({r['request_id'] for r in rows}) == 2
     r = rows[0]
-    assert (r['status'], r['error_type'], r['mode'], r['profile'], r['model'], r['fmt']) == (
-        'ok',
-        None,
-        'api',
-        'v4',
-        'fast',
-        'full',
-    )
+    assert (r['status'], r['error_type'], r['mode'], r['profile'], r['model']) == ('ok', None, 'api', 'v4', 'fast')
+    assert 'fmt' not in r
     assert r['search_ms'] is not None and r['total_ms'] >= r['search_ms'] and r['rerank_ms'] is None
     assert {'ttft_ms', 'load_ms', 'prompt_tokens', 'gen_tokens', 'peak_gb', 'finish', 'caller', 'ts'} <= set(r)
     text = log.read_text(encoding='utf-8')
     assert '고유문구XYZ' not in text and '예고해야' not in text and '해고의 예고' not in text  # 질문·답변·조문 없음
 
 
-def test_default_fmt_and_disabled(env, log, tmp_path):
+def test_log_without_format_and_disabled(env, log, tmp_path):
     a = local_app(env)
-    list(service.ask(a, QUESTION, 'pro'))  # 평가 스크립트처럼 fmt 없이: 모델 기본 형식
-    assert lines(log)[0]['fmt'] == 'concise'
+    list(service.ask(a, QUESTION, 'pro'))
+    assert 'fmt' not in lines(log)[0]
     env.setenv('LAWBOT_REQUEST_LOG', '')  # 빈 값이면 기록하지 않음 (경로는 시작할 때 읽음: 새 앱부터)
     list(service.ask(a, QUESTION, 'fast'))
     assert len(lines(log)) == 2
@@ -101,7 +95,7 @@ def test_log_summary_reads_monthly_and_legacy(env, tmp_path, capsys):
 def test_generation_error(env, log, capsys):
     a = local_app(env)
     env.setattr(FakeLLM, 'chunks', ['【결론】', RuntimeError('생성 실패')])
-    r = run(a, QUESTION, 'fast', 'full')
+    r = run(a, QUESTION, 'fast')
     assert r.error.startswith('답변을 생성하지 못했습니다')  # 화면 안내
     assert '생성 실패' in capsys.readouterr().out  # 원래 예외는 서버 로그에
     r = lines(log)[-1]
@@ -110,7 +104,7 @@ def test_generation_error(env, log, capsys):
 
 def test_model_load_error(env, log, tmp_path):
     env.setenv('LAWBOT_PRO_SYSTEM', str(tmp_path / '없음.txt'))
-    r = run(local_app(env, resident=1), QUESTION, 'pro', 'concise')
+    r = run(local_app(env, resident=1), QUESTION, 'pro')
     assert r.error.startswith('Lawbot Pro 모델을 불러오지 못했습니다')
     assert (lines(log)[-1]['status'], lines(log)[-1]['error_type']) == ('error', 'model_load')
 
@@ -125,7 +119,7 @@ def test_rerank_error(env, log, capsys):
             raise RuntimeError('리랭커 점수 오류')
 
     a.reranker = Broken()
-    r = run(a, QUESTION, 'fast', 'full')
+    r = run(a, QUESTION, 'fast')
     assert r.error.startswith('조문 순위를 매기지 못했습니다') and not r.text  # 임베딩 순위로 되돌리지 않음
     assert '리랭커 점수 오류' in capsys.readouterr().out
     r = lines(log)[-1]
@@ -162,10 +156,10 @@ def test_error_type(e, stage, kind):
 def test_server_down_is_model_server(env, log):
     """생성 중 모델 서버 연결이 끊기면 오류 유형 model_server (화면은 '모델 서버가 준비되지 않았습니다')"""
     a = local_app(env)
-    run(a, QUESTION, 'fast', 'full')
+    run(a, QUESTION, 'fast')
     assert lines(log)[-1]['mode'] == 'api' and lines(log)[-1]['status'] == 'ok'
     env.setattr(FakeLLM, 'chunks', [ConnectionError('모델 서버에 연결할 수 없습니다')])
-    assert run(a, QUESTION, 'fast', 'full').error.startswith('모델 서버가 준비되지 않았습니다')
+    assert run(a, QUESTION, 'fast').error.startswith('모델 서버가 준비되지 않았습니다')
     r = lines(log)[-1]
     assert (r['status'], r['error_type'], r['mode']) == ('error', 'model_server', 'api')
 
@@ -188,7 +182,7 @@ def test_server_down_is_model_server(env, log):
 def test_timeout_and_unavailable_are_logged_and_shown(env, log, error, kind, shown):
     a = local_app(env)
     env.setattr(FakeLLM, 'chunks', [error])
-    assert run(a, QUESTION, 'fast', 'full').error.startswith(shown)
+    assert run(a, QUESTION, 'fast').error.startswith(shown)
     r = lines(log)[-1]
     assert (r['status'], r['error_type']) == ('error', kind)
 

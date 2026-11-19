@@ -677,7 +677,7 @@ def test_end_to_end_through_real_server_app(env, real_server, tmp_path):
         '[질문]\n수습 기간에도 해고 예고를 해야 하나요?'
     )
     assert kw == {'max_tokens': 1024, 'temperature': 0.0, 'top_p': None, 'enable_thinking': True}
-    r = run(a, '해고 예고?', 'fast', 'concise')
+    r = run(a, '해고 예고?', 'fast')
     text, stats = r.text, r.stats
     assert text.startswith('예고해야 합니다.') and '25.0 tok/s' in stats
 
@@ -716,7 +716,7 @@ def test_calculation_router_through_real_server_app(env, real_server, tmp_path, 
     app.calculator_dependencies = {MEDICAL: ()}
 
     capsys.readouterr()
-    events = list(web.chat_events(app, question, 'pro', 'concise'))
+    events = list(web.chat_events(app, question, 'pro'))
     event_names = [event for event, _ in events]
     assert event_names.index('calculation') < event_names.index('calculation_check') < event_names.index('done')
     assert 'answer' not in event_names
@@ -769,12 +769,12 @@ def test_web_noncalculation_prompt_and_calls_unchanged(env, real_server, capsys)
     env.setenv('LAWBOT_RERANKER_ENABLED', '1')
     app = service.load_app()
     capsys.readouterr()
-    events = list(web.chat_events(app, '해고 예고?', 'pro', 'full'))
+    events = list(web.chat_events(app, '해고 예고?', 'pro'))
     assert all(event not in {'calculation', 'calculation_check'} for event, _ in events)
     calls = real_server.chat[app.models.specs['pro'].model].calls
     assert len(calls) == 1
     messages, kwargs = calls[0]
-    assert messages[0]['content'].encode() == app.profile.system_file.read_text().strip().encode()
+    assert messages[0]['content'].encode() == service.system_text(app.profile, app.models.specs['pro']).encode()
     assert (
         messages[1]['content'].encode()
         == (
@@ -810,12 +810,12 @@ def test_gated_lookup_uses_identical_rag_messages_and_no_calculation_event(env, 
     env.setenv('LAWBOT_REQUEST_LOG', str(path))
     env.setenv('LAWBOT_RERANKER_ENABLED', '1')
     app = service.load_app()
-    list(service.ask(app, question, 'pro', fmt='concise'))
+    list(service.ask(app, question, 'pro'))
     chat = real_server.chat[app.models.specs['pro'].model]
     [(baseline, baseline_kwargs)] = chat.calls
 
     capsys.readouterr()
-    events = list(web.chat_events(app, question, 'pro', 'concise'))
+    events = list(web.chat_events(app, question, 'pro'))
     assert 'done' in dict(events)
     assert all(event not in {'calculation', 'calculation_check'} for event, _ in events)
     _, (router, router_kwargs), (answer, answer_kwargs) = chat.calls
@@ -844,7 +844,7 @@ def test_router_unavailable_shows_temporary_guidance_and_continues_rag(env, real
     path = tmp_path / 'requests.jsonl'
     env.setenv('LAWBOT_REQUEST_LOG', str(path))
     app = service.load_app()
-    events = dict(web.chat_events(app, question, 'pro', 'concise'))
+    events = dict(web.chat_events(app, question, 'pro'))
 
     assert events['calculation']['status'] == 'none'
     assert events['calculation']['message'].startswith('계산 판정을 일시적으로 하지 못했습니다.')
@@ -911,7 +911,7 @@ def test_server_errors_reach_web_app_as_known_types(env, real_server):
         )
 
     env.setattr(llm.client.chat.completions, 'create', unavailable)
-    assert run(a, '질문', 'pro', 'full').error.startswith('모델 서버가 준비되지 않았습니다')
+    assert run(a, '질문', 'pro').error.startswith('모델 서버가 준비되지 않았습니다')
     env.setenv('LAWBOT_PRO_MODEL', '없는-모델')
     with pytest.raises(RuntimeError, match='chat 없는-모델'):  # 시작할 때 /v1/models로 확인
         service.load_app()

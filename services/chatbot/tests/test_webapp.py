@@ -35,7 +35,6 @@ def test_profiles_define_fast_and_pro(env):
     assert [m.key for m in p.models] == ['fast', 'pro']
     assert [m.label for m in p.models] == ['Lawbot Fast', 'Lawbot Pro']
     assert '정확' not in ' '.join(m.info for m in p.models)  # 검증 전 정확도 단정 금지
-    assert [m.fmt for m in p.models] == ['full', 'concise']  # Fast 4항목, Pro 간결형
     assert p.models[0].system_file is None and p.models[1].system_file == paths.V4_SYSTEM_CONCISE
     assert [m.model for m in p.models] == ['lawbot-fast-v4', 'qwen3.8-27b-4bit'] and p.emb_model == 'lawbot-emb-v4'
     assert (p.articles, p.max_seq, p.system_file) == (paths.V4_ARTICLES, 2304, paths.V4_SYSTEM)
@@ -114,14 +113,14 @@ def test_load_app_v4_reads_system_file(env, tmp_path):
 
 def test_pro_system_missing_is_reported(env, tmp_path):
     env.setenv('LAWBOT_PRO_SYSTEM', str(tmp_path / '없음.txt'))
-    assert run(make_app(env), '질문', 'pro', 'concise').error.startswith('Lawbot Pro 모델을 불러오지 못했습니다')
+    assert run(make_app(env), '질문', 'pro').error.startswith('Lawbot Pro 모델을 불러오지 못했습니다')
 
 
 def test_format_follows_model_by_default(env):
     # 화면은 모델을 바꾸면 형식을 그 모델의 기본값으로 바꾼다 (frontend App.test). 서버는 모델별 기본 형식을 알려 준다
     cfg = web.config_data(make_app(env), None)
     assert cfg['default_model'] == 'fast'  # 기본 선택 Fast → 4항목
-    assert {m['key']: m['format'] for m in cfg['models']} == {'fast': 'full', 'pro': 'concise'}
+    assert all('format' not in m for m in cfg['models'])
 
 
 def test_missing_model_on_generation_server_refuses_start(env, model_server):
@@ -148,7 +147,7 @@ def test_server_model_load_failure_is_reported(env):
             raise ModelLoadError('모델 서버 오류 FileNotFoundError: 모델 폴더 없음')
             yield
 
-    r = run(make_app(env, llm=ServerCannotLoad), '질문', 'pro', 'full')
+    r = run(make_app(env, llm=ServerCannotLoad), '질문', 'pro')
     assert r.error.startswith('Lawbot Pro 모델을 불러오지 못했습니다: qwen3.8-27b-4bit')
 
 
@@ -177,20 +176,20 @@ def test_selection_is_per_request(env):
     a = make_app(env)
     names = {'fast': 'lawbot-fast-v4', 'pro': 'qwen3.8-27b-4bit'}
     for key in ('fast', 'pro', 'fast', 'pro', 'pro', 'fast'):
-        r = run(a, '해고 예고?', key, 'full')
+        r = run(a, '해고 예고?', key)
         assert names[key] in r.text and r.stats.startswith(f'Lawbot {key.title()}')
 
 
 def test_fast_and_pro_get_same_context(env):
     a = make_app(env)
-    src = [run(a, '수습 해고 예고?', k, 'full').sources for k in ('fast', 'pro')]
+    src = [run(a, '수습 해고 예고?', k).sources for k in ('fast', 'pro')]
     assert src[0] == src[1]
     assert a.models.llms['fast'].args == a.models.llms['pro'].args == ('수습 해고 예고?', HITS)
 
 
 def test_switch_does_not_wait_for_model_residency(env, model_server):
     a = make_app(env)
-    r = run(a, '질문', 'pro', 'concise')
+    r = run(a, '질문', 'pro')
     assert r.events[1] == ('sources', web.sources_data(HITS[:3]))
     assert r.text.startswith('qwen3.8-27b-4bit')
     assert not any(
@@ -203,9 +202,8 @@ def test_switch_does_not_wait_for_model_residency(env, model_server):
 def test_invalid_inputs(env):
     a = make_app(env)
     for body, shown in (
-        ({'question': '   ', 'model': 'fast', 'format': 'concise'}, '질문을 입력해 주세요.'),
-        ({'question': '질문', 'model': 'ultra', 'format': 'concise'}, '알 수 없는 답변 모델입니다.'),
-        ({'question': '질문', 'model': 'fast', 'format': 'long'}, '알 수 없는 답변 형식입니다.'),
+        ({'question': '   ', 'model': 'fast'}, '질문을 입력해 주세요.'),
+        ({'question': '질문', 'model': 'ultra'}, '알 수 없는 답변 모델입니다.'),
     ):
         with pytest.raises(HTTPException) as ei:
             web.valid_chat(a, body)
@@ -220,9 +218,9 @@ def test_empty_and_truncated_answer(env):
 
     Odd.text, Odd.finish = ' ', 'stop'
     a = make_app(env, llm=Odd)
-    assert run(a, '질문', 'fast', 'concise').text == view.EMPTY
+    assert run(a, '질문', 'fast').text == view.EMPTY
     Odd.text, Odd.finish = '【결론】길게', 'length'
-    truncated = run(a, '질문', 'fast', 'full')
+    truncated = run(a, '질문', 'fast')
     assert '⚠ 최대 길이에서 잘림' in truncated.stats
     assert truncated.text == '' and '길이' in truncated.done['notice']
 
@@ -413,7 +411,8 @@ def test_env_example_is_complete_without_secrets(env):
     assert p.emb_model == 'lawbot-emb-v6' and p.max_seq == 4352
     law, combined = deploy.article_paths(p.name)
     assert law.name == 'articles_v5.csv' and p.articles == combined == paths.DATA / 'v5/law_articles_v5_decree.csv'
-    assert p.system_file == paths.V5_SYSTEM
+    assert p.system_file == paths.V5_SYSTEM_CONCISE
+    assert not (paths.DATA / 'v5/system_v5.txt').exists()  # full-format system removed with the format
     assert all(manifest.check(csv)['dataset_version'] == 'v5' for csv in (law, combined))
     assert deploy.reranker(p) == deploy.RerankerConfig('qwen3-reranker-4b', 10)
     assert deploy.decree(p) == deploy.DecreeConfig(0.9, 2, ('pro',), max_seq=5120)
@@ -513,32 +512,19 @@ def test_pro_only_app(env):
     assert list(a.models.specs) == ['pro']  # Fast는 쓰지 않음 (모델 서버에 없어도 됨)
     assert [m.key for m in a.profile.disabled] == ['fast']
     cfg = web.config_data(a, None)
-    assert cfg['default_model'] == 'pro' and cfg['models'][0]['format'] == 'concise'
+    assert cfg['default_model'] == 'pro'
     assert [m['key'] for m in cfg['models']] == ['pro'] and [m['key'] for m in cfg['disabled']] == ['fast']  # 비활성
     with pytest.raises(HTTPException, match='사용하지 않는 모델'):  # 화면은 버튼을 막고, 서버도 거부
-        web.valid_chat(a, {'question': '질문', 'model': 'fast', 'format': 'full'})
-    assert run(a, '해고 예고?', 'pro', 'concise').stats.startswith('Lawbot Pro')
+        web.valid_chat(a, {'question': '질문', 'model': 'fast'})
+    assert run(a, '해고 예고?', 'pro').stats.startswith('Lawbot Pro')
     assert any('사용 안 함' in m for lv, m in check_deploy.run())
 
 
-def test_full_format_uses_four_part_system(env):
-    # 간결형이 기본인 Pro에서 '전체'를 고르면 4항목 system으로 생성 (간결형 출력이 그대로 나오지 않게)
+def test_each_model_generates_with_its_own_system(env):
     a = make_app(env)
-    run(a, '질문', 'pro', 'full')
-    assert a.models.llms['pro'].system == a.full_system
-    run(a, '질문', 'pro', 'concise')
-    assert a.models.llms['pro'].system is None  # 간결형: Pro 기본(간결형) system
-    for f in ('full', 'concise'):  # Fast(4항목 학습)는 system을 바꾸지 않음
-        run(a, '질문', 'fast', f)
-        assert a.models.llms['fast'].system is None
-    list(service.ask(a, '질문', 'pro'))  # fmt 없이 (평가·벤치): 모델 기본
-    assert a.models.llms['pro'].system is None
-
-
-def test_full_system_is_profile_system_file(env):
-    a = make_app(env)
-    assert a.full_system == paths.V4_SYSTEM.read_text(encoding='utf-8').strip()
-    assert '【설명】' in a.full_system and '【설명】' not in paths.V4_SYSTEM_CONCISE.read_text(encoding='utf-8')
+    for key in ('pro', 'fast'):
+        run(a, '질문', key)
+        assert a.models.llms[key].system is None  # no per-request override of the model's system
 
 
 # ---- 근거 조문 표시 (B5) ----
@@ -596,7 +582,7 @@ def test_sources_split_cited_and_retrieved(v4_files):
         v4_files,
         '【결론】\n30일 전에 예고해야 합니다.\n\n【근거 조문】\n근로기준법 제27조(해고사유 등의 서면통지), 제26조',
     )
-    first, final = [d for e, d in run(a, '해고 예고?', 'pro', 'concise').events if e == 'sources']
+    first, final = [d for e, d in run(a, '해고 예고?', 'pro').events if e == 'sources']
     assert groups(first) == [(None, True, ['제26조', '제27조', '제28조'])]  # 생성 중에는 세 개 모두 펼침
     assert groups(final) == [
         (view.CITED_LABEL, True, ['제26조', '제27조']),  # 인용한 조문은 펼쳐서 먼저 (검색 순서대로)
@@ -609,19 +595,18 @@ def test_sources_split_cited_and_retrieved(v4_files):
 
 def test_sources_for_refusal(v4_files):
     a = v4_chat(v4_files, '【결론】\n제공된 조문에서 근거를 찾을 수 없습니다.\n\n【근거 조문】\n근로기준법 제26조')
-    r = run(a, '제주도 여행 코스?', 'pro', 'concise')
+    r = run(a, '제주도 여행 코스?', 'pro')
     assert r.text == '제공된 조문에서 근거를 찾을 수 없습니다.'  # 거절: 결론만
     assert groups({'groups': r.sources}) == [
         ('검색됐지만 답변에 쓰지 않은 조문', False, ['제26조', '제27조', '제28조'])
     ]
 
 
-@pytest.mark.parametrize('fmt', ['full', 'concise'])
 @pytest.mark.parametrize('cites', ['', '근로기준법 제26조, 근로기준법 제109조', '최저임금법 제26조'])
-def test_unconfirmed_answer_is_withheld(v4_files, fmt, cites):
+def test_unconfirmed_answer_is_withheld(v4_files, cites):
     raw = f'【결론】\n예고해야 합니다.\n\n【근거 조문】\n{cites}'
     remembered = []
-    r = run(v4_chat(v4_files, raw), '해고?', 'pro', fmt, remember=remembered.append)
+    r = run(v4_chat(v4_files, raw), '해고?', 'pro', remember=remembered.append)
     assert any('예고해야' in d['text'] for e, d in r.events if e == 'answer')
     assert r.text == '' and '근거' in r.done['notice'] and r.done['turn_id'] is None
     assert groups({'groups': r.sources}) == [(None, True, ['제26조', '제27조', '제28조'])]
@@ -629,7 +614,7 @@ def test_unconfirmed_answer_is_withheld(v4_files, fmt, cites):
 
 
 def test_status_steps(env):
-    events = run(make_app(env), '질문', 'fast', 'concise').events
+    events = run(make_app(env), '질문', 'fast').events
     assert events[0] == ('status', {'text': '⏳ 조문 검색 중…'})  # 검색 결과가 오기 전
     assert all(d['text'].strip() for e, d in events if e in ('answer', 'status', 'done'))  # 빈 화면 단계 없음
     statuses = [d['text'] for e, d in events if e == 'status']
@@ -660,12 +645,10 @@ def test_v5_profile_uses_v6_and_v5_systems(env):
     assert p.articles.name == 'law_articles_v5_decree.csv'
     assert p.emb_model == 'lawbot-emb-v6'
     assert p.max_seq == 4352 and deploy.decree(p).max_seq == 5120
-    assert [(m.key, m.model, m.fmt) for m in p.models] == [('pro', 'qwen3.8-27b-4bit', 'concise')]
-    concise_system = service.system_text(p, p.models[0])
-    full = p.system_file.read_text(encoding='utf-8')
-    assert concise_system.splitlines()[0] == full.splitlines()[0]
-    assert '근로소득 세금, 4대보험' in full
-    assert all(section in full for section in ('【결론】', '【근거 조문】', '【설명】', '【참고】'))
+    assert [(m.key, m.model) for m in p.models] == [('pro', 'qwen3.8-27b-4bit')]
+    system = service.system_text(p, p.models[0])
+    assert p.system_file == p.models[0].system_file  # one concise system for the v5 profile
+    assert '근로소득 세금, 4대보험' in system and '【결론】' in system and '【설명】' not in system
     service.check_profile_files(p)
     checks = []
     check_deploy.check_decree(p, checks)

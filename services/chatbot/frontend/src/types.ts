@@ -3,7 +3,7 @@ export type SourceItem = { title: string; scores: string; body: string; decree: 
 export type SourceGroup = { label: string | null; open: boolean; items: SourceItem[] }
 export type Sources = { groups: SourceGroup[] }
 
-export type ModelOption = { key: string; label: string; info: string; format: string }
+export type ModelOption = { key: string; label: string; info: string }
 export type Option = { value: string; label: string }
 
 export type Config = {
@@ -13,7 +13,6 @@ export type Config = {
   models: ModelOption[]
   disabled: { key: string; label: string }[]
   default_model: string
-  formats: Option[]
   examples: string[]
   sources_title: string
   feedback: { enabled: boolean; reasons: Option[] }
@@ -39,7 +38,6 @@ export type Turn = {
   id: string
   question: string
   model: string
-  format: string
   status?: string
   notice?: string
   draft?: boolean

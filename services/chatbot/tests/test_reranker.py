@@ -244,7 +244,7 @@ def test_reranker_failure_is_not_hidden(env, tmp_path, capsys):
     # 리랭커 오류를 임베딩 순위로 몰래 되돌리지 않고 안내 문구로 알린다. 원래 예외는 서버 로그에. 답변 생성도 하지 않음
     a = v4_app(env, tmp_path, enabled=True)
     FakeReranker.fail = RuntimeError('리랭커 점수가 올바르지 않습니다')
-    r = run(a, '질문', 'fast', 'full')
+    r = run(a, '질문', 'fast')
     assert r.error.startswith('조문 순위를 매기지 못했습니다') and r.kind == 'rerank'
     assert '점수가 올바르지' in capsys.readouterr().out
     assert 'fast' not in a.models.llms  # 답변 모델을 부르지 않음
@@ -254,14 +254,14 @@ def test_chat_shows_rerank_info(env, tmp_path):
     a = v4_app(env, tmp_path, enabled=True)
     cite = '\n\n【근거 조문】\n근로기준법 제10조'
     env.setattr(FakeLLM, 'chunks', [*FakeLLM.chunks, cite])
-    r = run(a, '해고 예고?', 'fast', 'full')
+    r = run(a, '해고 예고?', 'fast')
     text, src, stats = r.text, r.src, r.stats
-    assert text == '【결론】예고해야 합니다.' + cite
+    assert text == '예고해야 합니다.\n\n근거: 근로기준법 제10조(제목10)'
     assert src.index('제10조') < src.index('제9조') < src.index('제8조')
     assert '근로기준법 제10조 제목10 · 유사도 0.900 · 리랭커 1.000 (임베딩 10위)' in src
     assert '리랭킹' in stats and stats.index('검색') < stats.index('리랭킹')
     off = v4_app(env, tmp_path, enabled=False)
-    r = run(off, '해고 예고?', 'fast', 'full')
+    r = run(off, '해고 예고?', 'fast')
     src, stats = r.src, r.stats
     assert '리랭커' not in src and '리랭킹' not in stats
 

@@ -15,7 +15,6 @@ class ModelSpec:
     label: str  # 화면 표시명
     info: str  # 크기·속도 설명 (정확도 비교는 쓰지 않음: 실측 전)
     model: str  # API 모델 id (chat completions의 model)
-    fmt: str  # 기본 답변 형식: 'full'(4섹션 원문) / 'concise'(결론 + 근거)
     system_file: Path | None = None  # 이 모델만 쓰는 system (None이면 프로필 system)
 
 
@@ -26,7 +25,7 @@ class Profile:
     articles: Path  # 조문 CSV
     emb_model: str  # 검색 임베딩 모델 id (모델 서버 /v1/embeddings)
     max_seq: int  # 조문 인코딩 최대 토큰
-    system_file: Path  # 4항목 system. 모델별 system_file이 있으면 그쪽 우선
+    system_file: Path  # 프로필 기본 system (v4: Fast가 학습한 4항목, v5: Pro 간결형). 모델별 system_file이 우선
     models: tuple  # (Fast, Pro). 첫 번째가 기본 선택
     disabled: tuple = ()  # LAWBOT_MODELS에서 뺀 모델: 화면에 '사용 안 함'으로만 표시하고 올리지 않음
 
@@ -85,24 +84,22 @@ def get_profile(env=None):
 def _profile(name, env):
     law, combined = article_paths(name, env)
     v5 = name == 'v5'
+    pro_system = _path('LAWBOT_PRO_SYSTEM', paths.V5_SYSTEM_CONCISE if v5 else paths.V4_SYSTEM_CONCISE, env)
     pro = ModelSpec(
         'pro',
         'Lawbot Pro',
-        '27B · 큰 모델(튜닝 전), 간결한 답변, 응답이 더 느림',
+        '27B · 큰 모델(튜닝 전), 응답이 더 느림',
         _model('LAWBOT_PRO_MODEL', 'qwen3.8-27b-4bit', env),
-        'concise',
-        _path('LAWBOT_PRO_SYSTEM', paths.V5_SYSTEM_CONCISE if v5 else paths.V4_SYSTEM_CONCISE, env),
+        pro_system,
     )
-    fast = ModelSpec(
-        'fast', 'Lawbot Fast', '4B · 빠른 응답, 4항목 답변', _model('LAWBOT_FAST_MODEL', 'lawbot-fast-v4', env), 'full'
-    )
+    fast = ModelSpec('fast', 'Lawbot Fast', '4B · 빠른 응답', _model('LAWBOT_FAST_MODEL', 'lawbot-fast-v4', env))
     return Profile(
         name,
         'Lawbot',
         combined if decree_enabled(env) else law,
         _model('LAWBOT_EMB_MODEL', 'lawbot-emb-v6' if v5 else 'lawbot-emb-v4', env),
         _positive_int('LAWBOT_MAX_SEQ', 4352 if v5 else MAX_SEQ, env),
-        _path('LAWBOT_V5_SYSTEM', paths.V5_SYSTEM, env) if v5 else _path('LAWBOT_V4_SYSTEM', paths.V4_SYSTEM, env),
+        pro_system if v5 else _path('LAWBOT_V4_SYSTEM', paths.V4_SYSTEM, env),
         (pro,) if v5 else (fast, pro),
     )
 

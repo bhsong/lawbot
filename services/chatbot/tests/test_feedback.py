@@ -56,9 +56,9 @@ def lines(folder):
     ]
 
 
-def turn(a, fb, question=QUESTION, model='fast', fmt='full', session='s1'):
+def turn(a, fb, question=QUESTION, model='fast', session='s1'):
     """한 턴을 돌리고 (turn_id, 화면 글). 웹앱처럼 끝난 턴을 세션의 다음 순번에 기억한다"""
-    done = run(a, question, model, fmt, remember=lambda record: fb.remember_turn(session, record)).done
+    done = run(a, question, model, remember=lambda record: fb.remember_turn(session, record)).done
     return done['turn_id'], done['text']
 
 
@@ -85,8 +85,8 @@ def test_reasons_offered_to_screen(env, tmp_path):
 def test_like_saves_full_turn(env, feedback_db):
     a = local_app(env)
     path, fb = feedback_db
-    tid, shown = turn(a, fb, fmt='concise', model='pro')
-    expected = list(service.ask(a, QUESTION, 'pro', fmt='concise'))[-1]
+    tid, shown = turn(a, fb, model='pro')
+    expected = list(service.ask(a, QUESTION, 'pro'))[-1]
     row = fb.save('s1', tid, 'like')
     assert row is not None
     with connect(path) as conn:
@@ -126,13 +126,15 @@ def test_like_saves_full_turn(env, feedback_db):
     assert row['system_sha256'] == hashlib.sha256(row['system'].encode()).hexdigest()
 
 
-def test_full_format_system_and_default(env, tmp_path):
+def test_turn_records_each_model_system_and_concise_format(env, tmp_path):
     a = local_app(env)
     fb = feedback.Feedback(tmp_path)
-    t1, _ = turn(a, fb, model='pro', fmt='full')  # 간결형 모델에서 '전체' → 4항목 system
-    t2, _ = turn(a, fb, model='fast', fmt='full')  # Fast: 모델 기본 system (프로필 4항목 system 파일)
+    t1, _ = turn(a, fb, model='pro')
+    t2, _ = turn(a, fb, model='fast')
     r1, r2 = fb.save('s1', t1, 'like'), fb.save('s1', t2, 'like')
-    assert r1['system'] == a.full_system and r2['system'] == service.system_text(a.profile, a.models.specs['fast'])
+    assert r1['system'] == service.system_text(a.profile, a.models.specs['pro'])
+    assert r2['system'] == service.system_text(a.profile, a.models.specs['fast'])
+    assert r1['fmt'] == r2['fmt'] == 'concise'
 
 
 def test_turn_provenance_matches_loaded_csv_and_system(env, tmp_path):
@@ -155,7 +157,7 @@ def test_turn_provenance_matches_loaded_csv_and_system(env, tmp_path):
     csv_path.write_bytes(csv + b'\n')
     system_path.write_text('edited system')
     fb = feedback.Feedback(tmp_path / 'fb')
-    tid, _ = turn(a, fb, model='pro', fmt='concise')
+    tid, _ = turn(a, fb, model='pro')
     row = fb.save('s1', tid, 'like')
     assert row['system'] == 'initial system'
     assert row['system_sha256'] == hashlib.sha256(b'initial system').hexdigest()
@@ -647,8 +649,8 @@ def test_decree_turn_record(env, tmp_path):
     a = td.make()
     fb = feedback.Feedback(tmp_path)
     q = '해고 예고?'
-    tid, _ = turn(a, fb, question=q, model='pro', fmt='concise')
-    _, hits, _, st = list(service.ask(a, q, 'pro', fmt='concise'))[-1]
+    tid, _ = turn(a, fb, question=q, model='pro')
+    _, hits, _, st = list(service.ask(a, q, 'pro'))[-1]
     assert len(hits) > 3 and st['n_decree'] == len(hits) - 3
     row = fb.save('s1', tid, 'like')
     assert row['hits'] == json.loads(json.dumps(hits, default=feedback.jsonable, ensure_ascii=False))
@@ -659,7 +661,7 @@ def test_decree_turn_record(env, tmp_path):
     assert all('kind' not in x for x in row['hits'][:3]) and row['hits'][3]['parent_law']
     assert row['decree'] == {'tau': 0.9, 'k': 2} and row['n_decree'] == st['n_decree']
     assert row['timing']['decree_rerank'] is not None
-    tid, _ = turn(a, fb, question=q, model='fast', fmt='full')
+    tid, _ = turn(a, fb, question=q, model='fast')
     row = fb.save('s1', tid, 'like')
     assert row['decree'] is None and row['n_decree'] is None and len(row['hits']) == 3
 

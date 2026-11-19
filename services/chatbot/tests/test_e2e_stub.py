@@ -576,21 +576,12 @@ def v5_ui(tmp_path, page, request):
             stack.stop()
 
 
-def test_v5_default_and_full_answer_use_scoped_systems(v5_ui):
+def test_v5_answers_in_the_single_concise_format(v5_ui):
     page = v5_ui
-    question = '연말정산에서 어떤 소득공제를 받을 수 있나요?'
-    concise = page.get_by_role('radio', name='간결')
-    assert concise.get_attribute('aria-checked') == 'true'
-    e2e.ask(page, question)
-    e2e.wait_done(page)
-    assert '근로소득 세금, 4대보험' in e2e.answer(page).inner_text()
-    assert '설명' not in e2e.answer(page).inner_text()
-    assert len(e2e.law_cards(page)) == 3
-    page.get_by_role('radio', name='전체 (4항목)').click()
-    e2e.ask(page, question)
-    expect(page.get_by_test_id('answer')).to_have_count(2)
+    expect(page.get_by_role('radiogroup', name='답변 형식')).to_have_count(0)
+    e2e.ask(page, '연말정산에서 어떤 소득공제를 받을 수 있나요?')
     e2e.wait_done(page)
     answer = e2e.answer(page)
     expect(answer).to_contain_text('근로소득 세금, 4대보험')
-    expect(answer).to_contain_text('가짜 모델의 전체 설명')
-    expect(answer).to_contain_text('가짜 모델의 참고 사항')
+    expect(answer).not_to_contain_text('가짜 모델의 전체 설명')
+    assert len(e2e.law_cards(page)) == 3

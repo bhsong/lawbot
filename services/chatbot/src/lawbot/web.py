@@ -26,7 +26,7 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from lawbot import audit_store, envfile, feedback, security, settings, view
 from lawbot import auth as auth_logic
-from lawbot.answer_format import answer_citations, render
+from lawbot.answer_format import answer_citations, concise
 from lawbot.calc_gate import is_calculation_question
 from lawbot.decree import is_decree
 from lawbot.hits import Timing
@@ -174,7 +174,7 @@ def answer_verdict(raw, st: Timing, used, unknown, refused, *, calculated):
     return 'shown'
 
 
-def chat_events(app, question, model_key, fmt, remember=None):
+def chat_events(app, question, model_key, remember=None):
     """질문 하나 → (이벤트, 데이터)를 차례로. remember(턴 기록) → turn_id (피드백이 꺼져 있으면 None)
     이벤트: status → sources(모두 펼침) → answer·stats… → sources(인용/검색만 구분) → stats → done, 실패하면 error
     생성 단계에서 화면 글이 그대로면(간결형의 근거·설명 토큰) TICK을 낸다: 받는 쪽이 토큰마다 연결 끊김을 확인하게"""
@@ -200,7 +200,6 @@ def chat_events(app, question, model_key, fmt, remember=None):
             app,
             question,
             model_key,
-            fmt=fmt,
             report=report,
             calculation_candidate=is_calculation_question(question),
         ):
@@ -213,7 +212,7 @@ def chat_events(app, question, model_key, fmt, remember=None):
                 sent_sources = True
                 yield 'sources', sources_data(hits)
             if stage != 'done':
-                text = '' if calculated else render(raw, hits, fmt, done=False)
+                text = '' if calculated else concise(raw, hits, done=False)
                 out = (
                     changed('answer', {'text': text, 'draft': True})
                     if text.strip()
@@ -225,13 +224,13 @@ def chat_events(app, question, model_key, fmt, remember=None):
             used, unknown, refused = answer_citations(raw, hits)
             verdict = st['answer_verdict'] = answer_verdict(raw, st, used, unknown, refused, calculated=calculated)
             notice = view.ANSWER_NOTICES.get(verdict)
-            text = '' if notice else (view.EMPTY if verdict == 'empty' else render(raw, hits, fmt, done=True))
+            text = '' if notice else (view.EMPTY if verdict == 'empty' else concise(raw, hits, done=True))
             yield 'sources', sources_data(hits) if notice else sources_data(hits, used, refused)
             yield from changed('stats', {'text': view.fmt_stats(spec.label, stage, st)})
             tid = None
             if remember is not None and notice is None:
                 try:
-                    tid = remember(feedback.turn_record(app, question, hits, raw, text, model_key, fmt, st))
+                    tid = remember(feedback.turn_record(app, question, hits, raw, text, model_key, st))
                 except Exception as e:  # 피드백 기록 실패는 답변을 막지 않는다
                     log.warning(f'경고: 피드백용 턴 기록 실패 ({type(e).__name__})')
             check = st.get('calculation_metrics', {}).get('calculation_check')
@@ -252,7 +251,7 @@ def chat_events(app, question, model_key, fmt, remember=None):
             timing, status, error = outcomes[-1]
             if status == 'ok' and not sent_done:
                 status = 'cancelled'
-            log_request(app, timing, fmt, status, error)
+            log_request(app, timing, status, error)
 
 
 def _session(request: Request):
@@ -339,10 +338,10 @@ async def read_json(request):
 
 
 def valid_chat(app, body):
-    """요청 본문 → (질문, 모델 key, 형식). 틀리면 400"""
+    """요청 본문 → (질문, 모델 key). 틀리면 400"""
     if not isinstance(body, dict):
         raise HTTPException(400, '요청 형식이 틀렸습니다.')
-    question, model_key, fmt = body.get('question'), body.get('model'), body.get('format')
+    question, model_key = body.get('question'), body.get('model')
     if not isinstance(question, str) or not question.strip():
         raise HTTPException(400, '질문을 입력해 주세요.')
     if len(question) > MAX_QUESTION:
@@ -351,9 +350,7 @@ def valid_chat(app, body):
         raise HTTPException(400, view.DISABLED_MODEL)
     if not isinstance(model_key, str) or model_key not in app.models.specs:
         raise HTTPException(400, '알 수 없는 답변 모델입니다.')
-    if fmt not in ('concise', 'full'):
-        raise HTTPException(400, '알 수 없는 답변 형식입니다.')
-    return question, model_key, fmt
+    return question, model_key
 
 
 def config_data(app, fb):
@@ -362,12 +359,9 @@ def config_data(app, fb):
         'title': view.page_title(app),
         'intro': view.intro_text(app) + view.DISCLAIMER,
         'notice': view.data_notice(app),
-        'models': [
-            {'key': s.key, 'label': s.label, 'info': s.info, 'format': s.fmt} for s in app.models.specs.values()
-        ],
+        'models': [{'key': s.key, 'label': s.label, 'info': s.info} for s in app.models.specs.values()],
         'disabled': [{'key': s.key, 'label': s.label} for s in p.disabled],
         'default_model': p.models[0].key,
-        'formats': [{'value': v, 'label': label} for label, v in view.FORMATS],
         'examples': view.V5_EXAMPLES if p.name == 'v5' else view.EXAMPLES,
         'sources_title': view.sources_title(app),
         'feedback': {
@@ -503,9 +497,9 @@ def create_app(
     @api.post('/api/chat', dependencies=[Depends(require_json)])
     async def chat(request: Request, who: Who):
         body = await read_json(request)
-        question, model_key, fmt = valid_chat(app, body)
+        question, model_key = valid_chat(app, body)
         remember = partial(fb.remember_turn, who[1]) if fb is not None else None
-        events = chat_events(app, question, model_key, fmt, remember)
+        events = chat_events(app, question, model_key, remember)
         return ChatResponse(stream(events))
 
     class ChatResponse(StreamingResponse):
