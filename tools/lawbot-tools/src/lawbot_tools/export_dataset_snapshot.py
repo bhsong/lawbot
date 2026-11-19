@@ -26,7 +26,7 @@ from lawbot_tools.feedback_review import private_write
 VERDICT_TO_OK = {verdict: ok for ok, verdict in OK_TO_VERDICT.items()}
 SCOPES = dict(zip(('in', 'out'), SCOPE_VALUES, strict=True))
 ASSIGNED = ('train', 'val')
-COMPLETION = ('feedback_id', 'split', 'model', 'fmt', 'system', 'prompt', 'completion')
+COMPLETION = ('feedback_id', 'split', 'model', 'system', 'prompt', 'completion')
 CSV_COLUMNS = {
     'fb_questions.csv': ('feedback_id', 'split', 'question', 'label', 'reason', 'h_ok', 'h_gold', 'h_scope', 'h_note'),
     'fb_emb_pairs.csv': ('feedback_id', 'split', 'question', 'positive', 'negative', 'gold'),
@@ -140,11 +140,10 @@ def _completion_rows(row, record, sft, kto, preferences, warnings):
         feedback_id=row['feedback_id'],
         split=row['sllm'],
         model=row['model'],
-        fmt=record.get('fmt'),
         system=record.get('system'),
         prompt=prompt,
     )
-    for field in ('model', 'fmt', 'system'):
+    for field in ('model', 'system'):
         if example[field] is None:
             warnings[f'missing_{field}'] += 1
     correct = row['verdict'] == 'correct'

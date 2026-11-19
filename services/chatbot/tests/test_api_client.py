@@ -80,7 +80,7 @@ def test_load_app_applies_read_timeout(env):
     env.setenv('LAWBOT_MODEL_READ_TIMEOUT', '90')
     a = service.load_app()
     assert a.retriever.args[0][0].query_timeout.read == 90  # 질문 임베딩
-    oa = a.models.get('fast')[0].client  # 생성 (openai SDK)
+    oa = a.llm.client  # 생성 (openai SDK)
     assert oa.kw['timeout'].read == 90 and oa.kw['timeout'].connect == 5
 
 
@@ -267,9 +267,7 @@ def generation_startup(env):
     from lawbot import deploy
 
     state = types.SimpleNamespace(now=0.0, requests=[], sleeps=[], failures=[], models=None)
-    state.models = [
-        {'id': spec.model, 'object': 'model', 'mlx_lm_version': '0.31.2'} for spec in deploy.get_profile().models
-    ]
+    state.models = [{'id': deploy.get_profile().model.model, 'object': 'model', 'mlx_lm_version': '0.31.2'}]
 
     def sleep(seconds):
         state.sleeps.append(seconds)
@@ -398,15 +396,9 @@ def test_missing_models_uses_separate_generation_ids(env):
 
     p = deploy.get_profile()
     available = [{'id': p.emb_model, 'type': 'embedding'}]
-    chat = [
-        {'id': spec.model, 'object': 'model', 'revision': 'chat-revision', 'mlx_lm_version': '0.31.2'}
-        for spec in p.models
-    ]
+    chat = [{'id': p.model.model, 'object': 'model', 'revision': 'chat-revision', 'mlx_lm_version': '0.31.2'}]
     assert service.missing_models(available, p, None, chat_available=chat) == []
-    assert service.missing_models(available, p, None, chat_available=chat[:1]) == [('chat', p.models[1].model)]
-    assert service.missing_models(available + chat, p, None, chat_available=[]) == [
-        ('chat', spec.model) for spec in p.models
-    ]
+    assert service.missing_models(available + chat, p, None, chat_available=[]) == [('chat', p.model.model)]
 
 
 def test_llm_endpoint_external_needs_opt_in(env):
@@ -458,7 +450,7 @@ def test_external_llm_skips_server_chat_models(env, model_server):
     model_server.available = [{'id': 'lawbot-emb-v4', 'type': 'embedding'}]  # 서버에는 임베딩만
     a = service.load_app()
     assert a.llm_mode == 'external'
-    llm = a.models.get('pro')[0]
+    llm = a.llm
     assert llm.path == 'gpt-cloud' and llm.client.kw['base_url'] == 'https://api.example.com/v1'
     assert llm.client.kw['api_key'] == TEST_LLM_TOKEN and llm.client.kw['http_client']._trust_env is True
 
@@ -556,7 +548,7 @@ def real_server(env):
     ]
     reg = Registry(entries, {'embedding': Emb, 'rerank': Rr})
     reg.load_fixed()
-    reg.chat = {model: Chat(None) for model in ('lawbot-fast-v4', 'qwen3.8-27b-4bit')}
+    reg.chat = {'qwen3.8-27b-4bit': Chat(None)}
     reg.generation_requests = []
     generation = FastAPI()
 
@@ -660,7 +652,7 @@ def test_end_to_end_through_real_server_app(env, real_server, tmp_path):
     emb = real_server.fixed['lawbot-emb-v4']
     assert emb.calls == [(415, 'document', 2304)]
     assert len(a.retriever.ids) == 415 and a.retriever.D.shape == (415, 64)
-    steps = list(service.ask(a, '수습 기간에도 해고 예고를 해야 하나요?', 'fast'))
+    steps = list(service.ask(a, '수습 기간에도 해고 예고를 해야 하나요?'))
     assert steps[0][0] == 'generate' and steps[-1][0] == 'done'
     _, hits, raw, st = steps[-1]
     assert raw == f'【결론】\n예고해야 합니다.\n\n【근거 조문】\n{hits[0]["doc"].splitlines()[0]}'
@@ -672,12 +664,12 @@ def test_end_to_end_through_real_server_app(env, real_server, tmp_path):
         'stop',
     )
     assert emb.calls[-1] == (1, 'query', 2304)
-    messages, kw = real_server.chat['lawbot-fast-v4'].calls[0]
+    messages, kw = real_server.chat[a.profile.model.model].calls[0]
     assert messages[1]['content'].startswith('[참고 조문]\n[1] ') and messages[1]['content'].endswith(
         '[질문]\n수습 기간에도 해고 예고를 해야 하나요?'
     )
     assert kw == {'max_tokens': 1024, 'temperature': 0.0, 'top_p': None, 'enable_thinking': True}
-    r = run(a, '해고 예고?', 'fast')
+    r = run(a, '해고 예고?')
     text, stats = r.text, r.stats
     assert text.startswith('예고해야 합니다.') and '25.0 tok/s' in stats
 
@@ -716,7 +708,7 @@ def test_calculation_router_through_real_server_app(env, real_server, tmp_path, 
     app.calculator_dependencies = {MEDICAL: ()}
 
     capsys.readouterr()
-    events = list(web.chat_events(app, question, 'pro'))
+    events = list(web.chat_events(app, question))
     event_names = [event for event, _ in events]
     assert event_names.index('calculation') < event_names.index('calculation_check') < event_names.index('done')
     assert 'answer' not in event_names
@@ -735,7 +727,7 @@ def test_calculation_router_through_real_server_app(env, real_server, tmp_path, 
     assert record['answer_verdict'] == ('shown' if check == 'match' else f'calculation_{check}')
     assert record['call_counts'] == {'router': 1, 'embedding': 1, 'search': 1, 'rerank': 1, 'llm': 1}
     assert not any(value in path.read_text(encoding='utf-8') for value in ('5천만', '75,000', '75000', question))
-    chat = real_server.chat[app.models.specs['pro'].model]
+    chat = real_server.chat[app.profile.model.model]
     (router_messages, router_kwargs), (label_messages, label_kwargs), (answer_messages, answer_kwargs) = chat.calls
     assert router_messages[1]['content'] == question
     assert label_messages[1]['content'].startswith('[1:2026년] 총급여 [2:5천만 원]')
@@ -769,12 +761,12 @@ def test_web_noncalculation_prompt_and_calls_unchanged(env, real_server, capsys)
     env.setenv('LAWBOT_RERANKER_ENABLED', '1')
     app = service.load_app()
     capsys.readouterr()
-    events = list(web.chat_events(app, '해고 예고?', 'pro'))
+    events = list(web.chat_events(app, '해고 예고?'))
     assert all(event not in {'calculation', 'calculation_check'} for event, _ in events)
-    calls = real_server.chat[app.models.specs['pro'].model].calls
+    calls = real_server.chat[app.profile.model.model].calls
     assert len(calls) == 1
     messages, kwargs = calls[0]
-    assert messages[0]['content'].encode() == service.system_text(app.profile, app.models.specs['pro']).encode()
+    assert messages[0]['content'].encode() == service.system_text(app.profile).encode()
     assert (
         messages[1]['content'].encode()
         == (
@@ -810,12 +802,12 @@ def test_gated_lookup_uses_identical_rag_messages_and_no_calculation_event(env, 
     env.setenv('LAWBOT_REQUEST_LOG', str(path))
     env.setenv('LAWBOT_RERANKER_ENABLED', '1')
     app = service.load_app()
-    list(service.ask(app, question, 'pro'))
-    chat = real_server.chat[app.models.specs['pro'].model]
+    list(service.ask(app, question))
+    chat = real_server.chat[app.profile.model.model]
     [(baseline, baseline_kwargs)] = chat.calls
 
     capsys.readouterr()
-    events = list(web.chat_events(app, question, 'pro'))
+    events = list(web.chat_events(app, question))
     assert 'done' in dict(events)
     assert all(event not in {'calculation', 'calculation_check'} for event, _ in events)
     _, (router, router_kwargs), (answer, answer_kwargs) = chat.calls
@@ -844,7 +836,7 @@ def test_router_unavailable_shows_temporary_guidance_and_continues_rag(env, real
     path = tmp_path / 'requests.jsonl'
     env.setenv('LAWBOT_REQUEST_LOG', str(path))
     app = service.load_app()
-    events = dict(web.chat_events(app, question, 'pro'))
+    events = dict(web.chat_events(app, question))
 
     assert events['calculation']['status'] == 'none'
     assert events['calculation']['message'].startswith('계산 판정을 일시적으로 하지 못했습니다.')
@@ -852,7 +844,7 @@ def test_router_unavailable_shows_temporary_guidance_and_continues_rag(env, real
     assert events['done']['text'].startswith('예고해야 합니다.')
     assert 'error' not in events
     assert router_tokens == [SELECT_MAX_TOKENS]
-    [(messages, _)] = real_server.chat[app.models.specs['pro'].model].calls
+    [(messages, _)] = real_server.chat[app.profile.model.model].calls
     assert messages[1]['content'].startswith('[참고 조문]\n')
     assert '직접 계산하지 말고 계산에 필요한 정보와 근거 조문만 안내할 것.' in messages[1]['content']
     logged = path.read_text(encoding='utf-8')
@@ -869,7 +861,7 @@ def test_request_id_reaches_model_server_log(env, real_server, capsys):
     a = service.load_app()
     capsys.readouterr()
     real_server.generation_requests.clear()
-    steps = list(service.ask(a, '수습 기간에도 해고 예고를 해야 하나요?', 'fast'))
+    steps = list(service.ask(a, '수습 기간에도 해고 예고를 해야 하나요?'))
     rid = steps[-1][3]['request_id']
     server = [line for line in capsys.readouterr().out.splitlines() if line.startswith('[model-server]')]
     paths = [line.split()[2] for line in server if ' POST ' in line and line.endswith(f'rid={rid}')]
@@ -900,7 +892,7 @@ def test_reranker_through_real_server_app(env, real_server):
 def test_server_errors_reach_web_app_as_known_types(env, real_server):
     a = service.load_app()
 
-    llm = a.models.get('pro')[0]
+    llm = a.llm
     request = httpx.Request('POST', 'http://127.0.0.1:65534/v1/chat/completions')
 
     def unavailable(**kwargs):
@@ -911,7 +903,7 @@ def test_server_errors_reach_web_app_as_known_types(env, real_server):
         )
 
     env.setattr(llm.client.chat.completions, 'create', unavailable)
-    assert run(a, '질문', 'pro').error.startswith('모델 서버가 준비되지 않았습니다')
+    assert run(a, '질문').error.startswith('모델 서버가 준비되지 않았습니다')
     env.setenv('LAWBOT_PRO_MODEL', '없는-모델')
     with pytest.raises(RuntimeError, match='chat 없는-모델'):  # 시작할 때 /v1/models로 확인
         service.load_app()
@@ -919,9 +911,9 @@ def test_server_errors_reach_web_app_as_known_types(env, real_server):
 
 def test_generation_models_preserve_independent_revisions(env, real_server):
     app = service.load_app()
-    client = app.models.get('pro')[0].client
+    client = app.llm.client
     models = service.generation_models(client)
-    assert {row['id'] for row in models} == {'lawbot-fast-v4', 'qwen3.8-27b-4bit'}
+    assert {row['id'] for row in models} == {app.profile.model.model}
     assert all(row['revision'] == 'synthetic-e2e' for row in models)
     assert all(row.get('type') is None and row.get('loaded') is None for row in models)
 

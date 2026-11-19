@@ -88,7 +88,7 @@ def test_embedding_finds_article():
 
 def answer_messages(article, question):
     docs = v4_docs()
-    system = (ROOT / 'data/v4/system_v4.txt').read_text(encoding='utf-8').strip()
+    system = (ROOT / 'data/v4/system_v4_concise.txt').read_text(encoding='utf-8').strip()
     user = f'[참고 조문]\n[1] {docs[article]}\n\n[질문]\n{question}'
     return [{'role': 'system', 'content': system}, {'role': 'user', 'content': user}]
 

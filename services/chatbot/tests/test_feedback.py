@@ -23,7 +23,7 @@ from lawbot_tools import feedback_export, feedback_review
 QUESTION = '해고 예고 없이 해고되면 어떻게 하나요 고유문구XYZ'
 CHUNKS = ['【결론】\n예고해야', ' 합니다.\n\n【근거 조문】\n근로기준법 제26조\n\n【설명】\n- 설명']
 LEGACY_KEYS = set(
-    'feedback_id turn_id ts label reason question hits system answer_raw answer_shown model fmt refused '
+    'feedback_id turn_id ts label reason question hits system answer_raw answer_shown model refused '
     'n_cited citations timing decree n_decree instance mode profile dataset_version commit request_id'.split()
 )
 
@@ -56,9 +56,9 @@ def lines(folder):
     ]
 
 
-def turn(a, fb, question=QUESTION, model='fast', session='s1'):
+def turn(a, fb, question=QUESTION, session='s1'):
     """한 턴을 돌리고 (turn_id, 화면 글). 웹앱처럼 끝난 턴을 세션의 다음 순번에 기억한다"""
-    done = run(a, question, model, remember=lambda record: fb.remember_turn(session, record)).done
+    done = run(a, question, remember=lambda record: fb.remember_turn(session, record)).done
     return done['turn_id'], done['text']
 
 
@@ -85,8 +85,8 @@ def test_reasons_offered_to_screen(env, tmp_path):
 def test_like_saves_full_turn(env, feedback_db):
     a = local_app(env)
     path, fb = feedback_db
-    tid, shown = turn(a, fb, model='pro')
-    expected = list(service.ask(a, QUESTION, 'pro'))[-1]
+    tid, shown = turn(a, fb)
+    expected = list(service.ask(a, QUESTION))[-1]
     row = fb.save('s1', tid, 'like')
     assert row is not None
     with connect(path) as conn:
@@ -104,16 +104,16 @@ def test_like_saves_full_turn(env, feedback_db):
         row['commit'],
     )
     assert not (path.parent.parent / 'fallback').exists()
-    assert (row['label'], row['reason'], row['question'], row['model'], row['fmt'], row['turn_id']) == (
+    assert (row['label'], row['reason'], row['question'], row['model'], row['turn_id']) == (
         'like',
         None,
         QUESTION,
         'pro',
-        'concise',
         tid,
     )
+    assert 'fmt' not in row
     assert row['hits'] == expected[1] and row['answer_raw'] == expected[2]
-    assert row['system'] == service.system_text(a.profile, a.models.specs['pro'])  # Pro 간결형 system 파일
+    assert row['system'] == service.system_text(a.profile)  # Pro 간결형 system 파일
     assert row['answer_shown'] == shown != row['answer_raw']  # 간결형: 화면 글은 후처리
     assert row['refused'] is False and row['citations'] == [
         {'law': '근로기준법', 'article_id': '제26조', 'verdict': 'ok'}
@@ -122,19 +122,8 @@ def test_like_saves_full_turn(env, feedback_db):
     assert row['request_id'] and row['timing']['total'] is not None and row['commit']
     assert row['articles_sha256'] == hashlib.sha256(a.profile.articles.read_bytes()).hexdigest()
     assert row['emb_model'] == a.profile.emb_model and row['rerank_model'] is None
-    assert row['chat_model'] == a.models.specs['pro'].model and row['corpus_release_id'] is None
+    assert row['chat_model'] == a.profile.model.model and row['corpus_release_id'] is None
     assert row['system_sha256'] == hashlib.sha256(row['system'].encode()).hexdigest()
-
-
-def test_turn_records_each_model_system_and_concise_format(env, tmp_path):
-    a = local_app(env)
-    fb = feedback.Feedback(tmp_path)
-    t1, _ = turn(a, fb, model='pro')
-    t2, _ = turn(a, fb, model='fast')
-    r1, r2 = fb.save('s1', t1, 'like'), fb.save('s1', t2, 'like')
-    assert r1['system'] == service.system_text(a.profile, a.models.specs['pro'])
-    assert r2['system'] == service.system_text(a.profile, a.models.specs['fast'])
-    assert r1['fmt'] == r2['fmt'] == 'concise'
 
 
 def test_turn_provenance_matches_loaded_csv_and_system(env, tmp_path):
@@ -153,11 +142,11 @@ def test_turn_provenance_matches_loaded_csv_and_system(env, tmp_path):
 
     env.setattr(service, 'LLM', ProvenanceLLM)
     a = service.load_app()
-    a.models.get('pro')
+    assert a.llm.system == 'initial system'
     csv_path.write_bytes(csv + b'\n')
     system_path.write_text('edited system')
     fb = feedback.Feedback(tmp_path / 'fb')
-    tid, _ = turn(a, fb, model='pro')
+    tid, _ = turn(a, fb)
     row = fb.save('s1', tid, 'like')
     assert row['system'] == 'initial system'
     assert row['system_sha256'] == hashlib.sha256(b'initial system').hexdigest()
@@ -326,7 +315,6 @@ def fb_row(fid, question, label='like', reason=None, ts='2026-11-01T10:00:00', t
         'answer_raw': '【결론】\n답',
         'answer_shown': '답',
         'model': 'pro',
-        'fmt': 'concise',
         'refused': False,
         'profile': profile,
     }
@@ -428,7 +416,8 @@ def test_review_csv_escapes_external_text_only(tmp_path, source, text):
     feedback_review.review([folder], out, keep=keep, evals=[], db=db)
     reviewed = pd.read_csv(out, dtype=str, keep_default_na=False, encoding='utf-8-sig').iloc[0]
     expected = "'" + text if text.startswith(('=', '+', '-', '@', '\t', '\r')) else text
-    for column in ('question', 'model', 'fmt', 'answer_shown'):
+    assert 'fmt' not in reviewed.index
+    for column in ('question', 'model', 'answer_shown'):
         assert reviewed[column] == expected
     assert reviewed['reason'] == (expected if source == 'jsonl' else '')
     hit = feedback_review.hit_keys(row)
@@ -581,6 +570,7 @@ def test_export_preserves_original_formula_text(tmp_path, source, prefix):
     review_csv = tmp_path / 'review.csv'
     feedback_review.review([folder], review_csv, evals=[], db=db)
     reviewed = pd.read_csv(review_csv, dtype=str, keep_default_na=False, encoding='utf-8-sig')
+    assert 'fmt' not in reviewed.columns
     assert reviewed.loc[0, 'question'] == "'" + row['question']
     assert reviewed.loc[0, 'answer_shown'] == "'" + row['answer_shown']
     reviewed.loc[0, ['h_ok', 'h_gold']] = ['맞음', '근로기준법 제26조']
@@ -591,6 +581,7 @@ def test_export_preserves_original_formula_text(tmp_path, source, prefix):
         assert exported.loc[0, 'question'] == row['question']
     for name in ('fb_sft', 'fb_kto'):
         exported = pd.read_csv(tmp_path / 'out' / f'{name}.csv', keep_default_na=False, encoding='utf-8-sig')
+        assert 'fmt' not in exported.columns
         assert exported.loc[0, 'system'] == row['system']
         assert exported.loc[0, 'prompt'] == build_prompt(row['hits'], row['question'])
         assert exported.loc[0, 'completion'] == row['answer_raw']
@@ -599,8 +590,8 @@ def test_export_preserves_original_formula_text(tmp_path, source, prefix):
 @pytest.mark.parametrize(
     'missing, null',
     [('system', 'answer_raw')]
-    + [(key, None) for key in ('question', 'label', 'reason', 'hits', 'model', 'fmt', 'system', 'answer_raw')]
-    + [(None, key) for key in ('question', 'label', 'hits', 'model', 'fmt', 'system', 'answer_raw')],
+    + [(key, None) for key in ('question', 'label', 'reason', 'hits', 'model', 'system', 'answer_raw')]
+    + [(None, key) for key in ('question', 'label', 'hits', 'model', 'system', 'answer_raw')],
 )
 def test_export_skips_records_without_training_fields(tmp_path, capsys, missing, null):
     valid = fb_row('valid', '정상 질문')
@@ -649,8 +640,8 @@ def test_decree_turn_record(env, tmp_path):
     a = td.make()
     fb = feedback.Feedback(tmp_path)
     q = '해고 예고?'
-    tid, _ = turn(a, fb, question=q, model='pro')
-    _, hits, _, st = list(service.ask(a, q, 'pro'))[-1]
+    tid, _ = turn(a, fb, question=q)
+    _, hits, _, st = list(service.ask(a, q))[-1]
     assert len(hits) > 3 and st['n_decree'] == len(hits) - 3
     row = fb.save('s1', tid, 'like')
     assert row['hits'] == json.loads(json.dumps(hits, default=feedback.jsonable, ensure_ascii=False))
@@ -661,7 +652,7 @@ def test_decree_turn_record(env, tmp_path):
     assert all('kind' not in x for x in row['hits'][:3]) and row['hits'][3]['parent_law']
     assert row['decree'] == {'tau': 0.9, 'k': 2} and row['n_decree'] == st['n_decree']
     assert row['timing']['decree_rerank'] is not None
-    tid, _ = turn(a, fb, question=q, model='fast')
+    tid, _ = turn(td.make(None), fb, question=q)
     row = fb.save('s1', tid, 'like')
     assert row['decree'] is None and row['n_decree'] is None and len(row['hits']) == 3
 

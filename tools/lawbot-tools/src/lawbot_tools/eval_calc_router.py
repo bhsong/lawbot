@@ -129,7 +129,7 @@ def _configuration(cfg, client):
         raise SystemExit('임베딩·리랭크 모델 서버의 준비 상태를 확인할 수 없습니다.') from None
     if not health.get('ready'):
         raise SystemExit('임베딩 모델 서버가 준비되어야 합니다.')
-    pro = next(spec for spec in cfg.profile.models if spec.key == 'pro')
+    pro = cfg.profile.model
     advertised = {m['id']: m for m in client.models()}
     with OpenAI(
         base_url=cfg.llm_url,
@@ -156,7 +156,7 @@ def _configuration(cfg, client):
         'profile': cfg.profile.name,
         'dataset_version': (manifest.load(cfg.profile.articles) or {}).get('dataset_version'),
         'articles_sha256': manifest.sha256(cfg.profile.articles),
-        'system_sha256': sha256(service.system_text(cfg.profile, pro).encode()).hexdigest(),
+        'system_sha256': sha256(service.system_text(cfg.profile).encode()).hexdigest(),
         'router_sha256': _router_sha256(),
         'temperature': TEMPERATURE,
         'router_max_tokens': ROUTER_MAX_TOKENS,
@@ -190,7 +190,7 @@ def _latency_summary(values):
 def _answer(app, question, *, routed):
     _time_guard()
     try:
-        for stage, hits, raw, timing in service.ask(app, question, 'pro', calculation_candidate=routed):
+        for stage, hits, raw, timing in service.ask(app, question, calculation_candidate=routed):
             if stage == 'done':
                 return {
                     'answer': raw,
@@ -327,7 +327,7 @@ def _live(groups, samples, output, post_limit):
     envfile.load()
     env = {k: v for k, v in os.environ.items() if k != 'LAWBOT_DB'}
     cfg = settings.load(env | {'LAWBOT_CORPUS': 'csv', 'LAWBOT_REQUEST_LOG': '', 'LAWBOT_EMBED_CACHE': '0'})
-    if cfg.profile.name != 'v5' or [m.key for m in cfg.profile.models] != ['pro']:
+    if cfg.profile.name != 'v5':
         raise SystemExit('개발 CSV v5 프로필과 Pro 모델을 사용하세요.')
     compatibility = calculator_compatibility(cfg.profile.articles)
     if not compatibility or any(compatibility.values()):
@@ -348,7 +348,7 @@ def _live(groups, samples, output, post_limit):
     with patch.object(httpx.Client, 'send', send):
         before = _configuration(cfg, client)
         app = service.load_app(cfg)
-        pro, _ = app.models.get('pro')
+        pro = app.llm
         routes = [_route_case(case, pro, compatibility, name) for name, cases in groups.items() for case in cases]
         # Alternate order to balance warm-up and time-of-run effects across the pairs.
         answers = [_answer_pair(app, case, routed_first=index % 2 == 1) for index, case in enumerate(samples)]
@@ -403,10 +403,9 @@ def _heldout_settings():
         base_url, token, external = llm_endpoint()
     except OSError, ValueError, RuntimeError:
         raise _HeldoutStop('configuration_error') from None
-    pro = next((spec for spec in profile.models if spec.key == 'pro'), None)
-    if profile.name != 'v5' or pro is None:
+    if profile.name != 'v5':
         raise _HeldoutStop('configuration_error')
-    return base_url, token, pro.model, external
+    return base_url, token, profile.model.model, external
 
 
 def _webapp_commit():

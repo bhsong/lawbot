@@ -251,8 +251,8 @@ class RR:
 class Bot:
     """받은 hits를 기록하고, 마지막 hit(첨부가 있으면 하위법령)을 인용하는 답변"""
 
-    def __init__(self, spec):
-        self.spec, self.calls = spec, []
+    def __init__(self):
+        self.calls = []
 
     def stream(self, question, hits, system=None, **kw):
         self.calls.append(hits)
@@ -270,17 +270,16 @@ class Bot:
             )
 
 
-DC = deploy.DecreeConfig(0.9, 2, ('pro',))
+DC = deploy.DecreeConfig(0.9, 2)
 
 
 def make(dc=DC, ret=None):
     p = deploy.get_profile()
-    models = service.ChatModels(p.models, Bot)
-    return service.LawbotApp(p, ret or DecRet(decree=dc is not None), models, RR(), dc)
+    return service.LawbotApp(p, ret or DecRet(decree=dc is not None), Bot, RR(), dc)
 
 
-def ask(a, q, model, **kw):
-    return list(service.ask(a, q, model, **kw))[-1]
+def ask(a, q, **kw):
+    return list(service.ask(a, q, **kw))[-1]
 
 
 @pytest.fixture
@@ -290,27 +289,26 @@ def rr(env):
     return env
 
 
-def test_off_and_fast_unchanged(rr, tmp_path):
+def test_attachment_does_not_change_law_hits(rr, tmp_path):
     log = tmp_path / 'req.jsonl'
     rr.setenv('LAWBOT_REQUEST_LOG', str(log))
     off, on = make(None), make()
     for q in ('해고 예고?', '체불 융자 이자 몇프로?', '평균임금'):
-        _, h_off, raw_off, st_off = ask(off, q, 'fast')
-        _, h_on, raw_on, st_on = ask(on, q, 'fast')
-        assert h_on == h_off and raw_on == raw_off and len(h_on) == 3
-        assert 'decree_rerank' not in st_on and 'n_decree' not in st_on
-        _, h_pro_off, _, _ = ask(off, q, 'pro')
-        _, h_pro, _, st = ask(on, q, 'pro')
-        assert h_pro[:3] == h_pro_off == h_off  # 법률 3개는 하위법령을 켜도 같음
-        assert all(decree.is_decree(h) for h in h_pro[3:]) and len(h_pro) == 3 + st['n_decree']
-        assert all(not decree.is_decree(h) and 'kind' not in h for h in h_pro[:3])
-    assert on.retriever.decree_calls == 3 and off.retriever.decree_calls == 0  # Fast는 하위법령을 찾지 않음
+        _, h_off, _, st_off = ask(off, q)
+        _, h_on, _, st_on = ask(on, q)
+        assert 'decree_rerank' not in st_off and 'n_decree' not in st_off
+        assert h_on[:3] == h_off and len(h_off) == 3
+        assert all(decree.is_decree(h) for h in h_on[3:]) and len(h_on) == 3 + st_on['n_decree']
+        assert all(not decree.is_decree(h) and 'kind' not in h for h in h_on[:3])
+    assert on.retriever.decree_calls == 3 and off.retriever.decree_calls == 0
     recs = [json.loads(x) for x in log.read_text().splitlines()]
-    fast = [r for r in recs if r['model'] == 'fast']
-    assert all(r['decree'] is False and r['n_decree'] is None and r['decree_rerank_ms'] is None for r in fast)
-    pro_on = [r for r in recs if r['model'] == 'pro' and r['decree']]
-    assert len(pro_on) == 3 and all(r['decree_rerank_ms'] is not None and r['n_decree'] >= 0 for r in pro_on)
-    assert all('질문' not in json.dumps(r, ensure_ascii=False) for r in recs)
+    assert [r['decree'] for r in recs] == [False, True] * 3
+    for r in recs:
+        assert r['model'] == 'pro' and '질문' not in json.dumps(r, ensure_ascii=False)
+        if r['decree']:
+            assert r['decree_rerank_ms'] is not None and r['n_decree'] >= 0
+        else:
+            assert r['decree_rerank_ms'] is None and r['n_decree'] is None
 
 
 def test_attached_order_and_prompt(rr):
@@ -326,13 +324,13 @@ def test_attached_order_and_prompt(rr):
     )
     on = make()
     q = '해고 예고?'  # 법률 1위: 근로기준법 (점수 동점 → 임베딩 순서)
-    _, hits, _, st = ask(on, q, 'pro')
+    _, hits, _, st = ask(on, q)
     top1 = hits[0]['law']
     dec = hits[3:]
     want = decree.attach(st['decree_candidates'], top1, 0.9, 2)
     assert dec == want and len(dec) == 2
     assert [h['parent_law'] == top1 or h['rerank_score'] >= 0.9 for h in dec] == [True, True]
-    assert on.models.llms['pro'].calls[-1] == hits  # LLM에 넘긴 참고 조문 = 화면 hits
+    assert on.llm.calls[-1] == hits  # LLM에 넘긴 참고 조문 = 화면 hits
     prompt = build_prompt(hits, q)
     assert prompt.index('[3] ') < prompt.index('[4] ' + dec[0]['law']) < prompt.index('[5] ' + dec[1]['law'])
 
@@ -343,11 +341,11 @@ def test_no_decree_passes_prompt_unchanged(rr):
     on, off = make(), make(None)
     on.retriever.parent_laws[on.retriever.n_law :] = '다른 법'  # 어떤 하위법령도 법률 1위와 같은 법이 아님
     q = '최저임금'
-    _, h_on, _, st = ask(on, q, 'pro')
-    _, h_off, _, _ = ask(off, q, 'pro')
+    _, h_on, _, st = ask(on, q)
+    _, h_off, _, _ = ask(off, q)
     assert st['n_decree'] == 0 and len(st['decree_candidates']) == 4 and h_on == h_off
     assert build_prompt(h_on, q) == build_prompt(h_off, q)
-    assert on.models.llms['pro'].calls[-1] == off.models.llms['pro'].calls[-1]
+    assert on.llm.calls[-1] == off.llm.calls[-1]
 
 
 def test_decree_rerank_error_not_hidden(rr, tmp_path):
@@ -355,7 +353,7 @@ def test_decree_rerank_error_not_hidden(rr, tmp_path):
     rr.setenv('LAWBOT_REQUEST_LOG', str(log))
     rr.setattr(RR, 'ERROR', RuntimeError('리랭커 고장'))
     with pytest.raises(service.AskError, match='리랭커 고장') as e:
-        ask(make(), '해고', 'pro')
+        ask(make(), '해고')
     assert (e.value.kind, e.value.stage) == ('rerank', 'rerank') and isinstance(e.value.__cause__, RuntimeError)
     assert json.loads(log.read_text())['error_type'] == 'rerank'
 
@@ -369,12 +367,11 @@ def test_decree_config(env):
     env.setenv('LAWBOT_RERANKER_ENABLED', '1')
     p = deploy.get_profile()
     assert p.articles == V4_DECREE_ARTICLES and p.max_seq == 2304
-    assert deploy.decree(p) == deploy.DecreeConfig(0.9, 2, ('pro',), 10, 3072)
+    assert deploy.decree(p) == deploy.DecreeConfig(0.9, 2, 10, 3072)
     for var, bad in (
         ('LAWBOT_DECREE_TAU', '1.5'),
         ('LAWBOT_DECREE_TAU', 'x'),
         ('LAWBOT_DECREE_K', '0'),
-        ('LAWBOT_DECREE_MODELS', 'pro,big'),
         ('LAWBOT_DECREE_ENABLED', 'yes'),
     ):
         env.setenv(var, bad)
@@ -384,8 +381,7 @@ def test_decree_config(env):
         env.setenv('LAWBOT_DECREE_ENABLED', '1')
     env.setenv('LAWBOT_DECREE_TAU', '0.8')
     env.setenv('LAWBOT_DECREE_K', '3')
-    env.setenv('LAWBOT_DECREE_MODELS', 'fast,pro')
-    assert deploy.decree(deploy.get_profile()) == deploy.DecreeConfig(0.8, 3, ('fast', 'pro'))
+    assert deploy.decree(deploy.get_profile()) == deploy.DecreeConfig(0.8, 3)
 
 
 def test_max_seq_settings_for_longer_articles(env):
@@ -410,7 +406,7 @@ def test_load_app_with_decree(env, tmp_path):
     env.setenv('LAWBOT_DECREE_ENABLED', '1')
     made = []
     env.setattr(service, 'Retriever', lambda *a, **kw: made.append(kw) or DecRet())
-    env.setattr(service, 'LLM', lambda *a, **kw: Bot(None))
+    env.setattr(service, 'LLM', lambda *a, **kw: Bot())
     env.setattr(service, 'Reranker', lambda *a, **kw: RR())
     with pytest.raises(ValueError, match='리랭커가 필요'):  # 모델 서버에 접속하기 전에 거부
         service.load_app()
@@ -418,7 +414,7 @@ def test_load_app_with_decree(env, tmp_path):
     env.setenv('LAWBOT_RERANKER_ENABLED', '1')
     a = service.load_app()
     assert made == [{'max_seq_length': 2304, 'decree_max_seq': 3072}]
-    assert a.decree == DC and service.uses_decrees(a, 'pro') and not service.uses_decrees(a, 'fast')
+    assert a.decree == DC
     assert manifest.summary(manifest.load(a.profile.articles))['dataset_version'] == 'v4-decree'
     env.setenv('LAWBOT_DECREE_ENABLED', '0')
     made.clear()
@@ -483,7 +479,7 @@ def test_concise_and_cards_with_decree():
 
 def test_screen_texts(env):
     on, off = make(), make(None)
-    assert '시행령·시행규칙' in view.searching_stats(on, 'pro') and '시행령' not in view.searching_stats(on, 'fast')
+    assert '시행령·시행규칙' in view.searching_stats(on) and '시행령' not in view.searching_stats(off)
     assert view.sources_title(on) == '검색된 조문 (법률 3개 + 시행령·시행규칙 최대 2개)'
     assert view.sources_title(off) == '검색된 조문 (상위 3개)'
     assert 'Lawbot Pro는 관련 시행령·시행규칙을 최대 2개' in view.intro_text(on)
@@ -569,18 +565,18 @@ def test_eval_answers_and_refusal_with_decree(rr, tmp_path):
         ]
     )
     rr.setattr(ev, 'keywords', lambda *a: pd.DataFrame(columns=['must_include']))
-    ev.run_answers(on, 'pro', t, tmp_path / 'answers_dec.csv')
+    ev.run_answers(on, t, tmp_path / 'answers_dec.csv')
     a = pd.read_csv(tmp_path / 'answers_dec.csv', keep_default_na=False, **E)
     assert a['top3'].str.count(r'\|').eq(2).all() and a['decrees'].str.len().gt(0).all()
     assert {'decree_search', 'decree_rerank', 'n_decree', 'prompt_tokens'} <= set(a.columns)
     assert ev.hit_table(on) == ev.hit_table(off) and len(ev.hit_table(on)) == 4  # refusal·retrieval은 법률만
     sub = t.iloc[2:]  # 다른 법률 조문이 3개 이상인 문항 (가짜 법률 4개)
     assert ev.refusal_cases(on, sub, n=2) == ev.refusal_cases(off, sub, n=2)
-    ev.run_answers(off, 'pro', t.head(2), tmp_path / 'answers_x.csv')  # 꺼짐: 지금과 같은 열
+    ev.run_answers(off, t.head(2), tmp_path / 'answers_x.csv')  # 꺼짐: 지금과 같은 열
     assert 'decrees' not in pd.read_csv(tmp_path / 'answers_x.csv', **E)
     with pytest.raises(SystemExit, match='없는 열'):  # 열이 다른 기존 파일에 이어 쓰지 않음
-        ev.run_answers(on, 'pro', t, tmp_path / 'answers_x.csv')
-    ev.run_answers(off, 'pro', t, tmp_path / 'answers_x.csv')  # 같은 구성은 이어서 실행
+        ev.run_answers(on, t, tmp_path / 'answers_x.csv')
+    ev.run_answers(off, t, tmp_path / 'answers_x.csv')  # 같은 구성은 이어서 실행
     assert len(pd.read_csv(tmp_path / 'answers_x.csv', **E)) == 4
     ev.run_retrieval(on, t, tmp_path / 'retrieval_dec.csv', decree=True)
     r = pd.read_csv(tmp_path / 'retrieval_dec.csv', **E)
@@ -613,8 +609,8 @@ def test_eval_decree_stage(rr, tmp_path):
     rr.setattr(ev, 'DQ_SAMPLE', sample)
     on = make()
     for _ in range(2):  # 두 번째는 이어서 실행 (건너뜀)
-        ev.run_decree_retrieval(on, 'pro', dq, tmp_path / 'dqretrieval_t.csv')
-        ev.run_decree_answers(on, 'pro', dq, tmp_path / 'dqanswers_t.csv')
+        ev.run_decree_retrieval(on, dq, tmp_path / 'dqretrieval_t.csv')
+        ev.run_decree_answers(on, dq, tmp_path / 'dqanswers_t.csv')
     r = pd.read_csv(tmp_path / 'dqretrieval_t.csv', **E)
     a = pd.read_csv(tmp_path / 'dqanswers_t.csv', keep_default_na=False, **E)
     assert len(r) == 4 and r['in_cands'].all() and (r['n_att'] <= 2).all() and len(a) == 3

@@ -4,6 +4,8 @@
 
 ## 기록 목록
 
+- **Fast 모델 제거 (2026-11-19)** — Pro 단일화·피드백 `fmt` 제거. 기본 Python 2,760개, 프런트엔드 55개 통과 → [기록](2026-11-19-remove-fast-model.md)
+
 - **법률 추론 val 형식 비교와 정의 조문 연결 (2026-11-19)** — 32문항 A 간결형 24.5 · B 핵심 검토 25.5(+10.5초) · C 전체 형식 25.5(+28초). 간결형 하나로 정함. v6에서 top-k 확대 효과 없음, 정의 조문 연결로 기준 조문 회수 21→24 → [기록](2026-11-19-reasoning-format-definitions.md)
 
 - **운영 반영 v6.3.2 (2026-11-19)** — 터널 경유 요청의 관리자 기능 차단과 출처 표시. 웹앱·캘린더만 재시작, 루프백·tailnet 상태 확인 통과(헤더가 있으면 관리자 API 404) → [기록](2026-11-19-deploy-v6.3.2.md)
@@ -218,7 +220,7 @@ uv run lawbot-eval-v4 retrieval             # test 2,075 전체: 임베딩 Recal
 uv run lawbot-eval-v4 answers               # 고정 시드 표본 200 (A_lsa·B_newlaw 100씩): 인용·거짓 거절, A_lsa는 키워드 채점
 uv run lawbot-eval-v4 oos                   # 범위 밖 102 (7개 법률 출처 27문항은 범위 안으로 재분류) + 대조군 20
 uv run lawbot-eval-v4 refusal               # 표본 중 100문항에 다른 법률 조문 / 비슷한 조문만 줄 때 거절률
-uv run lawbot-eval-v4 summary --tag pro_concise_rr   # 결과 파일로 지표 표만 다시 → results/v4/summary_<tag>.csv
+uv run lawbot-eval-v4 summary --tag rr   # 결과 파일로 지표 표만 다시 → results/v4/summary_<tag>.csv
 uv run lawbot-eval-v4 --split val            # 하위법령 첨부 구성이면 retrieval·answers·refusal + decree (tag 끝 _dec_val)
 uv run lawbot-eval-v4 decree --split val     # 하위법령 정답 val 444 첨부 포함률 + 표본 200 답변 (val만)
 uv run lawbot-eval-v4 answers --split val --concurrency 4 --tag <tag>  # 문항을 4개씩 동시에 (처리량 측정, 모델 서버 LAWBOT_MAX_CONCURRENT와 함께)
@@ -227,8 +229,8 @@ uv run lawbot-eval-v4 --split val --dataset v5      # v5: 노동 문항 + 세금
 
 - `--concurrency N`(기본 1)은 문항을 N개씩 동시에 보내고 결과 파일에는 문항 순서대로 씁니다. 단계별 문항 수·시간은 `run_<tag>.json`의 `stage_times`에 남고, 끝날 때 문항/분을 출력합니다.
 
-- tag 기본값은 `<모델>_<형식>_<rr|emb>`입니다(예: `pro_concise_rr`). `--fmt full`이면 4항목 system으로 생성합니다.
-- 하위법령 첨부 구성(그 모델이 `LAWBOT_DECREE_MODELS`에 있음)이면 tag에 `_dec`가 붙습니다(예: `pro_concise_rr_dec_val`). retrieval에 법률 질문에 붙은 하위법령(첨부 수, 첨부 중 다른 법 비율), answers에 `decrees` 열이 더해집니다. 열이 다른 기존 결과 파일에는 이어 쓰지 않고 멈춥니다. refusal의 정답 없는 참고 조문은 하위법령을 켜도 법률 415개에서 고릅니다(기준선과 같은 표본).
+- tag 기본값은 리랭커 설정에 따라 `rr` 또는 `emb`입니다. `--split val`이면 마지막에 `_val`이 붙습니다.
+- `LAWBOT_DECREE_ENABLED=1`이면 tag에 `_dec`가 붙습니다(예: `rr_dec_val`). retrieval에 법률 질문에 붙은 하위법령(첨부 수, 첨부 중 다른 법 비율), answers에 `decrees` 열이 더해집니다. 열이 다른 기존 결과 파일에는 이어 쓰지 않고 멈춥니다. refusal의 정답 없는 참고 조문은 하위법령을 켜도 법률 415개에서 고릅니다(기준선과 같은 표본).
 - `decree` 단계: ① `data/decree_exp/qa_decree_v4.csv`·`split_decree_v4.csv`의 val 444에서 정답 하위법령이 후보 10개·첨부에 들었는지(`dqretrieval_<tag>.csv`) ② `data/v4/decree_ctx_dq_val200.csv`의 id 200개를 웹앱 경로로 답하고 정답 하위법령 인용·거짓 거절·참고 조문 밖 인용을 채점(`dqanswers_<tag>.csv`). summary·compare에 '하위법령 검색'·'하위법령 답변' 절이 생깁니다.
 - 인용은 법령명까지 맞아야 정답입니다(`근로기준법 제26조`와 `최저임금법 제26조`를 구분). 법령명 없이 이어 쓴 번호(`근로기준법 제26조, 제27조`)는 앞 법령으로 봅니다. 줄임말(`퇴직급여법`, `고평법` 등)도 인정하고, `근로기준법 시행령 제5조`는 법률 조문과 다른 조문으로 봅니다.
 - 인용·거절 판정은 웹앱 화면과 같은 `lawbot.citation` 하나를 씁니다. `citation.check`는 인용마다 `ok`(검색 결과 안) / `outside`(존재하지만 검색 결과 밖) / `wrong_law`(같은 번호, 다른 법령) / `nonexistent`(전체 조문에 없음: 하위법령을 끄면 415조문, 켜면 812조문 기준) / `ambiguous`(법령명 없이 번호가 겹침)를 돌려줍니다.

@@ -54,7 +54,7 @@ def add_promotion(db, name, *, verdict='correct', label='like', emb='train', sll
         reason=reason,
         question=f'원 질문 {name}',
         answer_raw=answer_raw,
-        model='fast',
+        model='pro',
         chat_model='synthetic-model',
         fmt='chat',
         system=system,
@@ -194,7 +194,7 @@ def test_feedback_uses_review_and_purpose_splits(corpus_db, tmp_path, capsys):
     assert meta['warnings']['unassigned'] == 3
     assert meta['models']['chat'] == ['synthetic-model']
 
-    completion = 'feedback_id split model fmt system prompt completion'.split()
+    completion = 'feedback_id split model system prompt completion'.split()
     columns = {
         'fb_questions': 'feedback_id split question label reason h_ok h_gold h_scope h_note'.split(),
         'fb_emb_pairs': 'feedback_id split question positive negative gold'.split(),
@@ -313,6 +313,6 @@ def test_legacy_feedback_without_prompt_fields_is_reported(corpus_db, tmp_path, 
     assert (out / 'fb_preferences.jsonl').read_bytes() == b''
     assert [row['feedback_id'] for row in csv_rows((out / 'fb_questions.csv').read_bytes())] == ['no-hits', 'no-system']
     [sft] = csv_rows((out / 'fb_sft.csv').read_bytes())
-    assert sft['fmt'] == sft['system'] == ''
+    assert sft['system'] == '' and 'fmt' not in sft
     warnings = json.loads((out / 'manifest.json').read_bytes())['snapshot']['warnings']
-    assert warnings == dict(unassigned=0, missing_fmt=1, missing_hits=1, missing_system=1)
+    assert warnings == dict(unassigned=0, missing_hits=1, missing_system=1)

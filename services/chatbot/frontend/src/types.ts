@@ -3,16 +3,12 @@ export type SourceItem = { title: string; scores: string; body: string; decree: 
 export type SourceGroup = { label: string | null; open: boolean; items: SourceItem[] }
 export type Sources = { groups: SourceGroup[] }
 
-export type ModelOption = { key: string; label: string; info: string }
 export type Option = { value: string; label: string }
 
 export type Config = {
   title: string
   intro: string
   notice: string
-  models: ModelOption[]
-  disabled: { key: string; label: string }[]
-  default_model: string
   examples: string[]
   sources_title: string
   feedback: { enabled: boolean; reasons: Option[] }
@@ -37,7 +33,6 @@ export type CalculationCheck = 'match' | 'mismatch' | 'missing'
 export type Turn = {
   id: string
   question: string
-  model: string
   status?: string
   notice?: string
   draft?: boolean

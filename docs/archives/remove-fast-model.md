@@ -32,3 +32,5 @@
 ## 완료 기준
 
 기본 테스트 전체(단위·계약·통합·대역 E2E)와 Ruff·Pyright·두 화면 typecheck·test·build 통과. Pro의 생성 system과 검색 경로는 바뀌지 않으므로 실제 모델 E2E·모델 스모크·품질 평가는 실행하지 않는다. 운영 반영 때는 웹앱 화면 빌드, 운영 `.env`의 `LAWBOT_MODELS` 줄 삭제, 웹앱 재시작이 필요하다.
+
+[구현 검증 기록](../evals/2026-11-19-remove-fast-model.md)

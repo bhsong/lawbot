@@ -7,12 +7,6 @@ const config: Config = {
   title: 'Lawbot · 테스트',
   intro: '안내',
   notice: '법령 기준일 2026-10-20',
-  models: [
-    { key: 'pro', label: 'Lawbot Pro', info: '27B' },
-    { key: 'fast', label: 'Lawbot Fast', info: '4B' },
-  ],
-  disabled: [],
-  default_model: 'pro',
   examples: ['예시 질문'],
   sources_title: '검색된 조문',
   feedback: { enabled: false, reasons: [] },
@@ -84,7 +78,7 @@ test('login: wrong password shows the error, right one opens the chat', async ()
   await userEvent.type(screen.getByLabelText('비밀번호'), 'pw')
   await userEvent.click(screen.getByRole('button', { name: '로그인' }))
   expect(await screen.findByRole('heading', { name: config.title })).toBeInTheDocument()
-  expect(screen.getByRole('radio', { name: 'Lawbot Pro' })).toHaveAttribute('aria-checked', 'true')
+  expect(screen.queryByRole('radiogroup', { name: '답변 모델' })).not.toBeInTheDocument()
   expect(screen.queryByRole('radiogroup', { name: '답변 형식' })).not.toBeInTheDocument()
 })
 
@@ -121,15 +115,13 @@ test.each([undefined, 'user'] as const)('role %s has no management switch', asyn
   expect(screen.queryByRole('radio', { name: '피드백 & 법령 관리' })).not.toBeInTheDocument()
 })
 
-test('choosing a model sends only the question and model; there is no answer format choice', async () => {
+test('sending a question requires no model or answer format choice', async () => {
   const s = server()
   s.answers.push(['답', '근로기준법 제26조'])
   render(<App />)
-  await userEvent.click(await screen.findByRole('radio', { name: 'Lawbot Fast' }))
-  expect(screen.queryByRole('radio', { name: /간결|전체/ })).not.toBeInTheDocument()
   await ask('질문')
   await screen.findByText('답')
-  expect(s.chats).toEqual([{ question: '질문', model: 'fast' }])
+  expect(s.chats).toEqual([{ question: '질문' }])
 })
 
 test('clicking an earlier answer shows its articles; a new question follows the latest again', async () => {
@@ -158,7 +150,7 @@ test('Enter sends, Shift+Enter and Korean IME composition do not', async () => {
   fireEvent.keyDown(box, { key: 'Enter', isComposing: true })
   expect(s.chats).toEqual([])
   await userEvent.keyboard('{Enter}')
-  await waitFor(() => expect(s.chats).toEqual([{ question: '첫줄\n둘째줄', model: 'pro' }]))
+  await waitFor(() => expect(s.chats).toEqual([{ question: '첫줄\n둘째줄' }]))
   expect(box).toHaveValue('')
 })
 
@@ -168,7 +160,7 @@ test('example question is sent on click', async () => {
   render(<App />)
   await userEvent.click(await screen.findByRole('button', { name: '예시 질문' }))
   expect(await screen.findByText('예시 답')).toBeInTheDocument()
-  expect(s.chats).toEqual([{ question: '예시 질문', model: 'pro' }])
+  expect(s.chats).toEqual([{ question: '예시 질문' }])
 })
 
 test('scope wording: Lawbot on login, HR·attendance·payroll law on the empty chat', async () => {

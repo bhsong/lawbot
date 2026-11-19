@@ -30,17 +30,17 @@ def test_reasoning_uses_web_answer_and_counts_all_reference_articles(monkeypatch
     raw = [f'【결론】 답변\n【근거 조문】 {a}', '【결론】 확인할 수 없습니다.\n【근거 조문】 해당 없음']
     calls = []
 
-    def ask(app, question, model):
-        calls.append((question, model))
+    def ask(app, question):
+        calls.append(question)
         hits = [{'law': '근로기준법', 'article_id': no} for no in ('제26조', '제27조')]
         yield 'generate', hits, '', {}
         yield 'done', hits, raw[len(calls) - 1], {'finish': 'stop', 'total': 1}
 
     monkeypatch.setattr(service, 'ask', ask)
     output = io.StringIO()
-    summary = ev.run_questions(SimpleNamespace(), 'pro', rows, output)
+    summary = ev.run_questions(SimpleNamespace(), rows, output)
     first, second = map(json.loads, output.getvalue().splitlines())
-    assert calls == [('질문 1', 'pro'), ('질문 2', 'pro')]
+    assert calls == ['질문 1', '질문 2']
     assert (first['answer'], first['cited'], first['context']) == (raw[0], [a], [a, b])
     assert first['all_reference_retrieved'] and not first['all_reference_cited']
     assert second['refused'] and not second['all_reference_cited']
@@ -58,7 +58,7 @@ def test_reasoning_stops_if_generation_finishes_without_an_answer(monkeypatch):
     monkeypatch.setattr(service, 'ask', ask)
     rows = [{'id': 'case', 'error_type': '예외', 'question': '질문', 'article_ids': '근로기준법 제26조'}]
     output = io.StringIO()
-    assert ev.run_questions(SimpleNamespace(), 'pro', rows, output) is None
+    assert ev.run_questions(SimpleNamespace(), rows, output) is None
     assert json.loads(output.getvalue())['error'] == 'empty_answer'
 
 
@@ -72,7 +72,7 @@ def test_question_failure_records_stage_and_preserves_exception(monkeypatch):
     rows = [{'id': 'case', 'error_type': '예외', 'question': '질문', 'article_ids': '근로기준법 제26조'}]
     output = io.StringIO()
     with pytest.raises(service.AskError) as failed:
-        ev.run_questions(SimpleNamespace(), 'pro', rows, output)
+        ev.run_questions(SimpleNamespace(), rows, output)
     assert failed.value.__cause__ is cause
     assert json.loads(output.getvalue())['stage'] == 'rerank'
 
@@ -134,7 +134,7 @@ def test_snapshot_separates_generation_from_embedding_metadata(monkeypatch, exte
     )
     requests = []
     original_client = httpx.Client
-    spec = cfg.profile.models[0]
+    spec = cfg.profile.model
 
     def reply(request):
         requests.append(request)

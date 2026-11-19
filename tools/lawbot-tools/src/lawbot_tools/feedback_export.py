@@ -93,7 +93,7 @@ def export(review_csv, out, articles=None, frac=VAL_FRAC):
     d = d[(d['h_ok'] != '') | (d['h_gold'] != '')]
     skipped = [f for f in d['feedback_id'] if records[f].get('profile') not in SUPPORTED_PROFILES]
     d = d[~d['feedback_id'].isin(skipped)]
-    required = ('question', 'label', 'reason', 'hits', 'model', 'fmt', 'system', 'answer_raw')
+    required = ('question', 'label', 'reason', 'hits', 'model', 'system', 'answer_raw')
     incomplete = [
         f
         for f in d['feedback_id']
@@ -140,7 +140,6 @@ def export(review_csv, out, articles=None, frac=VAL_FRAC):
                 'feedback_id': f,
                 'split': sp,
                 'model': r['model'],
-                'fmt': r['fmt'],
                 'system': r['system'],
                 'prompt': build_prompt(hits, r['question']),
                 'completion': r['answer_raw'],

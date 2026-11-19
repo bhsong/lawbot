@@ -106,8 +106,8 @@ def test_router_latency_percentiles_and_missing_measurements():
 def test_answer_sample_compares_two_paths_on_same_question(monkeypatch):
     calls = []
 
-    def ask(app, question, model, *, calculation_candidate=False):
-        calls.append((question, model, calculation_candidate))
+    def ask(app, question, *, calculation_candidate=False):
+        calls.append((question, calculation_candidate))
         timing = {'ttft': 0.040, 'first_text': 0.120}
         if calculation_candidate:
             timing = {'ttft': 0.050, 'first_text': 0.250, 'calculation_metrics': {'router_ms': 90}}
@@ -118,7 +118,7 @@ def test_answer_sample_compares_two_paths_on_same_question(monkeypatch):
     case = {'id': 'CR001', 'question': '질문'}
     answer = eval_calc_router._answer_pair(object(), case, routed_first=False)
 
-    assert calls == [('질문', 'pro', False), ('질문', 'pro', True)]
+    assert calls == [('질문', False), ('질문', True)]
     assert answer['ttft_ms'] == 50
     assert answer['baseline']['first_text_ms'] == 120
     assert answer['ttft_delta_ms'] == 10
@@ -141,7 +141,7 @@ def test_live_configuration_checks_only_embedding_health_and_residency(monkeypat
             'LAWBOT_RERANKER_ENABLED': '0',
         }
     )
-    pro = cfg.profile.models[0].model
+    pro = cfg.profile.model.model
     calls = []
 
     def generation_models(client):

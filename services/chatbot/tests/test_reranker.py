@@ -177,10 +177,10 @@ def v4_app(env, tmp_path, enabled, **extra):
 def test_disabled_is_embedding_top3(env, tmp_path):
     a = v4_app(env, tmp_path, enabled=False)
     assert a.reranker is None and FakeReranker.created == 0  # 꺼져 있으면 리랭커를 만들지 않음
-    *_, (stage, hits, raw, st) = service.ask(a, '해고 예고?', 'fast')
+    *_, (stage, hits, raw, st) = service.ask(a, '해고 예고?')
     assert stage == 'done' and a.retriever.ks == [3]
     assert hits == cands(3)  # 기존 검색 결과 그대로 (키 추가 없음)
-    assert a.models.llms['fast'].args == ('해고 예고?', cands(3))
+    assert a.llm.args == ('해고 예고?', cands(3))
     assert 'rerank' not in st
 
 
@@ -194,7 +194,7 @@ def test_disabled_passes_search_hits_unchanged(env):
     a = service.load_app()
     from fakes import HITS
 
-    *_, (_, hits, _, st) = service.ask(a, '질문', 'fast')
+    *_, (_, hits, _, st) = service.ask(a, '질문')
     assert a.reranker is None and FakeReranker.created == 0 and hits == HITS and 'rerank' not in st
 
 
@@ -202,25 +202,25 @@ def test_enabled_reranks_top10_to_top3(env, tmp_path, capsys):
     a = v4_app(env, tmp_path, enabled=True)
     assert FakeReranker.created == 1 and a.reranker.model == 'qwen3-reranker-4b'
     assert isinstance(a.reranker.client, FakeServerClient)  # 임베딩과 같은 모델 서버
-    *_, (stage, hits, raw, st) = service.ask(a, '해고 예고?', 'fast')
+    *_, (stage, hits, raw, st) = service.ask(a, '해고 예고?')
     assert a.retriever.ks == [10]
     assert a.reranker.calls == [('해고 예고?', [f'제{i}조' for i in range(1, 11)], 3)]
     assert [h['article_id'] for h in hits] == ['제10조', '제9조', '제8조']  # 리랭킹 점수순
-    assert a.models.llms['fast'].args == ('해고 예고?', hits)  # 최종 3개만 답변 모델로
+    assert a.llm.args == ('해고 예고?', hits)  # 최종 3개만 답변 모델로
     assert st['search'] >= 0 and st['rerank'] >= 0
     assert '리랭킹' in capsys.readouterr().out  # 단계별 시간 로그
 
 
 def test_reranker_loaded_once(env, tmp_path):
     a = v4_app(env, tmp_path, enabled=True)
-    for key in ('fast', 'pro', 'fast'):
-        run(a, '질문', key, 'full')
+    for _ in range(3):
+        run(a, '질문')
     assert FakeReranker.created == 1 and len(a.reranker.calls) == 3
 
 
 def test_enabled_candidates_env(env, tmp_path):
     a = v4_app(env, tmp_path, enabled=True, LAWBOT_RERANKER_CANDIDATES='5')
-    list(service.ask(a, '질문', 'fast'))
+    list(service.ask(a, '질문'))
     assert a.retriever.ks == [5]
     with pytest.raises(ValueError, match='3 이상'):
         v4_app(env, tmp_path, enabled=True, LAWBOT_RERANKER_CANDIDATES='2')
@@ -244,24 +244,24 @@ def test_reranker_failure_is_not_hidden(env, tmp_path, capsys):
     # 리랭커 오류를 임베딩 순위로 몰래 되돌리지 않고 안내 문구로 알린다. 원래 예외는 서버 로그에. 답변 생성도 하지 않음
     a = v4_app(env, tmp_path, enabled=True)
     FakeReranker.fail = RuntimeError('리랭커 점수가 올바르지 않습니다')
-    r = run(a, '질문', 'fast')
+    r = run(a, '질문')
     assert r.error.startswith('조문 순위를 매기지 못했습니다') and r.kind == 'rerank'
     assert '점수가 올바르지' in capsys.readouterr().out
-    assert 'fast' not in a.models.llms  # 답변 모델을 부르지 않음
+    assert FakeLLM.created == 0
 
 
 def test_chat_shows_rerank_info(env, tmp_path):
     a = v4_app(env, tmp_path, enabled=True)
     cite = '\n\n【근거 조문】\n근로기준법 제10조'
     env.setattr(FakeLLM, 'chunks', [*FakeLLM.chunks, cite])
-    r = run(a, '해고 예고?', 'fast')
+    r = run(a, '해고 예고?')
     text, src, stats = r.text, r.src, r.stats
     assert text == '예고해야 합니다.\n\n근거: 근로기준법 제10조(제목10)'
     assert src.index('제10조') < src.index('제9조') < src.index('제8조')
     assert '근로기준법 제10조 제목10 · 유사도 0.900 · 리랭커 1.000 (임베딩 10위)' in src
     assert '리랭킹' in stats and stats.index('검색') < stats.index('리랭킹')
     off = v4_app(env, tmp_path, enabled=False)
-    r = run(off, '해고 예고?', 'fast')
+    r = run(off, '해고 예고?')
     src, stats = r.src, r.stats
     assert '리랭커' not in src and '리랭킹' not in stats
 

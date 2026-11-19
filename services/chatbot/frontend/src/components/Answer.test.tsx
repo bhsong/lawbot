@@ -5,7 +5,6 @@ import type { Turn } from '../types'
 const turn: Turn = {
   id: 't1',
   question: '질문',
-  model: 'pro',
   text: '사용자는 **30일분 이상의 통상임금(해고예고수당)**을 지급해야 합니다.',
   done: true,
   turnId: 'x',

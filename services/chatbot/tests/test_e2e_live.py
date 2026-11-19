@@ -53,7 +53,7 @@ class Live:
         self.tmp = tmp
         if env is None:
             env = {k: v for k, v in os.environ.items() if k.startswith('LAWBOT_') and k != 'LAWBOT_ENV_FILE'}
-        self.env = env | {'LAWBOT_MODELS': 'pro'}
+        self.env = env
         self.server = self.env.get('LAWBOT_MODEL_SERVER')
         self.token = self.env.get('LAWBOT_MODEL_TOKEN')
         self.generation_server = self.env.get('LAWBOT_LLM_BASE_URL', '').rstrip('/')
@@ -137,14 +137,14 @@ class Live:
             'models': [{k: x.get(k) for k in ('id', 'type', 'loaded', 'revision')} for x in models],
             'dataset_version': m.get('dataset_version'),
             'articles_sha256': sha256(profile.articles),
-            'system_sha256': sha256(profile.models[0].system_file),
+            'system_sha256': sha256(profile.system_file),
             'temperature': llm.TEMPERATURE,
             'max_tokens': 1024,
             'settings': {
                 'profile': profile.name,
                 'embedding': profile.emb_model,
                 'max_seq': profile.max_seq,
-                'chat': profile.models[0].model,
+                'chat': profile.model.model,
                 'reranker': None if rr is None else vars(rr),
                 'decree': None if dc is None else vars(dc),
             },
@@ -169,7 +169,7 @@ def live(tmp_path_factory):
     s.before = s.config()
     port = free_port()
     env = {k: v for k, v in s.env.items() if k not in LOCAL}
-    env.update(LAWBOT_REQUEST_LOG=str(s.request_log), LAWBOT_FEEDBACK='0', LAWBOT_MODELS='pro')
+    env.update(LAWBOT_REQUEST_LOG=str(s.request_log), LAWBOT_FEEDBACK='0')
     s.web = e2e.start_web(tmp, port, **env)
     s.url = f'http://127.0.0.1:{port}'
     yield s

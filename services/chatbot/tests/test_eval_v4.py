@@ -1,5 +1,6 @@
 # tests/test_eval_v4.py  →  v4 재평가 스크립트 (eval_v4): 인용 판정·문항 구성·단계별 실행·요약
 # 실제 모델 대신 가짜 검색기·리랭커·sLLM으로 모든 단계를 끝까지 돌린다 (data/는 읽기만)
+import dataclasses
 import json
 import subprocess
 import types
@@ -131,9 +132,6 @@ class RR:
 class Bot:
     systems = []
 
-    def __init__(self, spec):
-        self.spec = spec
-
     def stream(self, question, hits, system=None):
         Bot.systems.append(system)
         h = hits[0]
@@ -156,8 +154,7 @@ class Bot:
 
 def fake_app(rerank=True, *, settings=None):
     p = deploy.get_profile()
-    models = service.ChatModels(p.models, Bot)
-    return service.LawbotApp(p, Ret(), models, RR() if rerank else None)
+    return service.LawbotApp(p, Ret(), Bot, RR() if rerank else None)
 
 
 def frame(n=6):
@@ -190,9 +187,9 @@ def test_stages_end_to_end_and_resume(tmp_path, env):
     env.setattr(ev, 'keywords', lambda *a: kw)
     for _ in range(2):  # 두 번째 실행은 이미 끝난 문항을 건너뜀
         ev.run_retrieval(app, t, tmp_path / 'retrieval_x.csv')
-        ev.run_answers(app, 'pro', t, tmp_path / 'answers_x.csv')
-        ev.run_oos(app, 'pro', tmp_path / 'oos_x.csv')
-        ev.run_refusal(app, 'pro', t, tmp_path / 'refusal_x.csv')
+        ev.run_answers(app, t, tmp_path / 'answers_x.csv')
+        ev.run_oos(app, tmp_path / 'oos_x.csv')
+        ev.run_refusal(app, t, tmp_path / 'refusal_x.csv')
     r = pd.read_csv(tmp_path / 'retrieval_x.csv', **E)
     assert len(r) == 6 and r['id'].is_unique
     assert ((r['emb_rank'] >= 1) & (r['emb_rank'] <= 6)).all() and (r['rr_rank'] <= 6).all()
@@ -231,7 +228,6 @@ def test_retrieval_without_reranker(tmp_path, env):
 def test_default_stage_is_all(env, monkeypatch, tmp_path):
     # 단계를 생략하면 네 단계를 차례로 실행하고 요약까지
     calls = []
-    env.setenv('LAWBOT_MODELS', 'pro')  # 맥 미니 .env와 같은 구성
     monkeypatch.setattr(ev, 'OUT', tmp_path)
     monkeypatch.setattr(service, 'load_app', fake_app)
     for name in ('run_retrieval', 'run_answers', 'run_oos', 'run_refusal'):
@@ -239,7 +235,7 @@ def test_default_stage_is_all(env, monkeypatch, tmp_path):
     monkeypatch.setattr(ev, 'summarize', lambda tag, test: calls.append(('summary', tag)))
     monkeypatch.setattr('sys.argv', ['lawbot-eval-v4'])
     ev.main()
-    assert calls == ['run_retrieval', 'run_answers', 'run_oos', 'run_refusal', ('summary', 'pro_rr')]
+    assert calls == ['run_retrieval', 'run_answers', 'run_oos', 'run_refusal', ('summary', 'rr')]
 
 
 def test_evaluation_keeps_csv_source_when_web_uses_db(env, tmp_path):
@@ -414,7 +410,6 @@ def test_val_split_and_sample():
 
 def test_val_skips_oos_and_records_run(env, monkeypatch, tmp_path):
     calls = []
-    env.setenv('LAWBOT_MODELS', 'pro')
     monkeypatch.setattr(ev, 'OUT', tmp_path)
     monkeypatch.setattr(service, 'load_app', fake_app)
     for name in ('run_retrieval', 'run_answers', 'run_oos', 'run_refusal'):
@@ -423,15 +418,15 @@ def test_val_skips_oos_and_records_run(env, monkeypatch, tmp_path):
     monkeypatch.setattr('sys.argv', ['lawbot-eval-v4', '--split', 'val'])
     ev.main()
     assert [c[0] for c in calls] == ['run_retrieval', 'run_answers', 'run_refusal', 'summary']  # 범위 밖은 평가 전용
-    assert calls[-1] == ('summary', 'pro_rr_val', 1110)
-    meta = json.loads((tmp_path / 'run_pro_rr_val.json').read_text(encoding='utf-8'))
+    assert calls[-1] == ('summary', 'rr_val', 1110)
+    meta = json.loads((tmp_path / 'run_rr_val.json').read_text(encoding='utf-8'))
     run = meta['runs'][0]
     assert (run['mode'], run['split'], run['model']) == ('api', 'val', 'pro') and 'fmt' not in run
     assert run['model_id'] == 'qwen3.8-27b-4bit' and run['emb_model'] == 'lawbot-emb-v4'
     assert run['info'] is None  # 가짜 검색기에는 모델 서버 클라이언트가 없음 (실제는 /v1/models 목록)
     assert run['dataset']['dataset_version'] == 'v4' and 'commit' in run
     ev.main()  # 이어서 실행하면 실행 기록이 하나 더
-    assert len(json.loads((tmp_path / 'run_pro_rr_val.json').read_text(encoding='utf-8'))['runs']) == 2
+    assert len(json.loads((tmp_path / 'run_rr_val.json').read_text(encoding='utf-8'))['runs']) == 2
     monkeypatch.setattr('sys.argv', ['lawbot-eval-v4', 'oos', '--split', 'val'])
     with pytest.raises(SystemExit, match='평가 전용'):
         ev.main()
@@ -610,40 +605,37 @@ def test_v5_summary_by_gold_length(tmp_path, monkeypatch):
 
 def test_v5_main_adds_tax_questions_and_writes_results_v5(env, monkeypatch, tmp_path):
     calls = []
-    env.setenv('LAWBOT_MODELS', 'pro')
     monkeypatch.setattr(ev, 'OUT', tmp_path / 'v4')
     monkeypatch.setattr(ev, 'DATASET', 'v4')  # main이 바꾸는 전역: 테스트가 끝나면 v4로 되돌림
     monkeypatch.setattr(service, 'load_app', fake_app)
     monkeypatch.setattr(ev, 'run_retrieval', lambda app, test, path, **k: calls.append(('retrieval', len(test), path)))
-    monkeypatch.setattr(ev, 'run_answers', lambda app, m, sample, path: calls.append(('answers', len(sample), path)))
-    monkeypatch.setattr(ev, 'run_refusal', lambda app, m, sample, path: calls.append(('refusal', sample)))
+    monkeypatch.setattr(ev, 'run_answers', lambda app, sample, path: calls.append(('answers', len(sample), path)))
+    monkeypatch.setattr(ev, 'run_refusal', lambda app, sample, path: calls.append(('refusal', sample)))
     monkeypatch.setattr(ev, 'summarize', lambda tag, test: calls.append(('summary', tag)))
     monkeypatch.setattr('sys.argv', ['lawbot-eval-v4', '--split', 'val', '--dataset', 'v5', '--n-tax', '50'])
     ev.main()
     n_tax_law = (ev.load_test('val', 'v5')['eval_cat'] == 'D_tax').sum()
-    assert calls[0] == ('retrieval', 1110 + n_tax_law, tmp_path / 'v5' / 'retrieval_pro_rr_val.csv')
+    assert calls[0] == ('retrieval', 1110 + n_tax_law, tmp_path / 'v5' / 'retrieval_rr_val.csv')
     assert calls[1][:2] == ('answers', 250)  # v4 표본 200 + D_tax 50
     v4_sample = ev.answer_sample(ev.load_test('val'), 200)
     assert calls[2][1]['id'].tolist() == v4_sample['id'].tolist()  # 정답 없는 참고 조문 시험은 v4와 같은 문항에서
-    run = json.loads((tmp_path / 'v5' / 'run_pro_rr_val.json').read_text(encoding='utf-8'))['runs'][0]
+    run = json.loads((tmp_path / 'v5' / 'run_rr_val.json').read_text(encoding='utf-8'))['runs'][0]
     assert (run['eval_dataset'], run['n_tax']) == ('v5', 50)
 
 
 def test_decree_retrieval_stage_runs_without_answers(env, monkeypatch, tmp_path):
     """하위법령 검색만 (답변 생성 없음): 첨부 수를 고르려고 LAWBOT_DECREE_K를 크게 한 번 돌린다"""
     calls = []
-    env.setenv('LAWBOT_MODELS', 'pro')
     env.setenv('LAWBOT_RERANKER_ENABLED', '1')
     env.setenv('LAWBOT_DECREE_ENABLED', '1')
     monkeypatch.setattr(ev, 'OUT', tmp_path / 'v4')
     monkeypatch.setattr(ev, 'DATASET', 'v4')
-    monkeypatch.setattr(service, 'load_app', fake_app)
-    monkeypatch.setattr(ev, 'uses_decrees', lambda app, model: True)
-    monkeypatch.setattr(ev, 'run_decree_retrieval', lambda app, m, dq, path: calls.append(('dqr', len(dq), path.name)))
+    monkeypatch.setattr(service, 'load_app', lambda settings: dataclasses.replace(fake_app(), decree=settings.decree))
+    monkeypatch.setattr(ev, 'run_decree_retrieval', lambda app, dq, path: calls.append(('dqr', len(dq), path.name)))
     monkeypatch.setattr(ev, 'run_decree_answers', lambda *a, **k: calls.append(('dqa',)))
     monkeypatch.setattr('sys.argv', ['lawbot-eval-v4', 'decree-retrieval', '--split', 'val', '--dataset', 'v5'])
     ev.main()
-    assert calls == [('dqr', len(ev.load_decree_questions('val', 'v5')), 'dqretrieval_pro_rr_dec_val.csv')]
+    assert calls == [('dqr', len(ev.load_decree_questions('val', 'v5')), 'dqretrieval_rr_dec_val.csv')]
 
 
 @pytest.fixture
@@ -669,7 +661,7 @@ def candidate_app():
     return types.SimpleNamespace(
         retriever=retriever,
         reranker=Reranker(client, 'stub', candidates=12),
-        decree=types.SimpleNamespace(candidates=3, tau=0.9, k=2, models=('pro',)),
+        decree=types.SimpleNamespace(candidates=3, tau=0.9, k=2),
     )
 
 
@@ -718,7 +710,7 @@ def test_decree_retrieval_records_candidates_without_extra_calls(candidate_app, 
         [{'id': 'a', 'question': '질문', 'article_id': '시험법 시행령 제1조', 'question_type': 'keyword'}]
     )
 
-    ev.run_decree_retrieval(app, 'pro', questions, path)
+    ev.run_decree_retrieval(app, questions, path)
 
     app.retriever.rank_all.assert_not_called()
     app.retriever.search.assert_called_once_with('질문', k=12)
@@ -793,15 +785,15 @@ def test_decree_retrieval_records_embedding_rank_before_reranking(tmp_path, monk
         }
     )
 
-    def retrieve(app, question, k, st, model):
+    def retrieve(app, question, k, st):
         candidate = {'law': '가법 시행령', 'article_id': '제1조', 'emb_rank': 4}
         st.update(decree_candidates=[candidate], decree_rerank=0.1)
         return [{'law': '가법'}], [candidate]
 
     monkeypatch.setattr(service, 'retrieve', retrieve)
     path = tmp_path / 'dqretrieval.csv'
-    ev.run_decree_retrieval(None, 'pro', dq, path)
-    ev.run_decree_retrieval(None, 'pro', dq, path)
+    ev.run_decree_retrieval(None, dq, path)
+    ev.run_decree_retrieval(None, dq, path)
     rows = pd.read_csv(path, **E)
     assert rows['id'].tolist() == ['a', 'b']
     assert rows['emb_rank'].tolist() == [4, 999]
@@ -817,7 +809,7 @@ def test_decree_retrieval_requires_a_fresh_tag_for_legacy_csv(tmp_path):
         [{'id': 'old', 'question': '질문', 'article_id': '시험법 시행령 제1조', 'question_type': 'keyword'}]
     )
     with pytest.raises(SystemExit, match='다른 --tag'):
-        ev.run_decree_retrieval(None, 'pro', questions, path)
+        ev.run_decree_retrieval(None, questions, path)
     assert path.read_bytes() == legacy
 
 
@@ -859,14 +851,14 @@ def test_run_metadata_reads_generation_revision_from_separate_server(monkeypatch
     def generation_models(client):
         assert client is generation_client
         calls.append(client)
-        return [{'id': app.models.specs['pro'].model, 'revision': revision, 'mlx_lm_version': mlx_lm_version}]
+        return [{'id': app.profile.model.model, 'revision': revision, 'mlx_lm_version': mlx_lm_version}]
 
     monkeypatch.setattr(service, 'generation_models', generation_models)
     monkeypatch.setattr(ev, 'git_state', lambda: ('commit', False))
-    metadata = ev.run_meta(app, 'pro', 'val', 1, ['answers'])
+    metadata = ev.run_meta(app, 'val', 1, ['answers'])
     assert metadata['info'] == {'models': retrieval_models}
     assert metadata['generation'] == {
-        'id': app.models.specs['pro'].model,
+        'id': app.profile.model.model,
         'revision': None if external else revision,
     }
     assert metadata['generation_server_mlx_lm_version'] == (None if external else mlx_lm_version)
@@ -883,6 +875,6 @@ def test_run_metadata_records_generation_discovery_failure(monkeypatch):
 
     monkeypatch.setattr(service, 'generation_models', generation_models)
     monkeypatch.setattr(ev, 'git_state', lambda: ('commit', False))
-    metadata = ev.run_meta(app, 'pro', 'val', 1, ['answers'])
+    metadata = ev.run_meta(app, 'val', 1, ['answers'])
     assert metadata['generation'] == {'error': 'ValueError'}
     assert metadata['generation_server_mlx_lm_version'] is None

@@ -90,7 +90,7 @@ def test_db_and_csv_use_same_search_and_legacy_cache(corpus_db, tmp_path, env, m
     assert csv_app.profile.articles == (combined if decrees else law)
     expected_sha = manifest.sha256(csv_app.profile.articles)
     csv_retriever = csv_app.retriever
-    csv_hits = service.retrieve(csv_app, QUESTION, 3, {}, 'pro')
+    csv_hits = service.retrieve(csv_app, QUESTION, 3, {})
     parts = [('law', csv_app.profile.max_seq, csv_retriever.docs[: csv_retriever.n_law], csv_retriever.D)]
     if decrees:
         parts.append(('decree', csv_app.decree.max_seq, csv_retriever.docs[csv_retriever.n_law :], csv_retriever.D_dec))
@@ -124,7 +124,7 @@ def test_db_and_csv_use_same_search_and_legacy_cache(corpus_db, tmp_path, env, m
     for key in expected_keys.values():
         with np.load(cache_dir / f'{key}.npz') as legacy:
             assert set(legacy.files) == {'vectors', 'probe'}
-    assert service.retrieve(db_app, QUESTION, 3, {}, 'pro') == csv_hits
+    assert service.retrieve(db_app, QUESTION, 3, {}) == csv_hits
     admin = Corpus(db_app)
     assert ('근로기준법', '제26조') in admin.articles
     assert admin.sha == expected_sha and admin.version == csv_app.dataset_version
@@ -199,7 +199,7 @@ def test_running_app_pins_corpus_for_search_feedback_and_request_log(corpus_db, 
     assert '(데이터 v5)' in view.data_notice(app) and '(데이터 v5-next)' in view.data_notice(restarted)
 
     stats = {'model': 'pro', 'request_id': 'synthetic-request', '_system': 'synthetic system'}
-    record = feedback.turn_record(app, QUESTION, before, '합성 답변', '합성 답변', 'pro', stats)
+    record = feedback.turn_record(app, QUESTION, before, '합성 답변', '합성 답변', stats)
     assert record['corpus_release_id'] == RELEASE
     assert record['dataset_version'] == app.dataset_version == 'v5'
     assert record['articles_sha256'] == app.articles_sha256 != restarted.articles_sha256

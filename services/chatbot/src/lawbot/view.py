@@ -5,9 +5,7 @@ import os
 from lawbot import manifest
 from lawbot.decree import is_decree
 from lawbot.security import instance_name
-from lawbot.service import uses_decrees
 
-# v4 Fast로 검색·답변을 확인한 질문 (근로기준법 제26조, 최저임금법 제6조, 남녀고용평등법 제19조)
 EXAMPLES = [
     '해고 예고 없이 갑자기 해고되면 어떻게 하나요?',
     '최저임금보다 적게 주기로 한 근로계약은 효력이 있나요?',
@@ -28,7 +26,6 @@ ANSWER_NOTICES = {
     'calculation_missing': '답변에서 계산 결과의 숫자를 확인하지 못했습니다. 계산 카드를 확인해 주세요.',
 }
 DISCLAIMER = '법률 자문이 아닌 참고용 답변입니다.'
-DISABLED_MODEL = '이 기기에서는 사용하지 않는 모델입니다. 다른 답변 모델을 고르세요.'
 CITED_LABEL = '✅ 답변에서 인용한 조문'
 # 검색·리랭킹·생성 단계 오류의 화면 안내 (요청 로그 error_type → 문구)
 STAGE_ERRORS = {
@@ -82,12 +79,12 @@ def data_notice(app):
     )
 
 
-def searching_stats(app, model_key=None):
+def searching_stats(app):
     """질문 직후 처리 단계 (검색 → 리랭킹 → 하위법령 → 생성)"""
     return (
         '⏳ 조문 검색'
         + (' → 리랭킹' if app.reranker else '')
-        + (' → 시행령·시행규칙' if uses_decrees(app, model_key) else '')
+        + (' → 시행령·시행규칙' if getattr(app, 'decree', None) is not None else '')
         + ' 중…'
     )
 
@@ -143,18 +140,16 @@ def page_title(app):
 
 
 def intro_text(app):
-    """제목 아래 안내: 하위법령 첨부 모델이 있으면 그 모델 이름과 함께 알린다"""
-    names = [s.label for s in app.models.specs.values() if uses_decrees(app, s.key)]
-    if not names:
+    if getattr(app, 'decree', None) is None:
         return '질문과 관련된 조문 3개를 찾아 그 조문을 근거로 답합니다. '
     return (
-        f'질문과 관련된 법률 조문 3개를 찾아 그 조문을 근거로 답합니다. {", ".join(names)}는 관련 시행령·시행규칙을 '
+        f'질문과 관련된 법률 조문 3개를 찾아 그 조문을 근거로 답합니다. {app.profile.model.label}는 관련 시행령·시행규칙을 '
         f'최대 {app.decree.k}개 더 붙입니다. '
     )
 
 
 def sources_title(app):
-    if any(uses_decrees(app, k) for k in app.models.specs):
+    if getattr(app, 'decree', None) is not None:
         return f'검색된 조문 (법률 3개 + 시행령·시행규칙 최대 {app.decree.k}개)'
     return '검색된 조문 (상위 3개)'
 

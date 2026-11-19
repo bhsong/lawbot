@@ -39,7 +39,6 @@ COLUMNS = (
     'label',
     'reason',
     'model',
-    'fmt',
     'refused',
     'question',
     'hits',
@@ -136,7 +135,7 @@ def review_frame(rows, keep=None):
         p = prev.get(r['feedback_id'], {})
         out.append(
             {
-                c: _csv_text(r.get(c)) if c in ('reason', 'model', 'fmt', 'question', 'answer_shown') else r.get(c)
+                c: _csv_text(r.get(c)) if c in ('reason', 'model', 'question', 'answer_shown') else r.get(c)
                 for c in COLUMNS
                 if c not in HUMAN and c != 'hits'
             }
