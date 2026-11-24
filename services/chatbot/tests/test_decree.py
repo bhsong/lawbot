@@ -451,7 +451,7 @@ def test_concise_and_cards_with_decree():
     )  # 인용 순서
     assert '⚠' not in out
     bad = raw.replace('근로기준법 제2조\n', '근로기준법 시행령 제9조\n')
-    assert '⚠ 검색된 조문에서 확인되지 않은 인용: 제9조' in answer_format.concise(bad, hits)
+    assert '근로기준법 시행령 제9조⚠확인되지 않은 인용' in answer_format.concise(bad, hits)
     used, unknown, no = answer_format.answer_citations(raw, hits)
     assert used == [dec[0], law[0]] and unknown == [] and not no
     shown, folded = web.sources_data(hits, used, no)['groups']

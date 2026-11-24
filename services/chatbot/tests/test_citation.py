@@ -215,3 +215,66 @@ def test_parse_addendum_articles():
         ('국민연금법', '제88조'),
     ]
     assert ci.parse('국민연금법 부칙 제4조') == [('국민연금법', '부칙제4조')]
+
+
+@pytest.mark.parametrize(
+    ('text', 'expected'),
+    [
+        ('이는 근로기준법 제26조, (제43조)입니다.', [('근로기준법 제26조', 'ok'), ('제43조', 'ok')]),
+        ('근로기준법에 따릅니다. (제26조)', [('제26조', 'ok')]),
+        ('(제26조)와 제999조', [('제26조', 'ok'), ('제999조', 'outside')]),
+        ('법 제26조', [('법 제26조', 'ambiguous')]),
+        (
+            '근로기준법 제26조. 법 제43조, 같은 법 제26조, 동법 제43조',
+            [('근로기준법 제26조', 'ok'), ('법 제43조', 'ok'), ('같은 법 제26조', 'ok'), ('동법 제43조', 'ok')],
+        ),
+        (
+            '근로기준법 제26조. 같은 법 시행령 제26조, 제43조. 같은 법 제43조',
+            [
+                ('근로기준법 제26조', 'ok'),
+                ('같은 법 시행령 제26조', 'wrong_law'),
+                ('제43조', 'wrong_law'),
+                ('같은 법 제43조', 'ok'),
+            ],
+        ),
+        (
+            '근로기준법 시행령 제26조. 동법 제26조. 같은 법 시행규칙 제26조',
+            [
+                ('근로기준법 시행령 제26조', 'wrong_law'),
+                ('동법 제26조', 'wrong_law'),
+                ('같은 법 시행규칙 제26조', 'wrong_law'),
+            ],
+        ),
+        (
+            '근로기준법 제26조, 사회복지사업법 제26조제1호, 「알 수 없는 법」 제43조,'
+            ' 공공 복지에 관한 법률 제26조, 새복지법 시행령 제43조, (제26조)',
+            [
+                ('근로기준법 제26조', 'ok'),
+                ('사회복지사업법 제26조제1호', 'outside'),
+                ('「알 수 없는 법」 제43조', 'outside'),
+                ('공공 복지에 관한 법률 제26조', 'outside'),
+                ('새복지법 시행령 제43조', 'outside'),
+                ('제26조', 'outside'),
+            ],
+        ),
+    ],
+)
+def test_span_citations_keep_original_offsets_and_law_context(text, expected):
+    assert [(text[c.start : c.end], c.verdict) for c in ci.check_spans(text, HITS)] == expected
+
+
+def test_number_without_previous_law_does_not_guess_among_provided_laws():
+    cites = ci.check_spans('제2조', [hit('근로기준법', '제2조'), hit('최저임금법', '제2조')])
+    assert [(c.law, c.verdict) for c in cites] == [(None, 'ambiguous')]
+
+
+def test_concise_marks_each_original_occurrence_only_after_completion():
+    raw = (
+        '【결론】🙂 근로기준법 제999조 제2항에 따릅니다(제999조).\n'
+        '【근거 조문】근로기준법 제26조\n사회복지사업법 제26조제1호(정의)'
+    )
+    assert '⚠' not in concise(raw, HITS, done=False)
+    shown = concise(raw, HITS)
+    assert '🙂 근로기준법 제999조 제2항⚠확인되지 않은 인용에 따릅니다(제999조⚠확인되지 않은 인용).' in shown
+    assert '사회복지사업법 제26조제1호⚠확인되지 않은 인용' in shown
+    assert '근거: 근로기준법 제26조(해고의 예고)' in shown

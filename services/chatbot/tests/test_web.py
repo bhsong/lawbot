@@ -413,7 +413,16 @@ def test_default_chat_matches_wire_contract(authed, lawbot, tmp_path, env):
     assert response.headers['content-type'] == 'text/event-stream; charset=utf-8'
     baseline = json.loads((Path(__file__).parent / 'fixtures/chat_wire_contract.json').read_bytes())
     assert response.content == baseline['response_body'].encode()
-    assert request_log.read_bytes() == baseline['request_log'].encode()
+    record = json.loads(request_log.read_bytes())
+    assert {name: record.pop(name) for name in tuple(record) if name.startswith('concl_cite_')} == {
+        'concl_cite_ok': 0,
+        'concl_cite_outside': 0,
+        'concl_cite_wrong_law': 0,
+        'concl_cite_nonexistent': 0,
+        'concl_cite_ambiguous': 0,
+    }
+    assert record.pop('clarify_status') == 'skipped'
+    assert record == json.loads(baseline['request_log'])
 
 
 def test_chat_item_fields(authed):

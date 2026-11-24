@@ -3,6 +3,7 @@
 # 검색 결과 dict 형식은 그대로 쓴다: 조문 키는 웹앱 쪽에서 law + ' ' + article_id로 만든다 (retriever·서버 API 변경 없음)
 # 평가 도구(lawbot_tools)의 refusal.is_refusal(【결론】에 '확인할 수 없')은 키워드 채점과 v1 기록 재현 테스트가 쓴다
 import re
+from dataclasses import dataclass
 
 from lawbot.hits import Hit
 
@@ -176,4 +177,86 @@ def check(cites, hits: list[Hit], articles=None):
         else:
             verdict, h = OUTSIDE, None
         out.append((law, no, verdict, h))
+    return out
+
+
+@dataclass(frozen=True)
+class CitationSpan:
+    """One citation occurrence, with a half-open span in the original text."""
+
+    start: int
+    end: int
+    law: str | None
+    article_id: str
+    verdict: str
+    hit: Hit | None
+
+
+_SPAN_ALIASES = dict(_ALIAS)
+_KNOWN_NAME = '|'.join(r'[ \t]*'.join('[ㆍ·・]' if ch == '·' else re.escape(ch) for ch in alias) for alias, _ in _ALIAS)
+_LONG_NAME = r'[가-힣0-9ㆍ·・]+(?:[ \t]+[가-힣0-9ㆍ·・]+){0,16}?[ \t]*에[ \t]*(?:관한|따른)[ \t]*법률'
+_SUB = r'시행령|시행규칙'
+_ARTICLE = r'(?:부칙[ \t]*(?:[<(（\[][ \t]*제[ \t]*\d+[ \t]*호[ \t]*[>)）\]][ \t]*)?)?제[ \t]*\d+[ \t]*조'
+_PART = r'[ \t]*제[ \t]*\d+[ \t]*(?:[항호목])(?:[ \t]*의[ \t]*\d+)?'
+_SPAN_TOKEN = re.compile(
+    rf'(?P<article>{_ARTICLE}(?:[ \t]*의[ \t]*\d+)?)(?:{_PART})*(?:[ \t]*[가-하]목)?'
+    rf'|(?<![가-힣])(?P<relative>같은[ \t]*법|동법|법)(?:[ \t]*(?P<relative_sub>{_SUB}))?(?=[ \t]*{_ARTICLE})'
+    rf'|(?<![가-힣])(?P<sub_only>{_SUB})(?=[ \t]*{_ARTICLE})'
+    rf'|(?P<quoted>「[^」\n]+」|『[^』\n]+』)(?:[ \t]*(?P<quoted_sub>{_SUB}))?'
+    rf'|(?<![가-힣])(?P<known>{_KNOWN_NAME})(?:[ \t]*(?P<known_sub>{_SUB}))?'
+    rf'(?=(?:[ \t]*{_ARTICLE})|(?:(?:에서는|에서|으로는|으로|에는|에|은|는|이|가|을|를|의|과|와|도)?(?![가-힣])))'
+    rf'|(?<![가-힣])(?P<unknown>{_LONG_NAME}|[가-힣0-9ㆍ·・]+법(?:률)?)'
+    rf'(?:[ \t]*(?P<unknown_sub>{_SUB}))?(?=[ \t]*{_ARTICLE}|(?:에[ \t]*따[르른라]|에서[ \t]*정한))'
+)
+_PARENT = re.compile(rf' (?:{_SUB})$')
+
+
+def check_spans(text: str, hits: list[Hit], articles: set[tuple[str, str]] | None = None) -> list[CitationSpan]:
+    """Check every occurrence, resolving bare and anaphoric references without losing offsets."""
+    matches = []
+    named_law = law = None
+    pending = None
+    for token in _SPAN_TOKEN.finditer(text):
+        if token['article']:
+            no_match = _TOKEN.fullmatch(norm(token['article']))
+            assert no_match is not None
+            start = token.start()
+            if pending is not None and not text[pending.end() : start].strip(' \t'):
+                start = pending.start()
+            matches.append((start, token.end(), law, article_no(no_match), start != token.start() and law is None))
+            pending = None
+            continue
+
+        sub = (
+            token['relative_sub']
+            or token['sub_only']
+            or token['quoted_sub']
+            or token['known_sub']
+            or token['unknown_sub']
+        )
+        if token['relative'] or token['sub_only']:
+            law = f'{_PARENT.sub("", named_law)} {sub}' if named_law and sub else named_law
+        else:
+            name = token['known'] or token['unknown'] or token['quoted'][1:-1]
+            if token['quoted']:
+                parent = re.search(rf'\s*({_SUB})$', name)
+                if parent:
+                    name = name[: parent.start()]
+                    sub = sub or parent[1]
+                name = name.strip()
+                if norm(name) not in _SPAN_ALIASES and not name.endswith(('법', '법률', '령', '규칙', '조례')):
+                    continue
+            parent_law = _SPAN_ALIASES.get(norm(name), name)
+            named_law = law = f'{parent_law} {sub}' if sub else parent_law
+        pending = token
+
+    checked = check([(law, no) for _, _, law, no, _ in matches], hits, articles)
+    registered = LAW_ALIASES.keys() | {h['law'] for h in hits}
+    out = []
+    for (start, end, law, no, unresolved), (_, _, verdict, hit) in zip(matches, checked):
+        if unresolved:
+            verdict, hit = AMBIGUOUS, None
+        elif law and _PARENT.sub('', law) not in registered and law not in registered:
+            verdict, hit = OUTSIDE, None
+        out.append(CitationSpan(start, end, law or (hit_law(hit) if hit else None), no, verdict, hit))
     return out

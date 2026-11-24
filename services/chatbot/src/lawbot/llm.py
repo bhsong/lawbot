@@ -1,8 +1,10 @@
 # lawbot/llm.py  →  답변 생성: [참고 조문] 프롬프트를 만들어 OpenAI 호환 chat completions로 스트리밍 (openai SDK)
 # Generation uses a dedicated OpenAI-compatible endpoint, local or explicitly allowed external HTTPS.
 # (text·generation_tps·prompt_tokens·prompt_tps·generation_tokens·peak_memory·finish_reason: service.ask가 읽음)
+import json
 import re
 import types
+from functools import cached_property
 
 import httpx
 import openai
@@ -15,7 +17,11 @@ from lawbot.api_client import (
     error_from_body,
     request_headers,
 )
-from lawbot.hits import Hit
+from lawbot.hits import Clarification, ClarifyAttempt, Hit
+from lawbot.paths import DATA
+
+CLARIFY_SYSTEM_FILE = DATA / 'v5' / 'system_clarify.txt'
+CLARIFY_MAX_TOKENS = 256
 
 
 def _clean(s):
@@ -101,6 +107,30 @@ def responses(chunks):
     yield response('', **stats)
 
 
+def _unique_keys(pairs):
+    obj = dict(pairs)
+    if len(obj) != len(pairs):
+        raise ValueError('Duplicate JSON key')
+    return obj
+
+
+def _parse_clarification(text: str | None) -> Clarification | None:
+    try:
+        value = json.loads(text or '', object_pairs_hook=_unique_keys)
+    except ValueError:
+        return None
+    if not isinstance(value, dict) or value.keys() != {'ask', 'missing', 'question'}:
+        return None
+    ask, missing, question = value['ask'], value['missing'], value['question']
+    if type(ask) is not bool or not isinstance(question, str) or not isinstance(missing, list):
+        return None
+    if any(not isinstance(item, str) or not item.strip() for item in missing):
+        return None
+    if (ask and not question.strip()) or (not ask and (missing or question)):
+        return None
+    return Clarification(ask=ask, missing=missing, question=question.strip())
+
+
 class LLM:
     """model: API 모델 id, client: openai.OpenAI, system: 이 모델의 기본 system (deploy 프로필·모델의 system 파일)"""
 
@@ -112,6 +142,56 @@ class LLM:
             {'role': 'system', 'content': system or self.system},
             {'role': 'user', 'content': build_prompt(hits, question)},
         ]
+
+    @cached_property
+    def clarify_system(self):
+        return CLARIFY_SYSTEM_FILE.read_text(encoding='utf-8').strip()
+
+    def clarify(self, question: str, hits: list[Hit]):
+        """Decide once, allowing one format correction; return diagnostics separately from log metrics."""
+        attempts: list[ClarifyAttempt] = []
+        metrics = {'clarify_prompt_tokens': 0, 'clarify_completion_tokens': 0}
+        user = build_prompt(hits, question)
+        decision = None
+        failure = None
+        for retry in (False, True):
+            content = user + '\n\n형식 오류: 지정된 JSON 객체 하나만 출력하세요.' if retry else user
+            messages = [{'role': 'system', 'content': self.clarify_system}, {'role': 'user', 'content': content}]
+            attempt = ClarifyAttempt(messages=messages, raw=None, parsed=None, retry=retry, finish=None, error=None)
+            attempts.append(attempt)
+            try:
+                result = self._plain_completion(messages, CLARIFY_MAX_TOKENS)
+            except (openai.OpenAIError, httpx.TransportError) as exc:
+                attempt['error'] = type(exc).__name__
+                failure = 'call_error'
+                break
+            if result.usage is not None:
+                metrics['clarify_prompt_tokens'] += result.usage.prompt_tokens
+                metrics['clarify_completion_tokens'] += result.usage.completion_tokens
+            if result.choices:
+                choice = result.choices[0]
+                attempt.update(raw=choice.message.content, finish=choice.finish_reason)
+            if attempt['finish'] == 'length':
+                failure = 'length'
+                break
+            if attempt['finish'] == 'stop':
+                decision = _parse_clarification(attempt['raw'])
+            attempt['parsed'] = decision
+            failure = None if decision is not None else 'invalid_json'
+            if decision is not None:
+                break
+        status = 'failed_open' if decision is None else ('asked' if decision['ask'] else 'not_asked')
+        return (
+            decision,
+            attempts,
+            {
+                **metrics,
+                'clarify_status': status,
+                'clarify_failure': failure,
+                'clarify_calls': len(attempts),
+                'clarify_retries': len(attempts) - 1,
+            },
+        )
 
     def route_calculation(self, question: str, *, metrics: dict[str, int] | None = None) -> str | None:
         """Select a calculator, then label the question's numbers for it.
@@ -138,16 +218,23 @@ class LLM:
         )
         return None if labels is None else compose_route(question, selection, labels)
 
+    def _plain_completion(self, messages, max_tokens: int):
+        return self.client.chat.completions.create(
+            model=self.model,
+            messages=messages,
+            max_tokens=max_tokens,
+            temperature=TEMPERATURE,
+            stream=False,
+            extra_body={'chat_template_kwargs': {'enable_thinking': False}},
+            **({'extra_headers': h} if (h := request_headers()) else {}),
+        )
+
     def _router_completion(self, system: str, user: str, max_tokens: int, metrics: dict[str, int] | None) -> str | None:
+        if metrics is not None:
+            metrics['router_calls'] = metrics.get('router_calls', 0) + 1
         try:
-            result = self.client.chat.completions.create(
-                model=self.model,
-                messages=[{'role': 'system', 'content': system}, {'role': 'user', 'content': user}],
-                max_tokens=max_tokens,
-                temperature=TEMPERATURE,
-                stream=False,
-                extra_body={'chat_template_kwargs': {'enable_thinking': False}},
-                **({'extra_headers': h} if (h := request_headers()) else {}),
+            result = self._plain_completion(
+                [{'role': 'system', 'content': system}, {'role': 'user', 'content': user}], max_tokens
             )
         except openai.APITimeoutError as exc:
             raise RouterTimeout(exc.__cause__) from exc
@@ -157,7 +244,6 @@ class LLM:
                 converted = ModelServerError('계산 라우터 응답 오류')
             raise converted from exc
         if metrics is not None:
-            metrics['router_calls'] = metrics.get('router_calls', 0) + 1
             if (usage := getattr(result, 'usage', None)) is not None:
                 for key, value in (
                     ('router_prompt_tokens', usage.prompt_tokens),
@@ -170,11 +256,13 @@ class LLM:
             raise ModelServerError('계산 라우터 응답에 finish_reason이 없습니다.')
         return result.choices[0].message.content
 
-    def stream(self, question, hits, max_tokens=1024, system=None, *, suffix=''):
+    def stream(self, question, hits, max_tokens=1024, system=None, *, suffix='', capture_messages=None):
         """system: 이번 요청만 다른 system으로 (None이면 모델의 기본 system). 생성기를 닫으면 연결을 끊는다 (서버가 생성을 멈춤)"""
         messages = self.build_messages(question, hits, system)
         if suffix:
             messages[-1]['content'] += suffix
+        if capture_messages is not None:
+            capture_messages.extend(messages)
         try:
             s = self.client.chat.completions.create(
                 model=self.model,

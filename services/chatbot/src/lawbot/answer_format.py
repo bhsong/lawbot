@@ -1,11 +1,14 @@
 # src/lawbot/answer_format.py  →  모델 원문을 화면용 간결형(결론 + 근거)으로 바꾸는 후처리
 # 모델 입력([참고 조문])과 원문 출력은 바꾸지 않는다. 화면 형식만 바꾼다
 import re
+from dataclasses import dataclass
 
-from lawbot.citation import OK, check, hit_law, parse, refused
+from lawbot.citation import OK, CitationSpan, check, check_spans, hit_key, hit_law, parse, refused
 from lawbot.hits import Hit
 
 SECTION = re.compile(r'【(결론|근거 조문|설명|참고)】')
+UNVERIFIED = '⚠확인되지 않은 인용'
+UNVERIFIED_GROUNDS_HEADER = '\n\n확인되지 않은 근거:\n'
 
 
 def sections(raw):
@@ -36,7 +39,9 @@ def cited_hits(cite_text, hits: list[Hit]):
 
 
 def concise(raw, hits: list[Hit], done=True):
-    """간결형: 결론 + '근거: ' 실제 인용 조문만. 4섹션 표시가 없으면 원문 그대로 (형식을 벗어난 답변을 숨기지 않음)"""
+    """Render the conclusion and evidence, annotating only the completed answer."""
+    if done:
+        return review_answer(raw, hits).render()
     sec = sections(raw)
     if '결론' not in sec:
         if not done and '【결론】'.startswith(raw.strip()):  # 표시 기호를 아직 쓰는 중
@@ -45,9 +50,7 @@ def concise(raw, hits: list[Hit], done=True):
     out = sec['결론']
     if refused(raw):  # 거절은 근거 줄 없이 결론만 (튜닝 전 27B의 거절 표현 포함)
         return out
-    if (
-        done or '설명' in sec or '참고' in sec
-    ):  # 근거 조문 섹션이 끝난 뒤에 한 번에 붙인다 (쓰는 중인 번호를 표시하지 않음)
+    if '설명' in sec or '참고' in sec:  # Wait for the whole evidence section.
         used, unknown = cited_hits(sec.get('근거 조문', ''), hits)
         if used:
             out += '\n\n근거: ' + ', '.join(hit_label(h) for h in used)
@@ -59,10 +62,77 @@ def concise(raw, hits: list[Hit], done=True):
 
 
 def answer_citations(raw, hits: list[Hit]):
-    """생성이 끝난 답변의 (인용한 검색 결과 조문, 검색 결과에서 확인되지 않은 번호, 거절 여부). 화면의 조문 카드 구분에 씀
-    【결론】 형식이면 【근거 조문】만, 형식을 벗어난 답변은 전체에서 인용을 찾는다 (간결형과 같은 기준)"""
-    if refused(raw):
-        return [], [], True
+    """Return verified hits, unverified article numbers and refusal for the completed answer."""
+    review = review_answer(raw, hits)
+    unknown = (
+        []
+        if review.refused
+        else list(dict.fromkeys(c.article_id for c in review.ground_cites + review.conclusion_cites if c.verdict != OK))
+    )
+    return review.used(), unknown, review.refused
+
+
+def mark_unverified(text, citations):
+    parts = []
+    start = 0
+    for cite in citations:
+        if cite.verdict != OK:
+            parts.extend((text[start : cite.end], UNVERIFIED))
+            start = cite.end
+    parts.append(text[start:])
+    return ''.join(parts)
+
+
+@dataclass(frozen=True)
+class AnswerReview:
+    conclusion: str
+    grounds: str
+    conclusion_cites: list[CitationSpan]
+    ground_cites: list[CitationSpan]
+    refused: bool
+    structured: bool
+
+    def used(self) -> list[Hit]:
+        if self.refused:
+            return []
+        hits: dict[str, Hit] = {}
+        for cite in self.ground_cites + self.conclusion_cites:
+            if cite.hit is not None:
+                hits.setdefault(hit_key(cite.hit), cite.hit)
+        return list(hits.values())
+
+    def unverified(self) -> list[tuple[str, CitationSpan]]:
+        return [(self.grounds[c.start : c.end], c) for c in self.ground_cites if c.verdict != OK]
+
+    def render(self) -> str:
+        text = mark_unverified(self.conclusion, self.conclusion_cites)
+        if self.refused or not self.structured:
+            return text
+        used, unknown = self.used(), self.unverified()
+        if used:
+            text += '\n\n근거: ' + ', '.join(hit_label(h) for h in used)
+        if unknown:
+            text += UNVERIFIED_GROUNDS_HEADER + '\n'.join(label + UNVERIFIED for label, _ in unknown)
+        if not used and not unknown:
+            text += '\n\n⚠ 인용 조문 없음: 오른쪽 조문을 직접 확인하세요.'
+        return text
+
+
+def review_answer(raw: str, hits: list[Hit], articles: set[tuple[str, str]] | None = None) -> AnswerReview:
+    """Check all displayed model text; preserve law context from conclusion into grounds."""
     sec = sections(raw)
-    used, unknown = cited_hits(sec.get('근거 조문', '') if '결론' in sec else raw, hits)
-    return used, unknown, False
+    structured = '결론' in sec
+    text = sec['결론'] if structured else raw.strip()
+    grounds = sec.get('근거 조문', '') if structured else ''
+    if grounds.startswith('해당 없음'):
+        grounds = ''
+    offset = len(text) + 1
+    main, basis = [], []
+    for cite in check_spans(f'{text}\n{grounds}' if grounds else text, hits, articles):
+        if cite.start < offset:
+            main.append(cite)
+        else:
+            basis.append(
+                CitationSpan(cite.start - offset, cite.end - offset, cite.law, cite.article_id, cite.verdict, cite.hit)
+            )
+    return AnswerReview(text, grounds, main, basis, refused(raw), structured)

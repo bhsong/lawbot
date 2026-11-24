@@ -12,13 +12,14 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from functools import cached_property, partial
 from pathlib import Path
-from typing import cast
+from typing import Any, cast
 
 import httpx
 from openai import OpenAI
 
 from lawbot import corpus_store, deploy, manifest
 from lawbot import decree as decree_filter
+from lawbot.answer_format import review_answer
 from lawbot.api_client import (
     REQUEST_ID,
     WAIT_INTERVAL,
@@ -437,6 +438,8 @@ def request_record(app, st, status, error):
     rec |= {f'{k}_ms': None if st.get(k) is None else round(st[k] * 1000) for k in MS_FIELDS}
     rec |= {k: st.get(k) for k in ('prompt_tokens', 'gen_tokens', 'peak_gb', 'finish')}
     rec |= {k: st.get(k) for k in ('refused', 'n_cited', *CITE_FIELDS)}
+    rec |= {f'concl_{k}': st.get(f'concl_{k}') for k in CITE_FIELDS}
+    rec |= st.get('clarify_metrics', {'clarify_status': 'skipped'})
     if 'answer_verdict' in st:
         rec['answer_verdict'] = st['answer_verdict']
     rec |= st.get('calculation_metrics', {})
@@ -445,7 +448,8 @@ def request_record(app, st, status, error):
     return rec | {'status': status, 'error_type': error}
 
 
-CITE_FIELDS = ('cite_ok', 'cite_outside', 'cite_wrong_law', 'cite_nonexistent', 'cite_ambiguous')
+CITE_VERDICTS = ('ok', 'outside', 'wrong_law', 'nonexistent', 'ambiguous')
+CITE_FIELDS = tuple(f'cite_{v}' for v in CITE_VERDICTS)
 
 
 def answer_check(app, raw, hits):
@@ -454,11 +458,16 @@ def answer_check(app, raw, hits):
     try:
         from lawbot import citation
 
-        cites = citation.check(citation.citations(raw), hits, citation.article_keys(app.retriever))
+        articles = citation.article_keys(app.retriever)
+        cites = citation.check(citation.citations(raw), hits, articles)
+        conclusion = review_answer(raw, hits, articles).conclusion_cites
+        counts = {v: sum(c.verdict == v for c in conclusion) for v in CITE_VERDICTS}
         verdicts = [v for _, _, v, _ in cites]
-        return {'refused': citation.refused(raw), 'n_cited': len(cites)} | {
-            f: verdicts.count(f.removeprefix('cite_')) for f in CITE_FIELDS
-        }
+        return (
+            {'refused': citation.refused(raw), 'n_cited': len(cites)}
+            | {f'cite_{v}': verdicts.count(v) for v in CITE_VERDICTS}
+            | {f'concl_cite_{v}': n for v, n in counts.items()}
+        )
     except Exception:
         return {}
 
@@ -505,14 +514,28 @@ def ask(
     request_id=None,
     report=None,
     calculation_candidate=False,
+    clarify=False,
+    trace=False,
 ):
-    """질문 하나: (단계, 검색 조문, 답변 원문, 측정값)을 차례로 돌려준다
-    단계 'generate'(토큰마다) → 'done'. 조문은 생성 전에 정해짐
-    hits: 검색된 법률·첨부한 하위법령과 모델에 제공하는 정의 항목
-    측정값(초): search, rerank, decree_search·decree_rerank(첨부가 켜졌을 때만), ttft(생성 호출→첫 토큰),
-    first_text(질문 수신→첫 글자), total / tps, prompt_tokens, prompt_tps(프리필 속도), gen_tokens, peak_gb, finish
-    질문마다 요청 로그 한 줄 (log_request): 성공 ok / 오류 error(AskError로 감싸 올림: kind는 요청 로그 error_type과 같고 화면 안내에 씀) /
-    중간에 멈춤 cancelled (정지 버튼 등으로 생성기를 닫음)"""
+    """Stream a consultation; an opt-in 'clarify' event ends it before the writer."""
+    return _answer(app, question, k, request_id, report, calculation_candidate, clarify, trace, None)
+
+
+def answer_after_clarification(
+    app, question, hits, clarify_question, reply, *, request_id=None, report=None, trace=False
+):
+    """Write the answer from the same context, without retrieval or another decision."""
+    suffix = f'\n\n[확인 질문]\n{clarify_question}\n\n[사용자 답]\n{reply}'
+    return write_from_context(app, question, hits, suffix=suffix, request_id=request_id, report=report, trace=trace)
+
+
+def write_from_context(app, question, hits, *, suffix='', request_id=None, report=None, trace=False):
+    """Run only the writer with already provided articles."""
+    return _answer(app, question, TOP_K, request_id, report, False, False, trace, hits, suffix)
+
+
+def _answer(app, question, k, request_id, report, calculation_candidate, clarify, trace, provided, suffix=''):
+    """Share writer streaming, measurements and error handling for initial and resumed answers."""
     t0 = time.perf_counter()
     st: Timing = {
         'model': app.profile.model.key,
@@ -528,7 +551,6 @@ def ask(
             report(st, status, error)
 
     stage, logged = 'search', False
-    suffix = ''
     try:
         # 요청 id를 모델 서버 요청 헤더로 (단계마다 다시 넣음: 웹앱은 생성기의 next()를 매번 다른 스레드 문맥에서 부름)
         REQUEST_ID.set(st['request_id'])
@@ -536,6 +558,7 @@ def ask(
             stage = 'router'
             route_started = time.perf_counter()
             router_usage: dict[str, int] = {}
+            st['calculation_metrics'] = router_usage
             llm = app.llm
             classify = getattr(llm, 'route_calculation', None)
             if isinstance(llm, LLM):
@@ -564,16 +587,39 @@ def ask(
                 yield 'calculation', [], '', st
             stage = 'search'
             REQUEST_ID.set(st['request_id'])
-        law_hits, decree_hits = retrieve(app, question, k, st)
-        hits = _model_hits(app.retriever, law_hits, decree_hits, st)
+        if provided is None:
+            law_hits, decree_hits = retrieve(app, question, k, st)
+            hits = _model_hits(app.retriever, law_hits, decree_hits, st)
+        else:
+            hits = provided
+            st['n_decree'] = sum(decree_filter.is_decree(h) for h in hits)
+            st['n_definitions'] = sum('definition_item' in h for h in hits)
+        if trace:
+            st['_provided_hits'] = hits
         stage = 'load'
         llm = app.llm
         stage = 'generation'
+        if clarify and not suffix:
+            REQUEST_ID.set(st['request_id'])
+            started = time.perf_counter()
+            decision, attempts, metrics = llm.clarify(question, hits)
+            st['_clarify_attempts'] = attempts
+            st['clarify_metrics'] = metrics | {'clarify_ms': round((time.perf_counter() - started) * 1000, 3)}
+            if decision is not None and decision['ask']:
+                st['total'] = time.perf_counter() - t0
+                log_timing(st)
+                record('ok')
+                logged = True
+                yield 'clarify', hits, decision['question'], st
+                return
         st['_system'] = getattr(llm, 'system', None)
         raw, last, t_gen = '', None, time.perf_counter()
         REQUEST_ID.set(st['request_id'])
         count_call(st, 'llm')
-        options = {'suffix': suffix} if suffix else {}
+        options: dict[str, Any] = {'suffix': suffix} if suffix else {}
+        if trace:
+            st['_writer_messages'] = []
+            options['capture_messages'] = st['_writer_messages']
         for r in llm.stream(question, hits, **options):
             if last is None:
                 st['ttft'] = time.perf_counter() - t_gen
