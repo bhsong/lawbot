@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { AdminPage } from './admin/AdminPage'
+import { ConsultPanel } from './admin/ConsultPanel'
 import { ApiError, NETWORK_ERROR, api } from './api'
 import { Composer } from './components/Composer'
 import { Close, Logout } from './components/icons'
@@ -80,7 +81,11 @@ export default function App() {
   return <Chat config={config} onSignedOut={signedOut} logout={logout} />
 }
 
-const adminViews = [{ value: 'chat', label: '채팅' }, { value: 'manage', label: '피드백 & 법령 관리' }]
+const adminViews = [
+  { value: 'chat', label: '채팅' },
+  { value: 'manage', label: '피드백 & 법령 관리' },
+  { value: 'consults', label: '상담 기록' },
+]
 type LogoutAction = { pending: boolean; error: string; run: () => Promise<void> }
 
 function LogoutControl({ action }: { action: LogoutAction }) {
@@ -97,12 +102,13 @@ function AdminSession({ config, onSignedOut, logout }: { config: Config; onSigne
   return <div className="admin-shell">
     <nav className="admin-switch" aria-label="관리자 화면">
       <Segmented label="화면 전환" items={adminViews} value={view} onChange={setView} />
-      {view === 'manage' && <LogoutControl action={logout} />}
+      {view !== 'chat' && <LogoutControl action={logout} />}
     </nav>
     <div className="admin-chat" hidden={view !== 'chat'}>
       <Chat config={config} onSignedOut={onSignedOut} logout={view === 'chat' ? logout : undefined} />
     </div>
     {view === 'manage' && <AdminPage onUnauthorized={onSignedOut} />}
+    {view === 'consults' && <ConsultPanel onUnauthorized={onSignedOut} />}
   </div>
 }
 
@@ -179,7 +185,7 @@ function Chat({ config, onSignedOut, logout }: { config: Config; onSignedOut: ()
             </div>
           )}
         </div>
-        <Composer busy={chat.busy} onSend={send} onStop={chat.stop} hint="법률 자문이 아닌 참고용 답변입니다. 중요한 결정은 전문가와 확인하세요." />
+        <Composer busy={chat.busy} onSend={send} onStop={chat.stop} consultTrace={config.consult_trace} />
       </main>
       <aside className="panel" aria-label="근거 조문">
         <SourcesView title={config.sources_title} sources={shown?.sources} />

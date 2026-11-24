@@ -4,6 +4,7 @@ import base64
 import hashlib
 import json
 import re
+import secrets
 from datetime import UTC, datetime
 from functools import partial
 from typing import Annotated, Literal
@@ -14,7 +15,8 @@ from fastapi.responses import JSONResponse, Response
 from httpx import URL, AsyncClient, RequestError, TimeoutException
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints, ValidationError
 
-from lawbot import audit_store, dataset_store, feedback_store
+from lawbot import audit_store, consult_admin_store, dataset_store, feedback_store
+from lawbot.consult_trace import stamp
 from lawbot.db.connection import connect, transaction
 from lawbot.qa_rules import ProtectedQA, assigned_overlap
 from lawbot.web import (
@@ -88,6 +90,44 @@ class PromoteDown(Body):
 
 class Revoke(Body):
     note: Annotated[Nonempty, Field(max_length=2000)]
+
+
+UserHash = Annotated[str, StringConstraints(pattern=r'^[a-f0-9]{16}$')]
+TraceDate = Annotated[str, StringConstraints(max_length=40)]
+
+
+class ConsultDeletePreview(Body):
+    user_hash: UserHash | None = None
+    start: TraceDate | None = None
+    end: TraceDate | None = None
+
+
+class ConsultDelete(ConsultDeletePreview):
+    confirmation: Annotated[str, StringConstraints(pattern=r'^[a-f0-9]{64}$')]
+
+
+def _consult_filters(user_hash, start, end, status=None):
+    filters = {}
+    if user_hash is not None:
+        if re.fullmatch(r'[a-f0-9]{16}', user_hash) is None:
+            raise AdminError(422, '사용자 해시를 확인하세요.', 'invalid_filter')
+        filters['user_hash'] = user_hash
+    for key, value in (('start', start), ('end', end)):
+        if value is None:
+            continue
+        try:
+            if len(value) > 40 or (date := datetime.fromisoformat(value)).utcoffset() is None:
+                raise ValueError
+            filters[key] = stamp(date)
+        except ValueError, OverflowError:
+            raise AdminError(422, '기간에는 시간대를 포함해야 합니다.', 'invalid_filter') from None
+    if 'start' in filters and 'end' in filters and filters['start'] >= filters['end']:
+        raise AdminError(422, '종료 시각은 시작 시각보다 뒤여야 합니다.', 'invalid_filter')
+    if status is not None:
+        if status not in ('ok', 'error', 'cancelled'):
+            raise AdminError(422, '상담 상태를 확인하세요.', 'invalid_filter')
+        filters['status'] = status
+    return filters
 
 
 def _mutation(model, body, who, endpoint):
@@ -214,6 +254,51 @@ def router(db, app, *, protected=None, calendar_url=None, calendar_token=None):
     corpus = Corpus(app)
     post_guards = [Depends(_post_body), Depends(require_admin_post_rate)]
     calendar_review_lock = anyio.Lock()
+    consult_confirmation_key = secrets.token_bytes(32)
+
+    @api.get('/consults')
+    def consults(
+        user_hash: str | None = None,
+        start: str | None = None,
+        end: str | None = None,
+        status: str | None = None,
+        limit: str = '50',
+        cursor: str | None = None,
+    ):
+        if not re.fullmatch(r'[0-9]{1,3}', limit) or not 1 <= int(limit) <= 200 or len(cursor or '') > 256:
+            raise AdminError(422, '목록 조건이 올바르지 않습니다.', 'invalid_query')
+        filters = _consult_filters(user_hash, start, end, status)
+        items, after = consult_admin_store.list_consults(db, filters, int(limit), _cursor(cursor))
+        return {'items': items, 'next_cursor': _encode_cursor(after) if after else None}
+
+    @api.get('/consults/{consult_id}')
+    def consult_detail(consult_id: str):
+        result = consult_admin_store.detail(db, consult_id)
+        if result is None:
+            raise AdminError(404, '상담 기록을 찾을 수 없습니다.', 'not_found')
+        return result
+
+    @api.post('/consults/delete-preview', dependencies=post_guards)
+    async def consult_delete_preview(body: PostBody, who: AdminWho):
+        mutation, parsed = _mutation(ConsultDeletePreview, body, who, 'consult_trace_delete_preview')
+        filters = _consult_filters(parsed.user_hash, parsed.start, parsed.end)
+        return await _write(
+            consult_admin_store.delete_consults, db, mutation, filters, consult_confirmation_key, who[1], None
+        )
+
+    @api.post('/consults/delete', dependencies=post_guards)
+    async def consult_delete(body: PostBody, who: AdminWho):
+        mutation, parsed = _mutation(ConsultDelete, body, who, 'consult_trace_delete')
+        filters = _consult_filters(parsed.user_hash, parsed.start, parsed.end)
+        return await _write(
+            consult_admin_store.delete_consults,
+            db,
+            mutation,
+            filters,
+            consult_confirmation_key,
+            who[1],
+            parsed.confirmation,
+        )
 
     @api.get('/feedbacks')
     async def feedbacks(
