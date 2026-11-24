@@ -14,6 +14,7 @@ from lawbot import service
 from lawbot_tools import eval_m5 as m5
 from lawbot_tools import eval_m5_score as scoring
 from test_clarify import ASK, NO_ASK, Client, make_app
+from test_pipeline import chunk
 
 
 def item(group, ident='I', **kwargs):
@@ -159,6 +160,28 @@ def test_scoring_uses_search_denominator_and_ignores_diagnostic(tmp_path):
     assert scores['reasoning']['all_provided'] == 1 and scores['reasoning']['all_cited'] == 0
     assert scores['out_of_scope']['correct'] == 0
     assert scores['overall']['generation_calls'] == 8
+
+
+def test_missing_citation_scores_as_unanswered_even_if_raw_answer_matches(tmp_path):
+    law, no = '근로기준법', '제26조'
+    general = item(
+        'general',
+        article_ids=[f'{law} {no}'],
+        answer_key={'must_include': [['예고']], 'must_not_include': []},
+    )
+    client = Client()
+    client.items = [chunk('【결론】예고해야 합니다.\n【근거 조문】최저임금법 제26조'), chunk(finish='stop')]
+    app = make_app(tmp_path / 'requests', client)
+    result, error = m5.run_item(app, general, 'A', {}, set())
+    assert error is None and result['initial']['verdict'] == 'missing_citation'
+    assert '답변을 확정하지 못했습니다' in result['initial']['shown']
+
+    summary, _ = scoring.score([general], [result])
+    assert summary['general']['search_hits'] == 1
+    assert summary['general']['total'] == summary['general']['total_all'] == summary['general']['cite_ok'] == 0
+    reasoning = item('reasoning', expected='answer', article_ids=['최저임금법 제26조'])
+    scored = scoring.score_item(reasoning, result)
+    assert not scored['cite_ok'] and not scored['unbased_assertion']
 
 
 def test_visible_exposure_checks_actual_text():

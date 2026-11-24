@@ -201,14 +201,21 @@ _SUBS = rf'(?:{_SUB})(?:[ \t]*[·ㆍ・/][ \t]*(?:{_SUB}))*'
 _PARTICLE = r'에서는|에서|으로는|으로|에는|에|은|는|이|가|을|를|의|과|와|도'
 _NAME_END = rf'(?:(?:{_PARTICLE})?(?![가-힣])|(?={_SUBS}|제\s*\d|부칙))'
 _KNOWN = re.compile(rf'(?<![가-힣])(?:{_KNOWN_NAME})(?={_NAME_END})')
-_OTHER = re.compile(rf'(?<![가-힣])(?:{_LONG_NAME}|[가-힣0-9ㆍ·・]+?(?:법률|법|조례))(?={_NAME_END})')
 _LAW_SUFFIX = re.compile(rf'(?:[ \t]*(?P<sub>{_SUBS}))?(?:{_PARTICLE})?(?=[^가-힣]|제\s*\d|부칙|$)')
 _RELATIVE = re.compile(rf'(?<![가-힣])(?:(?:같은[ \t]*법|동법|법)(?:[ \t]*(?P<sub>{_SUBS}))?|(?P<only>{_SUBS}))\s*$')
 _PART = r'(?:제\s*\d+\s*[항호목](?:\s*의\s*\d+)?|[가-하]목)'
 _ADDENDUM_NOTE = r'(?:\([^()\n]{0,50}\)|（[^（）\n]{0,50}）|<[^<>\n]{0,50}>|\[[^\[\]\n]{0,50}\])'
+_ADDENDUM = rf'부칙(?:\s*{_ADDENDUM_NOTE}|[^.!?。！？\n]{{0,50}}?)'
+_ARTICLE_HEAD = r'제\s*\d+\s*조'
+_OTHER = re.compile(
+    rf'(?<![가-힣])(?:{_LONG_NAME}(?={_NAME_END})'
+    rf'|[가-힣0-9ㆍ·・]+?(?:법률|법|조례)(?=(?:{_PARTICLE})?\s*(?:'
+    rf'(?:{_SUBS})(?={_NAME_END})|(?:{_ADDENDUM}\s*)?{_ARTICLE_HEAD})))'
+)
+# Nearby article numbers also occur after ordinary nouns and statute categories.
+_NON_NAMES = frozenset('동법 같은법 방법 적법 위법 불법 편법 문법 해법 용법 수법 기법 세법 과세법 노동법'.split())
 _NUMBER = re.compile(
-    rf'(?:(?P<add>부칙(?:\s*{_ADDENDUM_NOTE}|[^.!?。！？\n]{{0,50}}?))\s*)?'
-    r'(?P<no>제\s*\d+\s*조(?:\s*의\s*\d+)?)'
+    rf'(?:(?P<add>{_ADDENDUM})\s*)?(?P<no>{_ARTICLE_HEAD}(?:\s*의\s*\d+)?)'
     rf'(?:\s*{_PART})*(?:\s*[·ㆍ・,]\s*{_PART}(?:\s*{_PART})*)*'
 )
 _GAZETTE_NO = re.compile(r'부칙(?:제(\d+)호|\(제(\d+)호\)|<제(\d+)호>|\[제(\d+)호\]|（제(\d+)호）)')
@@ -236,7 +243,7 @@ def _law_mentions(text: str) -> list[_LawMention]:
     known = list(_KNOWN.finditer(text))
     # A complete registered name wins over an overlapping long generic match.
     known_ends = {m.end() for m in known}
-    other = (m for m in _OTHER.finditer(text) if m.end() not in known_ends and m[0] not in ('동법', '같은법'))
+    other = (m for m in _OTHER.finditer(text) if m.end() not in known_ends and m[0] not in _NON_NAMES)
     out = []
     for token in sorted([*known, *other, *_QUOTED_NAME.finditer(text)], key=lambda m: m.start()):
         start, end = token.span()

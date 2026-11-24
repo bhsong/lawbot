@@ -41,8 +41,7 @@ def law_keys(entries):
 def score_item(item, row):
     initial = row['initial']
     final = primary(row)
-    unavailable = ('truncated', 'empty', 'calculation_mismatch', 'calculation_missing')
-    answered = final['stage'] == 'done' and final['verdict'] not in unavailable and not failed(row)
+    answered = final['stage'] == 'done' and final['verdict'] in ('shown', 'refused') and not failed(row)
     raw = final['raw'] if answered else ''
     refused = is_refusal(raw)
     gold = {norm(article) for article in item.get('article_ids', [])}
@@ -73,8 +72,7 @@ def score_item(item, row):
     if kind == 'reasoning':
         return {'conditional': True, 'withheld': answered and refused, 'answer': raw}
     if kind == 'out_of_scope':
-        usable = answered and final['verdict'] in ('shown', 'refused')
-        outcome = oos_verdict(raw, item.get('refer_lsa')) if usable else '미응답'
+        outcome = oos_verdict(raw, item.get('refer_lsa')) if answered else '미응답'
         return {'correct': outcome in ('거절', '안내'), 'outcome': outcome}
     return {
         'asked': initial['verdict'] == 'clarify',
