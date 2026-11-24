@@ -351,11 +351,19 @@ def test_no_decree_passes_prompt_unchanged(rr):
 def test_decree_rerank_error_not_hidden(rr, tmp_path):
     log = tmp_path / 'req.jsonl'
     rr.setenv('LAWBOT_REQUEST_LOG', str(log))
-    rr.setattr(RR, 'ERROR', RuntimeError('리랭커 고장'))
-    with pytest.raises(service.AskError, match='리랭커 고장') as e:
+    cause = RuntimeError('리랭커 고장')
+    rr.setattr(RR, 'ERROR', cause)
+    with pytest.raises(service.AskError, match='rerank: RuntimeError') as e:
         ask(make(), '해고')
-    assert (e.value.kind, e.value.stage) == ('rerank', 'rerank') and isinstance(e.value.__cause__, RuntimeError)
-    assert json.loads(log.read_text())['error_type'] == 'rerank'
+    assert (e.value.kind, e.value.stage) == ('rerank', 'rerank') and e.value.__cause__ is cause
+    row = json.loads(log.read_text())
+    assert row['error_type'] == 'rerank'
+    assert row['failure'] == {
+        'stage': 'rerank',
+        'request_id': row['request_id'],
+        'exception': 'RuntimeError',
+        'status_code': None,
+    }
 
 
 # ---- 5. 설정 ----
@@ -451,7 +459,7 @@ def test_concise_and_cards_with_decree():
     )  # 인용 순서
     assert '⚠' not in out
     bad = raw.replace('근로기준법 제2조\n', '근로기준법 시행령 제9조\n')
-    assert '⚠ 검색된 조문에서 확인되지 않은 인용: 제9조' in answer_format.concise(bad, hits)
+    assert '근로기준법 시행령 제9조⚠확인되지 않은 인용' in answer_format.concise(bad, hits)
     used, unknown, no = answer_format.answer_citations(raw, hits)
     assert used == [dec[0], law[0]] and unknown == [] and not no
     shown, folded = web.sources_data(hits, used, no)['groups']

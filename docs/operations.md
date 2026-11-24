@@ -599,3 +599,23 @@ uv run pyright             # 타입 검사 (웹앱 런타임·모델 서버·mon
 - 실행 구성(웹앱·모델 서버 커밋, 모델 `revision`, 생성 서버 mlx-lm 버전, 조문 `dataset_version`·sha256, system sha256, temperature·max_tokens, 검색 설정, 서버가 보고한 동시 생성 상한. 비밀값·모델 서버 주소·포트 제외)을 시작 전·후에 읽어 `results/e2e_live/<시각>.json`에 남깁니다. 둘이 다르면 결과는 무효입니다. 결과는 `docs/evals/`에 옮겨 적고 JSON은 지웁니다.
 
 GitHub Actions(`.github/workflows/ci.yml`)가 `main` 푸시와 모든 pull request에서 macOS(Apple Silicon) 러너로 `uv sync --locked`, 문법 검사(`compileall`), 린트·포맷 검사(`ruff check`·`ruff format --check`), 타입 검사(`pyright`), Chromium 설치, `uv run pytest`를 실행합니다. 비밀정보는 쓰지 않으며, `-m models` 테스트와 평가 스크립트는 CI에서 실행하지 않습니다. 결과는 PR의 체크와 Actions 로그, `pytest-report` 아티팩트(e2e_stub가 실패하면 `results/e2e_stub/` 포함)에서 볼 수 있습니다.
+
+### M5 A/A′ 평가
+
+`run`은 공유 추론 서비스를 사용합니다. 질문 수·운영 영향에 대한 **별도 승인 후** 개발 트리에서 실행합니다. 고정 val 262문항을 추론 → 사실 부족 → 범위 밖 → 일반 표본 순서로 한 번에 하나씩 처리합니다. 명령의 출력 폴더 부모는 미리 준비합니다.
+
+```bash
+uv run lawbot-eval-m5 run --condition A --output results/m5-a --stop 06:00:00
+uv run lawbot-eval-m5 run --condition Aprime --output results/m5-aprime --stop 06:00:00
+# 중단된 같은 조건을 이어서 실행할 때 위 명령에 --resume 추가
+uv run lawbot-eval-m5 score results/m5-aprime
+uv run lawbot-eval-m5 compare results/m5-a results/m5-aprime
+```
+
+- 06:00–07:00 KST에는 시작하지 않습니다. 기본 06:00:00, 지정한 `--stop`, 또는 SIGINT에 도달하면 실행 중인 추론만 기다리고 다음 추론은 보내지 않습니다. 검색·writer 실패는 중단합니다. 판정 호출 오류 뒤 정상 생성된 답은 채점하되 판정 호출 오류가 3회 연속이면 중단합니다.
+- 시작 전에 조문 캐시의 모델 revision·문서 해시·입력 한도가 일치해야 합니다. 평가에서는 유효성 확인용 임베딩이나 인덱스 재생성을 하지 않습니다.
+- `run.json`에 실행 전후 구성과 무효 구간, `answers.jsonl`에 문항별 모델 입출력·화면 판정과 표시 글, `steps.jsonl`에 각 추론 송신 경계·종료, `requests.jsonl`에 원문 없는 요청 로그를 기록합니다. 오류 진단은 단계·요청 ID·예외 타입·상태 코드만 남깁니다.
+- `--resume`은 시작 구성이 같을 때만 허용합니다. 강제 종료 또는 종료 구성 미확인 시 그 실행 구간은 무효이며, 완료 기록이나 송신 경계 기록이 있는 문항은 다시 보내지 않습니다.
+- A′의 사실 부족 문항은 미리 작성한 가상 답으로 재개합니다. 나머지 세트에서 되물으면 주 채점에서는 실패이며, 동일 조문으로 만든 별도 writer 답변은 진단에만 씁니다.
+- `score`·`compare`는 네트워크 없이 동작합니다. `score`는 무효 기록을 제외하고 그 건수를 별도로 표시합니다. `compare`는 같은 구성으로 고정 세트 전체의 유효 기록을 갖춘 A와 A′만 비교하며, 양쪽 검색에서 모두 놓친 일반 문항은 `total` 짝 비교 분모에서 제외합니다.
+- `missing_citation`으로 답변 대신 안내만 표시된 문항은 미응답으로 채점하고, 검색 적중 집계는 유지합니다.

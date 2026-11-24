@@ -104,16 +104,17 @@ def test_failure_retains_safe_diagnostics(monkeypatch, tmp_path, capsys, stage):
     monkeypatch.setattr(service, 'load_app', load_app)
     assert ev.main() == 1
     diagnostics = (output / 'failure.txt').read_text(encoding='utf-8')
-    assert diagnostics == capsys.readouterr().err
-    assert stage in diagnostics and 'Traceback (most recent call last)' in diagnostics
+    captured = capsys.readouterr()
+    assert diagnostics == captured.err
+    fields = json.loads(diagnostics)
+    assert fields == {
+        'stage': stage,
+        'request_id': None,
+        'exception': 'HTTPStatusError' if stage == '실행 전 구성 확인' else 'OSError',
+        'status_code': 503 if stage == '실행 전 구성 확인' else None,
+    }
     assert url not in diagnostics and '12345' not in diagnostics and token not in diagnostics
-    if stage == '실행 전 구성 확인':
-        assert '503' in diagnostics and '/v1/models' in diagnostics
-        assert not (output / 'before.json').exists()
-    else:
-        assert 'OSError: 조문 CSV 해시 불일치' in diagnostics
-        assert 'RuntimeError: 웹앱 구성 검증 실패' in diagnostics
-        assert (output / 'after.json').is_file()
+    assert (output / 'after.json').is_file() == (stage == '웹앱 초기화')
 
 
 @pytest.mark.parametrize('external', [False, True])

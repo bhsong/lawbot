@@ -15,11 +15,14 @@ FIRST = re.compile(r'^\[1\] (.+?)\(', re.M)  # build_prompt의 첫 조문 '[1] �
 def answer_chunks(prompt):
     m = FIRST.search(prompt)
     cite = m.group(1) if m else '근로기준법 제26조'
+    conclusion = '답변입니다.'
     if '합성 근거 오류 사례' in prompt:
-        cite = '근로기준법 제99999조'
+        cite += '\n사회복지사업법 제2조제1호'
     elif '합성 정의 인용 사례' in prompt:
         cite = '근로기준법 제2조 제1항 제6호'
-    return ['【결론】', '가짜 모델 ', '답변입니다.', '\n【근거 조문】\n', cite]
+    elif '합성 결론 오류 사례' in prompt:
+        conclusion += ' 소득세법 제99999조 제2항에 따릅니다.'
+    return ['【결론】', '가짜 모델 ', conclusion, '\n【근거 조문】\n', cite]
 
 
 ROUTES = (

@@ -390,12 +390,27 @@ def test_unverified_draft_is_replaced_at_completion(stack, ui):
     answer = e2e.answer(ui)
     expect(answer.get_by_text('답변 초안', exact=True)).to_be_visible()
     e2e.wait_done(ui)
-    expect(answer.get_by_role('status')).to_contain_text('근거')
-    expect(answer).not_to_contain_text(FAKE_ANSWER)
-    expect(answer.get_by_role('button', name='답변 복사')).to_have_count(0)
-    expect(answer.get_by_role('button', name='좋아요')).to_have_count(0)
-    expect(e2e.sources(ui).get_by_text('✅ 답변에서 인용한 조문')).to_have_count(0)
-    assert new_log_rows(stack, before)[0]['answer_verdict'] == 'invalid_citation'
+    expect(answer).to_contain_text(FAKE_ANSWER)
+    expect(answer).to_contain_text('사회복지사업법 제2조제1호⚠확인되지 않은 인용')
+    expect(answer.get_by_role('button', name='답변 복사')).to_be_visible()
+    sources = e2e.sources(ui)
+    expect(sources.get_by_text('✅ 답변에서 인용한 조문')).to_be_visible()
+    expect(sources.get_by_test_id('source-card').filter(has_text='사회복지사업법')).to_have_count(0)
+    assert new_log_rows(stack, before)[0]['answer_verdict'] == 'shown'
+
+
+def test_unverified_conclusion_is_marked_only_at_completion(stack, ui):
+    stack.ensure('stream')
+    before = len(e2e.request_log(stack.request_log))
+    e2e.ask(ui, '합성 결론 오류 사례')
+    answer = e2e.answer(ui)
+    expect(answer.get_by_text('답변 초안', exact=True)).to_be_visible()
+    e2e.wait_done(ui)
+    expect(answer).to_contain_text('소득세법 제99999조 제2항⚠확인되지 않은 인용에 따릅니다.')
+    expect(answer).to_contain_text('근거:')
+    expect(e2e.sources(ui).get_by_test_id('source-card').filter(has_text='제99999조')).to_have_count(0)
+    row = new_log_rows(stack, before)[0]
+    assert row['answer_verdict'] == 'shown' and row['concl_cite_nonexistent'] == 1
 
 
 def test_sources_and_stats_shown(stack, ui):

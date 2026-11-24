@@ -18,6 +18,21 @@ class Hit(TypedDict):
     definition_item: NotRequired[str]  # Item number for a model-only definition excerpt.
 
 
+class Clarification(TypedDict):
+    ask: bool
+    missing: list[str]
+    question: str
+
+
+class ClarifyAttempt(TypedDict):
+    messages: list[dict[str, str]]
+    raw: str | None
+    parsed: Clarification | None
+    retry: bool
+    finish: str | None
+    error: str | None
+
+
 class Timing(TypedDict, total=False):
     """service.ask의 측정값 st (초·토큰·판정). 요청 로그·화면 측정 줄·피드백 기록이 읽는다"""
 
@@ -48,3 +63,8 @@ class Timing(TypedDict, total=False):
     call_counts: dict[str, int]
     _calculation: dict[str, Any]
     calculation_metrics: dict
+    clarify_metrics: dict[str, Any]
+    _clarify_attempts: list[ClarifyAttempt]
+    _writer_messages: list[dict[str, str]]
+    _provided_hits: list[Hit]
+    failure: dict[str, Any]

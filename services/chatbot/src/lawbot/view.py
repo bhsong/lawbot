@@ -20,7 +20,6 @@ EMPTY = '답변을 생성하지 못했습니다. 다시 질문해 주세요.'
 WRITING = '⏳ 답변을 쓰는 중…'  # '⏳'로 시작하는 문구는 첫 글자 측정에서 제외 (화면 지연 측정 기준)
 ANSWER_NOTICES = {
     'missing_citation': '답변에 인용한 근거 조문이 없어 답변을 확정하지 못했습니다. 검색된 조문을 참고해 주세요.',
-    'invalid_citation': '답변의 근거 조문을 검색 결과에서 확인하지 못했습니다. 검색된 조문을 참고해 주세요.',
     'truncated': '답변이 최대 길이에서 잘렸습니다. 질문을 좁혀 다시 물어봐 주세요.',
     'calculation_mismatch': '답변의 숫자가 계산 결과와 달라 설명을 보류했습니다. 계산 카드를 확인해 주세요.',
     'calculation_missing': '답변에서 계산 결과의 숫자를 확인하지 못했습니다. 계산 카드를 확인해 주세요.',
@@ -116,7 +115,7 @@ def error_message(kind, cause, spec):
     """ask 오류 종류(요청 로그 error_type) → 화면 안내. 설정 오류(config 등 안내가 없는 종류)는 None"""
     name = type(cause).__name__
     if kind == 'model_server_timeout':
-        return f'모델 서버 응답이 없습니다 ({cause}). 잠시 뒤 다시 질문하세요.'
+        return f'모델 서버 응답이 없습니다 ({name}). 잠시 뒤 다시 질문하세요.'
     if kind == 'model_server_busy':
         return '모델 서버가 바쁩니다 (대기 중인 질문이 많음). 잠시 뒤 다시 질문하세요.'
     if kind == 'model_server':  # Embedding/rerank or generation connection, authentication, or readiness failure.

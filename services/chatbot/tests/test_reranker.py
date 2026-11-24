@@ -241,12 +241,13 @@ def test_enabled_refuses_before_loading(env, tmp_path, model_server):
 
 
 def test_reranker_failure_is_not_hidden(env, tmp_path, capsys):
-    # 리랭커 오류를 임베딩 순위로 몰래 되돌리지 않고 안내 문구로 알린다. 원래 예외는 서버 로그에. 답변 생성도 하지 않음
+    # Fail instead of silently using embedding rank; do not log the server's message.
     a = v4_app(env, tmp_path, enabled=True)
     FakeReranker.fail = RuntimeError('리랭커 점수가 올바르지 않습니다')
     r = run(a, '질문')
     assert r.error.startswith('조문 순위를 매기지 못했습니다') and r.kind == 'rerank'
-    assert '점수가 올바르지' in capsys.readouterr().out
+    captured = capsys.readouterr()
+    assert 'RuntimeError' in captured.out and '점수가 올바르지' not in captured.out + captured.err
     assert FakeLLM.created == 0
 
 

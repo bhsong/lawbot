@@ -26,7 +26,7 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from lawbot import audit_store, envfile, feedback, security, settings, view
 from lawbot import auth as auth_logic
-from lawbot.answer_format import answer_citations, concise
+from lawbot.answer_format import calculator_evidence, concise, review_answer
 from lawbot.calc_gate import is_calculation_question
 from lawbot.decree import is_decree
 from lawbot.hits import Timing
@@ -154,7 +154,7 @@ def sources_data(hits, cited=None, refused=False):
     }
 
 
-def answer_verdict(raw, st: Timing, used, unknown, refused, *, calculated):
+def answer_verdict(raw, st: Timing, used, refused, *, calculated):
     """Decide whether to show the generated text using the request's existing checks."""
     if st.get('finish') == 'length':
         return 'truncated'
@@ -167,11 +167,20 @@ def answer_verdict(raw, st: Timing, used, unknown, refused, *, calculated):
     if calculated:
         # The prompt also includes the calculator's separately verified references.
         return 'shown'
-    if unknown:
-        return 'invalid_citation'
     if not used:
         return 'missing_citation'
     return 'shown'
+
+
+def answer_display(raw, hits, st: Timing, *, calculated, review=None):
+    """Use one completed-answer review for the text, notice and cited cards."""
+    if review is None:
+        review = review_answer(raw, hits, verified=calculator_evidence(st.get('_calculation', {})))
+    used = review.used()
+    verdict = answer_verdict(raw, st, used, review.refused, calculated=calculated)
+    notice = view.ANSWER_NOTICES.get(verdict)
+    text = '' if notice else (view.EMPTY if verdict == 'empty' else review.render())
+    return verdict, notice, text, used, review.refused
 
 
 def chat_events(app, question, remember=None):
@@ -220,10 +229,8 @@ def chat_events(app, question, remember=None):
                 out += changed('stats', {'text': view.fmt_stats(spec.label, stage, st)})
                 yield from out or [(TICK, None)]
                 continue
-            used, unknown, refused = answer_citations(raw, hits)
-            verdict = st['answer_verdict'] = answer_verdict(raw, st, used, unknown, refused, calculated=calculated)
-            notice = view.ANSWER_NOTICES.get(verdict)
-            text = '' if notice else (view.EMPTY if verdict == 'empty' else concise(raw, hits, done=True))
+            verdict, notice, text, used, refused = answer_display(raw, hits, st, calculated=calculated)
+            st['answer_verdict'] = verdict
             yield 'sources', sources_data(hits) if notice else sources_data(hits, used, refused)
             yield from changed('stats', {'text': view.fmt_stats(spec.label, stage, st)})
             tid = None
@@ -242,8 +249,10 @@ def chat_events(app, question, remember=None):
             sent_done = True
     except AskError as err:  # 유형(kind)은 요청 로그의 error_type과 같음. 원래 예외는 __cause__
         msg = view.error_message(err.kind, err.__cause__, spec)
-        # 원래 예외와 traceback은 서버 로그에 남긴다 (화면에는 안내 문구만, 설정 오류는 자세한 값도 숨김)
-        log.error(f'질문 처리 실패 ({err.kind}, {err.stage})', exc_info=err.__cause__ or err)
+        if outcomes:
+            log.error('질문 처리 실패 %s', outcomes[-1][0].get('failure'))
+        else:
+            log.error('질문 처리 실패: %s', err.stage)
         yield 'error', {'kind': err.kind, 'message': CONFIG_ERROR if msg is None else msg}
     finally:
         if outcomes:

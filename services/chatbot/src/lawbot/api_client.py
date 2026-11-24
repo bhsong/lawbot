@@ -3,18 +3,18 @@
 # 프록시 환경 변수를 쓰지 않는다 (trust_env=False): 질문이 맥 밖(프록시)으로 나가지 않게 127.0.0.1에 직접 접속
 import base64
 import time
-from contextvars import ContextVar
 from typing import Any, Literal
 
 import httpx
 import numpy as np
 from pydantic import ValidationError
 
+from lawbot.inference import REQUEST_ID as REQUEST_ID
+from lawbot.inference import observe_inference
 from lawbot_common import api
 
+_INFERENCE_PATHS = {api.EMBEDDINGS_PATH: 'embedding', api.RERANK_PATH: 'rerank'}
 CONNECT_TIMEOUT = 5.0
-# 지금 처리 중인 질문의 요청 id (service.ask가 넣음). 모델 서버로 가는 요청마다 X-Request-Id 헤더로 보낸다
-REQUEST_ID: ContextVar[str | None] = ContextVar('lawbot_request_id', default=None)
 
 
 def request_headers():
@@ -89,6 +89,13 @@ class ModelServerClient:
 
     def _call(self, method, path, body=None, timeout=None):
         timeout = timeout or TIMEOUT
+        stage = _INFERENCE_PATHS.get(path) if method == 'POST' else None
+        if stage is not None:
+            with observe_inference(stage):
+                return self._request(method, path, body, timeout)
+        return self._request(method, path, body, timeout)
+
+    def _request(self, method, path, body, timeout):
         try:
             r = self.http.request(method, path, json=body, timeout=timeout, headers=request_headers())
         except httpx.ConnectTimeout:

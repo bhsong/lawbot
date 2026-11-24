@@ -143,3 +143,34 @@ def test_load_app_passes_cache(env, tmp_path):
     assert a.retriever.args[1]['cache'].folder == tmp_path
     env.setenv('LAWBOT_EMBED_CACHE', '0')
     assert 'cache' not in service.load_app().retriever.args[1]
+
+
+@pytest.mark.parametrize('cache_state', ['missing', 'wrong_revision', 'corrupt', 'compatible'])
+def test_evaluation_cache_never_runs_document_inference(tmp_path, cache_state):
+    writer = embed_cache.EmbedCache(tmp_path, model_revision='r1')
+    if cache_state != 'missing':
+        vectors = writer.encode(Enc(), DOCS, 2304)
+    if cache_state == 'corrupt':
+        next(tmp_path.glob('*.npz')).write_bytes(b'broken')
+    reader = embed_cache.EmbedCache(
+        tmp_path, model_revision='r2' if cache_state == 'wrong_revision' else 'r1', read_only=True
+    )
+    encoder = Enc()
+    if cache_state == 'compatible':
+        assert np.array_equal(reader.encode(encoder, DOCS, 2304), vectors)
+    else:
+        with pytest.raises(embed_cache.EmbeddingCacheUnavailable):
+            reader.encode(encoder, DOCS, 2304)
+    assert encoder.calls == []
+
+
+def test_evaluation_missing_decree_cache_does_not_probe_law_cache(tmp_path):
+    from lawbot.paths import V4_DECREE_ARTICLES
+
+    seeded = embed_cache.EmbedCache(tmp_path, model_revision='rev')
+    retriever_mod.Retriever(Enc(), V4_DECREE_ARTICLES, 2304, cache=seeded)
+    encoder = Enc()
+    read_only = embed_cache.EmbedCache(tmp_path, model_revision='rev', read_only=True)
+    with pytest.raises(embed_cache.EmbeddingCacheUnavailable):
+        retriever_mod.Retriever(encoder, V4_DECREE_ARTICLES, 2304, decree_max_seq=3072, cache=read_only)
+    assert encoder.calls == []

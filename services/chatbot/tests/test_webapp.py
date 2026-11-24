@@ -231,7 +231,7 @@ def test_concise_refusal_and_fallbacks():
     assert concise(refusal, H56) == '제공된 조문으로는 확인할 수 없습니다.'
     assert concise('형식 없는 답변', H56) == '형식 없는 답변'  # 형식을 벗어난 답은 숨기지 않음
     outside = FULL.replace('제56조(연장·야간 및 휴일 근로) 제1항', '제56조, 제109조(벌칙)')
-    assert concise(outside, H56).endswith('⚠ 검색된 조문에서 확인되지 않은 인용: 제109조')
+    assert concise(outside, H56).endswith('제109조⚠확인되지 않은 인용')
     no_cite = '【결론】\n가산해야 합니다.\n\n【설명】\n- 설명'
     assert '⚠ 인용 조문 없음' in concise(no_cite, H56)
 
@@ -546,8 +546,8 @@ def test_sources_for_refusal(v4_files):
     ]
 
 
-@pytest.mark.parametrize('cites', ['', '근로기준법 제26조, 근로기준법 제109조', '최저임금법 제26조'])
-def test_unconfirmed_answer_is_withheld(v4_files, cites):
+@pytest.mark.parametrize('cites', ['', '최저임금법 제26조'])
+def test_answer_without_verified_citations_is_withheld(v4_files, cites):
     raw = f'【결론】\n예고해야 합니다.\n\n【근거 조문】\n{cites}'
     remembered = []
     r = run(v4_chat(v4_files, raw), '해고?', remember=remembered.append)
@@ -555,6 +555,17 @@ def test_unconfirmed_answer_is_withheld(v4_files, cites):
     assert r.text == '' and '근거' in r.done['notice'] and r.done['turn_id'] is None
     assert groups({'groups': r.sources}) == [(None, True, ['제26조', '제27조', '제28조'])]
     assert remembered == []
+
+
+def test_answer_with_mixed_citations_keeps_verified_sources_and_feedback(v4_files):
+    raw = '【결론】\n예고해야 합니다.\n\n【근거 조문】\n근로기준법 제26조, 근로기준법 제109조'
+    remembered = []
+    r = run(v4_chat(v4_files, raw), '해고?', remember=remembered.append)
+    assert 'notice' not in r.done
+    assert '근거: 근로기준법 제26조(해고의 예고)' in r.text
+    assert '근로기준법 제109조⚠확인되지 않은 인용' in r.text
+    assert groups({'groups': r.sources})[0] == (view.CITED_LABEL, True, ['제26조'])
+    assert len(remembered) == 1
 
 
 def test_status_steps(env):

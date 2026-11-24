@@ -10,6 +10,7 @@ import os
 import tempfile
 from pathlib import Path
 from typing import TypedDict
+from zipfile import BadZipFile
 
 import numpy as np
 
@@ -50,15 +51,22 @@ def embedding_metadata(model, max_seq, texts, vectors, revision) -> EmbeddingMet
     )
 
 
+class EmbeddingCacheUnavailable(RuntimeError):
+    """The requested index is not available for inference-free initialization."""
+
+
 class EmbedCache:
-    def __init__(self, folder=CACHE_DIR, *, model_revision=None):
+    def __init__(self, folder=CACHE_DIR, *, model_revision=None, read_only=False):
         self.folder = Path(folder)
         self.model_revision = model_revision
+        self.read_only = read_only
 
     def encode(self, encoder, texts, max_seq):
         """encoder.encode(texts, 'document', max_seq)와 같은 float32 배열 (캐시가 맞으면 확인용 1개만 임베딩)"""
         texts = list(texts)
         path = self.folder / f'{cache_key(encoder.model, max_seq, texts)}.npz'
+        if self.read_only:
+            return self._verified_vectors(path, encoder.model, max_seq, texts)
         cached = self._read(path, len(texts))
         if cached is not None:
             vectors, probe = cached
@@ -73,6 +81,26 @@ class EmbedCache:
         probe = np.asarray(encoder.encode(texts[:1], 'document', max_seq), dtype=np.float32)
         meta = embedding_metadata(encoder.model, max_seq, texts, vectors, self.model_revision)
         self._write(path, vectors, probe, meta)
+        return vectors
+
+    def _verified_vectors(self, path, model, max_seq, texts):
+        """Use model revision and document metadata; never probe or rewrite the index."""
+        try:
+            with np.load(path, allow_pickle=False) as cached:
+                vectors = cached['vectors']
+                meta = json.loads(cached['meta'].item())
+        except OSError, ValueError, TypeError, KeyError, EOFError, BadZipFile:
+            raise EmbeddingCacheUnavailable('No readable cached index') from None
+        if (
+            not self.model_revision
+            or vectors.dtype != np.float32
+            or vectors.ndim != 2
+            or vectors.shape[0] != len(texts)
+            or vectors.shape[1] == 0
+            or meta != embedding_metadata(model, max_seq, texts, vectors, self.model_revision)
+            or not np.isfinite(vectors).all()
+        ):
+            raise EmbeddingCacheUnavailable('Cached index is incompatible')
         return vectors
 
     def _read(self, path, n):
