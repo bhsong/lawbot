@@ -276,6 +276,10 @@ def answer(page):
     return page.get_by_test_id('answer').last
 
 
+def answer_body(page):
+    return answer(page).get_by_test_id('answer-body')
+
+
 def stats(page):
     return page.get_by_test_id('lawbot-stats').last
 

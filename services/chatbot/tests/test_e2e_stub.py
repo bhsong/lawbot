@@ -445,7 +445,8 @@ def test_consult_trace_wire_and_admin_browser(admin_stack, page, tmp_path):
         expect(page.get_by_test_id('consult-retention')).to_have_count(0)
         e2e.ask(page, QUESTION)
         e2e.wait_done(page)
-        original = e2e.answer(page).inner_text()
+        expect(e2e.stats(page)).to_be_visible()
+        original = e2e.answer_body(page).inner_text()
         original_cards = e2e.sources(page).get_by_test_id('source-card').all_inner_texts()
         baseline = _wire(stack, e2e.wait_request_log(page, off_log, 0)['request_id'])
         with connect(db) as conn:
@@ -461,7 +462,8 @@ def test_consult_trace_wire_and_admin_browser(admin_stack, page, tmp_path):
     )
     e2e.ask(page, QUESTION)
     e2e.wait_done(page)
-    assert e2e.answer(page).inner_text() == original
+    expect(e2e.stats(page)).to_be_visible()
+    assert e2e.answer_body(page).inner_text() == original
     assert e2e.sources(page).get_by_test_id('source-card').all_inner_texts() == original_cards
     row = e2e.wait_request_log(page, stack.request_log, start)
     assert row['trace_status'] == 'saved'
@@ -546,14 +548,15 @@ def test_question_streams_answer(stack, ui):
     stack.ensure('stream')  # 토큰 사이 지연: 답이 조각으로 늘어나는지 보이게
     e2e.ask(ui, QUESTION)
     seen = []
+    body = e2e.answer_body(ui)
     deadline = time.monotonic() + e2e.ANSWER_TIMEOUT / 1000
     while not ui.get_by_test_id('lawbot-stats').get_by_text('완료').count():
         assert time.monotonic() < deadline, f'답변이 끝나지 않음 (본 화면: {seen})'
-        text = e2e.answer(ui).inner_text() if ui.get_by_test_id('answer').count() else ''
+        text = body.inner_text() if body.count() else ''
         if text and (not seen or seen[-1] != text):
             seen.append(text)
         ui.wait_for_timeout(50)
-    assert FAKE_ANSWER in e2e.answer(ui).inner_text()
+    assert FAKE_ANSWER in body.inner_text()
     assert any(FAKE_ANSWER not in t and t.strip() for t in seen)  # 끝나기 전 중간 상태가 화면에 보였음
 
 

@@ -65,3 +65,9 @@
 마지막 `LAWBOT_ENV_FILE= uv run --locked pytest -q --tb=short --show-capture=no`는 **2,881개 통과**, 실패·skip 0이었다. `models`, `network`, `e2e_live` 선택 제외 10개는 통과로 세지 않았다. 상담 추적 회귀 25개, 대역 E2E 59개, 웹 인증 통합 6개가 포함된다. Ruff 린트·포맷, `compileall`, Pyright(루트·캘린더·ERP·수집원), ERP·수집원 잠금 파일과 캘린더 스키마 검사도 통과했다. 두 화면의 typecheck·test·build 통과(챗봇 55개, 캘린더 36개).
 
 실제 모델 E2E, 모델 스모크, 품질 평가: **실행 안 함**. [리뷰 반영 계획](../archives/consult-trace-review.md)
+
+## PR #197 CI 회귀
+
+macOS CI에서 켜짐·꺼짐 답변 영역의 검색·리랭킹 측정값 차이로 동등성 검사가 실패했다. 비교를 표시된 답변 본문·조문 카드로 좁히고 측정 줄은 두 실행에서 별도로 표시 여부만 확인한다. 스트리밍의 중간 글 비교에서도 측정 줄을 뺐다.
+
+`LAWBOT_ENV_FILE= uv run --locked pytest -q --tb=short --show-capture=no`: 2,881개 통과, 실패·skip 0, 선택 제외 10개. Ruff 린트·포맷, Pyright(루트·캘린더·ERP·수집원), 챗봇 화면 typecheck·test(55개)·build 통과. 실제 모델 E2E·스모크·품질 평가: **실행 안 함**. [수정 계획](../archives/consult-trace-ci-stable-answer.md)
