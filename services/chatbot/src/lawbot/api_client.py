@@ -9,6 +9,7 @@ import httpx
 import numpy as np
 from pydantic import ValidationError
 
+from lawbot.consult_trace import TraceClient
 from lawbot.inference import REQUEST_ID as REQUEST_ID
 from lawbot.inference import observe_inference
 from lawbot_common import api
@@ -81,7 +82,7 @@ def error_from_body(status, body):
 class ModelServerClient:
     def __init__(self, url, token, http=None):
         self.url = url.rstrip('/')
-        self.http = http or httpx.Client(
+        self.http = http or TraceClient(
             base_url=self.url, headers={'Authorization': f'Bearer {token}'}, timeout=TIMEOUT, trust_env=False
         )
         if http is not None:

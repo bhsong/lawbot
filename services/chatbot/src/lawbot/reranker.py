@@ -3,6 +3,7 @@
 # 점수 내림차순으로 정렬한다 (동점은 임베딩 순위: 하위법령 필터와 같은 rank_order)
 from typing import cast
 
+from lawbot.consult_trace import current
 from lawbot.decree import rank_order
 from lawbot.hits import Hit
 
@@ -34,7 +35,15 @@ class Reranker:
         if not candidates or not all(isinstance(c, dict) and isinstance(c.get('doc'), str) for c in candidates):
             raise ValueError('후보는 doc 문자열을 가진 검색 결과 dict 목록이어야 합니다')
         scores = self.score(question, [c['doc'] for c in candidates])
-        return [
-            cast(Hit, candidates[i] | {'rerank_score': scores[i], 'emb_rank': i + 1})
-            for i in rank_order(scores)[:top_k]
-        ]
+        ranking = rank_order(scores)
+        if (trace := current()) is not None and trace.stages and trace.stages[-1].stage == 'rerank':
+            trace.stages[-1].result['ranked'] = [
+                {
+                    'law': candidates[i]['law'],
+                    'article_id': candidates[i]['article_id'],
+                    'score': scores[i],
+                    'emb_rank': i + 1,
+                }
+                for i in ranking
+            ]
+        return [cast(Hit, candidates[i] | {'rerank_score': scores[i], 'emb_rank': i + 1}) for i in ranking[:top_k]]

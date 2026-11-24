@@ -73,6 +73,7 @@ def ui(calculation_stack, page, request):
 
 
 def ask_with_events(page, stack, question):
+    before = len(e2e.request_log(stack.request_log))
     read_body = e2e.capture_response_body(page, '/api/chat')
     with page.expect_response(f'{stack.url}/api/chat', timeout=e2e.ANSWER_TIMEOUT) as response:
         e2e.ask(page, question)
@@ -80,6 +81,7 @@ def ask_with_events(page, stack, question):
     events = list(dict.fromkeys(re.findall(r'^event: (\S+)', read_body(), re.MULTILINE)))
     assert 'done' in events, events
     e2e.wait_done(page)
+    e2e.wait_request_log(page, stack.request_log, before)
     return events
 
 

@@ -68,3 +68,5 @@ class Timing(TypedDict, total=False):
     _writer_messages: list[dict[str, str]]
     _provided_hits: list[Hit]
     failure: dict[str, Any]
+    trace_status: str
+    trace_error: str

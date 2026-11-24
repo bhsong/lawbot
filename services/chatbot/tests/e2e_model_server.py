@@ -1,6 +1,7 @@
 # Test-only HTTP servers: protected generation fake and the real embedding/rerank app with fake models.
 # Generation never imports the model-server package, MLX, or model loaders.
 import asyncio
+import base64
 import hmac
 import json
 import os
@@ -10,6 +11,55 @@ from pathlib import Path
 
 STREAM_S, SLOW_S = 0.4, 5.0
 FIRST = re.compile(r'^\[1\] (.+?)\(', re.M)  # build_prompt의 첫 조문 '[1] 근로기준법 제26조(해고의 예고)'
+
+
+class WireCapture:
+    """Record bytes at the receiving test ASGI app, independently of the client transport."""
+
+    def __init__(self, app, path):
+        self.app, self.path = app, Path(path)
+
+    async def __call__(self, scope, receive, send):
+        if scope['type'] != 'http':
+            return await self.app(scope, receive, send)
+        request_id = dict(scope['headers']).get(b'x-request-id')
+        request, chunks = bytearray(), []
+        status = None
+
+        async def read():
+            message = await receive()
+            if request_id:
+                request.extend(message.get('body', b''))
+            return message
+
+        async def write(message):
+            nonlocal status
+            await send(message)
+            if message['type'] == 'http.response.start':
+                status = message['status']
+            elif request_id and message['type'] == 'http.response.body' and message.get('body'):
+                chunks.append(base64.b64encode(message['body']).decode('ascii'))
+
+        try:
+            await self.app(scope, read, write)
+        finally:
+            # Keep startup traffic as evidence without persisting the large index bodies in the test fixture.
+            row = {
+                'request_id': request_id.decode() if request_id else None,
+                'path': scope['path'],
+                'method': scope['method'],
+                'status': status,
+                'request': base64.b64encode(request).decode('ascii') if request_id else None,
+                'chunks': chunks if request_id else None,
+            }
+            with self.path.open('a', encoding='utf-8') as out:
+                out.write(json.dumps(row) + '\n')
+
+
+def capture_wire(app):
+    if path := os.environ.get('LAWBOT_TEST_WIRE'):
+        app.add_middleware(WireCapture, path=path)
+    return app
 
 
 def answer_chunks(prompt):
@@ -268,7 +318,7 @@ def run_model_server(port):
     reg.load_fixed()
     app = api.create_app(os.environ['LAWBOT_MODEL_TOKEN'])
     api.set_registry(app, reg)
-    server.build_server(app, port).run()
+    server.build_server(capture_wire(app), port).run()
 
 
 def main():
@@ -285,7 +335,7 @@ def main():
         service,
         port,
     )
-    uvicorn.run(app, host='127.0.0.1', port=port, log_level='warning', access_log=False, lifespan='off')
+    uvicorn.run(capture_wire(app), host='127.0.0.1', port=port, log_level='warning', access_log=False, lifespan='off')
 
 
 if __name__ == '__main__':

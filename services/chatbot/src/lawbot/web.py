@@ -10,7 +10,10 @@ import os
 import secrets
 import threading
 import time
+import uuid
 from collections import OrderedDict
+from contextlib import nullcontext
+from dataclasses import replace
 from functools import partial
 from pathlib import Path
 from typing import Annotated
@@ -24,12 +27,13 @@ from fastapi.staticfiles import StaticFiles
 from starlette.datastructures import MutableHeaders
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
-from lawbot import audit_store, envfile, feedback, security, settings, view
+from lawbot import audit_store, consult_store, consult_trace, envfile, feedback, security, settings, view
 from lawbot import auth as auth_logic
 from lawbot.answer_format import calculator_evidence, concise, review_answer
 from lawbot.calc_gate import is_calculation_question
 from lawbot.decree import is_decree
 from lawbot.hits import Timing
+from lawbot.inference import REQUEST_ID
 from lawbot.paths import ROOT
 from lawbot.service import AskError, ask, load_app, log_request
 from lawbot_common.edge import via_cloudflare
@@ -188,13 +192,13 @@ def chat_events(app, question, remember=None):
     이벤트: status → sources(모두 펼침) → answer·stats… → sources(인용/검색만 구분) → stats → done, 실패하면 error
     생성 단계에서 화면 글이 그대로면(간결형의 근거·설명 토큰) TICK을 낸다: 받는 쪽이 토큰마다 연결 끊김을 확인하게"""
     outcomes: list[tuple[Timing, str, str | None]] = []
+    trace = consult_trace.ACTIVE.get()
     sent_done = False
 
     def report(st, status, error):
         outcomes.append((st, status, error))
 
     spec = app.profile.model
-    yield 'status', {'text': view.searching_stats(app)}
     sent_sources, last = False, {}
     calculated = False
 
@@ -204,13 +208,17 @@ def chat_events(app, question, remember=None):
         last[event] = data
         return [(event, data)]
 
+    pipeline = None
     try:
-        for stage, hits, raw, st in ask(
+        yield 'status', {'text': view.searching_stats(app)}
+        pipeline = ask(
             app,
             question,
             report=report,
+            request_id=trace.request_id if trace is not None else None,
             calculation_candidate=is_calculation_question(question),
-        ):
+        )
+        for stage, hits, raw, st in pipeline:
             if stage == 'calculation':
                 calculation = st['_calculation']
                 calculated = calculation['status'] == 'calculated'
@@ -229,7 +237,10 @@ def chat_events(app, question, remember=None):
                 out += changed('stats', {'text': view.fmt_stats(spec.label, stage, st)})
                 yield from out or [(TICK, None)]
                 continue
-            verdict, notice, text, used, refused = answer_display(raw, hits, st, calculated=calculated)
+            with trace.step('display') if trace is not None else nullcontext() as captured:
+                verdict, notice, text, used, refused = answer_display(raw, hits, st, calculated=calculated)
+                if captured is not None:
+                    captured.update(verdict=verdict, text=text, notice=notice, cited=used, refused=refused)
             st['answer_verdict'] = verdict
             yield 'sources', sources_data(hits) if notice else sources_data(hits, used, refused)
             yield from changed('stats', {'text': view.fmt_stats(spec.label, stage, st)})
@@ -247,19 +258,36 @@ def chat_events(app, question, remember=None):
                 final['notice'] = notice
             yield 'done', final
             sent_done = True
+            if trace is not None:
+                trace.answer_shown = notice or text
+                trace.answer_verdict = verdict
+                trace.feedback_turn_id = tid
+                if captured is not None:
+                    captured['feedback_turn_id'] = tid
     except AskError as err:  # 유형(kind)은 요청 로그의 error_type과 같음. 원래 예외는 __cause__
         msg = view.error_message(err.kind, err.__cause__, spec)
         if outcomes:
             log.error('질문 처리 실패 %s', outcomes[-1][0].get('failure'))
         else:
             log.error('질문 처리 실패: %s', err.stage)
-        yield 'error', {'kind': err.kind, 'message': CONFIG_ERROR if msg is None else msg}
+        message = CONFIG_ERROR if msg is None else msg
+        if trace is not None:
+            with trace.step('display', error_type=err.kind, notice=message):
+                pass
+        yield 'error', {'kind': err.kind, 'message': message}
+        if trace is not None:
+            trace.answer_shown = message
     finally:
+        if pipeline is not None and (close := getattr(pipeline, 'close', None)) is not None:
+            close()
         if outcomes:
             timing, status, error = outcomes[-1]
             if status == 'ok' and not sent_done:
                 status = 'cancelled'
-            log_request(app, timing, status, error)
+            if trace is None:
+                log_request(app, timing, status, error)
+            else:
+                trace.timing, trace.status, trace.error_type = timing, status, error
 
 
 def _session(request: Request):
@@ -359,12 +387,14 @@ def valid_chat(body):
 
 def config_data(app, fb):
     p = app.profile
+    cfg = getattr(app, 'settings', None)
     return {
         'title': view.page_title(app),
         'intro': view.intro_text(app) + view.DISCLAIMER,
         'notice': view.data_notice(app),
         'examples': view.V5_EXAMPLES if p.name == 'v5' else view.EXAMPLES,
         'sources_title': view.sources_title(app),
+        'consult_trace': bool(cfg is not None and cfg.consult_trace and cfg.db is not None),
         'feedback': {
             'enabled': fb is not None,
             'reasons': [{'value': v, 'label': k} for k, v in feedback.REASONS.items()] if fb is not None else [],
@@ -395,7 +425,7 @@ def create_app(
     auth: tuple[str, str],
     concurrency: int = 1,
     fb=None,
-    dist=DIST,
+    dist: Path | None = DIST,
     *,
     admin: auth_logic.AdminCredentials | None = None,
     db: Path | None = None,
@@ -406,6 +436,15 @@ def create_app(
     """app: service.load_app() 결과, auth: (사용자, 비밀번호), fb: feedback.Feedback 또는 None, dist: SPA 빌드 폴더"""
     if admin is not None and db is None:
         raise RuntimeError('관리자 계정을 쓰려면 LAWBOT_DB를 설정하세요.')
+    cfg = getattr(app, 'settings', None)
+    trace_db = cfg.db if cfg is not None and cfg.consult_trace else None
+    redactor = (
+        partial(consult_store.Redactor, cfg.model_token, cfg.llm_key, cfg.model_server, cfg.llm_url, cfg.port)
+        if cfg is not None and trace_db is not None
+        else None
+    )
+    if trace_db is None:
+        log.info('상담 기록 저장 꺼짐 (LAWBOT_DB 미설정 또는 LAWBOT_CONSULT_TRACE=0)')
     api = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
     api.add_middleware(ApiCacheControl)
     sessions, slots = Sessions(), asyncio.Semaphore(concurrency)
@@ -500,13 +539,27 @@ def create_app(
         body = await read_json(request)
         question = valid_chat(body)
         remember = partial(fb.remember_turn, who[1]) if fb is not None else None
+        trace = None
+        if trace_db is not None:
+            rid = uuid.uuid4().hex[:12]
+            trace = consult_trace.Consultation(
+                rid,
+                question,
+                consult_trace.account_hash(who[0]),
+                who[1],
+                who[2],
+                {'model': app.profile.model.key, 'request_id': rid},
+                app.corpus_release_id,
+            )
         events = chat_events(app, question, remember)
-        return ChatResponse(stream(events))
+        return ChatResponse(stream(events, trace), trace, request.cookies.get(COOKIE) if trace is not None else None)
 
     class ChatResponse(StreamingResponse):
-        def __init__(self, content):
+        def __init__(self, content, trace: consult_trace.Consultation | None, cookie: str | None):
             super().__init__(content, media_type='text/event-stream')
             self.content = content
+            self.trace = trace
+            self.cookie = cookie
 
         async def __call__(self, scope, receive, send):
             nonlocal chat_requests
@@ -532,18 +585,36 @@ def create_app(
                         await self.content.aclose()
                 finally:
                     chat_requests -= 1
+                    if self.trace is not None:
+                        self.trace.end = time.monotonic_ns()
+                        with anyio.CancelScope(shield=True):
+                            await anyio.to_thread.run_sync(finish_trace, self.trace, self.cookie)
 
-    async def stream(events):
-        if slots.locked():
-            yield sse('status', {'text': WAITING})
-        async with slots:
-            try:
-                while (item := await anyio.to_thread.run_sync(next, events, None)) is not None:
-                    if item[0] != TICK:
-                        yield sse(*item)
-            finally:
-                with anyio.CancelScope(shield=True):
-                    await anyio.to_thread.run_sync(events.close)
+    def finish_trace(trace: consult_trace.Consultation, cookie: str | None):
+        assert trace_db is not None and redactor is not None
+        try:
+            consult_store.save(trace_db, trace, redactor(cookie=cookie))
+        except Exception as exc:
+            # Storage failures must not surface after the SSE response is sent.
+            trace.timing['trace_status'] = 'failed'
+            trace.timing['trace_error'] = type(exc).__name__
+        else:
+            trace.timing['trace_status'] = 'saved'
+        log_request(app, trace.timing, trace.status, trace.error_type)
+
+    async def stream(events, trace):
+        # Each worker invocation inherits this scope, including after a generator yield.
+        with consult_trace.ACTIVE.set(trace), REQUEST_ID.set(trace.request_id if trace is not None else None):
+            if slots.locked():
+                yield sse('status', {'text': WAITING})
+            async with slots:
+                try:
+                    while (item := await anyio.to_thread.run_sync(next, events, None)) is not None:
+                        if item[0] != TICK:
+                            yield sse(*item)
+                finally:
+                    with anyio.CancelScope(shield=True):
+                        await anyio.to_thread.run_sync(events.close)
 
     @api.post('/api/feedback', dependencies=[Depends(require_json)])
     async def feedback_(request: Request, who: Who):
@@ -623,7 +694,7 @@ def main(argv=None):
 
         protected = load_protected(cfg.db)
     api = create_app(
-        load_app(cfg),
+        load_app(replace(cfg, port=port)),
         cfg.auth,
         cfg.chat_concurrency,
         cfg.feedback,

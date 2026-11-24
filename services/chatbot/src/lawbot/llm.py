@@ -17,6 +17,7 @@ from lawbot.api_client import (
     error_from_body,
     request_headers,
 )
+from lawbot.consult_trace import call_purpose
 from lawbot.hits import Clarification, ClarifyAttempt, Hit
 from lawbot.inference import failure_fields, observe_inference
 from lawbot.paths import DATA
@@ -161,7 +162,9 @@ class LLM:
             attempt = ClarifyAttempt(messages=messages, raw=None, parsed=None, retry=retry, finish=None, error=None)
             attempts.append(attempt)
             try:
-                result = self._plain_completion(messages, CLARIFY_MAX_TOKENS, 'clarify_retry' if retry else 'clarify')
+                result = self._plain_completion(
+                    messages, CLARIFY_MAX_TOKENS, 'clarify_retry' if retry else 'clarify', 'clarify'
+                )
             except (openai.OpenAIError, httpx.TransportError) as exc:
                 attempt['error'] = type(exc).__name__
                 fields = failure_fields('clarify', exc)
@@ -218,16 +221,18 @@ class LLM:
             parse_selection,
         )
 
-        selection = parse_selection(self._router_completion(SELECT_SYSTEM, question, SELECT_MAX_TOKENS, metrics))
+        selection = parse_selection(
+            self._router_completion(SELECT_SYSTEM, question, SELECT_MAX_TOKENS, metrics, 'router_select')
+        )
         if selection is None or selection in ('lookup', 'unsupported'):
             return compose_route(question, selection)
         labels = self._router_completion(
-            label_system(selection), marked_question(question), label_max_tokens(question), metrics
+            label_system(selection), marked_question(question), label_max_tokens(question), metrics, 'router_label'
         )
         return None if labels is None else compose_route(question, selection, labels)
 
-    def _plain_completion(self, messages, max_tokens: int, stage: str):
-        with observe_inference(stage):
+    def _plain_completion(self, messages, max_tokens: int, stage: str, purpose: str):
+        with call_purpose(purpose), observe_inference(stage):
             return self.client.chat.completions.create(
                 model=self.model,
                 messages=messages,
@@ -238,12 +243,17 @@ class LLM:
                 **({'extra_headers': h} if (h := request_headers()) else {}),
             )
 
-    def _router_completion(self, system: str, user: str, max_tokens: int, metrics: dict[str, int] | None) -> str | None:
+    def _router_completion(
+        self, system: str, user: str, max_tokens: int, metrics: dict[str, int] | None, purpose: str
+    ) -> str | None:
         if metrics is not None:
             metrics['router_calls'] = metrics.get('router_calls', 0) + 1
         try:
             result = self._plain_completion(
-                [{'role': 'system', 'content': system}, {'role': 'user', 'content': user}], max_tokens, 'router'
+                [{'role': 'system', 'content': system}, {'role': 'user', 'content': user}],
+                max_tokens,
+                'router',
+                purpose,
             )
         except openai.APITimeoutError as exc:
             raise RouterTimeout(exc.__cause__) from exc

@@ -40,6 +40,7 @@ class Settings:
     calendar_api_url: str | None = None
     calendar_admin_token: str | None = field(default=None, repr=False)
     corpus: str = 'csv'
+    consult_trace: bool = False
 
 
 MISSING_SERVER = (
@@ -66,6 +67,14 @@ def corpus_mode(env):
     if mode == 'db' and not (env.get('LAWBOT_DB') or '').strip():
         raise ValueError('LAWBOT_CORPUS=db에는 LAWBOT_DB가 필요합니다.')
     return mode
+
+
+def consult_trace_enabled(env):
+    """Enable consultation storage only when a DB is configured."""
+    value = env.get('LAWBOT_CONSULT_TRACE', '').strip() or '1'
+    if value not in ('0', '1'):
+        raise ValueError('LAWBOT_CONSULT_TRACE는 0 또는 1이어야 합니다.')
+    return value == '1' and bool((env.get('LAWBOT_DB') or '').strip())
 
 
 def load(env=None, web=False):
@@ -108,6 +117,8 @@ def load(env=None, web=False):
         take('db', lambda: startup_path(db) if web or corpus == 'db' else db_path(db))
     if web:
         from lawbot import view
+
+        take('consult_trace', lambda: consult_trace_enabled(env))
 
         take('auth', lambda: security.auth(env))
         take('admin', lambda: admin_credentials(env, db_configured=bool(db)))

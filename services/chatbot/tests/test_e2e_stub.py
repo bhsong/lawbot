@@ -1,7 +1,9 @@
 # Browser E2E: the real web app, a protected generation HTTP fake, and fake embedding/rerank models.
 # These tests never load real models and are not evidence of real-model E2E success.
 # 화면 요소는 역할·라벨·테스트 id로 찾는다 (e2e_support). 접속은 127.0.0.1만
+import base64
 import csv
+import hashlib
 import json
 import time
 
@@ -11,7 +13,7 @@ from playwright.sync_api import expect
 
 import e2e_support as e2e
 from admin_test_data import add_feedback, seed_qa
-from conftest import ADMIN_PW, ADMIN_USER
+from conftest import ADMIN_PW, ADMIN_USER, free_port
 from lawbot import manifest
 from lawbot.db import cli
 from lawbot.db.connection import connect
@@ -64,10 +66,6 @@ def ui(stack, page, request):
 def fresh(stack, page, request):
     yield page
     e2e.keep_on_failure(request, 'e2e_stub', stack.logs(), page)
-
-
-def new_log_rows(stack, before):
-    return e2e.request_log(stack.request_log)[before:]
 
 
 def test_generation_server_has_separate_protected_model_contract(stack):
@@ -247,11 +245,12 @@ def test_reasoning_is_not_shown_and_usage_is_logged(stack, ui):
     e2e.wait_done(ui)
     expect(e2e.answer(ui)).to_contain_text(FAKE_ANSWER)
     expect(e2e.answer(ui)).not_to_contain_text('private synthetic reasoning')
-    (row,) = new_log_rows(stack, before)
+    row = e2e.wait_request_log(ui, stack.request_log, before)
     assert row['prompt_tokens'] == 12 and row['gen_tokens'] == 5
 
 
 def test_feedback_button_saves_turn(stack, ui, feedback_db):
+    before = len(e2e.request_log(stack.request_log))
     e2e.ask(ui, QUESTION)
     e2e.wait_done(ui)
     expect(e2e.answer(ui)).to_contain_text(FAKE_ANSWER)
@@ -269,7 +268,12 @@ def test_feedback_button_saves_turn(stack, ui, feedback_db):
     record = json.loads(raw)
     assert origin == 'web' and record['question'] == QUESTION and record['label'] == 'like'
     assert FAKE_ANSWER in record['answer_shown']
-    assert record['request_id'] == e2e.request_log(stack.request_log)[-1]['request_id']
+    rid = e2e.wait_request_log(ui, stack.request_log, before)['request_id']
+    assert record['request_id'] == rid
+    with connect(feedback_db) as conn:
+        assert conn.execute('SELECT feedback_turn_id FROM consults WHERE request_id = ?', (rid,)).fetchone() == (
+            record['turn_id'],
+        )
 
 
 # ---- 로그인 ----
@@ -292,6 +296,7 @@ def admin_stack(tmp_path, page, request, admin_hash):
     s = e2e.Stack(
         tmp_path,
         read_timeout=READ_TIMEOUT_S,
+        capture_wire=True,
         LAWBOT_DB=str(db),
         LAWBOT_ADMIN_USER=ADMIN_USER,
         LAWBOT_ADMIN_PW_HASH=admin_hash,
@@ -367,6 +372,136 @@ def test_admin_reviews_and_promotes_a_like(admin_stack, page, width):
     assert denied.status == 403 and denied.json()['code'] == 'admin_required'
 
 
+def _wire(stack, request_id):
+    rows = {
+        path: [row for row in e2e.request_log(path) if row['request_id'] == request_id]
+        for path in (stack.model_wire, stack.chat_wire)
+    }
+    # Both router completions precede the retrieval sequence; the writer follows it.
+    return rows[stack.chat_wire][:-1] + rows[stack.model_wire] + rows[stack.chat_wire][-1:]
+
+
+def _assert_recorded_wire(db, stack, rid, purposes):
+    with connect(db) as conn:
+        calls = conn.execute(
+            'SELECT purpose, method, path, model_id, model_revision, request_body, status_code, '
+            'response_body, response_chunks, first_byte_at, usage, model_calls.redaction_count FROM model_calls '
+            'JOIN consults ON consults.id = model_calls.consult_id WHERE request_id = ? ORDER BY seq',
+            (rid,),
+        ).fetchall()
+    assert [row[0] for row in calls] == purposes
+    wire = _wire(stack, rid)
+    for call, actual in zip(calls, wire, strict=True):
+        purpose, method, path, model_id, revision, sent, status, body, chunks, first, usage, redactions = call
+        assert (method, path, status) == (actual['method'], actual['path'], actual['status'])
+        assert sent == base64.b64decode(actual['request'])
+        assert model_id == json.loads(sent)['model'] and revision == e2e.STUB_MODEL_REVISION
+        assert first and redactions == 0
+        if purpose == 'writer':
+            received = json.loads(chunks)
+            offsets = [offset for offset, _ in received]
+            assert len(offsets) > 1 and offsets == sorted(offsets) and offsets[0] >= 0
+            assert [piece for _, piece in received] == actual['chunks']
+            assert body is None and json.loads(usage)['total_tokens'] == 17
+        else:
+            assert chunks is None and body == b''.join(base64.b64decode(piece) for piece in actual['chunks'])
+    return [row['request'] for row in wire]
+
+
+def test_consult_trace_wire_and_admin_browser(admin_stack, page, tmp_path):
+    stack, db = admin_stack
+    off_dir = tmp_path / 'disabled'
+    off_dir.mkdir()
+    off_log = off_dir / 'requests.jsonl'
+    port = free_port()
+    off_env = stack.web_env | {'LAWBOT_CONSULT_TRACE': '0', 'LAWBOT_REQUEST_LOG': str(off_log)}
+    off = e2e.start_web(off_dir, port, **off_env)
+    try:
+        e2e.login(page, f'http://127.0.0.1:{port}')
+        expect(e2e.textbox(page)).to_be_visible()
+        expect(page.get_by_test_id('consult-retention')).to_have_count(0)
+        e2e.ask(page, QUESTION)
+        e2e.wait_done(page)
+        original = e2e.answer(page).inner_text()
+        original_cards = e2e.sources(page).get_by_test_id('source-card').all_inner_texts()
+        baseline = _wire(stack, e2e.wait_request_log(page, off_log, 0)['request_id'])
+        with connect(db) as conn:
+            assert conn.execute('SELECT count(*) FROM consults').fetchone() == (0,)
+    finally:
+        off.stop()
+        page.context.clear_cookies()
+
+    start = len(e2e.request_log(stack.request_log))
+    e2e.login(page, stack.url)
+    expect(page.get_by_test_id('consult-retention')).to_have_text(
+        '상담 내용은 디버깅·평가·학습을 위해 기한 없이 보관되며, 관리자에게 삭제를 요청할 수 있습니다.'
+    )
+    e2e.ask(page, QUESTION)
+    e2e.wait_done(page)
+    assert e2e.answer(page).inner_text() == original
+    assert e2e.sources(page).get_by_test_id('source-card').all_inner_texts() == original_cards
+    row = e2e.wait_request_log(page, stack.request_log, start)
+    assert row['trace_status'] == 'saved'
+    wire = _assert_recorded_wire(db, stack, row['request_id'], ['embedding', 'rerank', 'embedding', 'rerank', 'writer'])
+    assert wire == [item['request'] for item in baseline]
+    model_startup_paths = {x['path'] for x in e2e.request_log(stack.model_wire) if x['request_id'] is None}
+    assert {'/health', '/v1/models', '/v1/embeddings'} <= model_startup_paths
+    assert any(x['path'] == '/v1/models' and x['request_id'] is None for x in e2e.request_log(stack.chat_wire))
+    assert QUESTION not in stack.request_log.read_text() and FAKE_ANSWER not in stack.request_log.read_text()
+
+    page.get_by_role('button', name='로그아웃').click()
+    e2e.login(page, stack.url, user=ADMIN_USER, pw=ADMIN_PW)
+    page.get_by_role('radio', name='상담 기록').click()
+    page.get_by_role('list', name='상담 목록').get_by_role('button', name=QUESTION).click()
+    detail = page.get_by_role('region', name='상담 상세')
+    expect(detail.get_by_test_id('consult-shown')).to_contain_text(FAKE_ANSWER)
+    step_list = detail.get_by_role('list', name='처리 단계')
+    assert step_list.get_by_test_id('consult-step').all_inner_texts() == [
+        'search',
+        'rerank',
+        'decree_search',
+        'decree_rerank',
+        'definitions',
+        'writer',
+        'citation',
+        'display',
+    ]
+    writer = detail.get_by_test_id('consult-call').last
+    writer.get_by_text(f'writer · {stack.chat_model} · 200', exact=True).click()
+    expect(writer.get_by_test_id('consult-request-body')).to_contain_text(QUESTION)
+    expect(writer.get_by_test_id('consult-request-body')).to_contain_text('"messages"')
+    expect(writer.get_by_test_id('consult-response-chunk').first).to_contain_text('private synthetic reasoning')
+
+    delete = page.get_by_role('region', name='상담 삭제')
+    delete.get_by_label('사용자 해시').fill(hashlib.sha256(e2e.USER.encode()).hexdigest()[:16])
+    delete.get_by_role('button', name='삭제 건수 미리 보기').click()
+    expect(delete.get_by_role('status')).to_have_text('삭제 대상: 상담 1건 · 단계 8건 · 호출 5건')
+    delete.get_by_role('button', name='확인 후 삭제').click()
+    expect(delete.get_by_test_id('consult-delete-result')).to_have_text(
+        '상담 1건 · 단계 8건 · 호출 5건을 삭제했습니다.'
+    )
+    expect(page.get_by_role('status').get_by_text('상담 기록이 없습니다.')).to_be_visible()
+    with connect(db) as conn:
+        assert conn.execute('SELECT consult_count, step_count, call_count FROM consult_trace_deletions').fetchall() == [
+            (1, 8, 5),
+        ]
+
+
+def test_consult_trace_router_http_purposes(admin_stack, page):
+    stack, db = admin_stack
+    stack.ensure('calculation')
+    e2e.login(page, stack.url)
+    e2e.ask(page, '월급 300만원으로 3년 일했습니다. 퇴직금은 얼마인가요?')
+    e2e.wait_done(page)
+    row = e2e.wait_request_log(page, stack.request_log, 0)
+    _assert_recorded_wire(
+        db,
+        stack,
+        row['request_id'],
+        ['router_select', 'router_label', 'embedding', 'rerank', 'embedding', 'rerank', 'writer'],
+    )
+
+
 # ---- 정상 질문 ----
 def test_question_streams_answer(stack, ui):
     stack.ensure('stream')  # 토큰 사이 지연: 답이 조각으로 늘어나는지 보이게
@@ -396,7 +531,7 @@ def test_unverified_draft_is_replaced_at_completion(stack, ui):
     sources = e2e.sources(ui)
     expect(sources.get_by_text('✅ 답변에서 인용한 조문')).to_be_visible()
     expect(sources.get_by_test_id('source-card').filter(has_text='사회복지사업법')).to_have_count(0)
-    assert new_log_rows(stack, before)[0]['answer_verdict'] == 'shown'
+    assert e2e.wait_request_log(ui, stack.request_log, before)['answer_verdict'] == 'shown'
 
 
 def test_unverified_conclusion_is_marked_only_at_completion(stack, ui):
@@ -409,7 +544,7 @@ def test_unverified_conclusion_is_marked_only_at_completion(stack, ui):
     expect(answer).to_contain_text('소득세법 제99999조 제2항⚠확인되지 않은 인용에 따릅니다.')
     expect(answer).to_contain_text('근거:')
     expect(e2e.sources(ui).get_by_test_id('source-card').filter(has_text='제99999조')).to_have_count(0)
-    row = new_log_rows(stack, before)[0]
+    row = e2e.wait_request_log(ui, stack.request_log, before)
     assert row['answer_verdict'] == 'shown' and row['concl_cite_nonexistent'] == 1
 
 
@@ -460,7 +595,7 @@ def test_db_corpus_question_shows_three_law_cards(db_corpus_stack, page):
     e2e.wait_done(page)
     expect(e2e.answer(page)).to_contain_text(FAKE_ANSWER)
     assert len(e2e.law_cards(page)) == 3
-    assert e2e.request_log(stack.request_log)[-1]['corpus_release_id'] == release
+    assert e2e.wait_request_log(page, stack.request_log, 0)['corpus_release_id'] == release
 
 
 @pytest.mark.parametrize('question', V5_EXAMPLES)
@@ -475,14 +610,13 @@ def test_request_log_api_mode(stack, ui):
     before = len(e2e.request_log(stack.request_log))
     e2e.ask(ui, QUESTION)
     e2e.wait_done(ui)
-    rows = new_log_rows(stack, before)
-    assert len(rows) == 1, rows
-    assert rows[0]['mode'] == 'api' and rows[0]['status'] == 'ok' and rows[0]['error_type'] is None
+    row = e2e.wait_request_log(ui, stack.request_log, before)
+    assert row['mode'] == 'api' and row['status'] == 'ok' and row['error_type'] is None
     assert QUESTION not in stack.request_log.read_text(encoding='utf-8')  # 질문 원문은 남기지 않음
 
 
 @pytest.mark.parametrize('action', ['중지', '로그아웃'])
-def test_leaving_a_running_answer_cancels_generation(stack, ui, action):
+def test_leaving_a_running_answer_cancels_generation(stack, ui, action, feedback_db):
     stack.ensure('long')  # 결론 뒤 설명이 길다: 간결형은 그동안 화면 글이 바뀌지 않음
     before = len(e2e.request_log(stack.request_log))
     ended_before = sum(line.startswith('e2e chat end') for line in stack.chat.output().splitlines())
@@ -496,11 +630,17 @@ def test_leaving_a_running_answer_cancels_generation(stack, ui, action):
     else:
         expect(ui.get_by_role('button', name='로그인')).to_be_visible()
         assert ui.request.get(f'{stack.url}/api/me', timeout=e2e.ANSWER_TIMEOUT).status == 401
-    deadline = time.monotonic() + 15
-    while not new_log_rows(stack, before):
-        assert time.monotonic() < deadline, '요청 로그가 남지 않음'
-        ui.wait_for_timeout(100)
-    assert [r['status'] for r in new_log_rows(stack, before)] == ['cancelled']
+    row = e2e.wait_request_log(ui, stack.request_log, before)
+    assert row['status'] == 'cancelled' and row['trace_status'] == 'saved'
+    with connect(feedback_db) as conn:
+        stored = conn.execute(
+            'SELECT consults.status, answer_shown, response_chunks FROM consults '
+            'JOIN model_calls ON consult_id = consults.id WHERE request_id = ? AND purpose = ?',
+            (row['request_id'], 'writer'),
+        ).fetchone()
+    assert stored[:2] == ('cancelled', None)
+    chunks = b''.join(base64.b64decode(piece) for _, piece in json.loads(stored[2]))
+    assert b'data: [DONE]' not in chunks and '가짜 모델'.encode() in chunks
     deadline = time.monotonic() + 15
     while (
         len(ends := [line for line in stack.chat.output().splitlines() if line.startswith('e2e chat end')])
@@ -534,13 +674,22 @@ def test_phone_sources_sheet(stack, browser, request):
 
 # ---- 오류 안내 ----
 @pytest.mark.parametrize('question', [QUESTION, '2026년 총급여 5천만 원, 의료비 300만 원이면 세액공제액은 얼마인가요?'])
-def test_error_generation_busy(stack, ui, question):
+def test_error_generation_busy(stack, ui, question, feedback_db):
     stack.ensure('busy')
     before = len(e2e.request_log(stack.request_log))
     e2e.ask(ui, question)
     alert(ui, '모델 서버가 바쁩니다 (대기 중인 질문이 많음). 잠시 뒤 다시 질문하세요.')
-    (row,) = new_log_rows(stack, before)
+    row = e2e.wait_request_log(ui, stack.request_log, before)
     assert (row['status'], row['error_type']) == ('error', 'model_server_busy')
+    assert row['trace_status'] == 'saved'
+    with connect(feedback_db) as conn:
+        stored = conn.execute(
+            'SELECT consults.status, consults.error_type, status_code, response_body, response_chunks '
+            'FROM consults JOIN model_calls ON consult_id = consults.id WHERE request_id = ? ORDER BY seq DESC LIMIT 1',
+            (row['request_id'],),
+        ).fetchone()
+    assert stored[:3] == ('error', 'model_server_busy', 503) and stored[-1] is None
+    assert json.loads(stored[3])['error']['type'] == 'server_busy'
     assert stack.chat.output().splitlines().count('e2e chat busy') == 1
     assert FAKE_ANSWER not in e2e.answer(ui).inner_text()
     expect(ui.get_by_role('button', name='좋아요', exact=True)).to_have_count(0)
@@ -551,7 +700,7 @@ def test_error_timeout(stack, ui):
     before = len(e2e.request_log(stack.request_log))
     e2e.ask(ui, QUESTION)
     alert(ui, '모델 서버 응답이 없습니다')
-    assert [r['error_type'] for r in new_log_rows(stack, before)] == ['model_server_timeout']
+    assert e2e.wait_request_log(ui, stack.request_log, before)['error_type'] == 'model_server_timeout'
 
 
 @pytest.mark.parametrize('mode', ['chat_error', 'truncated'])
@@ -560,7 +709,7 @@ def test_error_generation(stack, ui, mode):
     before = len(e2e.request_log(stack.request_log))
     e2e.ask(ui, QUESTION)
     alert(ui, '답변을 생성하지 못했습니다')
-    (row,) = new_log_rows(stack, before)
+    row = e2e.wait_request_log(ui, stack.request_log, before)
     assert (row['status'], row['error_type']) == ('error', 'generation')
     assert FAKE_ANSWER not in e2e.answer(ui).inner_text()
     expect(ui.get_by_role('button', name='좋아요', exact=True)).to_have_count(0)
@@ -571,7 +720,7 @@ def test_error_server_down(stack, ui):
     before = len(e2e.request_log(stack.request_log))
     e2e.ask(ui, QUESTION)
     alert(ui, '모델 서버가 준비되지 않았습니다')
-    assert [r['error_type'] for r in new_log_rows(stack, before)] == ['model_server']
+    assert e2e.wait_request_log(ui, stack.request_log, before)['error_type'] == 'model_server'
 
 
 def test_error_generation_authentication(stack, ui):
@@ -579,7 +728,7 @@ def test_error_generation_authentication(stack, ui):
     before = len(e2e.request_log(stack.request_log))
     e2e.ask(ui, QUESTION)
     alert(ui, '모델 서버가 준비되지 않았습니다')
-    assert [row['error_type'] for row in new_log_rows(stack, before)] == ['model_server']
+    assert e2e.wait_request_log(ui, stack.request_log, before)['error_type'] == 'model_server'
 
 
 @pytest.fixture
