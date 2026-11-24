@@ -3,7 +3,7 @@
 # 점수 내림차순으로 정렬한다 (동점은 임베딩 순위: 하위법령 필터와 같은 rank_order)
 from typing import cast
 
-from lawbot.consult_trace import current
+from lawbot.consult_trace import capture_call, current
 from lawbot.decree import rank_order
 from lawbot.hits import Hit
 
@@ -19,10 +19,12 @@ class Reranker:
 
     def score(self, question, docs):
         """문서마다 P(yes). 0~1 밖(NaN 등)이면 정렬 결과를 믿을 수 없으므로 오류 (서버도 검사함)"""
-        scores = self.client.rerank(self.model, question, docs, TASK, timeout=self.timeout)
-        bad = [i for i, s in enumerate(scores) if not (isinstance(s, (int, float)) and 0.0 <= s <= 1.0)]
-        if bad:
-            raise RuntimeError(f'리랭커 점수가 올바르지 않습니다 (후보 {bad}): {[scores[i] for i in bad]}')
+        with capture_call() as capture:
+            scores = self.client.rerank(self.model, question, docs, TASK, timeout=self.timeout)
+            bad = [i for i, s in enumerate(scores) if not (isinstance(s, (int, float)) and 0.0 <= s <= 1.0)]
+            if bad:
+                capture.invalid('invalid_rerank_score')
+                raise RuntimeError(f'리랭커 점수가 올바르지 않습니다 (후보 {bad}): {[scores[i] for i in bad]}')
         return scores
 
     def rerank(self, question: str, candidates: list[Hit], top_k: int = 3) -> list[Hit]:

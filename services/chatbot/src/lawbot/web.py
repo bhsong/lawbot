@@ -256,14 +256,15 @@ def chat_events(app, question, remember=None):
             final = {'text': text, 'finish': st.get('finish'), 'turn_id': tid}
             if notice:
                 final['notice'] = notice
-            yield 'done', final
-            sent_done = True
             if trace is not None:
+                trace.delivery_status = 'interrupted'
                 trace.answer_shown = notice or text
                 trace.answer_verdict = verdict
                 trace.feedback_turn_id = tid
                 if captured is not None:
                     captured['feedback_turn_id'] = tid
+            yield 'done', final
+            sent_done = True
     except AskError as err:  # 유형(kind)은 요청 로그의 error_type과 같음. 원래 예외는 __cause__
         msg = view.error_message(err.kind, err.__cause__, spec)
         if outcomes:
@@ -272,17 +273,17 @@ def chat_events(app, question, remember=None):
             log.error('질문 처리 실패: %s', err.stage)
         message = CONFIG_ERROR if msg is None else msg
         if trace is not None:
+            trace.answer_shown = message
+            trace.delivery_status = 'interrupted'
             with trace.step('display', error_type=err.kind, notice=message):
                 pass
         yield 'error', {'kind': err.kind, 'message': message}
-        if trace is not None:
-            trace.answer_shown = message
     finally:
         if pipeline is not None and (close := getattr(pipeline, 'close', None)) is not None:
             close()
         if outcomes:
             timing, status, error = outcomes[-1]
-            if status == 'ok' and not sent_done:
+            if status == 'ok' and not (sent_done if trace is None else trace.delivery_status == 'sent'):
                 status = 'cancelled'
             if trace is None:
                 log_request(app, timing, status, error)
@@ -567,6 +568,16 @@ def create_app(
             if chat_requests >= 2 * concurrency:
                 return await JSONResponse({'detail': CHAT_BUSY}, status_code=503)(scope, receive, send)
             chat_requests += 1
+
+            async def send_event(message):
+                await send(message)
+                if (
+                    self.trace is not None
+                    and message['type'] == 'http.response.body'
+                    and message.get('body', b'').startswith((b'event: done\n', b'event: error\n'))
+                ):
+                    self.trace.delivery_status = 'sent'
+
             try:
                 async with anyio.create_task_group() as group:
 
@@ -576,7 +587,7 @@ def create_app(
 
                     group.start_soon(cancel_on_disconnect)
                     try:
-                        await self.stream_response(send)
+                        await self.stream_response(send_event if self.trace is not None else send)
                     finally:
                         group.cancel_scope.cancel()
             finally:
@@ -598,6 +609,7 @@ def create_app(
             # Storage failures must not surface after the SSE response is sent.
             trace.timing['trace_status'] = 'failed'
             trace.timing['trace_error'] = type(exc).__name__
+            log.warning('상담 기록 저장 실패: request_id=%s exception=%s', trace.request_id, type(exc).__name__)
         else:
             trace.timing['trace_status'] = 'saved'
         log_request(app, trace.timing, trace.status, trace.error_type)

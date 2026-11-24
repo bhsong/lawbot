@@ -9,7 +9,7 @@ from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
-from typing import Any
+from typing import Any, Literal
 
 import httpx
 
@@ -49,6 +49,7 @@ class Call:
     start: int = field(default_factory=time.monotonic_ns)
     end: int | None = None
     status_code: int | None = None
+    send_status: Literal['sent', 'failed_before_response', 'unknown'] = 'unknown'
     encoding: str | None = None
     chunks: list[tuple[int, bytes]] = field(default_factory=list)
     error_type: str | None = None
@@ -70,6 +71,7 @@ class Consultation:
     stages: list[Step] = field(default_factory=list)
     calls: list[Call] = field(default_factory=list)
     status: str = 'cancelled'
+    delivery_status: Literal['not_prepared', 'interrupted', 'sent'] = 'not_prepared'
     error_type: str | None = None
     answer_shown: str | None = None
     answer_verdict: str | None = None
@@ -82,18 +84,10 @@ class Consultation:
     def step(self, name: str, **result: Any) -> Iterator[dict[str, Any]]:
         step = Step(name, time.monotonic_ns(), result=result)
         self.stages.append(step)
-        first_call = len(self.calls)
         try:
             yield result
         except BaseException as exc:
             result['error_type'] = type(exc).__name__
-            if (
-                name in ('writer', 'search', 'rerank', 'decree_search', 'decree_rerank')
-                and len(self.calls) > first_call
-            ):
-                call = self.calls[-1]
-                if call.error_type is None:
-                    call.error_type = type(exc).__name__
             raise
         finally:
             step.end = time.monotonic_ns()
@@ -101,6 +95,31 @@ class Consultation:
 
 ACTIVE: ContextVar[Consultation | None] = ContextVar('consultation', default=None)
 _PURPOSE: ContextVar[str | None] = ContextVar('consultation_call_purpose', default=None)
+
+
+@dataclass
+class CallCapture:
+    """Own the transport record of one SDK or model client call, not a whole stage."""
+
+    call: Call | None = None
+
+    def invalid(self, error: str) -> None:
+        if self.call is not None and self.call.send_status == 'sent' and self.call.error_type is None:
+            self.call.error_type = error
+
+
+_CAPTURE: ContextVar[CallCapture | None] = ContextVar('consultation_call_capture', default=None)
+
+
+@contextmanager
+def capture_call(*validation_errors: type[Exception]) -> Iterator[CallCapture]:
+    capture = _CAPTURE.get() or CallCapture()
+    with _CAPTURE.set(capture):
+        try:
+            yield capture
+        except validation_errors as exc:
+            capture.invalid(type(exc).__name__)
+            raise
 
 
 def current() -> Consultation | None:
@@ -144,6 +163,9 @@ class _RecordedStream(httpx.SyncByteStream):
     def close(self) -> None:
         try:
             self.upstream.close()
+        except httpx.TransportError as exc:
+            self.call.error_type = type(exc).__name__
+            raise
         finally:
             if self.call.end is None:
                 self.call.end = time.monotonic_ns()
@@ -169,13 +191,18 @@ class _RecordingTransport(httpx.BaseTransport):
             return self.upstream.handle_request(request)
         call = Call(purpose, request.method, path, model, self.revisions.get(model), body, streaming)
         self.trace.calls.append(call)
+        if (capture := _CAPTURE.get()) is not None:
+            capture.call = call
         try:
             response = self.upstream.handle_request(request)
         except httpx.TransportError as exc:
             call.error_type = type(exc).__name__
+            if isinstance(exc, (httpx.ConnectError, httpx.ConnectTimeout, httpx.PoolTimeout)):
+                call.send_status = 'failed_before_response'
             call.end = time.monotonic_ns()
             raise
         call.status_code = response.status_code
+        call.send_status = 'sent'
         call.streaming = streaming and response.is_success
         call.encoding = response.headers.get('content-encoding')
         if response.is_error:

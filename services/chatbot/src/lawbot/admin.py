@@ -103,7 +103,7 @@ class ConsultDeletePreview(Body):
 
 
 class ConsultDelete(ConsultDeletePreview):
-    confirmation: Annotated[str, StringConstraints(pattern=r'^[a-f0-9]{64}$')]
+    confirmation: Annotated[str, StringConstraints(pattern=r'^[a-f0-9]{96}$')]
 
 
 def _consult_filters(user_hash, start, end, status=None):
@@ -276,6 +276,30 @@ def router(db, app, *, protected=None, calendar_url=None, calendar_token=None):
         result = consult_admin_store.detail(db, consult_id)
         if result is None:
             raise AdminError(404, '상담 기록을 찾을 수 없습니다.', 'not_found')
+        return result
+
+    @api.get('/consults/{consult_id}/text')
+    def consult_text(consult_id: str):
+        result = consult_admin_store.consult_text(db, consult_id)
+        if result is None:
+            raise AdminError(404, '상담 기록을 찾을 수 없습니다.', 'not_found')
+        return result
+
+    @api.get('/consults/{consult_id}/steps/{seq}')
+    def consult_step(consult_id: str, seq: int):
+        result = consult_admin_store.step_result(db, consult_id, seq)
+        if result is None:
+            raise AdminError(404, '상담 단계를 찾을 수 없습니다.', 'not_found')
+        return result
+
+    @api.get('/consults/{consult_id}/calls/{seq}/body')
+    def consult_call_body(consult_id: str, seq: int, part: consult_admin_store.BodyPart, cursor: str = '1:0'):
+        match = re.fullmatch(r'([1-9][0-9]{0,8}):([0-9]{1,9})', cursor)
+        if match is None or (part != 'chunks' and match[1] != '1'):
+            raise AdminError(422, '커서가 올바르지 않습니다.', 'invalid_cursor')
+        result = consult_admin_store.call_body(db, consult_id, seq, part, (int(match[1]), int(match[2])))
+        if result is None:
+            raise AdminError(404, '모델 호출을 찾을 수 없습니다.', 'not_found')
         return result
 
     @api.post('/consults/delete-preview', dependencies=post_guards)

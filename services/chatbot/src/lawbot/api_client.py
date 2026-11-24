@@ -9,7 +9,7 @@ import httpx
 import numpy as np
 from pydantic import ValidationError
 
-from lawbot.consult_trace import TraceClient
+from lawbot.consult_trace import TraceClient, capture_call
 from lawbot.inference import REQUEST_ID as REQUEST_ID
 from lawbot.inference import observe_inference
 from lawbot_common import api
@@ -142,26 +142,28 @@ class ModelServerClient:
         fields['input_type'] = input_type
         if max_seq_length:
             fields['max_seq_length'] = int(max_seq_length)
-        req = api.EmbeddingRequest(**fields)  # 넘긴 필드만 본문에 (exclude_unset)
-        res = self._parsed(
-            api.EmbeddingResponse, 'POST', api.EMBEDDINGS_PATH, req.model_dump(exclude_unset=True), timeout
-        )
-        data = _ordered_results(res.data, len(req.input), api.EMBEDDINGS_PATH)
-        if not all(isinstance(d.embedding, str) for d in data):
-            raise ModelServerError('모델 서버 응답 형식이 아닙니다 (/v1/embeddings: base64가 아님)')
-        return np.stack([np.frombuffer(base64.b64decode(str(d.embedding)), dtype='<f4') for d in data]).astype(
-            np.float32
-        )
+        with capture_call(ValueError, ModelServerError, httpx.DecodingError):
+            req = api.EmbeddingRequest(**fields)
+            res = self._parsed(
+                api.EmbeddingResponse, 'POST', api.EMBEDDINGS_PATH, req.model_dump(exclude_unset=True), timeout
+            )
+            data = _ordered_results(res.data, len(req.input), api.EMBEDDINGS_PATH)
+            if not all(isinstance(d.embedding, str) for d in data):
+                raise ModelServerError('모델 서버 응답 형식이 아닙니다 (/v1/embeddings: base64가 아님)')
+            return np.stack([np.frombuffer(base64.b64decode(str(d.embedding)), dtype='<f4') for d in data]).astype(
+                np.float32
+            )
 
     def rerank(self, model, query, documents, instruction=None, timeout=None, *, strict=False):
         """문서 순서대로 점수 목록 (정렬은 호출한 쪽이 한다)"""
         req = api.RerankRequest(
             model=model, query=query, documents=list(documents), **({'instruction': instruction} if instruction else {})
         )
-        res = self._parsed(
-            api.RerankResponse, 'POST', api.RERANK_PATH, req.model_dump(exclude_unset=True), timeout, strict=strict
-        )
-        return [item.relevance_score for item in _ordered_results(res.results, len(req.documents), api.RERANK_PATH)]
+        with capture_call(ValueError, ModelServerError, httpx.DecodingError):
+            res = self._parsed(
+                api.RerankResponse, 'POST', api.RERANK_PATH, req.model_dump(exclude_unset=True), timeout, strict=strict
+            )
+            return [item.relevance_score for item in _ordered_results(res.results, len(req.documents), api.RERANK_PATH)]
 
 
 def _ordered_results[T: (api.EmbeddingItem, api.RerankResult)](items: list[T], count: int, path: str) -> list[T]:

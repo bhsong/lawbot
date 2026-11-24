@@ -373,38 +373,61 @@ def test_admin_reviews_and_promotes_a_like(admin_stack, page, width):
 
 
 def _wire(stack, request_id):
-    rows = {
-        path: [row for row in e2e.request_log(path) if row['request_id'] == request_id]
-        for path in (stack.model_wire, stack.chat_wire)
-    }
-    # Both router completions precede the retrieval sequence; the writer follows it.
-    return rows[stack.chat_wire][:-1] + rows[stack.model_wire] + rows[stack.chat_wire][-1:]
+    return sorted(
+        (
+            row
+            for path in (stack.model_wire, stack.chat_wire)
+            for row in e2e.request_log(path)
+            if row['request_id'] == request_id
+        ),
+        key=lambda row: row['ordinal'],
+    )
 
 
 def _assert_recorded_wire(db, stack, rid, purposes):
     with connect(db) as conn:
         calls = conn.execute(
             'SELECT purpose, method, path, model_id, model_revision, request_body, status_code, '
-            'response_body, response_chunks, first_byte_at, usage, model_calls.redaction_count FROM model_calls '
+            'response_body, response_streaming, first_byte_at, usage, model_calls.redaction_count, '
+            'send_status FROM model_calls '
             'JOIN consults ON consults.id = model_calls.consult_id WHERE request_id = ? ORDER BY seq',
+            (rid,),
+        ).fetchall()
+        chunks = conn.execute(
+            'SELECT body FROM model_call_chunks JOIN consults ON consults.id = consult_id '
+            'WHERE request_id = ? ORDER BY call_seq, seq',
             (rid,),
         ).fetchall()
     assert [row[0] for row in calls] == purposes
     wire = _wire(stack, rid)
     for call, actual in zip(calls, wire, strict=True):
-        purpose, method, path, model_id, revision, sent, status, body, chunks, first, usage, redactions = call
+        (
+            purpose,
+            method,
+            path,
+            model_id,
+            revision,
+            sent,
+            status,
+            body,
+            streaming,
+            first,
+            usage,
+            redactions,
+            send_status,
+        ) = call
         assert (method, path, status) == (actual['method'], actual['path'], actual['status'])
         assert sent == base64.b64decode(actual['request'])
+        assert send_status == 'sent'
         assert model_id == json.loads(sent)['model'] and revision == e2e.STUB_MODEL_REVISION
         assert first and redactions == 0
         if purpose == 'writer':
-            received = json.loads(chunks)
-            offsets = [offset for offset, _ in received]
-            assert len(offsets) > 1 and offsets == sorted(offsets) and offsets[0] >= 0
-            assert [piece for _, piece in received] == actual['chunks']
+            assert streaming and b''.join(piece for (piece,) in chunks) == b''.join(
+                base64.b64decode(piece) for piece in actual['chunks']
+            )
             assert body is None and json.loads(usage)['total_tokens'] == 17
         else:
-            assert chunks is None and body == b''.join(base64.b64decode(piece) for piece in actual['chunks'])
+            assert not streaming and body == b''.join(base64.b64decode(piece) for piece in actual['chunks'])
     return [row['request'] for row in wire]
 
 
@@ -468,9 +491,25 @@ def test_consult_trace_wire_and_admin_browser(admin_stack, page, tmp_path):
     ]
     writer = detail.get_by_test_id('consult-call').last
     writer.get_by_text(f'writer · {stack.chat_model} · 200', exact=True).click()
-    expect(writer.get_by_test_id('consult-request-body')).to_contain_text(QUESTION)
-    expect(writer.get_by_test_id('consult-request-body')).to_contain_text('"messages"')
-    expect(writer.get_by_test_id('consult-response-chunk').first).to_contain_text('private synthetic reasoning')
+    sent = writer.get_by_role('region', name='송신 본문')
+    request_body = sent.get_by_test_id('consult-request-body')
+    expect(request_body).to_contain_text('"messages"')
+    sent_bytes = base64.b64decode(wire[-1])
+    pages = [request_body.text_content() or '']
+    loaded = len(pages[0].encode())
+    while loaded < len(sent_bytes):
+        sent.get_by_role('button', name='다음 본문').click()
+        expect(request_body).not_to_have_text(pages[-1])
+        text = request_body.text_content()
+        assert text
+        pages.append(text)
+        loaded += len(text.encode())
+    request_text = ''.join(pages)
+    assert request_text.encode() == sent_bytes
+    assert QUESTION in request_text
+    response_chunks = writer.get_by_role('region', name='수신 원문').get_by_test_id('consult-response-chunk')
+    expect(response_chunks.first).to_be_visible()
+    assert 'private synthetic reasoning' in ''.join(response_chunks.all_text_contents())
 
     delete = page.get_by_role('region', name='상담 삭제')
     delete.get_by_label('사용자 해시').fill(hashlib.sha256(e2e.USER.encode()).hexdigest()[:16])
@@ -634,12 +673,18 @@ def test_leaving_a_running_answer_cancels_generation(stack, ui, action, feedback
     assert row['status'] == 'cancelled' and row['trace_status'] == 'saved'
     with connect(feedback_db) as conn:
         stored = conn.execute(
-            'SELECT consults.status, answer_shown, response_chunks FROM consults '
+            'SELECT consults.status, answer_shown, delivery_status, consults.id, seq, model_calls.error_type FROM consults '
             'JOIN model_calls ON consult_id = consults.id WHERE request_id = ? AND purpose = ?',
             (row['request_id'], 'writer'),
         ).fetchone()
-    assert stored[:2] == ('cancelled', None)
-    chunks = b''.join(base64.b64decode(piece) for _, piece in json.loads(stored[2]))
+        assert stored[:3] == ('cancelled', None, 'not_prepared') and stored[-1] is None
+        chunks = b''.join(
+            piece
+            for (piece,) in conn.execute(
+                'SELECT body FROM model_call_chunks WHERE consult_id = ? AND call_seq = ? ORDER BY seq',
+                stored[3:5],
+            )
+        )
     assert b'data: [DONE]' not in chunks and '가짜 모델'.encode() in chunks
     deadline = time.monotonic() + 15
     while (
@@ -684,11 +729,11 @@ def test_error_generation_busy(stack, ui, question, feedback_db):
     assert row['trace_status'] == 'saved'
     with connect(feedback_db) as conn:
         stored = conn.execute(
-            'SELECT consults.status, consults.error_type, status_code, response_body, response_chunks '
+            'SELECT consults.status, consults.error_type, status_code, response_body, response_streaming '
             'FROM consults JOIN model_calls ON consult_id = consults.id WHERE request_id = ? ORDER BY seq DESC LIMIT 1',
             (row['request_id'],),
         ).fetchone()
-    assert stored[:3] == ('error', 'model_server_busy', 503) and stored[-1] is None
+    assert stored[:3] == ('error', 'model_server_busy', 503) and stored[-1] == 0
     assert json.loads(stored[3])['error']['type'] == 'server_busy'
     assert stack.chat.output().splitlines().count('e2e chat busy') == 1
     assert FAKE_ANSWER not in e2e.answer(ui).inner_text()

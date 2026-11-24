@@ -7,6 +7,7 @@ import json
 import os
 import re
 import sys
+from fcntl import LOCK_EX, flock
 from pathlib import Path
 
 STREAM_S, SLOW_S = 0.4, 5.0
@@ -16,13 +17,17 @@ FIRST = re.compile(r'^\[1\] (.+?)\(', re.M)  # build_prompt의 첫 조문 '[1] �
 class WireCapture:
     """Record bytes at the receiving test ASGI app, independently of the client transport."""
 
-    def __init__(self, app, path):
-        self.app, self.path = app, Path(path)
+    def __init__(self, app, path, order):
+        self.app, self.path, self.order = app, Path(path), Path(order)
 
     async def __call__(self, scope, receive, send):
         if scope['type'] != 'http':
             return await self.app(scope, receive, send)
         request_id = dict(scope['headers']).get(b'x-request-id')
+        with self.order.open('ab') as order:
+            flock(order, LOCK_EX)
+            ordinal = order.seek(0, os.SEEK_END) + 1
+            order.write(b'\n')
         request, chunks = bytearray(), []
         status = None
 
@@ -46,6 +51,7 @@ class WireCapture:
             # Keep startup traffic as evidence without persisting the large index bodies in the test fixture.
             row = {
                 'request_id': request_id.decode() if request_id else None,
+                'ordinal': ordinal,
                 'path': scope['path'],
                 'method': scope['method'],
                 'status': status,
@@ -58,7 +64,7 @@ class WireCapture:
 
 def capture_wire(app):
     if path := os.environ.get('LAWBOT_TEST_WIRE'):
-        app.add_middleware(WireCapture, path=path)
+        app.add_middleware(WireCapture, path=path, order=os.environ['LAWBOT_TEST_WIRE_ORDER'])
     return app
 
 

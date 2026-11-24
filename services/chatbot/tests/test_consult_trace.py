@@ -1,6 +1,7 @@
 import base64
 import gzip
 import hashlib
+import io
 import json
 import sqlite3
 from collections.abc import Iterator
@@ -86,7 +87,9 @@ def test_saved_consult_redacts_and_request_log_does_not_contain_raw(cfg, db):
         assert client.get('/api/config').json()['consult_trace'] is True
         token = client.cookies.get(web.COOKIE)
         assert token
-        marker = ' '.join((TEST_TOKEN, TEST_LLM_TOKEN, cfg.model_server, cfg.llm_url, str(cfg.port), f'X{token}Y'))
+        marker = ' '.join(
+            (TEST_TOKEN, TEST_LLM_TOKEN, cfg.model_server, cfg.llm_url, f'localhost:{cfg.port}', f'X{token}Y')
+        )
         events = ask(client, QUESTION + ' ' + marker)
         assert '합성 답변입니다.' in events
     with connect(db) as conn:
@@ -104,6 +107,7 @@ def test_saved_consult_redacts_and_request_log_does_not_contain_raw(cfg, db):
     for secret in (TEST_TOKEN, TEST_LLM_TOKEN, cfg.model_server, cfg.llm_url, str(cfg.port), token):
         assert secret not in question + stored_steps
     assert '[REDACTED:session_cookie]' in question
+    assert 'localhost:[REDACTED:web_port]' in question
     assert 'X[REDACTED:session_cookie]Y' in question
     log = cfg.request_log.read_text()
     assert QUESTION not in log and '합성 답변입니다.' not in log and token not in log
@@ -170,6 +174,12 @@ def test_delete_preview_confirmation_filters_snapshot_and_receipt(cfg, db, admin
         assert post('/delete-preview', 'bad-period', start='2026-01-01').status_code == 422
         preview = post('/delete-preview', 'preview', **body).json()
         assert preview['counts']['consults'] == 2
+        login(admin, (ADMIN_USER, ADMIN_PW))
+        repeated = post('/delete-preview', 'preview', **body)
+        assert (repeated.status_code, repeated.json().get('code')) == (409, 'preview_session_changed')
+        previous_confirm = post('/delete', 'old-session', **body, confirmation=preview['confirmation'])
+        assert (previous_confirm.status_code, previous_confirm.json().get('code')) == (409, 'preview_session_changed')
+        preview = post('/delete-preview', 'new-preview', **body).json()
         ask(user, QUESTION + ' 셋째')
         assert post('/delete', 'stale', **body, confirmation=preview['confirmation']).status_code == 409
         time_filter = {'start': first['created_at']}
@@ -209,9 +219,7 @@ def test_redact_response_at_chunk_boundaries_and_preserve_binary(cfg, db, compre
     cookie = token_urlsafe(32)
     model_addr = urlsplit(cfg.model_server).netloc
     llm_addr = urlsplit(cfg.llm_url).netloc
-    raw = (
-        f'prefix={TEST_TOKEN}; {TEST_LLM_TOKEN} {model_addr} {llm_addr} {cfg.port} {web.COOKIE}={cookie}; end'.encode()
-    )
+    raw = f'prefix={TEST_TOKEN}; {TEST_LLM_TOKEN} {model_addr} {llm_addr} localhost:{cfg.port} {web.COOKIE}={cookie}; end'.encode()
     body = gzip.compress(raw) if compressed else raw
     split = len(body) // 2 if compressed else raw.index(TEST_TOKEN.encode()) + 3
     wire = [body[:split], body[split:]]
@@ -238,17 +246,18 @@ def test_redact_response_at_chunk_boundaries_and_preserve_binary(cfg, db, compre
     consult_store.save(db, trace, redactor)
     with connect(db) as conn:
         saved_binary, saved_stream = conn.execute(
-            'SELECT request_body, response_body, response_chunks, response_decoded, redaction_reasons '
+            'SELECT request_body, response_body, response_streaming, response_decoded, redaction_reasons '
             'FROM model_calls ORDER BY seq'
         ).fetchall()
+        parts = [piece for (piece,) in conn.execute('SELECT body FROM model_call_chunks ORDER BY seq')]
     assert saved_binary[:2] == (seen[0], binary)
-    sent, _, chunks, decoded, reasons = saved_stream
+    sent, empty, streaming, decoded, reasons = saved_stream
+    assert empty is None and streaming
     expected = (
         'prefix=[REDACTED:model_token]; [REDACTED:generation_api_key] [REDACTED:model_server_address] '
-        '[REDACTED:generation_server_address] [REDACTED:web_port] lawbot_session=[REDACTED:session_cookie]; end'
+        '[REDACTED:generation_server_address] localhost:[REDACTED:web_port] lawbot_session=[REDACTED:session_cookie]; end'
     )
     assert json.loads(sent)['messages'][0]['content'] == expected
-    parts = [base64.b64decode(value) for _, value in json.loads(chunks)]
     assert len(parts) == 2 and b''.join(parts).decode() == expected and decoded == int(compressed)
     if not compressed:
         assert parts[0] == b'prefix=[REDACTED:model_token]' and parts[1].startswith(b'; ')
@@ -264,8 +273,15 @@ def test_redact_response_at_chunk_boundaries_and_preserve_binary(cfg, db, compre
         2,
     )
     detail = consult_admin_store.detail(db, trace.id)
-    assert detail['calls'][0]['response_body'] == {'encoding': 'base64', 'data': base64.b64encode(binary).decode()}
-    assert detail['calls'][1]['request_body'] == {'encoding': 'utf-8', 'data': sent.decode()}
+    assert 'response_body' not in detail['calls'][0] and 'request_body' not in detail['calls'][1]
+    assert consult_admin_store.call_body(db, trace.id, 1, 'response', (1, 0))['body'] == {
+        'encoding': 'base64',
+        'data': base64.b64encode(binary).decode(),
+    }
+    assert consult_admin_store.call_body(db, trace.id, 2, 'request', (1, 0))['body'] == {
+        'encoding': 'utf-8',
+        'data': sent.decode(),
+    }
 
 
 def test_opt_in_clarify_and_resume_keep_their_original_llm_bodies(cfg):
@@ -326,3 +342,83 @@ def test_opt_in_clarify_and_resume_keep_their_original_llm_bodies(cfg):
     assert [call.purpose for call in trace.calls] == ['clarify', 'writer']
     assert [json.loads(call.request_body) for call in trace.calls] == seen
     assert seen[1]['messages'][1]['content'].endswith(f'{QUESTION}\n\n[확인 질문]\n기간은?\n\n[사용자 답]\n두 달')
+
+
+@pytest.mark.parametrize('variant', ['clean', 'second_member', 'header', 'truncated'])
+def test_gzip_is_inspected_before_preserving_any_encoded_bytes(cfg, db, variant):
+    clean = gzip.compress(b'first ') + gzip.compress(b'second')
+    wire = clean
+    if variant == 'second_member':
+        wire = gzip.compress(b'first ') + gzip.compress(TEST_TOKEN.encode())
+    elif variant == 'header':
+        buffer = io.BytesIO()
+        with gzip.GzipFile(fileobj=buffer, filename=TEST_TOKEN, mode='wb') as f:
+            f.write(b'clean')
+        wire += buffer.getvalue()
+    elif variant == 'truncated':
+        wire = clean[:-1]
+    rid = 'synthetic-gzip'
+    trace = consult_trace.Consultation(rid, QUESTION, 'user-hash', 'server-session', 'user', {}, None)
+    midpoint = len(wire) // 2
+    handler = lambda _: httpx.Response(
+        200,
+        headers={'Content-Encoding': 'gzip'},
+        stream=Chunks(wire[:midpoint], wire[midpoint:]),
+    )
+    with (
+        consult_trace.ACTIVE.set(trace),
+        REQUEST_ID.set(rid),
+        consult_trace.TraceClient(transport=httpx.MockTransport(handler), base_url=cfg.model_server) as client,
+        client.stream('POST', '/v1/rerank', json={'model': 'fixture'}) as response,
+    ):
+        assert b''.join(response.iter_raw()) == wire
+    consult_store.save(
+        db, trace, consult_store.Redactor(TEST_TOKEN, TEST_LLM_TOKEN, cfg.model_server, cfg.llm_url, cfg.port)
+    )
+    with connect(db) as conn:
+        body, decoded = conn.execute('SELECT response_body, response_decoded FROM model_calls').fetchone()
+    if variant == 'clean':
+        assert (body, decoded) == (wire, 0)
+    elif variant == 'second_member':
+        assert (body, decoded) == (b'first [REDACTED:model_token]', 1)
+    else:
+        assert (body, decoded) == (b'[REDACTED:unreadable_encoding]', 1)
+
+
+@pytest.mark.parametrize('codec', ['utf-8', 'utf-16', 'utf-32-be'])
+def test_json_escaped_secrets_and_port_preserve_other_bytes(cfg, db, codec):
+    escaped = ''.join(f'\\u{ord(c):04x}' for c in TEST_TOKEN)
+    rid = 'synthetic-json'
+    trace = consult_trace.Consultation(rid, QUESTION, 'user-hash', 'server-session', 'user', {}, None)
+    safe = b'{ "untouched": "\\u0061" }'
+    request_body = rf'{{ "model": "fixture", "max_tokens": {cfg.port}, "text": "before:{escaped} after", "url":"https:\/\/localhost:{cfg.port}\/api", "safe": "\u0061" }}'
+    expected = request_body.replace(escaped, '[REDACTED:model_token]').replace(
+        f'{cfg.port}\\/api',
+        '[REDACTED:web_port]\\/api',
+    )
+    handler = lambda _: httpx.Response(200, stream=Chunks(safe))
+    with (
+        consult_trace.ACTIVE.set(trace),
+        REQUEST_ID.set(rid),
+        consult_trace.TraceClient(transport=httpx.MockTransport(handler), base_url=cfg.model_server) as client,
+    ):
+        assert client.post('/v1/rerank', content=request_body.encode(codec)).content == safe
+    consult_store.save(
+        db, trace, consult_store.Redactor(TEST_TOKEN, TEST_LLM_TOKEN, cfg.model_server, cfg.llm_url, cfg.port)
+    )
+    with connect(db) as conn:
+        sent, received = conn.execute('SELECT request_body,response_body FROM model_calls').fetchone()
+    assert json.loads(sent) == json.loads(expected)
+    assert f'"max_tokens": {cfg.port}' in sent.decode(codec) and '"safe": "\\u0061"' in sent.decode(codec)
+    assert received == safe
+
+
+def test_request_id_collision_does_not_drop_a_consultation(cfg, db):
+    redactor = consult_store.Redactor(TEST_TOKEN, TEST_LLM_TOKEN, cfg.model_server, cfg.llm_url, cfg.port)
+    for question in (QUESTION, '다른 합성 질문'):
+        trace = consult_trace.Consultation('same-request-id', question, 'user-hash', 'server-session', 'user', {}, None)
+        consult_store.save(db, trace, redactor)
+    with connect(db) as conn:
+        assert conn.execute(
+            'SELECT count(DISTINCT id) FROM consults WHERE request_id = ?', ('same-request-id',)
+        ).fetchone() == (2,)

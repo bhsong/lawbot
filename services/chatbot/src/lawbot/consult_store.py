@@ -1,29 +1,36 @@
-"""Redact a completed trace and persist it atomically."""
+"""Redact a completed trace and persist it atomically.
 
-import base64
+Configured model credentials, addresses and the web port are not supplied as model inputs;
+generated SSE tokens are not reassembled for redaction.
+"""
+
+import codecs
 import hashlib
 import json
 import re
 import time
+import zlib
 from bisect import bisect_right
 from collections import Counter
 from collections.abc import Iterator
-from importlib.util import find_spec
 from pathlib import Path
 from urllib.parse import urlsplit
-
-import httpx
 
 from lawbot import feedback
 from lawbot.consult_trace import POLICY, Call, Consultation, stamp
 from lawbot.db.connection import connect, transaction
 
 _COOKIE = rb'(?<![A-Za-z0-9_+/-])[A-Za-z0-9_-]{42}[AEIMQUYcgkosw048](?![A-Za-z0-9_+/=-])'
-_ENCODINGS = {'gzip', 'deflate', 'identity'}
-if find_spec('brotli') or find_spec('brotlicffi'):
-    _ENCODINGS.add('br')
-if find_spec('zstandard'):
-    _ENCODINGS.add('zstd')
+_JSON_STRING = re.compile(rb'"(?:[^"\\\x00-\x1f]|\\.)*"')
+_LINE_END = re.compile(rb'\r\n|\r|\n')
+_HOST_END = re.compile(
+    rb'(?i:(?<![a-z0-9_.-])(?:[a-z][a-z0-9+.-]*://[a-z0-9-]+|localhost|[a-z0-9-]+(?:\.[a-z0-9-]+)+\.?'
+    rb'|\[[a-f0-9:.]+(?:%[a-z0-9_.-]+)?\]))\Z'
+)
+_WIDE_BOMS = {
+    'utf-16': (('utf-16-be', codecs.BOM_UTF16_BE), ('utf-16-le', codecs.BOM_UTF16_LE)),
+    'utf-32': (('utf-32-be', codecs.BOM_UTF32_BE), ('utf-32-le', codecs.BOM_UTF32_LE)),
+}
 
 
 def _json(value) -> str:
@@ -47,95 +54,183 @@ class Redactor:
             (urlsplit(llm_url).netloc, 'generation_server_address'),
             (cookie or '', 'session_cookie'),
         )
-        self.port = port
+        self.port = (
+            re.compile(rb'(?<=:)' + str(port).encode() + rb'(?=$|[\s/?#"\'<>),;\]}\\])') if port is not None else None
+        )
         patterns: dict[bytes, str] = {}
         for value, reason in sorted(values, key=lambda item: len(item[0]), reverse=True):
             if not value:
                 continue
-            for form in (value, _json(value)[1:-1], json.dumps(value)[1:-1]):
-                literal = re.escape(form.encode())
-                pattern = b'(?i:' + literal + b')' if reason.endswith('_address') else literal
-                patterns.setdefault(pattern, reason)
-        if port is not None:
-            patterns[rb'(?<![0-9])' + str(port).encode() + rb'(?![0-9])'] = 'web_port'
+            literal = re.escape(value.encode())
+            pattern = b'(?i:' + literal + b')' if reason.endswith('_address') else literal
+            patterns.setdefault(pattern, reason)
         patterns[_COOKIE] = 'session_cookie'
         self.reasons = list(patterns.values())
         self.pattern = re.compile(b'|'.join(b'(' + term + b')' for term in patterns))
 
-    def _replacement(self, match: re.Match[bytes], counts: Counter[str]) -> bytes:
-        index = match.lastindex
-        assert index is not None
-        reason = self.reasons[index - 1]
-        counts[reason] += 1
-        return _marker(reason)
+    def _matches(self, value: bytes) -> Iterator[tuple[int, int, str]]:
+        for match in self.pattern.finditer(value):
+            assert match.lastindex is not None
+            yield match.start(), match.end(), self.reasons[match.lastindex - 1]
+        if self.port is not None:
+            for match in self.port.finditer(value):
+                if _HOST_END.search(value, 0, match.start() - 1):
+                    yield match.start(), match.end(), 'web_port'
+
+    def _plain_edits(self, value: bytes, counts: Counter[str], offset=0) -> Iterator[tuple[int, int, bytes]]:
+        end = 0
+        for start, stop, reason in sorted(self._matches(value)):
+            if start >= end:
+                counts[reason] += 1
+                yield offset + start, offset + stop, _marker(reason)
+                end = stop
 
     def body(self, value: bytes, counts: Counter[str]) -> bytes:
-        return self.pattern.sub(lambda match: self._replacement(match, counts), value)
+        return _apply_edits([value], self._plain_edits(value, counts))[0]
+
+    def wire(self, chunks: list[bytes], counts: Counter[str]) -> list[bytes]:
+        """Inspect JSON string tokens without rewriting unchanged bytes or joining generated deltas."""
+        joined = b''.join(chunks)
+        encoding = json.detect_encoding(joined)
+        if encoding not in ('utf-8', 'utf-8-sig'):
+            # Wide JSON is legal in the decoder; translate edit positions without re-encoding untouched bytes.
+            try:
+                text = joined.decode(encoding).encode('utf-8')
+            except UnicodeError:
+                return _apply_edits(chunks, self._plain_edits(joined, counts))
+            codec, bom = next(
+                ((codec, bom) for codec, bom in _WIDE_BOMS.get(encoding, ()) if joined.startswith(bom)),
+                (encoding, b''),
+            )
+
+            def wide_edits():
+                at, offset = 0, len(bom)
+                for start, end, replacement in self._wire_edits(text, counts):
+                    offset += len(text[at:start].decode().encode(codec))
+                    stop = offset + len(text[start:end].decode().encode(codec))
+                    yield offset, stop, replacement.decode().encode(codec)
+                    at, offset = end, stop
+
+            return _apply_edits(chunks, wide_edits())
+        return _apply_edits(chunks, self._wire_edits(joined, counts))
+
+    def _wire_edits(self, value: bytes, counts: Counter[str]) -> Iterator[tuple[int, int, bytes]]:
+        at = 0
+        for match in _JSON_STRING.finditer(value):
+            if b'\\' not in (inside := match[0][1:-1]):
+                yield from self._plain_edits(value[at : match.start()], counts, at)
+                yield from self._plain_edits(inside, counts, match.start() + 1)
+                at = match.end()
+                continue
+            try:
+                decoded = json.loads(match[0]).encode('utf-8', errors='surrogatepass')
+            except ValueError, UnicodeError:
+                continue
+            yield from self._plain_edits(value[at : match.start()], counts, at)
+            redacted = self.body(decoded, counts)
+            if redacted != decoded:
+                payload = json.dumps(redacted.decode('utf-8', errors='surrogatepass')).encode()
+                yield match.start(), match.end(), payload
+            at = match.end()
+        yield from self._plain_edits(value[at:], counts, at)
 
     def data(self, value, counts: Counter[str]):
         if isinstance(value, str):
             return self.body(value.encode(), counts).decode()
-        if type(value) is int and value == self.port:
-            counts['web_port'] += 1
-            return '[REDACTED:web_port]'
         if isinstance(value, (tuple, list)):
             return [self.data(item, counts) for item in value]
         if isinstance(value, dict):
             return {self.data(key, counts): self.data(item, counts) for key, item in value.items()}
         return value
 
-    def chunks(self, joined: bytes, chunks: list[bytes], counts: Counter[str]) -> list[bytes]:
-        # Keep each receive boundary. A cross-boundary replacement belongs to the chunk where it starts.
-        matches = self.pattern.finditer(joined)
-        first = next(matches, None)
-        if first is None:
-            return chunks
-        starts = [0]
-        for chunk in chunks:
-            starts.append(starts[-1] + len(chunk))
-        output: list[bytes] = []
-        match = first
-        consumed = 0
-        for index, chunk in enumerate(chunks):
-            at = max(0, consumed - starts[index])
-            parts = bytearray()
-            while match is not None and bisect_right(starts, match.start()) - 1 == index:
-                parts += chunk[at : match.start() - starts[index]]
-                parts += self._replacement(match, counts)
-                consumed = match.end()
-                at = consumed - starts[index]
-                match = next(matches, None)
-            parts += chunk[at:]
-            output.append(bytes(parts))
-        return output
+
+def _apply_edits(chunks: list[bytes], edits: Iterator[tuple[int, int, bytes]]) -> list[bytes]:
+    """Keep receive offsets and boundaries; place replacements where they start."""
+    edit = next(edits, None)
+    if edit is None:
+        return chunks
+    starts = [0]
+    for chunk in chunks:
+        starts.append(starts[-1] + len(chunk))
+    output = []
+    consumed = 0
+    for index, chunk in enumerate(chunks):
+        at = max(0, consumed - starts[index])
+        parts = bytearray()
+        while edit is not None and bisect_right(starts, edit[0]) - 1 == index:
+            start, consumed, replacement = edit
+            parts += chunk[at : start - starts[index]]
+            parts += replacement
+            at = consumed - starts[index]
+            edit = next(edits, None)
+        parts += chunk[at:]
+        output.append(bytes(parts))
+    return output
 
 
-class _Replay(httpx.SyncByteStream):
-    def __init__(self, chunks: list[bytes]):
-        self.chunks = chunks
-        self.index = 0
+def _gzip_header(data: bytes, start: int, redactor: Redactor) -> None:
+    # Extra fields may carry arbitrary encoded metadata, which is not safe to inspect as text.
+    if len(data) - start < 10 or data[start : start + 3] != b'\x1f\x8b\x08':
+        raise ValueError('Invalid gzip member')
+    flags = data[start + 3]
+    if flags & 0xE4:
+        raise ValueError('Unverifiable gzip metadata')
+    end = start + 10
+    for flag in (8, 16):  # FNAME, FCOMMENT
+        if flags & flag:
+            terminator = data.index(b'\0', end)
+            metadata = data[end:terminator]
+            if redactor.wire([metadata], Counter())[0] != metadata:
+                raise ValueError('Sensitive gzip metadata')
+            end = terminator + 1
 
-    def __iter__(self) -> Iterator[bytes]:
-        for index, chunk in enumerate(self.chunks):
-            self.index = index
-            yield chunk
+
+def _inflate(encoding: str, chunks: list[bytes], redactor: Redactor) -> list[bytes]:
+    if encoding not in ('gzip', 'deflate'):
+        raise ValueError('Unverifiable content encoding')
+    raw = b''.join(chunks)
+    gzip = encoding == 'gzip'
+    if gzip:
+        wbits = 31
+    else:
+        head = int.from_bytes(raw[:2], 'big')
+        wbits = 15 if len(raw) >= 2 and head % 31 == 0 and head & 0x0F00 == 0x0800 else -15
+    decoder = None
+    end = 0
+    plain = []
+    for chunk in chunks:
+        end += len(chunk)
+        pending = chunk
+        output = bytearray()
+        while pending:
+            if decoder is None or decoder.eof:
+                if gzip:
+                    _gzip_header(raw, end - len(pending), redactor)
+                elif decoder is not None:
+                    raise ValueError('Trailing deflate bytes')
+                decoder = zlib.decompressobj(wbits)
+            output.extend(decoder.decompress(pending))
+            pending = decoder.unused_data
+        plain.append(bytes(output))
+    if decoder is None or not decoder.eof:
+        raise ValueError('Incomplete compressed response')
+    return plain
 
 
-def _decoded(encoding: str, chunks: list[bytes]) -> list[bytes]:
-    replay = _Replay(chunks)
-    decoded = [b''] * len(chunks)
-    response = httpx.Response(200, headers={'content-encoding': encoding}, stream=replay)
-    for chunk in response.iter_bytes():
-        decoded[replay.index] += chunk
-    return decoded
+def _sse_data(body: bytes) -> Iterator[bytes]:
+    at = len(codecs.BOM_UTF8) if body.startswith(codecs.BOM_UTF8) else 0
+    data = []
+    for delimiter in _LINE_END.finditer(body, at):
+        line, at = body[at : delimiter.start()], delimiter.end()
+        if not line and data:
+            yield b'\n'.join(data)
+            data.clear()
+        elif line == b'data' or line.startswith(b'data:'):
+            data.append(line[5:].removeprefix(b' '))
 
 
 def _usage(body: bytes, streaming: bool) -> dict[str, int] | None:
-    documents = (
-        (line[5:].lstrip() for line in body.splitlines() if line.startswith(b'data:') and b'"usage"' in line)
-        if streaming
-        else (body,)
-    )
+    documents = _sse_data(body) if streaming else (body,)
     result = None
     for document in documents:
         try:
@@ -160,31 +255,29 @@ def _response(call: Call, redactor: Redactor, counts: Counter[str]):
     if encoding != 'identity' and raw:
         # Raw compressed bytes are retained only if their decoded contents are safe to persist.
         try:
-            if not set(encoding.replace(' ', '').split(',')) <= _ENCODINGS:
-                raise httpx.DecodingError('Unsupported content encoding')
-            plain = _decoded(encoding, raw)
-        except httpx.DecodingError:
+            plain = raw
+            for name in reversed(encoding.split(',')):
+                if name.strip() != 'identity':
+                    plain = _inflate(name.strip(), plain, redactor)
+        except ValueError, zlib.error:
             counts['unreadable_encoding'] += 1
             raw = [_marker('unreadable_encoding'), *([b''] * (len(raw) - 1))]
             decoded = True
         else:
             joined = b''.join(plain)
             usage = _usage(joined, call.streaming)
-            if redactor.pattern.search(joined):
-                raw = redactor.chunks(joined, plain, counts)
-                decoded = True
+            redacted = redactor.wire(plain, counts)
+            if redacted != plain:
+                raw, decoded = redacted, True
     else:
         joined = b''.join(raw)
         usage = _usage(joined, call.streaming)
-        raw = redactor.chunks(joined, raw, counts) if call.streaming else [redactor.body(joined, counts)]
+        raw = redactor.wire(raw, counts)
     if call.status_code is None:
         return None, None, decoded, usage
     if not call.streaming:
         return b''.join(raw), None, decoded, usage
-    chunks = [
-        [offset, base64.b64encode(body).decode('ascii')] for (offset, _), body in zip(call.chunks, raw, strict=True)
-    ]
-    return None, _json(chunks), decoded, usage
+    return None, raw, decoded, usage
 
 
 def save(db: Path, trace: Consultation, redactor: Redactor) -> None:
@@ -212,13 +305,19 @@ def save(db: Path, trace: Consultation, redactor: Redactor) -> None:
         )
         total.update(counts)
     calls = []
+    received_chunks = []
     for seq, call in enumerate(trace.calls, 1):
         counts = Counter()
         path = redactor.data(call.path, counts)
         model = redactor.data(call.model_id, counts)
         revision = redactor.data(call.model_revision, counts)
-        request = redactor.body(call.request_body, counts)
+        request = redactor.wire([call.request_body], counts)[0]
         response, chunks, decoded, usage = _response(call, redactor, counts)
+        if chunks is not None:
+            received_chunks.extend(
+                (trace.id, seq, number, offset, body)
+                for number, ((offset, _), body) in enumerate(zip(call.chunks, chunks, strict=True), 1)
+            )
         first_byte = trace.timestamp(call.start + call.chunks[0][0]) if call.chunks else None
         calls.append(
             (
@@ -230,9 +329,10 @@ def save(db: Path, trace: Consultation, redactor: Redactor) -> None:
                 model,
                 revision,
                 request,
+                call.send_status,
                 call.status_code,
                 response,
-                chunks,
+                int(chunks is not None),
                 int(decoded),
                 trace.timestamp(call.start),
                 first_byte,
@@ -246,7 +346,7 @@ def save(db: Path, trace: Consultation, redactor: Redactor) -> None:
         total.update(counts)
     with connect(db, write=True) as conn, transaction(conn):
         conn.execute(
-            'INSERT INTO consults VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+            'INSERT INTO consults VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
             (
                 trace.id,
                 trace.request_id,
@@ -259,6 +359,7 @@ def save(db: Path, trace: Consultation, redactor: Redactor) -> None:
                 answer_shown,
                 trace.answer_verdict,
                 trace.status,
+                trace.delivery_status,
                 trace.error_type,
                 POLICY,
                 app_commit,
@@ -271,5 +372,6 @@ def save(db: Path, trace: Consultation, redactor: Redactor) -> None:
         )
         conn.executemany('INSERT INTO consult_steps VALUES (?, ?, ?, ?, ?, ?, ?, ?)', steps)
         conn.executemany(
-            'INSERT INTO model_calls VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)', calls
+            'INSERT INTO model_calls VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)', calls
         )
+        conn.executemany('INSERT INTO model_call_chunks VALUES (?, ?, ?, ?, ?)', received_chunks)

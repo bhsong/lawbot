@@ -17,7 +17,7 @@ from lawbot.api_client import (
     error_from_body,
     request_headers,
 )
-from lawbot.consult_trace import call_purpose
+from lawbot.consult_trace import call_purpose, capture_call
 from lawbot.hits import Clarification, ClarifyAttempt, Hit
 from lawbot.inference import failure_fields, observe_inference
 from lawbot.paths import DATA
@@ -162,9 +162,10 @@ class LLM:
             attempt = ClarifyAttempt(messages=messages, raw=None, parsed=None, retry=retry, finish=None, error=None)
             attempts.append(attempt)
             try:
-                result = self._plain_completion(
-                    messages, CLARIFY_MAX_TOKENS, 'clarify_retry' if retry else 'clarify', 'clarify'
-                )
+                with capture_call(openai.OpenAIError, ValueError, httpx.DecodingError) as capture:
+                    result = self._plain_completion(
+                        messages, CLARIFY_MAX_TOKENS, 'clarify_retry' if retry else 'clarify', 'clarify'
+                    )
             except (openai.OpenAIError, httpx.TransportError) as exc:
                 attempt['error'] = type(exc).__name__
                 fields = failure_fields('clarify', exc)
@@ -179,6 +180,8 @@ class LLM:
                 choice = result.choices[0]
                 attempt.update(raw=choice.message.content, finish=choice.finish_reason)
             if attempt['finish'] != 'stop':
+                if attempt['finish'] is None:
+                    capture.invalid('missing_finish_reason')
                 finish = attempt['finish']
                 failure = (
                     finish
@@ -189,6 +192,8 @@ class LLM:
             decision = _parse_clarification(attempt['raw'])
             attempt['parsed'] = decision
             failure = None if decision is not None else 'invalid_json'
+            if decision is None:
+                capture.invalid('invalid_clarification')
             if decision is not None:
                 break
         status = 'failed_open' if decision is None else ('asked' if decision['ask'] else 'not_asked')
@@ -221,9 +226,11 @@ class LLM:
             parse_selection,
         )
 
-        selection = parse_selection(
-            self._router_completion(SELECT_SYSTEM, question, SELECT_MAX_TOKENS, metrics, 'router_select')
-        )
+        with capture_call() as capture:
+            raw = self._router_completion(SELECT_SYSTEM, question, SELECT_MAX_TOKENS, metrics, 'router_select')
+            selection = parse_selection(raw)
+            if raw is not None and selection is None:
+                capture.invalid('invalid_router_selection')
         if selection is None or selection in ('lookup', 'unsupported'):
             return compose_route(question, selection)
         labels = self._router_completion(
@@ -249,12 +256,13 @@ class LLM:
         if metrics is not None:
             metrics['router_calls'] = metrics.get('router_calls', 0) + 1
         try:
-            result = self._plain_completion(
-                [{'role': 'system', 'content': system}, {'role': 'user', 'content': user}],
-                max_tokens,
-                'router',
-                purpose,
-            )
+            with capture_call(openai.OpenAIError, ValueError, httpx.DecodingError) as capture:
+                result = self._plain_completion(
+                    [{'role': 'system', 'content': system}, {'role': 'user', 'content': user}],
+                    max_tokens,
+                    'router',
+                    purpose,
+                )
         except openai.APITimeoutError as exc:
             raise RouterTimeout(exc.__cause__) from exc
         except openai.OpenAIError as exc:
@@ -269,9 +277,13 @@ class LLM:
                     ('router_completion_tokens', usage.completion_tokens),
                 ):
                     metrics[key] = metrics.get(key, 0) + value
-        if not result.choices or result.choices[0].finish_reason == 'length':
+        if not result.choices:
+            capture.invalid('empty_choices')
+            return None
+        if result.choices[0].finish_reason == 'length':
             return None
         if not result.choices[0].finish_reason:
+            capture.invalid('missing_finish_reason')
             raise ModelServerError('계산 라우터 응답에 finish_reason이 없습니다.')
         return result.choices[0].message.content
 
@@ -287,20 +299,22 @@ class LLM:
 
     def _stream(self, messages, max_tokens):
         try:
-            s = self.client.chat.completions.create(
-                model=self.model,
-                messages=messages,
-                max_tokens=max_tokens,
-                temperature=TEMPERATURE,
-                stream=True,
-                stream_options={'include_usage': True},
-                **({'extra_headers': h} if (h := request_headers()) else {}),
-            )
+            with capture_call(openai.OpenAIError, ValueError, httpx.DecodingError) as capture:
+                s = self.client.chat.completions.create(
+                    model=self.model,
+                    messages=messages,
+                    max_tokens=max_tokens,
+                    temperature=TEMPERATURE,
+                    stream=True,
+                    stream_options={'include_usage': True},
+                    **({'extra_headers': h} if (h := request_headers()) else {}),
+                )
         except openai.OpenAIError as e:
             raise convert_error(e) from e
         try:
             yield from responses(s)
         except openai.OpenAIError as e:
+            capture.invalid(type(e).__name__)
             raise convert_error(e) from e
         except httpx.ConnectTimeout as e:
             raise ConnectionError(f'생성 API에 연결할 수 없습니다 ({type(e).__name__})') from e
@@ -308,6 +322,9 @@ class LLM:
             raise ModelServerTimeout(f'생성 API가 응답 중에 멈췄습니다 ({type(e).__name__})') from e
         except httpx.TransportError as e:
             raise ConnectionError(f'생성 API와 연결이 끊겼습니다 ({type(e).__name__})') from e
+        except (RuntimeError, ValueError, httpx.DecodingError) as e:
+            capture.invalid(type(e).__name__)
+            raise
         finally:
             s.close()
 

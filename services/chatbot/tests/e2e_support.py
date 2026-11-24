@@ -109,6 +109,7 @@ class Stack:
         self.request_log = tmp / 'requests.jsonl'
         self.model_wire = tmp / 'model-wire.jsonl'
         self.chat_wire = tmp / 'chat-wire.jsonl'
+        self.wire_order = tmp / 'wire-order'
         self.capture_wire = capture_wire
         self.serve = {
             key: value
@@ -138,7 +139,11 @@ class Stack:
                 clean_env(
                     LAWBOT_MODEL_TOKEN=self.token,
                     LAWBOT_TEST_MODEL_REVISION=STUB_MODEL_REVISION,
-                    **({'LAWBOT_TEST_WIRE': str(self.model_wire)} if capture_wire else {}),
+                    **(
+                        {'LAWBOT_TEST_WIRE': str(self.model_wire), 'LAWBOT_TEST_WIRE_ORDER': str(self.wire_order)}
+                        if capture_wire
+                        else {}
+                    ),
                     **self.serve,
                 ),
                 self.tmp,
@@ -167,7 +172,11 @@ class Stack:
                 LAWBOT_LLM_API_KEY=self.chat_token,
                 LAWBOT_PRO_MODEL=self.chat_model,
                 LAWBOT_TEST_MODEL_REVISION=STUB_MODEL_REVISION,
-                **({'LAWBOT_TEST_WIRE': str(self.chat_wire)} if self.capture_wire else {}),
+                **(
+                    {'LAWBOT_TEST_WIRE': str(self.chat_wire), 'LAWBOT_TEST_WIRE_ORDER': str(self.wire_order)}
+                    if self.capture_wire
+                    else {}
+                ),
             ),
             self.tmp,
         )
