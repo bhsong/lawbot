@@ -114,10 +114,12 @@ def test_web_rejects_db_without_current_schema(tmp_path, problem):
         migrate.init(path)
     if problem == 'older':
         with connection.connect(path, write=True) as conn:
-            conn.execute('DELETE FROM schema_migrations WHERE version=2')
+            conn.execute('DELETE FROM schema_migrations WHERE version=(SELECT max(version) FROM schema_migrations)')
     elif problem == 'newer':
         with connection.connect(path, write=True) as conn:
-            conn.execute("INSERT INTO schema_migrations VALUES (3, 'newer', 'checksum', 'time')")
+            conn.execute(
+                "INSERT INTO schema_migrations SELECT max(version)+1, 'newer', 'checksum', 'time' FROM schema_migrations"
+            )
     elif problem == 'corrupt':
         path.write_text('not SQLite')
     before = path.read_bytes() if path.exists() else None
