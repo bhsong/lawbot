@@ -2,7 +2,7 @@
 
 검색이 끝난 뒤 writer 전에 Qwen을 한 번 불러, 사용자만 아는 사실이 빠져 결론이 달라지면 한 문장으로 되묻는 기능이다. Lawbot2 M5에서 지휘 에이전트(B)의 유일한 장점이 되묻기였기 때문에, 고정 흐름(A)에 되묻기만 더한 A′를 만들어 비교했다. 판정 기준 6개 중 3개를 통과하지 못해 **2026-11-24 소유자 결정으로 취소**했다. 다시 쓸 때를 위해 설계·코드 위치·결과·재평가 방법을 남긴다.
 
-- 계획: [consult-trace-clarify](../plans/consult-trace-clarify.md) 4단계
+- 계획: [consult-trace-clarify](consult-trace-clarify.md) 4단계
 - 평가: [기준선](../evals/2026-11-24-m5-baseline.md) · [A·A′](../evals/2026-11-24-m5-a-aprime.md)
 - 구현: PR #193(`4b6959e`), 운영 v6.5.0에 코드는 있으나 꺼져 있음
 

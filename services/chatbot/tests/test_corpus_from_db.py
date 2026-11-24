@@ -171,7 +171,7 @@ def test_db_startup_errors_precede_model_connection(problem, message, db_path, r
         db_path = db_path.with_name('missing.db')
     elif problem == 'old':
         with connect(db_path, write=True) as conn, transaction(conn):
-            conn.execute('DELETE FROM schema_migrations WHERE version=2')
+            conn.execute('DELETE FROM schema_migrations WHERE version=(SELECT max(version) FROM schema_migrations)')
     elif problem == 'bad-sha':
         assert request.getfixturevalue('corpus_db') == db_path
         corrupt_release(db_path)

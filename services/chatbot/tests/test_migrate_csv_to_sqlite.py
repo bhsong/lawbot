@@ -139,7 +139,7 @@ def test_migrate_legacy_csv_format_and_preserve_human_notes(tmp_path, monkeypatc
                 ('plain', 'Human release note'),
             ],
         )
-    assert migrate.migrate(legacy) == 2
+    assert migrate.migrate(legacy) == 3
     with connect(legacy) as conn:
         rows = {
             key: (json.loads(fmt) if fmt else None, note)

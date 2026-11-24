@@ -11,6 +11,7 @@ export type Config = {
   notice: string
   examples: string[]
   sources_title: string
+  consult_trace: boolean
   feedback: { enabled: boolean; reasons: Option[] }
 }
 

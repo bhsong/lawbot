@@ -3,6 +3,7 @@
 # 점수 내림차순으로 정렬한다 (동점은 임베딩 순위: 하위법령 필터와 같은 rank_order)
 from typing import cast
 
+from lawbot.consult_trace import capture_call, current
 from lawbot.decree import rank_order
 from lawbot.hits import Hit
 
@@ -18,10 +19,12 @@ class Reranker:
 
     def score(self, question, docs):
         """문서마다 P(yes). 0~1 밖(NaN 등)이면 정렬 결과를 믿을 수 없으므로 오류 (서버도 검사함)"""
-        scores = self.client.rerank(self.model, question, docs, TASK, timeout=self.timeout)
-        bad = [i for i, s in enumerate(scores) if not (isinstance(s, (int, float)) and 0.0 <= s <= 1.0)]
-        if bad:
-            raise RuntimeError(f'리랭커 점수가 올바르지 않습니다 (후보 {bad}): {[scores[i] for i in bad]}')
+        with capture_call() as capture:
+            scores = self.client.rerank(self.model, question, docs, TASK, timeout=self.timeout)
+            bad = [i for i, s in enumerate(scores) if not (isinstance(s, (int, float)) and 0.0 <= s <= 1.0)]
+            if bad:
+                capture.invalid('invalid_rerank_score')
+                raise RuntimeError(f'리랭커 점수가 올바르지 않습니다 (후보 {bad}): {[scores[i] for i in bad]}')
         return scores
 
     def rerank(self, question: str, candidates: list[Hit], top_k: int = 3) -> list[Hit]:
@@ -34,7 +37,15 @@ class Reranker:
         if not candidates or not all(isinstance(c, dict) and isinstance(c.get('doc'), str) for c in candidates):
             raise ValueError('후보는 doc 문자열을 가진 검색 결과 dict 목록이어야 합니다')
         scores = self.score(question, [c['doc'] for c in candidates])
-        return [
-            cast(Hit, candidates[i] | {'rerank_score': scores[i], 'emb_rank': i + 1})
-            for i in rank_order(scores)[:top_k]
-        ]
+        ranking = rank_order(scores)
+        if (trace := current()) is not None and trace.stages and trace.stages[-1].stage == 'rerank':
+            trace.stages[-1].result['ranked'] = [
+                {
+                    'law': candidates[i]['law'],
+                    'article_id': candidates[i]['article_id'],
+                    'score': scores[i],
+                    'emb_rank': i + 1,
+                }
+                for i in ranking
+            ]
+        return [cast(Hit, candidates[i] | {'rerank_score': scores[i], 'emb_rank': i + 1}) for i in ranking[:top_k]]

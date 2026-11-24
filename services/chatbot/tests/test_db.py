@@ -44,7 +44,11 @@ def test_init_creates_private_database(tmp_path):
         rows = conn.execute(
             'SELECT version, name, length(checksum), applied_at FROM schema_migrations ORDER BY version'
         ).fetchall()
-    assert [row[:3] for row in rows] == [(1, '0001_init.sql', 64), (2, '0002_corpus_csv_format.sql', 64)]
+    assert [row[:3] for row in rows] == [
+        (1, '0001_init.sql', 64),
+        (2, '0002_corpus_csv_format.sql', 64),
+        (3, '0003_consult_trace.sql', 64),
+    ]
     assert all(row[3] for row in rows)
 
 
@@ -67,7 +71,7 @@ def test_cli_paths_are_relative_to_repo_from_a_subdirectory(tmp_path, monkeypatc
     cli.main(['backup', '--db', db, '--out', copied])
     assert (tmp_path / copied).is_file()
     cli.main(['restore', '--from', copied, '--to', restored])
-    assert migrations.check_schema(tmp_path / restored) == 2
+    assert migrations.check_schema(tmp_path / restored) == 3
     assert not list(workdir.iterdir())
 
 
@@ -128,33 +132,39 @@ def test_foreign_key_violation_rolls_back_write(db_path):
 
 
 def test_migrate_rejects_modified_migration(db_path, tmp_path, monkeypatch):
-    changed = (migrations.MIGRATIONS / '0001_init.sql').read_text(encoding='utf-8') + '\n-- Changed after applying\n'
-    (tmp_path / '0001_init.sql').write_text(changed, encoding='utf-8')
-    next_file = migrations.MIGRATIONS / '0002_corpus_csv_format.sql'
-    (tmp_path / next_file.name).write_bytes(next_file.read_bytes())
+    for file in migrations.MIGRATIONS.iterdir():
+        (tmp_path / file.name).write_bytes(file.read_bytes())
+    changed_file = tmp_path / '0003_consult_trace.sql'
+    with changed_file.open('a', encoding='utf-8') as out:
+        out.write('\n-- Changed after applying\n')
     monkeypatch.setattr(migrations, 'MIGRATIONS', tmp_path)
-    with pytest.raises(RuntimeError, match=r'checksum.*0001_init\.sql'):
+    with pytest.raises(RuntimeError, match=r'checksum.*0003_consult_trace\.sql'):
         migrations.migrate(db_path)
 
 
 def test_migrate_applies_each_version_atomically(db_path, tmp_path, monkeypatch):
     for file in migrations.MIGRATIONS.iterdir():
         (tmp_path / file.name).write_bytes(file.read_bytes())
-    (tmp_path / '0003_add.sql').write_text('CREATE TABLE applied (id INTEGER);', encoding='utf-8')
-    pending = tmp_path / '0004_invalid.sql'
+    (tmp_path / '0004_add.sql').write_text('CREATE TABLE applied (id INTEGER);', encoding='utf-8')
+    pending = tmp_path / '0005_invalid.sql'
     pending.write_text('CREATE TABLE partial (id INTEGER); INSERT INTO nonexistent VALUES (1);', encoding='utf-8')
     monkeypatch.setattr(migrations, 'MIGRATIONS', tmp_path)
     with pytest.raises(sqlite3.OperationalError, match='nonexistent'):
         migrations.migrate(db_path)
     with connection.connect(db_path) as conn:
-        assert conn.execute('SELECT version FROM schema_migrations ORDER BY version').fetchall() == [(1,), (2,), (3,)]
+        assert conn.execute('SELECT version FROM schema_migrations ORDER BY version').fetchall() == [
+            (1,),
+            (2,),
+            (3,),
+            (4,),
+        ]
         assert conn.execute("SELECT name FROM sqlite_schema WHERE name IN ('applied', 'partial')").fetchall() == [
             ('applied',)
         ]
     pending.write_text('CREATE TABLE finished (id INTEGER);', encoding='utf-8')
-    assert migrations.migrate(db_path) == 4
-    assert migrations.migrate(db_path) == 4
-    assert migrations.check_schema(db_path) == 4
+    assert migrations.migrate(db_path) == 5
+    assert migrations.migrate(db_path) == 5
+    assert migrations.check_schema(db_path) == 5
 
 
 def test_schema_version_errors(db_path, tmp_path):
@@ -162,14 +172,14 @@ def test_schema_version_errors(db_path, tmp_path):
     with pytest.raises(FileNotFoundError, match='lawbot-db init'):
         migrations.check_schema(missing)
     assert not missing.exists()
-    assert migrations.check_schema(db_path) == 2
+    assert migrations.check_schema(db_path) == 3
     with connection.connect(db_path, write=True) as conn:
         with connection.transaction(conn):
-            conn.execute('UPDATE schema_migrations SET version = 3 WHERE version = 2')
+            conn.execute('UPDATE schema_migrations SET version = 4 WHERE version = 3')
         with pytest.raises(RuntimeError, match=r'스키마 버전.*높습니다'):
             migrations.check_schema(db_path)
         with connection.transaction(conn):
-            conn.execute('DELETE FROM schema_migrations WHERE version = 3')
+            conn.execute('DELETE FROM schema_migrations WHERE version = 4')
         with pytest.raises(RuntimeError, match=r'스키마 버전.*낮습니다.*lawbot-db migrate'):
             migrations.check_schema(db_path)
 
@@ -179,6 +189,24 @@ def add_feedback(conn, feedback_id, question):
         'INSERT INTO feedbacks (feedback_id, turn_id, ts, label, question, record, origin) VALUES (?, ?, ?, ?, ?, ?, ?)',
         (feedback_id, 'turn', 'now', 'like', question, '{}', 'test'),
     )
+
+
+def test_v2_database_migrates_without_changing_existing_records(tmp_path):
+    legacy = tmp_path / 'legacy'
+    legacy.mkdir()
+    for name in ('0001_init.sql', '0002_corpus_csv_format.sql'):
+        (legacy / name).write_bytes((migrations.MIGRATIONS / name).read_bytes())
+    db = tmp_path / 'private' / 'lawbot.db'
+    assert migrations.init(db, directory=legacy) == 2
+    with connection.connect(db, write=True) as conn:
+        add_feedback(conn, 'fb-before-trace', 'Existing synthetic question')
+        history = conn.execute('SELECT * FROM schema_migrations ORDER BY version').fetchall()
+        prior = conn.execute('SELECT * FROM feedbacks').fetchall()
+    assert migrations.migrate(db) == 3 and migrations.check_schema(db) == 3
+    with connection.connect(db) as conn:
+        assert conn.execute('SELECT * FROM schema_migrations WHERE version < 3 ORDER BY version').fetchall() == history
+        assert conn.execute('SELECT * FROM feedbacks').fetchall() == prior
+        assert conn.execute('SELECT count(*) FROM consults').fetchone() == (0,)
 
 
 def test_feedback_is_append_only(db_path):
@@ -267,7 +295,7 @@ def test_online_backup_and_restore_with_open_writer(db_path, tmp_path):
     backups.restore(out, restored)
     assert mode(out) == mode(restored) == 0o600
     assert mode(out.parent) == mode(restored.parent) == 0o700
-    assert migrations.check_schema(restored) == 2
+    assert migrations.check_schema(restored) == 3
     with connection.connect(restored) as conn:
         assert conn.execute('PRAGMA integrity_check').fetchall() == [('ok',)]
         assert feedback_snapshot(conn) == expected

@@ -9,7 +9,7 @@ import threading
 import time
 import uuid
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from functools import cached_property, partial
 from pathlib import Path
 from typing import Any, cast
@@ -17,7 +17,7 @@ from typing import Any, cast
 import httpx
 from openai import OpenAI
 
-from lawbot import corpus_store, deploy, manifest
+from lawbot import consult_trace, corpus_store, deploy, manifest
 from lawbot import decree as decree_filter
 from lawbot.answer_format import calculator_evidence, mark_unverified, review_answer
 from lawbot.api_client import (
@@ -208,15 +208,21 @@ def load_app(settings=None, *, cached_index_only=False):
     wait, limit = cfg.server_wait, request_timeout(cfg.read_timeout)
     log.info(f'모델 서버 {url} 준비 대기 (최대 {wait:g}초)')
     wait_ready(client, wait)
+    generation_http = (consult_trace.TraceClient if cfg.consult_trace else httpx.Client)(trust_env=external)
     oa = OpenAI(
         base_url=llm_url,
         api_key=llm_key,
         max_retries=0,
         timeout=limit,  # pyright: ignore[reportArgumentType]
-        http_client=httpx.Client(trust_env=external),  # pyright: ignore[reportArgumentType]
+        http_client=generation_http,  # pyright: ignore[reportArgumentType]
     )
     chat_available = None if external else _wait_generation_models(oa, wait)
     available = client.models()
+    model_http = getattr(client, 'http', None)
+    if isinstance(model_http, consult_trace.TraceClient):
+        model_http.revisions = {row['id']: row.get('revision') for row in available}
+    if isinstance(generation_http, consult_trace.TraceClient):
+        generation_http.revisions = {row['id']: row.get('revision') for row in chat_available or ()}
     missing = missing_models(available, p, rr, chat_available=chat_available)
     if missing:
         raise RuntimeError(
@@ -295,17 +301,21 @@ def retrieve(app, question, k, st: Timing) -> tuple[list[Hit], list[Hit]]:
     st['_stage'] = 'search'
     t0 = time.perf_counter()
     count_call(st, 'embedding', 'search')
-    if app.reranker is None:
-        hits = app.retriever.search(question, k=k)
+    with consult_trace.stage('search', query=question) as step:
+        candidates = app.retriever.search(question, k=k if app.reranker is None else app.reranker.candidates)
         st['search'] = time.perf_counter() - t0
-        return hits, []
-    candidates = app.retriever.search(question, k=app.reranker.candidates)
-    st['search'] = time.perf_counter() - t0
+        if step is not None:
+            step.update(candidates=candidates, elapsed_s=st['search'])
+    if app.reranker is None:
+        return candidates, []
     st['_stage'] = 'rerank'
     t1 = time.perf_counter()
     count_call(st, 'rerank')
-    hits = app.reranker.rerank(question, candidates, top_k=k)
-    st['rerank'] = time.perf_counter() - t1
+    with consult_trace.stage('rerank', query=question) as step:
+        hits = app.reranker.rerank(question, candidates, top_k=k)
+        st['rerank'] = time.perf_counter() - t1
+        if step is not None:
+            step.update(selected=hits, elapsed_s=st['rerank'])
     if getattr(app, 'decree', None) is None:
         return hits, []
     return hits, retrieve_decrees(app, question, hits[0]['law'], st)
@@ -317,15 +327,21 @@ def retrieve_decrees(app, question, top1_law, st: Timing) -> list[Hit]:
     st['_stage'] = 'search'
     t0 = time.perf_counter()
     count_call(st, 'embedding', 'search')
-    cands = app.retriever.search_decrees(question, k=dc.candidates)
-    st['decree_search'] = time.perf_counter() - t0
+    with consult_trace.stage('decree_search', query=question) as step:
+        cands = app.retriever.search_decrees(question, k=dc.candidates)
+        st['decree_search'] = time.perf_counter() - t0
+        if step is not None:
+            step.update(candidates=cands, elapsed_s=st['decree_search'])
     st['_stage'] = 'rerank'
     t1 = time.perf_counter()
     count_call(st, 'rerank')
-    scored = app.reranker.rerank(question, cands, top_k=len(cands))
-    st['decree_rerank'] = time.perf_counter() - t1
-    att = decree_filter.attach(scored, top1_law, dc.tau, dc.k)
-    st['decree_candidates'], st['n_decree'] = scored, len(att)
+    with consult_trace.stage('decree_rerank', query=question) as step:
+        scored = app.reranker.rerank(question, cands, top_k=len(cands))
+        st['decree_rerank'] = time.perf_counter() - t1
+        att = decree_filter.attach(scored, top1_law, dc.tau, dc.k)
+        st['decree_candidates'], st['n_decree'] = scored, len(att)
+        if step is not None:
+            step.update(ranked=scored, attached=att, elapsed_s=st['decree_rerank'])
     return att
 
 
@@ -455,6 +471,10 @@ def request_record(app, st, status, error):
         rec['failure'] = st['failure']
     if 'call_counts' in st:
         rec['call_counts'] = st['call_counts']
+    if 'trace_status' in st:
+        rec['trace_status'] = st['trace_status']
+    if 'trace_error' in st:
+        rec['trace_error'] = st['trace_error']
     return rec | {'status': status, 'error_type': error}
 
 
@@ -462,7 +482,7 @@ CITE_VERDICTS = ('ok', 'outside', 'wrong_law', 'nonexistent', 'ambiguous')
 CITE_FIELDS = tuple(f'cite_{v}' for v in CITE_VERDICTS)
 
 
-def answer_check(app, raw, hits, *, verified=frozenset()):
+def answer_check(app, raw, hits, *, verified=frozenset(), trace_result=None):
     """요청 로그용 답변 요약 (내용 없이 수만): 거절 여부, 인용 수, citation.check 판정별 인용 수
     전체 조문은 검색기 기준. 판정에 실패해도 답변은 막지 않는다 (값 없음)"""
     try:
@@ -470,7 +490,14 @@ def answer_check(app, raw, hits, *, verified=frozenset()):
 
         articles = citation.article_keys(app.retriever)
         cites = citation.check(citation.citations(raw), hits, articles)
-        conclusion = review_answer(raw, hits, articles, verified=verified).conclusion_cites
+        review = review_answer(raw, hits, articles, verified=verified)
+        conclusion = review.conclusion_cites
+        if trace_result is not None:
+            trace_result.update(
+                conclusion=[asdict(item) for item in conclusion],
+                grounds=[asdict(item) for item in review.ground_cites],
+                refused=review.refused,
+            )
         counts = {v: sum(c.verdict == v for c in conclusion) for v in CITE_VERDICTS}
         verdicts = [v for _, _, v, _ in cites]
         return (
@@ -478,7 +505,9 @@ def answer_check(app, raw, hits, *, verified=frozenset()):
             | {f'cite_{v}': verdicts.count(v) for v in CITE_VERDICTS}
             | {f'concl_cite_{v}': n for v, n in counts.items()}
         )
-    except Exception:
+    except Exception as exc:
+        if trace_result is not None:
+            trace_result['error_type'] = type(exc).__name__
         return {}
 
 
@@ -577,9 +606,12 @@ def _answer(app, question, k, request_id, report, calculation_candidate, clarify
                 if 'call_counts' in st:
                     st['call_counts']['router'] = 0
                 count_call(st, 'router')
-            routing = route_calculation(question, classify, lambda: active_calculators(app))
-            route_ms = (time.perf_counter() - route_started) * 1000
-            payload = routing.payload
+            with consult_trace.stage('router', query=question) as step:
+                routing = route_calculation(question, classify, lambda: active_calculators(app))
+                route_ms = (time.perf_counter() - route_started) * 1000
+                payload = routing.payload
+                if step is not None:
+                    step.update(routing=payload, reason=routing.reason, elapsed_ms=route_ms)
             is_lookup = payload['status'] == 'lookup'
             st['calculation_metrics'] = {
                 'calculator': payload['calculator'],
@@ -599,7 +631,10 @@ def _answer(app, question, k, request_id, report, calculation_candidate, clarify
             REQUEST_ID.set(st['request_id'])
         if provided is None:
             law_hits, decree_hits = retrieve(app, question, k, st)
-            hits = _model_hits(app.retriever, law_hits, decree_hits, st)
+            with consult_trace.stage('definitions') as step:
+                hits = _model_hits(app.retriever, law_hits, decree_hits, st)
+                if step is not None:
+                    step.update(provided=hits, definitions=st.get('n_definitions'), decrees=decree_hits)
         else:
             hits = provided
             st['n_decree'] = sum(decree_filter.is_decree(h) for h in hits)
@@ -612,9 +647,12 @@ def _answer(app, question, k, request_id, report, calculation_candidate, clarify
         if clarify and '_calculation' not in st:
             REQUEST_ID.set(st['request_id'])
             started = time.perf_counter()
-            decision, attempts, metrics = llm.clarify(question, hits)
-            st['_clarify_attempts'] = attempts
-            st['clarify_metrics'] = metrics | {'clarify_ms': round((time.perf_counter() - started) * 1000, 3)}
+            with consult_trace.stage('clarify') as step:
+                decision, attempts, metrics = llm.clarify(question, hits)
+                st['_clarify_attempts'] = attempts
+                st['clarify_metrics'] = metrics | {'clarify_ms': round((time.perf_counter() - started) * 1000, 3)}
+                if step is not None:
+                    step.update(decision=decision, attempts=attempts, metrics=st['clarify_metrics'])
             if decision is not None and decision['ask']:
                 st['total'] = time.perf_counter() - t0
                 log_timing(st)
@@ -631,25 +669,50 @@ def _answer(app, question, k, request_id, report, calculation_candidate, clarify
         if trace:
             st['_writer_messages'] = []
             options['capture_messages'] = st['_writer_messages']
-        for r in llm.stream(question, hits, **options):
-            if last is None:
-                st['ttft'] = time.perf_counter() - t_gen
-            last = r
-            if r.text and not raw:
-                st['first_text'] = time.perf_counter() - t0
-            raw += r.text
-            yield 'generate', hits, raw, st
-        st['total'] = time.perf_counter() - t0
-        for name, attr in (
-            ('tps', 'generation_tps'),
-            ('prompt_tokens', 'prompt_tokens'),
-            ('prompt_tps', 'prompt_tps'),
-            ('gen_tokens', 'generation_tokens'),
-            ('peak_gb', 'peak_memory'),
-            ('finish', 'finish_reason'),
-        ):
-            st[name] = getattr(last, attr, None)
-        st |= cast(Timing, answer_check(app, raw, hits, verified=calculator_evidence(st.get('_calculation', {}))))
+        with consult_trace.stage('writer', provided=hits) as step:
+            stream = iter(llm.stream(question, hits, **options))
+            try:
+                for r in stream:
+                    if last is None:
+                        st['ttft'] = time.perf_counter() - t_gen
+                    last = r
+                    if r.text and not raw:
+                        st['first_text'] = time.perf_counter() - t0
+                    raw += r.text
+                    yield 'generate', hits, raw, st
+            finally:
+                if step is not None:
+                    step['raw'] = raw
+                if (close := getattr(stream, 'close', None)) is not None:
+                    close()
+            st['total'] = time.perf_counter() - t0
+            for name, attr in (
+                ('tps', 'generation_tps'),
+                ('prompt_tokens', 'prompt_tokens'),
+                ('prompt_tps', 'prompt_tps'),
+                ('gen_tokens', 'generation_tokens'),
+                ('peak_gb', 'peak_memory'),
+                ('finish', 'finish_reason'),
+            ):
+                st[name] = getattr(last, attr, None)
+            if step is not None:
+                step.update(
+                    {
+                        key: st.get(key)
+                        for key in ('ttft', 'first_text', 'total', 'prompt_tokens', 'gen_tokens', 'finish')
+                    }
+                )
+        with consult_trace.stage('citation') as step:
+            st |= cast(
+                Timing,
+                answer_check(
+                    app,
+                    raw,
+                    hits,
+                    verified=calculator_evidence(st.get('_calculation', {})),
+                    trace_result=step,
+                ),
+            )
         if (payload := st.get('_calculation')) and payload['status'] == 'calculated':
             st.setdefault('calculation_metrics', {})['calculation_check'] = check_conclusion(raw, payload)
         log_timing(st)

@@ -40,6 +40,10 @@
 .admin-original { white-space: pre-wrap; overflow-wrap: anywhere; }
 .admin-error { color: var(--danger); }
 
+.admin-consults > section + section { margin-top: 16px; }
+.admin-consults summary { cursor: pointer; }
+.admin-consults pre { max-block-size: 24rem; overflow: auto; }
+
 .admin-holds button { min-height: 2.5rem; }
 .admin-holds button[aria-pressed="true"] { border-color: var(--accent); font-weight: 650; }
 .admin-calendar-list { list-style: none; padding: 0; }

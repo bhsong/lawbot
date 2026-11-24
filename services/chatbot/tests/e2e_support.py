@@ -99,7 +99,7 @@ def start_web(log_dir, port, *, command=None, **env):
 class Stack:
     """A web app, a generation-only HTTP fake, and the real embedding/rerank app with fake models."""
 
-    def __init__(self, tmp, read_timeout, example='.env.example', *, web_command=None, **extra_env):
+    def __init__(self, tmp, read_timeout, example='.env.example', *, web_command=None, capture_wire=False, **extra_env):
         self.tmp, self.ms, self.chat, self.mode, self.n = tmp, None, None, None, 0
         self.token, self.chat_token = TEST_TOKEN, TEST_LLM_TOKEN
         self.ms_port, self.chat_port, self.web_port = free_port(), free_port(), free_port()
@@ -107,6 +107,10 @@ class Stack:
         self.ms_url = f'http://127.0.0.1:{self.ms_port}'
         self.chat_url = f'http://127.0.0.1:{self.chat_port}'
         self.request_log = tmp / 'requests.jsonl'
+        self.model_wire = tmp / 'model-wire.jsonl'
+        self.chat_wire = tmp / 'chat-wire.jsonl'
+        self.wire_order = tmp / 'wire-order'
+        self.capture_wire = capture_wire
         self.serve = {
             key: value
             for key, value in example_env().items()
@@ -125,13 +129,23 @@ class Stack:
             LAWBOT_MODEL_SERVER_WAIT='30',
         )
         web_env.update(extra_env)
+        self.web_env = web_env
         self.chat_model = web_env.get('LAWBOT_PRO_MODEL', 'qwen3.8-27b-4bit')
         self.web = None
         try:
             self.ms = Proc(
                 'model-server',
                 [sys.executable, str(TESTS / 'e2e_model_server.py'), str(self.ms_port), 'models'],
-                clean_env(LAWBOT_MODEL_TOKEN=self.token, LAWBOT_TEST_MODEL_REVISION=STUB_MODEL_REVISION, **self.serve),
+                clean_env(
+                    LAWBOT_MODEL_TOKEN=self.token,
+                    LAWBOT_TEST_MODEL_REVISION=STUB_MODEL_REVISION,
+                    **(
+                        {'LAWBOT_TEST_WIRE': str(self.model_wire), 'LAWBOT_TEST_WIRE_ORDER': str(self.wire_order)}
+                        if capture_wire
+                        else {}
+                    ),
+                    **self.serve,
+                ),
                 self.tmp,
             )
             self.ms.wait_http(
@@ -158,6 +172,11 @@ class Stack:
                 LAWBOT_LLM_API_KEY=self.chat_token,
                 LAWBOT_PRO_MODEL=self.chat_model,
                 LAWBOT_TEST_MODEL_REVISION=STUB_MODEL_REVISION,
+                **(
+                    {'LAWBOT_TEST_WIRE': str(self.chat_wire), 'LAWBOT_TEST_WIRE_ORDER': str(self.wire_order)}
+                    if self.capture_wire
+                    else {}
+                ),
             ),
             self.tmp,
         )
@@ -194,6 +213,16 @@ class Stack:
 def request_log(path):
     p = Path(path)
     return [json.loads(line) for line in p.read_text(encoding='utf-8').splitlines()] if p.exists() else []
+
+
+def wait_request_log(page, path, before):
+    """Wait for the server's post-response persistence of exactly one request."""
+    deadline = time.monotonic() + 10
+    while not (rows := request_log(path)[before:]):
+        assert time.monotonic() < deadline, 'Request log was not finalized'
+        page.wait_for_timeout(50)
+    assert len(rows) == 1
+    return rows[0]
 
 
 def capture_response_body(page, path):
@@ -245,6 +274,10 @@ def ask(page, question):
 
 def answer(page):
     return page.get_by_test_id('answer').last
+
+
+def answer_body(page):
+    return answer(page).get_by_test_id('answer-body')
 
 
 def stats(page):

@@ -9,6 +9,7 @@ const config: Config = {
   notice: '법령 기준일 2026-10-20',
   examples: ['예시 질문'],
   sources_title: '검색된 조문',
+  consult_trace: false,
   feedback: { enabled: false, reasons: [] },
 }
 

@@ -828,8 +828,8 @@ def test_router_unavailable_shows_temporary_guidance_and_continues_rag(env, real
     diagnostic = 'fixture private transport diagnostic'
     router_tokens = []
 
-    def unavailable(self, system, user, max_tokens, metrics):
-        router_tokens.append(max_tokens)
+    def unavailable(self, system, user, max_tokens, metrics, purpose):
+        router_tokens.append((max_tokens, purpose))
         raise ac.ModelServerError(diagnostic, 503)
 
     env.setattr(service.LLM, '_router_completion', unavailable)
@@ -843,7 +843,7 @@ def test_router_unavailable_shows_temporary_guidance_and_continues_rag(env, real
     assert diagnostic not in events['calculation']['message']
     assert events['done']['text'].startswith('예고해야 합니다.')
     assert 'error' not in events
-    assert router_tokens == [SELECT_MAX_TOKENS]
+    assert router_tokens == [(SELECT_MAX_TOKENS, 'router_select')]
     [(messages, _)] = real_server.chat[app.profile.model.model].calls
     assert messages[1]['content'].startswith('[참고 조문]\n')
     assert '직접 계산하지 말고 계산에 필요한 정보와 근거 조문만 안내할 것.' in messages[1]['content']

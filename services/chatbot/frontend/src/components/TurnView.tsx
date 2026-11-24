@@ -44,7 +44,7 @@ export function TurnView({ turn, selected, reasons, onSelect, onRetry, retryDisa
           </p>
         )}
         {turn.text && (
-          <div className="answer">
+          <div className="answer" data-testid="answer-body">
             {turn.draft && <p className="note">답변 초안</p>}
             <AnswerMarkdown text={turn.text} />
           </div>
