@@ -27,6 +27,24 @@ from lawbot.paths import DATA, ROOT
 from lawbot_common.llm_endpoint import generation_model
 
 QUESTIONS = DATA / 'v5' / 'qa_reasoning_val.csv'
+CONNECTION_KEYS = (
+    'LAWBOT_MODEL_SERVER',
+    'LAWBOT_MODEL_TOKEN',
+    'LAWBOT_LLM_BASE_URL',
+    'LAWBOT_LLM_API_KEY',
+    'LAWBOT_LLM_ALLOW_EXTERNAL',
+)
+
+
+def evaluation_env(output):
+    """Use the fixed development profile, taking only connection values from the environment."""
+    envfile.load()
+    example = ROOT / '.env.dev.example'
+    env = envfile.parse(example.read_text(encoding='utf-8'), example.name)
+    connection = {key: os.environ.get(key, '') for key in CONNECTION_KEYS}
+    env.update(connection)
+    env.update(LAWBOT_REQUEST_LOG=str(output / 'requests.jsonl'), LAWBOT_MODEL_READ_TIMEOUT='300')
+    return env, tuple(connection[key] for key in CONNECTION_KEYS if key != 'LAWBOT_LLM_ALLOW_EXTERNAL')
 
 
 def load_questions():
@@ -86,7 +104,7 @@ def run_questions(app, rows, output):
     return {'overall': dict(overall), 'by_error_type': {name: dict(counts) for name, counts in groups.items()}}
 
 
-def snapshot(cfg, client, *, preflight=False):
+def snapshot(cfg, client, *, preflight=False, extra_files=None):
     """Read runtime metadata without issuing an inference request."""
     if preflight and time(6, 20) <= datetime.now(ZoneInfo('Asia/Seoul')).time() <= time(6, 50):
         raise RuntimeError('조문 자동 갱신 시간대입니다.')
@@ -117,6 +135,8 @@ def snapshot(cfg, client, *, preflight=False):
     if any(not model['revision'] or (preflight and not model['loaded']) for model in models):
         raise RuntimeError('임베딩·리랭커 모델의 revision과 상주 상태를 확인하세요.')
     chat_model = {} if cfg.llm_external else generation_model(chat, spec.model)
+    if preflight and chat_model.get('loaded', True) is not True:
+        raise RuntimeError('상주 중인 생성 모델만 사용할 수 있습니다.')
     if not cfg.llm_external and not chat_model.get('revision'):
         raise RuntimeError('생성 모델 revision을 확인하세요.')
     if not cfg.llm_external and not chat_model.get('mlx_lm_version'):
@@ -126,7 +146,12 @@ def snapshot(cfg, client, *, preflight=False):
     data = manifest.load(combined)
     if not data or not data.get('dataset_version'):
         raise RuntimeError('v5 조문 매니페스트를 확인하세요.')
-    files = (law, combined, profile.system_file, QUESTIONS, Path(__file__))
+    files = (
+        law,
+        combined,
+        profile.system_file,
+        *(extra_files if extra_files is not None else (QUESTIONS, Path(__file__))),
+    )
     return {
         'webapp_commit': subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=ROOT, text=True).strip(),
         'model_server_commit': health['commit'],
@@ -150,11 +175,15 @@ def comparable(snapshot):
     return snapshot | {'models': [{k: v for k, v in model.items() if k != 'loaded'} for model in snapshot['models']]}
 
 
+def redact(text, sensitive):
+    for value in sorted({value.strip() for value in sensitive if value.strip()}, key=len, reverse=True):
+        text = text.replace(value, '<비공개>')
+    return text
+
+
 def report_failure(stage, exc, output, sensitive):
     """Render the original exception chain without locals or configured secrets."""
-    details = f'평가 중단 · {stage}\n' + ''.join(traceback.format_exception(exc))
-    for value in sorted({value.strip() for value in sensitive if value.strip()}, key=len, reverse=True):
-        details = details.replace(value, '<비공개>')
+    details = redact(f'평가 중단 · {stage}\n' + ''.join(traceback.format_exception(exc)), sensitive)
     print(details, file=sys.stderr, end='')
     if output is not None:
         try:
@@ -173,22 +202,7 @@ def main():
     if [row['id'] for row in rows] != [*(f'ERR{i:03}' for i in range(1, 31)), 'CARD01', 'CARD02']:
         raise SystemExit('고정 검증셋 문항 ID와 순서를 확인하세요.')
 
-    envfile.load()
-    example = ROOT / '.env.dev.example'
-    env = envfile.parse(example.read_text(encoding='utf-8'), example.name)
-    connection = {
-        key: os.environ.get(key, '')
-        for key in (
-            'LAWBOT_MODEL_SERVER',
-            'LAWBOT_MODEL_TOKEN',
-            'LAWBOT_LLM_BASE_URL',
-            'LAWBOT_LLM_API_KEY',
-            'LAWBOT_LLM_ALLOW_EXTERNAL',
-        )
-    }
-    env.update(connection)
-    env.update(LAWBOT_REQUEST_LOG=str(args.output / 'requests.jsonl'), LAWBOT_MODEL_READ_TIMEOUT='300')
-    sensitive = tuple(connection.values())
+    env, sensitive = evaluation_env(args.output)
 
     # The web app startup log includes the model server address.
     log = logging.getLogger('lawbot')
