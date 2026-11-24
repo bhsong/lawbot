@@ -65,6 +65,10 @@ def wire(client):
             1,
         ),
         ([completion(NO_ASK, 'length')], 'failed_open', 'length', 0),
+        ([completion(NO_ASK, 'content_filter')], 'failed_open', 'content_filter', 0),
+        ([completion(NO_ASK, 'tool_calls')], 'failed_open', 'tool_calls', 0),
+        ([completion(NO_ASK, None)], 'failed_open', 'missing_finish', 0),
+        (['{"ask":true,"missing":[],"question":"그런가요?"}', NO_ASK], 'not_asked', None, 1),
         ([openai.APIConnectionError(request=httpx.Request('POST', '/'))], 'failed_open', 'call_error', 0),
     ],
 )
@@ -116,13 +120,35 @@ def test_followup_resumes_same_articles_once_and_keeps_trace_out_of_log(tmp_path
     records = path.read_text()
     assert [json.loads(line)['clarify_status'] for line in records.splitlines()] == ['asked', 'skipped']
     assert not any(text in records for text in (QUESTION, FOLLOWUP, REPLY, '상시 근로자 수', 'messages'))
-    assert not any(text in capsys.readouterr().out for text in (QUESTION, FOLLOWUP, REPLY))
+    captured = capsys.readouterr()
+    assert not any(text in captured.out + captured.err for text in (QUESTION, FOLLOWUP, REPLY))
 
 
-def test_calculation_guidance_skips_clarification(tmp_path):
-    client = Client('{"calculator":"unsupported"}')
-    stages = list(service.ask(make_app(tmp_path / 'log', client), QUESTION, clarify=True, calculation_candidate=True))
-    assert stages[0][0] == 'calculation'
+@pytest.mark.parametrize(
+    ('question', 'replies', 'reason', 'status', 'router_calls', 'judge_calls'),
+    [
+        (QUESTION, ['unsupported'], 'unsupported_question', 'none', 1, 0),
+        (QUESTION, ['lookup', NO_ASK], 'lookup_question', 'none', 1, 1),
+        (
+            '2026년 의료비 300만 원, 실손보험금 100만 원, 총급여 5천만 원입니다. 의료비 세액공제액은 얼마인가요?',
+            ['medical_expense_credit', '1=x\n2=medical_expenses\n3=insurance_reimbursement\n4=gross_pay'],
+            'selected',
+            'calculated',
+            2,
+            0,
+        ),
+    ],
+)
+def test_final_calculation_route_controls_clarification(
+    tmp_path, monkeypatch, question, replies, reason, status, router_calls, judge_calls
+):
+    monkeypatch.setattr(service, 'active_calculators', lambda _app: {'medical_expense_credit': ()})
+    client = Client(*replies)
+    app = make_app(tmp_path / 'log', client)
+    stages = list(service.ask(app, question, clarify=True, calculation_candidate=True))
     assert stages[-1][0] == 'done'
-    assert len(client.calls) == 2 and not client.calls[0]['stream'] and client.calls[1]['stream']
-    assert json.loads((tmp_path / 'log').read_text())['clarify_status'] == 'skipped'
+    row = json.loads((tmp_path / 'log').read_text())
+    assert (row['router_reason'], row['calculation_status'], row['router_calls']) == (reason, status, router_calls)
+    assert row.get('clarify_calls', 0) == judge_calls
+    assert row['clarify_status'] == ('not_asked' if judge_calls else 'skipped')
+    assert len(client.calls) == router_calls + judge_calls + 1 and client.calls[-1]['stream']

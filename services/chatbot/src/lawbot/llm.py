@@ -18,6 +18,7 @@ from lawbot.api_client import (
     request_headers,
 )
 from lawbot.hits import Clarification, ClarifyAttempt, Hit
+from lawbot.inference import failure_fields, observe_inference
 from lawbot.paths import DATA
 
 CLARIFY_SYSTEM_FILE = DATA / 'v5' / 'system_clarify.txt'
@@ -126,7 +127,7 @@ def _parse_clarification(text: str | None) -> Clarification | None:
         return None
     if any(not isinstance(item, str) or not item.strip() for item in missing):
         return None
-    if (ask and not question.strip()) or (not ask and (missing or question)):
+    if (ask and (not missing or not question.strip())) or (not ask and (missing or question)):
         return None
     return Clarification(ask=ask, missing=missing, question=question.strip())
 
@@ -160,9 +161,12 @@ class LLM:
             attempt = ClarifyAttempt(messages=messages, raw=None, parsed=None, retry=retry, finish=None, error=None)
             attempts.append(attempt)
             try:
-                result = self._plain_completion(messages, CLARIFY_MAX_TOKENS)
+                result = self._plain_completion(messages, CLARIFY_MAX_TOKENS, 'clarify_retry' if retry else 'clarify')
             except (openai.OpenAIError, httpx.TransportError) as exc:
                 attempt['error'] = type(exc).__name__
+                fields = failure_fields('clarify', exc)
+                metrics['clarify_exception'] = fields['exception']
+                metrics['clarify_status_code'] = fields['status_code']
                 failure = 'call_error'
                 break
             if result.usage is not None:
@@ -171,11 +175,15 @@ class LLM:
             if result.choices:
                 choice = result.choices[0]
                 attempt.update(raw=choice.message.content, finish=choice.finish_reason)
-            if attempt['finish'] == 'length':
-                failure = 'length'
+            if attempt['finish'] != 'stop':
+                finish = attempt['finish']
+                failure = (
+                    finish
+                    if finish in ('length', 'content_filter', 'tool_calls', 'function_call')
+                    else ('missing_finish' if finish is None else 'unexpected_finish')
+                )
                 break
-            if attempt['finish'] == 'stop':
-                decision = _parse_clarification(attempt['raw'])
+            decision = _parse_clarification(attempt['raw'])
             attempt['parsed'] = decision
             failure = None if decision is not None else 'invalid_json'
             if decision is not None:
@@ -218,23 +226,24 @@ class LLM:
         )
         return None if labels is None else compose_route(question, selection, labels)
 
-    def _plain_completion(self, messages, max_tokens: int):
-        return self.client.chat.completions.create(
-            model=self.model,
-            messages=messages,
-            max_tokens=max_tokens,
-            temperature=TEMPERATURE,
-            stream=False,
-            extra_body={'chat_template_kwargs': {'enable_thinking': False}},
-            **({'extra_headers': h} if (h := request_headers()) else {}),
-        )
+    def _plain_completion(self, messages, max_tokens: int, stage: str):
+        with observe_inference(stage):
+            return self.client.chat.completions.create(
+                model=self.model,
+                messages=messages,
+                max_tokens=max_tokens,
+                temperature=TEMPERATURE,
+                stream=False,
+                extra_body={'chat_template_kwargs': {'enable_thinking': False}},
+                **({'extra_headers': h} if (h := request_headers()) else {}),
+            )
 
     def _router_completion(self, system: str, user: str, max_tokens: int, metrics: dict[str, int] | None) -> str | None:
         if metrics is not None:
             metrics['router_calls'] = metrics.get('router_calls', 0) + 1
         try:
             result = self._plain_completion(
-                [{'role': 'system', 'content': system}, {'role': 'user', 'content': user}], max_tokens
+                [{'role': 'system', 'content': system}, {'role': 'user', 'content': user}], max_tokens, 'router'
             )
         except openai.APITimeoutError as exc:
             raise RouterTimeout(exc.__cause__) from exc
@@ -263,6 +272,10 @@ class LLM:
             messages[-1]['content'] += suffix
         if capture_messages is not None:
             capture_messages.extend(messages)
+        with observe_inference('writer'):
+            yield from self._stream(messages, max_tokens)
+
+    def _stream(self, messages, max_tokens):
         try:
             s = self.client.chat.completions.create(
                 model=self.model,

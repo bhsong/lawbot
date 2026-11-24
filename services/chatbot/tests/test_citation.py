@@ -234,7 +234,7 @@ def test_parse_addendum_articles():
                 ('근로기준법 제26조', 'ok'),
                 ('같은 법 시행령 제26조', 'wrong_law'),
                 ('제43조', 'wrong_law'),
-                ('같은 법 제43조', 'ok'),
+                ('같은 법 제43조', 'ambiguous'),
             ],
         ),
         (
@@ -242,7 +242,7 @@ def test_parse_addendum_articles():
             [
                 ('근로기준법 시행령 제26조', 'wrong_law'),
                 ('동법 제26조', 'wrong_law'),
-                ('같은 법 시행규칙 제26조', 'wrong_law'),
+                ('같은 법 시행규칙 제26조', 'ambiguous'),
             ],
         ),
         (

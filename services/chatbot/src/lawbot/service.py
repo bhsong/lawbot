@@ -19,7 +19,7 @@ from openai import OpenAI
 
 from lawbot import corpus_store, deploy, manifest
 from lawbot import decree as decree_filter
-from lawbot.answer_format import review_answer
+from lawbot.answer_format import calculator_evidence, mark_unverified, review_answer
 from lawbot.api_client import (
     REQUEST_ID,
     WAIT_INTERVAL,
@@ -34,8 +34,10 @@ from lawbot.api_client import (
 )
 from lawbot.calc_corpus import calculator_compatibility, database_calculator_compatibility
 from lawbot.calc_router import check_conclusion, prompt_suffix, route_calculation
-from lawbot.embed_cache import EmbedCache, cache_key, embedding_metadata
+from lawbot.citation import check_spans
+from lawbot.embed_cache import EmbedCache, EmbeddingCacheUnavailable, cache_key, embedding_metadata
 from lawbot.hits import Hit, Timing
+from lawbot.inference import InferenceControlError, failure_fields
 from lawbot.llm import LLM, convert_error
 from lawbot.paths import ROOT
 from lawbot.reranker import Reranker
@@ -52,7 +54,7 @@ class AskError(Exception):
     """ask 중 오류: kind(요청 로그 error_type·화면 안내 기준), stage(실패한 단계). 원래 예외는 __cause__"""
 
     def __init__(self, kind, stage, cause):
-        super().__init__(f'{type(cause).__name__}: {cause}')
+        super().__init__(f'{stage}: {type(cause).__name__}')
         self.kind, self.stage = kind, stage
 
 
@@ -184,13 +186,15 @@ def _record_embeddings(db, release_id, retriever, profile, decree, revision):
     corpus_store.record_embeddings(db, release_id, entries)
 
 
-def load_app(settings=None):
+def load_app(settings=None, *, cached_index_only=False):
     """웹앱·평가용 LawbotApp: 조문 인덱스(임베딩은 모델 서버) + 켜져 있으면 리랭커 + 답변 모델
     settings: lawbot.settings.Settings (없으면 지금 환경 변수로 settings.load()). 설정이 틀리면 모델 서버에 접속하기 전에
     SettingsError로 모두 알린다. 서버가 준비될 때까지 기다린 뒤, 필요한 모델 id가 서버 /v1/models에 없으면 시작을 거부한다"""
     from lawbot import settings as settings_mod
 
     cfg = settings or settings_mod.load()
+    if cached_index_only and cfg.embed_cache is None:
+        raise EmbeddingCacheUnavailable('Evaluation requires a cached index')
     p, rr, dc = cfg.profile, cfg.reranker, cfg.decree
     release = corpus = None
     if cfg.corpus == 'db':
@@ -227,7 +231,11 @@ def load_app(settings=None):
         corpus.data if corpus else p.articles,
         max_seq_length=p.max_seq,
         **({'decree_max_seq': dc.max_seq} if dc else {}),
-        **({'cache': EmbedCache(cfg.embed_cache, model_revision=revision)} if cfg.embed_cache else {}),
+        **(
+            {'cache': EmbedCache(cfg.embed_cache, model_revision=revision, read_only=cached_index_only)}
+            if cfg.embed_cache
+            else {}
+        ),
     )
     log.info(
         f'조문 인덱스 {time.perf_counter() - t0:.1f}초 · 법률 {getattr(retriever, "n_law", len(retriever.ids))}개'
@@ -443,6 +451,8 @@ def request_record(app, st, status, error):
     if 'answer_verdict' in st:
         rec['answer_verdict'] = st['answer_verdict']
     rec |= st.get('calculation_metrics', {})
+    if 'failure' in st:
+        rec['failure'] = st['failure']
     if 'call_counts' in st:
         rec['call_counts'] = st['call_counts']
     return rec | {'status': status, 'error_type': error}
@@ -452,7 +462,7 @@ CITE_VERDICTS = ('ok', 'outside', 'wrong_law', 'nonexistent', 'ambiguous')
 CITE_FIELDS = tuple(f'cite_{v}' for v in CITE_VERDICTS)
 
 
-def answer_check(app, raw, hits):
+def answer_check(app, raw, hits, *, verified=frozenset()):
     """요청 로그용 답변 요약 (내용 없이 수만): 거절 여부, 인용 수, citation.check 판정별 인용 수
     전체 조문은 검색기 기준. 판정에 실패해도 답변은 막지 않는다 (값 없음)"""
     try:
@@ -460,7 +470,7 @@ def answer_check(app, raw, hits):
 
         articles = citation.article_keys(app.retriever)
         cites = citation.check(citation.citations(raw), hits, articles)
-        conclusion = review_answer(raw, hits, articles).conclusion_cites
+        conclusion = review_answer(raw, hits, articles, verified=verified).conclusion_cites
         counts = {v: sum(c.verdict == v for c in conclusion) for v in CITE_VERDICTS}
         verdicts = [v for _, _, v, _ in cites]
         return (
@@ -599,7 +609,7 @@ def _answer(app, question, k, request_id, report, calculation_candidate, clarify
         stage = 'load'
         llm = app.llm
         stage = 'generation'
-        if clarify and not suffix:
+        if clarify and '_calculation' not in st:
             REQUEST_ID.set(st['request_id'])
             started = time.perf_counter()
             decision, attempts, metrics = llm.clarify(question, hits)
@@ -610,7 +620,8 @@ def _answer(app, question, k, request_id, report, calculation_candidate, clarify
                 log_timing(st)
                 record('ok')
                 logged = True
-                yield 'clarify', hits, decision['question'], st
+                followup = decision['question']
+                yield 'clarify', hits, mark_unverified(followup, check_spans(followup, hits)), st
                 return
         st['_system'] = getattr(llm, 'system', None)
         raw, last, t_gen = '', None, time.perf_counter()
@@ -638,14 +649,14 @@ def _answer(app, question, k, request_id, report, calculation_candidate, clarify
             ('finish', 'finish_reason'),
         ):
             st[name] = getattr(last, attr, None)
-        st |= cast(Timing, answer_check(app, raw, hits))
+        st |= cast(Timing, answer_check(app, raw, hits, verified=calculator_evidence(st.get('_calculation', {}))))
         if (payload := st.get('_calculation')) and payload['status'] == 'calculated':
             st.setdefault('calculation_metrics', {})['calculation_check'] = check_conclusion(raw, payload)
         log_timing(st)
         record('ok')
         logged = True
         yield 'done', hits, raw, st
-    except GeneratorExit:
+    except GeneratorExit, InferenceControlError:
         if not logged:
             st['total'] = time.perf_counter() - t0
             record('cancelled')
@@ -655,6 +666,7 @@ def _answer(app, question, k, request_id, report, calculation_candidate, clarify
         if stage == 'search':
             stage = st.get('_stage', 'search')  # 법률·하위법령 검색('search') 또는 리랭킹('rerank')에서 실패
         kind = error_type(e, stage)
+        st['failure'] = failure_fields(stage, e, st['request_id'])
         if not logged:
             st['total'] = time.perf_counter() - t0
             record('error', kind)

@@ -97,9 +97,17 @@ def test_generation_error(env, log, capsys):
     env.setattr(FakeLLM, 'chunks', ['【결론】', RuntimeError('생성 실패')])
     r = run(a, QUESTION)
     assert r.error.startswith('답변을 생성하지 못했습니다')  # 화면 안내
-    assert '생성 실패' in capsys.readouterr().out  # 원래 예외는 서버 로그에
+    captured = capsys.readouterr()
+    assert '생성 실패' not in captured.out + captured.err
     r = lines(log)[-1]
     assert (r['status'], r['error_type']) == ('error', 'generation')
+    assert r['failure'] == {
+        'stage': 'generation',
+        'request_id': r['request_id'],
+        'exception': 'RuntimeError',
+        'status_code': None,
+    }
+    assert str(r['failure']) in captured.out
 
 
 def test_model_load_error(env, log, tmp_path):
@@ -125,9 +133,17 @@ def test_rerank_error(env, log, capsys):
     a.reranker = Broken()
     r = run(a, QUESTION)
     assert r.error.startswith('조문 순위를 매기지 못했습니다') and not r.text  # 임베딩 순위로 되돌리지 않음
-    assert '리랭커 점수 오류' in capsys.readouterr().out
+    captured = capsys.readouterr()
+    assert '리랭커 점수 오류' not in captured.out + captured.err
     r = lines(log)[-1]
     assert (r['error_type'], r['reranker']) == ('rerank', True) and r['search_ms'] is not None
+    assert r['failure'] == {
+        'stage': 'rerank',
+        'request_id': r['request_id'],
+        'exception': 'RuntimeError',
+        'status_code': None,
+    }
+    assert str(r['failure']) in captured.out
 
 
 def test_cancelled(env, log):

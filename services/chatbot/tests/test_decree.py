@@ -351,11 +351,19 @@ def test_no_decree_passes_prompt_unchanged(rr):
 def test_decree_rerank_error_not_hidden(rr, tmp_path):
     log = tmp_path / 'req.jsonl'
     rr.setenv('LAWBOT_REQUEST_LOG', str(log))
-    rr.setattr(RR, 'ERROR', RuntimeError('리랭커 고장'))
-    with pytest.raises(service.AskError, match='리랭커 고장') as e:
+    cause = RuntimeError('리랭커 고장')
+    rr.setattr(RR, 'ERROR', cause)
+    with pytest.raises(service.AskError, match='rerank: RuntimeError') as e:
         ask(make(), '해고')
-    assert (e.value.kind, e.value.stage) == ('rerank', 'rerank') and isinstance(e.value.__cause__, RuntimeError)
-    assert json.loads(log.read_text())['error_type'] == 'rerank'
+    assert (e.value.kind, e.value.stage) == ('rerank', 'rerank') and e.value.__cause__ is cause
+    row = json.loads(log.read_text())
+    assert row['error_type'] == 'rerank'
+    assert row['failure'] == {
+        'stage': 'rerank',
+        'request_id': row['request_id'],
+        'exception': 'RuntimeError',
+        'status_code': None,
+    }
 
 
 # ---- 5. 설정 ----

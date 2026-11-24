@@ -67,3 +67,4 @@ class Timing(TypedDict, total=False):
     _clarify_attempts: list[ClarifyAttempt]
     _writer_messages: list[dict[str, str]]
     _provided_hits: list[Hit]
+    failure: dict[str, Any]

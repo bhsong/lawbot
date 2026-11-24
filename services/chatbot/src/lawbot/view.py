@@ -115,7 +115,7 @@ def error_message(kind, cause, spec):
     """ask 오류 종류(요청 로그 error_type) → 화면 안내. 설정 오류(config 등 안내가 없는 종류)는 None"""
     name = type(cause).__name__
     if kind == 'model_server_timeout':
-        return f'모델 서버 응답이 없습니다 ({cause}). 잠시 뒤 다시 질문하세요.'
+        return f'모델 서버 응답이 없습니다 ({name}). 잠시 뒤 다시 질문하세요.'
     if kind == 'model_server_busy':
         return '모델 서버가 바쁩니다 (대기 중인 질문이 많음). 잠시 뒤 다시 질문하세요.'
     if kind == 'model_server':  # Embedding/rerank or generation connection, authentication, or readiness failure.

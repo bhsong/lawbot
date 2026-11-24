@@ -411,9 +411,10 @@ def test_chat_streams_answer_with_sources(web, env):
 
 
 def test_chat_generation_failure_is_not_hidden(web, capsys):
-    # 생성 실패를 빈 답변이나 부분 답변으로 끝내지 않고 안내 문구로 알린다. 원래 예외는 서버 로그에
+    # A server error can contain a reflected prompt; log metadata only.
     FakeLLM.chunks = ['【결론】', RuntimeError('generation failed')]
     r = run(service.load_app(), '질문')
     assert r.error.startswith('답변을 생성하지 못했습니다') and r.done is None
-    out = capsys.readouterr().out
-    assert 'generation failed' in out and 'Traceback' in out
+    captured = capsys.readouterr()
+    assert 'RuntimeError' in captured.out and 'generation' in captured.out
+    assert 'generation failed' not in captured.out + captured.err

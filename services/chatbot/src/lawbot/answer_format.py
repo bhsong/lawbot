@@ -3,7 +3,7 @@
 import re
 from dataclasses import dataclass
 
-from lawbot.citation import OK, CitationSpan, check, check_spans, hit_key, hit_law, parse, refused
+from lawbot.citation import OK, CitationSpan, check, check_spans, hit_key, hit_law, key, parse, refused
 from lawbot.hits import Hit
 
 SECTION = re.compile(r'【(결론|근거 조문|설명|참고)】')
@@ -76,7 +76,7 @@ def mark_unverified(text, citations):
     parts = []
     start = 0
     for cite in citations:
-        if cite.verdict != OK:
+        if cite.verdict != OK and cite.end > start:
             parts.extend((text[start : cite.end], UNVERIFIED))
             start = cite.end
     parts.append(text[start:])
@@ -102,37 +102,51 @@ class AnswerReview:
         return list(hits.values())
 
     def unverified(self) -> list[tuple[str, CitationSpan]]:
-        return [(self.grounds[c.start : c.end], c) for c in self.ground_cites if c.verdict != OK]
+        return list(
+            {
+                (c.start, c.end): (self.grounds[c.start : c.end], c) for c in self.ground_cites if c.verdict != OK
+            }.values()
+        )
 
     def render(self) -> str:
         text = mark_unverified(self.conclusion, self.conclusion_cites)
         if self.refused or not self.structured:
             return text
-        used, unknown = self.used(), self.unverified()
-        if used:
-            text += '\n\n근거: ' + ', '.join(hit_label(h) for h in used)
+        labels = list(
+            dict.fromkeys(
+                hit_label(c.hit) if c.hit is not None else key(c.law, c.article_id)
+                for c in self.ground_cites + self.conclusion_cites
+                if c.verdict == OK
+            )
+        )
+        unknown = self.unverified()
+        if labels:
+            text += '\n\n근거: ' + ', '.join(labels)
         if unknown:
             text += UNVERIFIED_GROUNDS_HEADER + '\n'.join(label + UNVERIFIED for label, _ in unknown)
-        if not used and not unknown:
+        if not labels and not unknown:
             text += '\n\n⚠ 인용 조문 없음: 오른쪽 조문을 직접 확인하세요.'
         return text
 
 
-def review_answer(raw: str, hits: list[Hit], articles: set[tuple[str, str]] | None = None) -> AnswerReview:
-    """Check all displayed model text; preserve law context from conclusion into grounds."""
+def calculator_evidence(calculation) -> frozenset[tuple[str, str]]:
+    """Return only the statute keys verified by a completed calculation."""
+    if calculation.get('status') != 'calculated':
+        return frozenset()
+    return frozenset((law, no) for entry in calculation['articles'] for law, _, no in (entry.rpartition(' '),))
+
+
+def review_answer(
+    raw: str, hits: list[Hit], articles: set[tuple[str, str]] | None = None, *, verified=frozenset()
+) -> AnswerReview:
+    """Check the conclusion and each independent ground line."""
     sec = sections(raw)
     structured = '결론' in sec
     text = sec['결론'] if structured else raw.strip()
     grounds = sec.get('근거 조문', '') if structured else ''
     if grounds.startswith('해당 없음'):
         grounds = ''
-    offset = len(text) + 1
-    main, basis = [], []
-    for cite in check_spans(f'{text}\n{grounds}' if grounds else text, hits, articles):
-        if cite.start < offset:
-            main.append(cite)
-        else:
-            basis.append(
-                CitationSpan(cite.start - offset, cite.end - offset, cite.law, cite.article_id, cite.verdict, cite.hit)
-            )
-    return AnswerReview(text, grounds, main, basis, refused(raw), structured)
+    basis = check_spans(grounds, hits, articles, verified=verified, line_scoped=True)
+    return AnswerReview(
+        text, grounds, check_spans(text, hits, articles, verified=verified), basis, refused(raw), structured
+    )

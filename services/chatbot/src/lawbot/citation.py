@@ -190,73 +190,170 @@ class CitationSpan:
     article_id: str
     verdict: str
     hit: Hit | None
+    attribution: str
 
 
 _SPAN_ALIASES = dict(_ALIAS)
 _KNOWN_NAME = '|'.join(r'[ \t]*'.join('[ㆍ·・]' if ch == '·' else re.escape(ch) for ch in alias) for alias, _ in _ALIAS)
 _LONG_NAME = r'[가-힣0-9ㆍ·・]+(?:[ \t]+[가-힣0-9ㆍ·・]+){0,16}?[ \t]*에[ \t]*(?:관한|따른)[ \t]*법률'
 _SUB = r'시행령|시행규칙'
-_ARTICLE = r'(?:부칙[ \t]*(?:[<(（\[][ \t]*제[ \t]*\d+[ \t]*호[ \t]*[>)）\]][ \t]*)?)?제[ \t]*\d+[ \t]*조'
-_PART = r'[ \t]*제[ \t]*\d+[ \t]*(?:[항호목])(?:[ \t]*의[ \t]*\d+)?'
-_SPAN_TOKEN = re.compile(
-    rf'(?P<article>{_ARTICLE}(?:[ \t]*의[ \t]*\d+)?)(?:{_PART})*(?:[ \t]*[가-하]목)?'
-    rf'|(?<![가-힣])(?P<relative>같은[ \t]*법|동법|법)(?:[ \t]*(?P<relative_sub>{_SUB}))?(?=[ \t]*{_ARTICLE})'
-    rf'|(?<![가-힣])(?P<sub_only>{_SUB})(?=[ \t]*{_ARTICLE})'
-    rf'|(?P<quoted>「[^」\n]+」|『[^』\n]+』)(?:[ \t]*(?P<quoted_sub>{_SUB}))?'
-    rf'|(?<![가-힣])(?P<known>{_KNOWN_NAME})(?:[ \t]*(?P<known_sub>{_SUB}))?'
-    rf'(?=(?:[ \t]*{_ARTICLE})|(?:(?:에서는|에서|으로는|으로|에는|에|은|는|이|가|을|를|의|과|와|도)?(?![가-힣])))'
-    rf'|(?<![가-힣])(?P<unknown>{_LONG_NAME}|[가-힣0-9ㆍ·・]+법(?:률)?)'
-    rf'(?:[ \t]*(?P<unknown_sub>{_SUB}))?(?=[ \t]*{_ARTICLE}|(?:에[ \t]*따[르른라]|에서[ \t]*정한))'
+_SUBS = rf'(?:{_SUB})(?:[ \t]*[·ㆍ・/][ \t]*(?:{_SUB}))*'
+_PARTICLE = r'에서는|에서|으로는|으로|에는|에|은|는|이|가|을|를|의|과|와|도'
+_NAME_END = rf'(?:(?:{_PARTICLE})?(?![가-힣])|(?={_SUBS}|제\s*\d|부칙))'
+_KNOWN = re.compile(rf'(?<![가-힣])(?:{_KNOWN_NAME})(?={_NAME_END})')
+_OTHER = re.compile(rf'(?<![가-힣])(?:{_LONG_NAME}|[가-힣0-9ㆍ·・]+?(?:법률|법|조례))(?={_NAME_END})')
+_LAW_SUFFIX = re.compile(rf'(?:[ \t]*(?P<sub>{_SUBS}))?(?:{_PARTICLE})?(?=[^가-힣]|제\s*\d|부칙|$)')
+_RELATIVE = re.compile(rf'(?<![가-힣])(?:(?:같은[ \t]*법|동법|법)(?:[ \t]*(?P<sub>{_SUBS}))?|(?P<only>{_SUBS}))\s*$')
+_PART = r'(?:제\s*\d+\s*[항호목](?:\s*의\s*\d+)?|[가-하]목)'
+_ADDENDUM_NOTE = r'(?:\([^()\n]{0,50}\)|（[^（）\n]{0,50}）|<[^<>\n]{0,50}>|\[[^\[\]\n]{0,50}\])'
+_NUMBER = re.compile(
+    rf'(?:(?P<add>부칙(?:\s*{_ADDENDUM_NOTE}|[^.!?。！？\n]{{0,50}}?))\s*)?'
+    r'(?P<no>제\s*\d+\s*조(?:\s*의\s*\d+)?)'
+    rf'(?:\s*{_PART})*(?:\s*[·ㆍ・,]\s*{_PART}(?:\s*{_PART})*)*'
 )
+_GAZETTE_NO = re.compile(r'부칙(?:제(\d+)호|\(제(\d+)호\)|<제(\d+)호>|\[제(\d+)호\]|（제(\d+)호）)')
+_SENTENCE_END = re.compile(r'[!?。！？]+|(?<!\d)\.+|\.+(?!\d)')
+_LINES = re.compile(r'\r\n|\r|\n')
 _PARENT = re.compile(rf' (?:{_SUB})$')
+_QUOTES = {'「': '」', '『': '』'}
+_QUOTED_NAME = re.compile(r'「(?P<corner>[^」\n]+(?:법률|법|조례))」|『(?P<double>[^』\n]+(?:법률|법|조례))』')
 
 
-def check_spans(text: str, hits: list[Hit], articles: set[tuple[str, str]] | None = None) -> list[CitationSpan]:
-    """Check every occurrence, resolving bare and anaphoric references without losing offsets."""
-    matches = []
-    named_law = law = None
-    pending = None
-    for token in _SPAN_TOKEN.finditer(text):
-        if token['article']:
-            no_match = _TOKEN.fullmatch(norm(token['article']))
-            assert no_match is not None
-            start = token.start()
-            if pending is not None and not text[pending.end() : start].strip(' \t'):
-                start = pending.start()
-            matches.append((start, token.end(), law, article_no(no_match), start != token.start() and law is None))
-            pending = None
-            continue
+@dataclass(frozen=True)
+class _LawMention:
+    start: int
+    end: int
+    names: tuple[str, ...]
 
-        sub = (
-            token['relative_sub']
-            or token['sub_only']
-            or token['quoted_sub']
-            or token['known_sub']
-            or token['unknown_sub']
-        )
-        if token['relative'] or token['sub_only']:
-            law = f'{_PARENT.sub("", named_law)} {sub}' if named_law and sub else named_law
-        else:
-            name = token['known'] or token['unknown'] or token['quoted'][1:-1]
-            if token['quoted']:
-                parent = re.search(rf'\s*({_SUB})$', name)
-                if parent:
-                    name = name[: parent.start()]
-                    sub = sub or parent[1]
-                name = name.strip()
-                if norm(name) not in _SPAN_ALIASES and not name.endswith(('법', '법률', '령', '규칙', '조례')):
-                    continue
-            parent_law = _SPAN_ALIASES.get(norm(name), name)
-            named_law = law = f'{parent_law} {sub}' if sub else parent_law
-        pending = token
 
-    checked = check([(law, no) for _, _, law, no, _ in matches], hits, articles)
-    registered = LAW_ALIASES.keys() | {h['law'] for h in hits}
+def _with_subs(laws: tuple[str, ...], subs: str | None) -> tuple[str, ...]:
+    if not subs:
+        return laws
+    return tuple(dict.fromkeys(f'{_PARENT.sub("", law)} {sub}' for law in laws for sub in re.findall(_SUB, subs)))
+
+
+def _law_mentions(text: str) -> list[_LawMention]:
+    known = list(_KNOWN.finditer(text))
+    # A complete registered name wins over an overlapping long generic match.
+    known_ends = {m.end() for m in known}
+    other = (m for m in _OTHER.finditer(text) if m.end() not in known_ends and m[0] not in ('동법', '같은법'))
     out = []
-    for (start, end, law, no, unresolved), (_, _, verdict, hit) in zip(matches, checked):
-        if unresolved:
-            verdict, hit = AMBIGUOUS, None
-        elif law and _PARENT.sub('', law) not in registered and law not in registered:
-            verdict, hit = OUTSIDE, None
-        out.append(CitationSpan(start, end, law or (hit_law(hit) if hit else None), no, verdict, hit))
+    for token in sorted([*known, *other, *_QUOTED_NAME.finditer(text)], key=lambda m: m.start()):
+        start, end = token.span()
+        if out and start < out[-1].end:
+            continue
+        name = (token['corner'] or token['double']) if token.re is _QUOTED_NAME else token[0]
+        name = _SPAN_ALIASES.get(norm(name), name)
+        if start and text[start - 1] in _QUOTES and text[end : end + 1] == _QUOTES[text[start - 1]]:
+            start, end = start - 1, end + 1
+        suffix = _LAW_SUFFIX.match(text, end)
+        if suffix is not None:
+            end = suffix.end()
+        out.append(_LawMention(start, end, _with_subs((name,), suffix['sub'] if suffix else None)))
+    return out
+
+
+def _article_id(token: re.Match[str]) -> str:
+    no = norm(token['no'])
+    if token['add'] is None:
+        return no
+    gazette = _GAZETTE_NO.fullmatch(norm(token['add']))
+    if gazette:
+        return f'부칙<제{next(n for n in gazette.groups() if n)}호>{no}'
+    return '부칙' + no
+
+
+def _citation_scopes(text: str, line_scoped: bool):
+    numbers = iter(_NUMBER.finditer(text))
+    number = next(numbers, None)
+    endings = sorted(
+        [(m.end(), False) for m in _SENTENCE_END.finditer(text)]
+        + ([(m.end(), True) for m in _LINES.finditer(text)] if line_scoped else [])
+    )
+    for end, line_break in endings:
+        while number and number.end() < end:
+            number = next(numbers, None)
+        if not number or not number.start() < end <= number.end():
+            yield end, line_break
+    yield len(text), False
+
+
+def _attributed_numbers(text: str, line_scoped: bool):
+    previous: tuple[str, ...] = ()
+    start = 0
+    for end, line_break in _citation_scopes(text, line_scoped):
+        if start == end:
+            continue
+        sentence = text[start:end]
+        mentions = _law_mentions(sentence)
+        law_index = 0
+        named = ()
+        active = ()
+        attribution = 'unresolved'
+        last_end = 0
+        for number in _NUMBER.finditer(sentence):
+            left, right = number.span()
+            while law_index < len(mentions) and mentions[law_index].end <= left:
+                named = active = mentions[law_index].names
+                attribution = 'same_sentence'
+                law_index += 1
+            mention = mentions[law_index - 1] if law_index else None
+            relative = _RELATIVE.search(sentence, last_end, left)
+            if relative and mention and relative.start() < mention.end:
+                relative = None
+            if relative:
+                active = _with_subs(named or previous, relative['sub'] or relative['only'])
+                attribution = 'same_sentence' if named else 'previous_sentence' if previous else 'unresolved'
+                left = relative.start()
+            elif mention and not sentence[mention.end : left].strip():
+                left = mention.start
+            names = active or (previous if relative is None else ())
+            source = attribution if active else 'previous_sentence' if names else 'unresolved'
+            quote_start = len(sentence[:left].rstrip(' \t')) - 1
+            quote_end = right + len(sentence[right:]) - len(sentence[right:].lstrip(' \t'))
+            if (
+                quote_start >= 0
+                and (close := _QUOTES.get(sentence[quote_start]))
+                and sentence[quote_end : quote_end + 1] == close
+            ):
+                left, right = quote_start, quote_end + 1
+            yield start + left, start + right, names, _article_id(number), source, relative is not None
+            last_end = right
+        previous = mentions[-1].names if mentions and not line_break else ()
+        start = end
+
+
+def check_spans(
+    text: str,
+    hits: list[Hit],
+    articles: set[tuple[str, str]] | None = None,
+    *,
+    verified: frozenset[tuple[str, str]] = frozenset(),
+    line_scoped: bool = False,
+) -> list[CitationSpan]:
+    """Validate each original citation, with explicit attribution and no synthetic search hit."""
+    provided = {(hit_law(h), h['article_id']): h for h in hits}
+    keys = provided.keys() | verified
+    registered = LAW_ALIASES.keys() | {law for law, _ in keys}
+    out = []
+    for start, end, names, no, attribution, relative in _attributed_numbers(text, line_scoped):
+        matching = {law for law, article in keys if article == no}
+        if not names and not relative and len(matching) == 1:
+            names = tuple(matching)
+            attribution = 'unique_provided'
+        for law in names or (None,):
+            hit = provided.get((law, no)) if law else None
+            if hit is not None or (law, no) in verified:
+                verdict = OK
+            elif law and law not in registered and _PARENT.sub('', law) not in registered:
+                verdict = OUTSIDE
+            elif law and matching:
+                verdict = WRONG_LAW
+            elif not law and (relative or matching or (articles and sum(a == no for _, a in articles) > 1)):
+                verdict = AMBIGUOUS
+            elif articles is not None and not any(a == no and (law is None or name == law) for name, a in articles):
+                verdict = NONEXISTENT
+            else:
+                verdict = OUTSIDE
+            out.append(CitationSpan(start, end, law, no, verdict, hit, attribution))
     return out
