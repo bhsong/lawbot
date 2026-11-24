@@ -90,17 +90,19 @@ def measurements(rows):
     verdicts = {name: Counter(dict.fromkeys(CITE_VERDICTS, 0)) for name in ('conclusion', 'ground')}
     statuses = Counter()
     calls, tokens = Counter(), Counter()
-    retries = exposure = diagnostic_exposure = unnecessary = 0
+    retries = exposure = unnecessary = 0
     completion, first_text, verified, judge = [], [], [], []
     for row in rows:
         initial, final = row['initial'], primary(row)
         clarification = initial['clarification']
         statuses[clarification['status']] += 1
         retries += clarification.get('retries', 0)
-        exposure += final['unmarked_exposure']
         unnecessary += row['unnecessary_clarification']
-        for name in verdicts:
-            verdicts[name].update(c['verdict'] for c in final[f'{name}_citations'])
+        for turn in (initial, row.get('resumed')):
+            if turn is not None:
+                exposure += turn['unmarked_exposure']
+                for name in verdicts:
+                    verdicts[name].update(c['verdict'] for c in turn[f'{name}_citations'])
         completion.append(row['system_seconds'])
         if final['verdict'] == 'shown' and not failed(row):
             verified.append(row['system_seconds'])
@@ -111,15 +113,12 @@ def measurements(rows):
             if (turn := row.get(step)) is not None:
                 calls.update(turn['calls'])
                 tokens.update({name: count for name, value in turn['tokens'].items() if (count := value or 0)})
-                if step == 'diagnostic':
-                    diagnostic_exposure += turn['unmarked_exposure']
     return {
         'request_errors': sum(failed(row) for row in rows),
         'unnecessary_clarifications': unnecessary,
         'unnecessary_clarification_rate': rate(unnecessary, sum(r['set'] != 'fact_missing' for r in rows)),
         'citation_verdicts': verdicts,
         'unmarked_exposure': exposure,
-        'diagnostic_unmarked_exposure': diagnostic_exposure,
         'timing_seconds': {
             'first_text': duration(first_text),
             'complete': duration(completion),

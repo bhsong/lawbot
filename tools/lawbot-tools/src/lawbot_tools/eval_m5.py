@@ -5,9 +5,9 @@ import fcntl
 import hashlib
 import json
 import logging
+import os
 import signal
 import subprocess
-import sys
 from contextlib import closing, contextmanager
 from dataclasses import replace
 from datetime import datetime, time, timedelta
@@ -20,10 +20,11 @@ from zoneinfo import ZoneInfo
 import httpx
 
 from lawbot import service, settings
-from lawbot.answer_format import UNVERIFIED, UNVERIFIED_GROUNDS_HEADER, review_answer
+from lawbot.answer_format import UNVERIFIED, UNVERIFIED_GROUNDS_HEADER, calculator_evidence, review_answer
 from lawbot.api_client import REQUEST_ID
 from lawbot.calc_gate import is_calculation_question
 from lawbot.citation import OK, article_keys, check_spans
+from lawbot.inference import OBSERVER, InferenceControlError, InferenceStopped, failure_fields
 from lawbot.llm import CLARIFY_MAX_TOKENS, CLARIFY_SYSTEM_FILE
 from lawbot.paths import DATA
 from lawbot.web import answer_display
@@ -35,6 +36,8 @@ SETS = ('reasoning', 'fact_missing', 'out_of_scope', 'general')
 KST = ZoneInfo('Asia/Seoul')
 ANSWERS = 'answers.jsonl'
 MANIFEST = 'run.json'
+STEPS = 'steps.jsonl'
+STOP_STATES = ('interrupted', 'time_limit')
 
 
 def read_json(path):
@@ -95,18 +98,27 @@ def provided_articles(hits):
     ]
 
 
-def unmarked_exposure(shown, review, hits, articles):
+def unmarked_exposure(shown, review, hits, articles, *, verified=frozenset()):
     """Count unmarked occurrences in the actual displayed text, not the model's draft."""
     if not shown:
         return 0
     # Ground warnings contain only excerpts and may have lost their original law context.
-    if review.structured and not review.refused:
+    if review is not None and review.structured and not review.refused:
         shown, _, warnings = shown.partition(UNVERIFIED_GROUNDS_HEADER)
     else:
         warnings = ''
-    return sum(
-        c.verdict != OK and not shown.startswith(UNVERIFIED, c.end) for c in check_spans(shown, hits, articles)
-    ) + sum(not warnings.startswith(UNVERIFIED, c.end) for c in check_spans(warnings, hits, articles))
+    return len(
+        {
+            c.end
+            for c in check_spans(shown, hits, articles, verified=verified)
+            if c.verdict != OK and not shown.startswith(UNVERIFIED, c.end)
+        }
+        | {
+            len(shown) + 1 + c.end
+            for c in check_spans(warnings, hits, articles)
+            if not warnings.startswith(UNVERIFIED, c.end)
+        }
+    )
 
 
 def citation_rows(text, spans):
@@ -118,6 +130,7 @@ def citation_rows(text, spans):
             'law': c.law,
             'article_id': c.article_id,
             'verdict': c.verdict,
+            'attribution': c.attribution,
         }
         for c in spans
     ]
@@ -132,12 +145,15 @@ def run_turn(app, articles, invoke):
 
     started = perf_counter()
     stage, hits, raw, st = None, [], '', {}
+    stopped = False
     error = None
     try:
         with closing(invoke(report=report, trace=True)) as stream:
             for stage, hits, raw, st in stream:
                 if stage in ('clarify', 'done'):
                     break
+    except InferenceStopped:
+        stopped = True
     except service.AskError as exc:
         error = exc
     if outcome:
@@ -146,6 +162,7 @@ def run_turn(app, articles, invoke):
     else:
         status, kind = 'error', 'missing_completion'
 
+    verified = calculator_evidence(st.get('_calculation', {}))
     result = {
         'stage': stage,
         'request_id': st.get('request_id'),
@@ -162,10 +179,19 @@ def run_turn(app, articles, invoke):
         'ground_citations': [],
         'unmarked_exposure': 0,
     }
-    if stage == 'clarify' and not error:
-        result.update(verdict='clarify', shown=raw)
+    if stopped:
+        result['verdict'] = 'interrupted'
+    elif stage == 'clarify' and not error:
+        original = st['_clarify_attempts'][-1]['parsed']['question']
+        result.update(
+            verdict='clarify',
+            shown=raw,
+            clarification_raw=original,
+            conclusion_citations=citation_rows(original, check_spans(original, hits, articles)),
+            unmarked_exposure=unmarked_exposure(raw, None, hits, articles),
+        )
     elif stage == 'done' and not error:
-        review = review_answer(raw, hits, articles)
+        review = review_answer(raw, hits, articles, verified=verified)
         verdict, notice, text, _, _ = answer_display(
             raw, hits, st, calculated=st.get('_calculation', {}).get('status') == 'calculated', review=review
         )
@@ -175,7 +201,7 @@ def run_turn(app, articles, invoke):
             shown=notice or text,
             conclusion_citations=citation_rows(review.conclusion, review.conclusion_cites),
             ground_citations=citation_rows(review.grounds, review.ground_cites),
-            unmarked_exposure=unmarked_exposure(text, review, hits, articles),
+            unmarked_exposure=unmarked_exposure(text, review, hits, articles, verified=verified),
         )
     elif not error:
         error = RuntimeError('요청이 최종 단계 없이 끝났습니다.')
@@ -199,13 +225,10 @@ def run_turn(app, articles, invoke):
         'clarify_output': result['clarification'].get('completion_tokens'),
     }
     if error:
-        result['error'] = {'kind': kind, 'stage': error.stage if isinstance(error, service.AskError) else stage}
-    elif result['clarification'].get('failure') == 'call_error':
-        result['error'] = {'kind': 'call_error', 'stage': 'clarify'}
-        error = RuntimeError('되묻기 판정의 모델 요청이 실패했습니다.')
-    elif (reason := calc.get('router_reason')) and (reason == 'model_error' or reason.endswith('timeout')):
-        result['error'] = {'kind': reason, 'stage': 'router'}
-        error = RuntimeError('계산 라우터의 모델 요청이 실패했습니다.')
+        error_stage = error.stage if isinstance(error, service.AskError) else (stage or 'generation')
+        result['error'] = {'kind': kind} | failure_fields(error_stage, error, st.get('request_id'))
+    elif reason := calc.get('router_reason'):
+        result['router_reason'] = reason
     if outcome:
         service.log_request(app, st, 'error' if error else status, result.get('error', {}).get('kind', kind))
     return result, hits, error
@@ -215,8 +238,9 @@ def seconds(ms):
     return ms / 1000 if ms is not None else None
 
 
-def run_item(app, row, condition, replies, articles):
+def run_item(app, row, condition, replies, articles, *, turn=lambda _: None):
     question = row['question']
+    turn('initial')
     initial, hits, error = run_turn(
         app,
         articles,
@@ -236,8 +260,10 @@ def run_item(app, row, condition, replies, articles):
     }
     if not asked or error:
         return result, error
-    followup = result['clarify_question'] = initial['shown']
+    result['clarify_question'] = initial['shown']
+    followup = initial['clarification_raw']
     if row['set'] == 'fact_missing':
+        turn('resumed')
         reply = result['reply'] = replies[row['id']]
         resumed, _, error = run_turn(
             app, articles, partial(service.answer_after_clarification, app, question, hits, followup, reply)
@@ -245,6 +271,7 @@ def run_item(app, row, condition, replies, articles):
         result['resumed'] = resumed
         result['system_seconds'] += resumed['timing']['complete']
     else:
+        turn('diagnostic')
         diagnostic, _, error = run_turn(app, articles, partial(service.write_from_context, app, question, hits))
         result['diagnostic'] = diagnostic
     return result, error
@@ -260,22 +287,117 @@ def safe_record(value, sensitive):
     return value
 
 
-def run_questions(app, rows, condition, replies, output, *, stop=lambda: None, sensitive=()):
+def append_record(stream, row):
+    print(json.dumps(row, ensure_ascii=False), file=stream, flush=True)
+    if hasattr(stream, 'name'):
+        os.fsync(stream.fileno())
+
+
+def append_step(journal, event):
+    try:
+        append_record(journal, event)
+    except OSError as exc:
+        raise InferenceControlError('Cannot persist inference boundary') from exc
+
+
+def guarded_item(app, row, condition, replies, articles, index, stop, journal):
+    active_turn, sent, blocked = 'initial', False, None
+
+    def turn(name):
+        nonlocal active_turn
+        active_turn = name
+
+    def observe(event, stage, request_id, exc):
+        nonlocal sent, blocked
+        if event == 'send' and (blocked := stop()):
+            raise InferenceStopped(blocked)
+        if journal is not None:
+            entry = {'index': index, 'turn': active_turn, 'event': event, 'stage': stage, 'request_id': request_id}
+            append_step(journal, entry | (failure_fields(stage, exc, request_id) if exc else {}))
+            if event == 'send' and (blocked := stop()):
+                append_step(journal, entry | {'event': 'blocked'})
+                raise InferenceStopped(blocked)
+        if event == 'send':
+            sent = True
+
+    observer_token = OBSERVER.set(observe)
+    try:
+        result, error = run_item(app, row, condition, replies, articles, turn=turn)
+    finally:
+        OBSERVER.reset(observer_token)
+    return result, error, sent, blocked
+
+
+def run_questions(app, rows, condition, replies, output, *, stop=lambda: None, sensitive=(), journal=None, offset=0):
     articles = article_keys(app.retriever)
-    for row in rows:
+    failure_streak = 0
+    for index, row in enumerate(rows, offset):
         if reason := stop():
             return reason, None
-        result, error = run_item(app, row, condition, replies, articles)
-        print(json.dumps(safe_record(result, sensitive), ensure_ascii=False), file=output, flush=True)
-        print(f'{row["set"]}/{row["id"]} · {"오류" if error else "기록"}', flush=True)
-        if error:
+        result, error, sent, blocked = guarded_item(app, row, condition, replies, articles, index, stop, journal)
+        if blocked:
+            if sent:
+                append_record(output, safe_record(result | {'invalid': 'incomplete_item'}, sensitive))
+            return blocked, None
+        append_record(output, safe_record(result, sensitive))
+        if error and (not isinstance(error, service.AskError) or error.stage != 'router'):
             return 'request_error', error
+        decision = result['initial']['clarification']
+        if decision.get('failure') == 'call_error':
+            failure_streak += 1
+            if failure_streak == 3:
+                return 'clarify_unavailable', None
+        elif decision['status'] != 'skipped':
+            failure_streak = 0
     return 'complete', None
 
 
+def read_jsonl(path, *, repair_tail=False):
+    """A killed process can leave only the final, unterminated append incomplete."""
+    with path.open('r+b' if repair_tail else 'rb') as stream:
+        records = []
+        while line := stream.readline():
+            if not line.endswith(b'\n') and repair_tail:
+                stream.truncate(stream.tell() - len(line))
+                os.fsync(stream.fileno())
+                break
+            records.append(json.loads(line))
+        return records
+
+
 def read_answers(output):
-    with (output / ANSWERS).open(encoding='utf-8') as records:
-        return [json.loads(line) for line in records]
+    return read_jsonl(output / ANSWERS)
+
+
+def invalidate_segment(manifest, end, reason):
+    start = manifest['segment_start']
+    if start < end:
+        manifest['invalid_segments'].append({'start': start, 'end': end, 'reason': reason})
+
+
+def recover_segment(output, rows, manifest):
+    answers = read_jsonl(output / ANSWERS, repair_tail=True)
+    remaining = remaining_items(rows, answers)
+    events = read_jsonl(output / STEPS, repair_tail=True)
+    offset = len(answers)
+    if any(event['index'] > offset for event in events):
+        raise ValueError('단계 기록 순서가 문항 기록과 일치하지 않습니다.')
+    pending = sum(
+        (event['event'] == 'send') - (event['event'] == 'blocked') for event in events if event['index'] == offset
+    )
+    if pending and remaining:
+        row = remaining[0]
+        placeholder = {k: row[k] for k in ('set', 'id', 'question')} | {'invalid': 'unverified_inflight'}
+        with (output / ANSWERS).open('a', encoding='utf-8') as stream:
+            append_record(stream, placeholder)
+        answers.append(placeholder)
+    invalidate_segment(manifest, len(answers), 'missing_final_configuration')
+    return answers
+
+
+def valid_records(records, manifest):
+    invalid = {i for r in manifest.get('invalid_segments', []) for i in range(r['start'], r['end'])}
+    return [row for i, row in enumerate(records) if i not in invalid and not row.get('invalid')]
 
 
 def remaining_items(rows, done):
@@ -286,14 +408,19 @@ def remaining_items(rows, done):
 
 def save_manifest(output, manifest):
     tmp = output / '.run.json.tmp'
-    tmp.write_text(json.dumps(manifest, ensure_ascii=False, indent=2) + '\n', encoding='utf-8')
+    with tmp.open('w', encoding='utf-8') as stream:
+        append_record(stream, manifest)
     tmp.replace(output / MANIFEST)
 
 
 def checked_run(output):
     manifest = read_json(output / MANIFEST)
-    if manifest['state'] not in ('complete', 'interrupted', 'time_limit', 'request_error') or (
-        comparable(manifest['before']) != comparable(manifest['after'])
+    if manifest['state'] not in (
+        *STOP_STATES,
+        'complete',
+        'request_error',
+        'clarify_unavailable',
+        'configuration_changed',
     ):
         raise ValueError('실행 전후 구성이 검증되지 않은 결과입니다.')
     return manifest
@@ -342,13 +469,15 @@ def run(args, rows, replies):
         ):
             fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
             if args.resume:
-                manifest = checked_run(args.output)
+                manifest = read_json(args.output / MANIFEST)
                 if manifest['condition'] != args.condition:
                     raise ValueError('재개 조건이 저장된 평가 조건과 다릅니다.')
-                rows = remaining_items(rows, read_answers(args.output))
+                if manifest['state'] not in ('running', 'unverified'):
+                    checked_run(args.output)
             else:
                 args.output.mkdir(mode=0o700)
                 (args.output / ANSWERS).touch(mode=0o600, exist_ok=False)
+                (args.output / STEPS).touch(mode=0o600, exist_ok=False)
                 manifest = {'condition': args.condition}
             output = args.output
             stage = '실행 전 구성 확인'
@@ -356,6 +485,13 @@ def run(args, rows, replies):
             if args.resume and comparable(manifest['before']) != comparable(before):
                 raise ValueError('재개 구성이 최초 실행 구성과 다릅니다.')
             manifest.setdefault('before', before)
+            manifest.setdefault('invalid_segments', [])
+            if args.resume and manifest['state'] in ('running', 'unverified'):
+                done = recover_segment(output, rows, manifest)
+            else:
+                done = read_answers(output)
+            rows = remaining_items(rows, done)
+            manifest['segment_start'] = len(done)
             manifest.update(state='running', after=None)
             save_manifest(output, manifest)
 
@@ -373,28 +509,40 @@ def run(args, rows, replies):
                 if state is None and rows:
                     stage = '웹앱 초기화'
                     REQUEST_ID.set('m5-eval-index')
-                    app = service.load_app(cfg)
+                    app = service.load_app(cfg, cached_index_only=True)
                     stage = '질문 평가'
-                    with (output / ANSWERS).open('a', encoding='utf-8') as stream:
+                    with (
+                        (output / ANSWERS).open('a', encoding='utf-8') as stream,
+                        (output / STEPS).open('a', encoding='utf-8') as journal,
+                    ):
                         state, error = run_questions(
-                            app, rows, args.condition, replies, stream, stop=stop, sensitive=sensitive
+                            app,
+                            rows,
+                            args.condition,
+                            replies,
+                            stream,
+                            stop=stop,
+                            sensitive=sensitive,
+                            journal=journal,
+                            offset=len(done),
                         )
                 state = state or 'complete'
             finally:
                 try:
                     after = safe_record(capture_config(cfg, client), sensitive)
                     if comparable(before) != comparable(after):
-                        state = 'invalid'
+                        invalidate_segment(manifest, len(read_answers(output)), 'configuration_changed')
+                        state = 'configuration_changed'
                     manifest['after'] = after
                 finally:
-                    manifest['state'] = state if manifest['after'] is not None and state else 'invalid'
+                    manifest['state'] = state if manifest['after'] is not None and state else 'unverified'
                     save_manifest(output, manifest)
             if error:
                 raise error
-            if state == 'invalid':
-                raise ValueError('실행 전후 구성이 바뀌어 결과가 무효입니다.')
+            if state == 'configuration_changed':
+                raise ValueError('실행 전후 구성이 바뀌어 이 구간은 무효입니다.')
             print(f'평가 상태: {state}', flush=True)
-            return 0
+            return int(state == 'clarify_unavailable')
     except (
         httpx.HTTPError,
         OSError,
@@ -404,7 +552,12 @@ def run(args, rows, replies):
         subprocess.CalledProcessError,
         service.AskError,
     ) as exc:
-        report_failure(stage, exc, output, sensitive)
+        report_failure(
+            exc.stage if isinstance(exc, service.AskError) else stage,
+            exc,
+            output,
+            request_id=REQUEST_ID.get() if stage == '질문 평가' else None,
+        )
         return 1
     finally:
         app_log.setLevel(level)
@@ -443,8 +596,14 @@ def main(argv=None):
             check_grading_data(manifest)
             records = read_answers(args.output)
             remaining_items(rows, records)
-            result, _ = scoring.score(rows, records)
-            result = {'condition': manifest['condition'], 'state': manifest['state']} | result
+            valid = valid_records(records, manifest)
+            result, _ = scoring.score(rows, valid)
+            result = {
+                'condition': manifest['condition'],
+                'state': manifest['state'],
+                'invalid': len(records) - len(valid),
+                'invalid_segments': manifest.get('invalid_segments', []),
+            } | result
         else:
             base, new = checked_run(args.base), checked_run(args.new)
             if base['condition'] != 'A' or new['condition'] != 'Aprime':
@@ -455,11 +614,13 @@ def main(argv=None):
             base_rows, new_rows = read_answers(args.base), read_answers(args.new)
             if remaining_items(rows, base_rows) or remaining_items(rows, new_rows):
                 raise ValueError('고정 세트 전체를 기록한 두 평가만 비교할 수 있습니다.')
+            if len(valid_records(base_rows, base)) != len(rows) or len(valid_records(new_rows, new)) != len(rows):
+                raise ValueError('무효 구간이 있는 실행은 채택 기준을 비교할 수 없습니다.')
             result = scoring.compare(rows, base_rows, new_rows)
         print(json.dumps(result, ensure_ascii=False, indent=2))
         return 0
     except (OSError, ValueError, KeyError) as exc:
-        print(f'M5: {exc}', file=sys.stderr)
+        report_failure(args.command, exc, None)
         return 1
 
 

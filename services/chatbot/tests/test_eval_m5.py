@@ -69,23 +69,41 @@ def test_run_records_request_error_and_does_not_start_next_item(tmp_path, monkey
     assert row['id'] == '1' and row['initial']['error']['stage'] == 'search'
 
 
-@pytest.mark.parametrize(
-    ('question', 'phase'),
-    [
-        ('합성 질문', 'clarify'),
-        ('총급여 4천만 원, 의료비 200만 원이면 의료비 세액공제액은 얼마인가요?', 'router'),
-    ],
-)
-def test_run_stops_after_model_call_failure_even_if_writer_finishes(tmp_path, question, phase):
-    client = Client(openai.APIConnectionError(request=httpx.Request('POST', '/')))
+def test_clarification_outage_scores_writer_and_stops_on_third_failure(tmp_path):
+    connection_error = openai.APIConnectionError(request=httpx.Request('POST', '/'))
+    client = Client(connection_error, connection_error, connection_error, NO_ASK)
     app = make_app(tmp_path / 'requests', client)
-    rows = [item('general', '1') | {'question': question}, item('general', '2')]
+    rows = [
+        item(
+            'general',
+            str(i),
+            article_ids=['근로기준법 제26조'],
+            answer_key={'must_include': [['예고']], 'must_not_include': []},
+        )
+        for i in range(4)
+    ]
     out = io.StringIO()
     state, error = m5.run_questions(app, rows, 'Aprime', {}, out)
-    assert state == 'request_error' and error is not None
-    turn = json.loads(out.getvalue())['initial']
-    assert turn['stage'] == 'done' and turn['error']['stage'] == phase
-    assert turn['calls'][phase] == 1 and turn['calls']['llm'] == 1
+    assert (state, error) == ('clarify_unavailable', None)
+    results = [json.loads(line) for line in out.getvalue().splitlines()]
+    assert len(results) == 3 and len(client.calls) == 6
+    assert [r['initial']['clarification']['failure'] for r in results] == ['call_error'] * 3
+    score, _ = scoring.score(rows, results)
+    assert score['general']['total'] == score['general']['cite_ok'] == 1
+    assert score['overall']['clarify_failure_rate'] == 1
+    assert score['overall']['timing_seconds']['verified_answer']['n'] == 3
+    assert score['overall']['request_errors'] == 0
+
+
+def test_router_call_failure_does_not_stop_writer_evaluation(tmp_path):
+    client = Client(openai.APIConnectionError(request=httpx.Request('POST', '/')))
+    app = make_app(tmp_path / 'requests', client)
+    row = item('general', '1') | {'question': '총급여 4천만 원, 의료비 200만 원이면 의료비 세액공제액은 얼마인가요?'}
+    out = io.StringIO()
+    assert m5.run_questions(app, [row, item('general', '2')], 'A', {}, out) == ('complete', None)
+    turn = json.loads(out.getvalue().splitlines()[0])['initial']
+    assert turn['stage'] == 'done' and turn['router_reason'] == 'model_error'
+    assert turn['calls']['router'] == turn['calls']['llm'] == 1
 
 
 def test_stop_finishes_current_item_and_resume_never_replays_it(tmp_path):
@@ -207,10 +225,11 @@ def test_cli_preflight_resume_and_compare_use_only_fake_inference(tmp_path, monk
             signal.raise_signal(signal.SIGINT)
             return result
 
-    clients = iter([InterruptingClient(), Client(), Client(NO_ASK, ASK, NO_ASK, NO_ASK)])
+    clients = iter([InterruptingClient(), Client(), Client(NO_ASK, ASK, NO_ASK, NO_ASK), Client()])
     loaded = []
 
-    def load_app(_config):
+    def load_app(_config, *, cached_index_only):
+        assert cached_index_only is True
         client = next(clients)
         loaded.append(client)
         return make_app(tmp_path / 'request-log', client)
@@ -239,3 +258,29 @@ def test_cli_preflight_resume_and_compare_use_only_fake_inference(tmp_path, monk
     result = json.loads(capsys.readouterr().out)
     assert len(result['gates']) == 6 and result['all_passed']
     assert result['pairs']['reasoning_cite_ok']['same'] == result['pairs']['general_total']['same'] == 1
+
+    # Simulate a crash after the second writer finished and the third was sent.
+    crash = tmp_path / 'crash'
+    crash.mkdir()
+    before = m5.checked_run(base)['before']
+    m5.save_manifest(
+        crash,
+        {
+            'state': 'running',
+            'before': before,
+            'after': None,
+            'condition': 'A',
+            'segment_start': 1,
+            'invalid_segments': [],
+        },
+    )
+    with (crash / m5.ANSWERS).open('w', encoding='utf-8') as answers:
+        for record in m5.read_answers(base)[:2]:
+            m5.append_record(answers, record)
+    with (crash / m5.STEPS).open('w', encoding='utf-8') as journal:
+        m5.append_record(journal, {'index': 2, 'event': 'send'})
+    assert m5.main(['run', '--condition', 'A', '--output', str(crash), '--resume']) == 0
+    answers = m5.read_answers(crash)
+    assert [r['id'] for r in answers] == ['R', 'F', 'O', 'G'] and len(loaded[-1].calls) == 1
+    assert [r['id'] for r in m5.valid_records(answers, m5.checked_run(crash))] == ['R', 'G']
+    assert m5.main(['compare', str(crash), str(new)]) == 1

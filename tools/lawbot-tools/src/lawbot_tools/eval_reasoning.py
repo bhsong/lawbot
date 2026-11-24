@@ -9,7 +9,6 @@ import logging
 import os
 import subprocess
 import sys
-import traceback
 from collections import Counter, defaultdict
 from contextlib import closing
 from dataclasses import asdict, replace
@@ -23,6 +22,7 @@ from openai import OpenAI
 from lawbot import deploy, envfile, llm, manifest, service, settings
 from lawbot.api_client import REQUEST_ID
 from lawbot.citation import citations, hit_key, refused
+from lawbot.inference import failure_fields
 from lawbot.paths import DATA, ROOT
 from lawbot_common.llm_endpoint import generation_model
 
@@ -181,9 +181,9 @@ def redact(text, sensitive):
     return text
 
 
-def report_failure(stage, exc, output, sensitive):
-    """Render the original exception chain without locals or configured secrets."""
-    details = redact(f'평가 중단 · {stage}\n' + ''.join(traceback.format_exception(exc)), sensitive)
+def report_failure(stage, exc, output, *, request_id=None):
+    """Log only failure metadata, even when a server echoes the prompt."""
+    details = json.dumps(failure_fields(stage, exc, request_id), ensure_ascii=False) + '\n'
     print(details, file=sys.stderr, end='')
     if output is not None:
         try:
@@ -202,7 +202,7 @@ def main():
     if [row['id'] for row in rows] != [*(f'ERR{i:03}' for i in range(1, 31)), 'CARD01', 'CARD02']:
         raise SystemExit('고정 검증셋 문항 ID와 순서를 확인하세요.')
 
-    env, sensitive = evaluation_env(args.output)
+    env, _ = evaluation_env(args.output)
 
     # The web app startup log includes the model server address.
     log = logging.getLogger('lawbot')
@@ -211,7 +211,6 @@ def main():
     stage, output = '평가 설정 확인', None
     try:
         cfg = replace(settings.load(env), embed_cache=args.output / 'embeddings', server_wait=0)
-        sensitive += (cfg.model_server, cfg.model_token, cfg.llm_url, cfg.llm_key)
         if cfg.profile.name != 'v5' or cfg.reranker is None or cfg.decree is None:
             raise RuntimeError('개발 설정 예시의 v5 프로필, 리랭커, 하위법령 첨부를 확인하세요.')
         stage = '실행 폴더 준비'
@@ -252,7 +251,12 @@ def main():
         json.JSONDecodeError,
         service.AskError,
     ) as exc:
-        report_failure(stage, exc, output, sensitive)
+        report_failure(
+            exc.stage if isinstance(exc, service.AskError) else stage,
+            exc,
+            output,
+            request_id=REQUEST_ID.get() if isinstance(exc, service.AskError) else None,
+        )
         return 1
     finally:
         log.setLevel(original_level)
