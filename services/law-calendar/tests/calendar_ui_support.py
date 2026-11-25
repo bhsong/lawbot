@@ -9,6 +9,7 @@ import subprocess
 import time
 from concurrent.futures import ThreadPoolExecutor
 from fnmatch import fnmatchcase
+from http import HTTPStatus
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from threading import Thread
@@ -32,7 +33,9 @@ def export_calendar(tmp, database, *, daily_feed=None, **feeds):
     # Playwright's synchronous facade already has an event loop on the test thread.
     with ThreadPoolExecutor(max_workers=1) as executor:
         if daily_feed is None:
-            executor.submit(write_site, create_app(database, **feeds), dist, site).result(timeout=30)
+            executor.submit(write_site, contextlib.nullcontext(create_app(database, **feeds)), dist, site).result(
+                timeout=30
+            )
         else:
             args = [
                 '--database',
@@ -102,12 +105,28 @@ def serve_static(tmp, site):
             key, value = line.strip().split(': ', 1)
             rules[pattern].append((key, value))
 
+    not_found = (site / '404.html').read_bytes()
     log = tmp / 'static-calendar.log'
     with log.open('w', encoding='utf-8', buffering=1) as stream:
 
         class Handler(SimpleHTTPRequestHandler):
             def __init__(self, *args, **kwargs):
                 super().__init__(*args, directory=str(site), **kwargs)
+
+            def send_error(self, code, message=None, explain=None):
+                if code != HTTPStatus.NOT_FOUND:
+                    super().send_error(code, message, explain)
+                    return
+                self.send_response(HTTPStatus.NOT_FOUND)
+                self.send_header('Content-Type', 'text/html; charset=utf-8')
+                self.send_header('Content-Length', str(len(not_found)))
+                self.end_headers()
+                if self.command != 'HEAD':
+                    self.wfile.write(not_found)
+
+            def list_directory(self, path):
+                self.send_error(HTTPStatus.NOT_FOUND)
+                return None
 
             def end_headers(self):
                 for pattern, headers in rules.items():
