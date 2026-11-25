@@ -289,7 +289,7 @@ async def all_pages[M: (ChangePage, HoldPage)](
     return result
 
 
-async def write_data(app: FastAPI, data: Path, count: int) -> None:
+async def write_data(app: FastAPI, data: Path, count: int) -> int:
     def save(path: str, payload: dict, *, agency: Agency | None = None, law: bool = False) -> None:
         nonlocal count
         check_strings(payload, path, agency, law=law)
@@ -342,6 +342,7 @@ async def write_data(app: FastAPI, data: Path, count: int) -> None:
             if news.agency != agency:
                 raise ExportError(path, 'schema', '$.agency')
             save(path, payload, agency=agency)
+    return count
 
 
 @contextmanager
@@ -366,14 +367,14 @@ def replaceable(out: Path) -> bool:
 
 
 @contextmanager
-def output_lock(out: Path) -> Iterator[None]:
+def output_lock(out: Path, timeout: float | None = None) -> Iterator[None]:
     lock = out.with_name(f'.{out.name}.lock')
     # Keep the lock file: unlinking it would let writers lock different inodes.
     fd = os.open(lock, os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW | os.O_NONBLOCK, 0o600)
     try:
         if not stat.S_ISREG(os.fstat(fd).st_mode):
             raise ExportError('<output>', 'destination')
-        deadline = time.monotonic() + LOCK_TIMEOUT
+        deadline = time.monotonic() + (LOCK_TIMEOUT if timeout is None else timeout)
         while True:
             try:
                 fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
@@ -410,19 +411,29 @@ def install_site(site: Path, out: Path) -> None:
         raise OSError(code, os.strerror(code))
 
 
-def write_site(source: AbstractContextManager[FastAPI], dist: Path, out: Path) -> None:
-    """Snapshot and render public reads under one output lock, without opening an HTTP port."""
+@contextmanager
+def exported_site(
+    source: AbstractContextManager[FastAPI],
+    dist: Path,
+    out: Path,
+    *,
+    protected: tuple[Path, ...] = (),
+    lock_timeout: float | None = None,
+) -> Iterator[tuple[Path, int]]:
+    """Install the public site and retain the output lock while a caller uses it."""
     if out.is_symlink():
         raise ExportError('<output>', 'destination')
     with filesystem('<output>'):
         out = out.resolve()
+        if any(path.resolve().is_relative_to(out) for path in protected):
+            raise ExportError('<output>', 'destination')
     with filesystem('<frontend>'):
         dist = dist.resolve()
     if out.is_relative_to(dist) or dist.is_relative_to(out) or Path.cwd().is_relative_to(out):
         raise ExportError('<output>', 'destination')
     with filesystem('<output>'):
         out.parent.mkdir(parents=True, exist_ok=True)
-        with output_lock(out):
+        with output_lock(out, lock_timeout):
             replaceable(out)
             with filesystem('<frontend>'):
                 files = build_files(dist)
@@ -439,8 +450,9 @@ def write_site(source: AbstractContextManager[FastAPI], dist: Path, out: Path) -
                     count += 1
                     check_file(name, len(content), count)
                     (site / name).write_bytes(content)
-                asyncio.run(write_data(app, site / 'data', count))
+                count = asyncio.run(write_data(app, site / 'data', count))
                 install_site(site, out)
+            yield out, count - 1  # The installation marker is not public.
 
 
 @contextmanager
@@ -475,10 +487,13 @@ def main(argv: list[str]) -> None:
     parser.add_argument('--out', type=Path, required=True)
     args = parser.parse_args(argv)
     try:
-        with filesystem('<output>'):
-            if any(path.resolve().is_relative_to(args.out.resolve()) for path in (args.database, args.erp_daily_feed)):
-                raise ExportError('<output>', 'destination')
-        write_site(snapshot_app(args.database, args.erp_daily_feed), args.frontend_dist, args.out)
+        with exported_site(
+            snapshot_app(args.database, args.erp_daily_feed),
+            args.frontend_dist,
+            args.out,
+            protected=(args.database, args.erp_daily_feed),
+        ):
+            return
     except ExportError as exc:
         parser.exit(1, f'Calendar export failed: {exc}\n')
     except ValueError:

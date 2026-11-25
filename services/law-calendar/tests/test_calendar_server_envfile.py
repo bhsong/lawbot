@@ -6,7 +6,8 @@ import sys
 import pytest
 from fastapi.testclient import TestClient
 
-from law_calendar import server
+from calendar_publish_fixtures import offline_calendar as offline_calendar
+from law_calendar import server, settings
 from test_calendar_workflow import approval, import_one
 from test_calendar_workflow import workflow as workflow
 
@@ -18,8 +19,7 @@ def test_calendar_main_loads_service_env_for_review(workflow, tmp_path, monkeypa
     database = workflow[0]
     decision = approval(database, import_one(workflow))
     service = tmp_path / 'calendar-service'
-    module = service / 'src' / 'law_calendar' / 'server.py'
-    module.parent.mkdir(parents=True)
+    service.mkdir()
     envfile = service / '.env'
     file_token = secrets.token_hex(32)
     token = secrets.token_hex(32) if shell_token else file_token
@@ -30,7 +30,7 @@ def test_calendar_main_loads_service_env_for_review(workflow, tmp_path, monkeypa
     monkeypatch.setenv(TOKEN_VAR, token)
     if not shell_token:
         monkeypatch.delenv(TOKEN_VAR)
-    monkeypatch.setattr(server, '__file__', str(module))
+    monkeypatch.setattr(settings, 'SERVICE', service)
     monkeypatch.setattr(sys, 'argv', ['law-calendar', '--database', str(database), '--port', '8000'])
     monkeypatch.chdir(tmp_path)
 

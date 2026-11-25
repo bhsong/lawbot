@@ -33,7 +33,7 @@ from law_calendar.models import (
     PublicDetail,
     PublicTaxSchedule,
 )
-from lawbot_common import envfile
+from law_calendar.settings import DAILY_KEY, DB_KEY, load_environment
 from lawbot_common.erp_daily import read_snapshot
 from lawbot_common.erp_news import Agency
 from lawbot_common.erp_rules import ErpRules, RuleSnapshot
@@ -41,7 +41,6 @@ from lawbot_common.logs import logger
 from lawbot_common.tax_schedule import TaxSchedule
 
 KST = timezone(timedelta(hours=9))
-SECRETS = ('LAWBOT_CALENDAR_ADMIN_TOKEN',)
 
 
 def month_bounds(value: str) -> tuple[str, str]:
@@ -329,23 +328,27 @@ def create_app(
     return app
 
 
-def main():
+def main() -> int | None:
     if sys.argv[1:2] == ['export']:
         from law_calendar.export import main as export_main
 
         export_main(sys.argv[2:])
         return
 
-    service = Path(__file__).resolve().parents[2]
-    envfile.load(service / '.env', service, SECRETS, logger('law_calendar', 'calendar'))
+    if sys.argv[1:2] == ['publish']:
+        from law_calendar.publish import main as publish_main
+
+        return publish_main(sys.argv[2:])
+
+    load_environment(logger('law_calendar', 'calendar'))
     parser = argparse.ArgumentParser(description='Independent calendar API')
-    parser.add_argument('--database', type=Path, default=os.environ.get('LAW_CALENDAR_DB'))
+    parser.add_argument('--database', type=Path, default=os.environ.get(DB_KEY))
     parser.add_argument('--port', type=int, required=True)
     parser.add_argument('--frontend', type=Path)
     parser.add_argument('--erp-feed', type=Path, default=os.environ.get('LAWBOT_CALENDAR_ERP_FEED'))
     parser.add_argument('--news-feed', type=Path, default=os.environ.get('LAWBOT_CALENDAR_NEWS_FEED'))
     parser.add_argument('--erp-rules-feed', type=Path, default=os.environ.get('LAWBOT_CALENDAR_ERP_RULES_FEED'))
-    parser.add_argument('--erp-daily-feed', type=Path, default=os.environ.get('LAWBOT_CALENDAR_ERP_DAILY_FEED'))
+    parser.add_argument('--erp-daily-feed', type=Path, default=os.environ.get(DAILY_KEY))
     args = parser.parse_args()
     if args.database is None or not 1 <= args.port <= 65535:
         parser.error('An explicit database and valid port are required')
@@ -364,4 +367,4 @@ def main():
 
 
 if __name__ == '__main__':
-    main()
+    sys.exit(main())

@@ -5,6 +5,7 @@ import json
 import pytest
 from fastapi.testclient import TestClient
 
+from calendar_publish_fixtures import offline_calendar as offline_calendar
 from law_calendar.server import create_app
 from test_calendar_api import dataset as dataset
 
@@ -90,16 +91,15 @@ def test_unconfigured_feed_is_missing_and_law_endpoints_are_unchanged(dataset, f
 
 
 def test_main_reads_the_feed_path_from_the_service_env_file(dataset, feed, tmp_path, monkeypatch):
-    from law_calendar import server
+    from law_calendar import server, settings
 
     service = tmp_path / 'calendar-service'
-    module = service / 'src' / 'law_calendar' / 'server.py'
-    module.parent.mkdir(parents=True)
+    service.mkdir()
     (service / '.env').write_text(f'LAWBOT_CALENDAR_ERP_FEED={feed}\n', encoding='utf-8')
     monkeypatch.delenv('LAWBOT_ENV_FILE', raising=False)
     monkeypatch.setenv('LAWBOT_CALENDAR_ERP_FEED', 'placeholder')
     monkeypatch.delenv('LAWBOT_CALENDAR_ERP_FEED')
-    monkeypatch.setattr(server, '__file__', str(module))
+    monkeypatch.setattr(settings, 'SERVICE', service)
     monkeypatch.setattr('sys.argv', ['law-calendar', '--database', str(dataset), '--port', '8000'])
     states = []
 

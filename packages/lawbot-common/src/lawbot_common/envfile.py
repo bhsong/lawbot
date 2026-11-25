@@ -43,7 +43,7 @@ def read(path, allowed):
     return parse(path.read_text(encoding='utf-8'), path.name, allowed)
 
 
-def load(default, root, secrets, log):
+def load(default, root, secrets, log, *, allowed=lawbot_keys):
     """레포 최상위 .env를 읽어 셸에 없는 변수만 os.environ에 넣는다 (웹앱·모델 서버의 main이 맨 먼저 호출). 읽은 경로 또는 None
     파일: LAWBOT_ENV_FILE이 가리키는 파일(상대 경로는 root 기준), 없으면 default. LAWBOT_ENV_FILE=''이면 읽지 않음
     secrets: 값이 있는데 파일을 다른 사용자도 읽을 수 있으면 경고할 변수. log: 서비스 로거 (lawbot_common.logs)"""
@@ -57,7 +57,7 @@ def load(default, root, secrets, log):
         if env:  # 직접 지정한 파일이 없으면 오류
             raise FileNotFoundError(f'LAWBOT_ENV_FILE 파일 없음: {path}')
         return None
-    values = read(path, lawbot_keys) or {}  # 위에서 파일이 있는 것을 확인함
+    values = read(path, allowed) or {}
     found = [k for k in secrets if values.get(k)]
     if found and path.stat().st_mode & (stat.S_IRWXG | stat.S_IRWXO):  # 값은 출력하지 않고 변수 이름만
         log.warning(

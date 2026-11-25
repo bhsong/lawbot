@@ -17,8 +17,8 @@ from urllib.parse import urlsplit
 
 import httpx
 
+from law_calendar.export import exported_site
 from law_calendar.export import main as export_main
-from law_calendar.export import write_site
 from law_calendar.server import create_app
 
 SERVICE = Path(__file__).resolve().parents[1]
@@ -33,9 +33,12 @@ def export_calendar(tmp, database, *, daily_feed=None, **feeds):
     # Playwright's synchronous facade already has an event loop on the test thread.
     with ThreadPoolExecutor(max_workers=1) as executor:
         if daily_feed is None:
-            executor.submit(write_site, contextlib.nullcontext(create_app(database, **feeds)), dist, site).result(
-                timeout=30
-            )
+
+            def export():
+                with exported_site(contextlib.nullcontext(create_app(database, **feeds)), dist, site):
+                    return
+
+            executor.submit(export).result(timeout=30)
         else:
             args = [
                 '--database',
