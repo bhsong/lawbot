@@ -119,12 +119,11 @@ def time_limit() -> Iterator[Deadline]:
 @dataclass(frozen=True, repr=False)
 class PagesSettings:
     project: str
-    project_id: str
     account: str
     token: str
 
     @classmethod
-    def read(cls, project: str, config: dict[str, str]) -> PagesSettings:
+    def read(cls, project: str) -> PagesSettings:
         try:
             with checked_file(settings.SERVICE / 'pages.env', os.O_RDONLY) as fd:
                 with open(fd, encoding='utf-8', closefd=False) as stream:
@@ -134,10 +133,9 @@ class PagesSettings:
                 raise ValueError
         except OSError, ValueError:
             raise PublishError('invalid_pages_credentials') from None
-        project_id = config.get(settings.PROJECT_ID_KEY, '')
-        if not PROJECT.fullmatch(project) or not re.fullmatch(r'[a-zA-Z0-9-]{1,64}', project_id):
+        if not PROJECT.fullmatch(project):
             raise PublishError('invalid_pages_config')
-        return cls(project, project_id, account, token)
+        return cls(project, account, token)
 
     @property
     def url(self) -> str:
@@ -300,7 +298,6 @@ async def project_metadata(client: httpx.AsyncClient, pages: PagesSettings) -> d
     if (
         not isinstance(metadata, dict)
         or metadata.get('name') != pages.project
-        or metadata.get('id') != pages.project_id
         or metadata.get('production_branch') != 'main'
     ):
         raise PublishError('project_mismatch')
@@ -481,7 +478,7 @@ def publish_site(
     state = private_directory()
     if project and args.purge_history:
         mark_withdrawal(state)
-    pages = PagesSettings.read(project, config) if project else None
+    pages = PagesSettings.read(project) if project else None
     command = wrangler_command(config) if pages else None
     withdrawals: tuple[Path, ...] = ()
 

@@ -21,7 +21,6 @@ from test_calendar_export import export_args
 from test_calendar_export import inputs as inputs
 
 PROJECT = 'calendar-fixture'
-PROJECT_ID = 'fixture-project-id'
 ACCOUNT = 'fixture-account-value'
 TOKEN = 'fixture-token-value'
 PUBLIC_STATUS = 'data/law-calendar/status.json'
@@ -41,7 +40,7 @@ def config(service, inputs, *, project=PROJECT, node=sys.executable):
     (service / '.env').write_text(
         f'LAW_CALENDAR_DB={database}\nLAWBOT_CALENDAR_ERP_DAILY_FEED={feed}\n'
         f'LAWBOT_CALENDAR_FRONTEND_DIST={dist}\nLAWBOT_CALENDAR_SITE={out}\n'
-        f'LAWBOT_CALENDAR_PAGES_PROJECT={project}\nLAWBOT_CALENDAR_PAGES_PROJECT_ID={PROJECT_ID}\n'
+        f'LAWBOT_CALENDAR_PAGES_PROJECT={project}\n'
         f'LAWBOT_CALENDAR_NODE={node}\n'
     )
 
@@ -173,7 +172,6 @@ class Pages:
         self.project_path = f'/client/v4/accounts/{ACCOUNT}/pages/projects/{PROJECT}'
         self.metadata = {
             'name': PROJECT,
-            'id': PROJECT_ID,
             'production_branch': 'main',
             'canonical_deployment': {'id': CURRENT},
         }
@@ -245,7 +243,7 @@ def test_publish_verifies_production_and_prunes_every_history_page(inputs, servi
     assert not publish_state.pending_withdrawals(service / '.pages-publish')
 
 
-@pytest.mark.parametrize('key,value', [('name', 'other'), ('id', 'replaced'), ('production_branch', 'preview')])
+@pytest.mark.parametrize('key,value', [('name', 'other'), ('production_branch', 'preview')])
 def test_preflight_rejects_the_wrong_project_before_running_wrangler(inputs, service, capsys, key, value):
     started = fake_wrangler(inputs, service)
     pages = Pages(inputs[-1])
