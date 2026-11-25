@@ -7,7 +7,7 @@
 ## 구성
 
 ```text
-공개 캘린더 서브도메인 → 정적 호스팅 → frontend/dist
+공개 캘린더 화면 → 정적 호스팅 → 내보낸 사이트 폴더(화면·data·헤더·라이선스)
 비공개 챗봇 서브도메인 → 기존 챗봇 서버 → Mac mini 모델 서버
 ```
 
@@ -31,7 +31,17 @@ npm test
 npm run build
 ```
 
-`frontend/dist/` 전체를 캘린더 호스트의 루트에서 정적 파일로 제공한다. production 빌드는 개발 예시를 제외한다.
+`frontend/dist/`에는 화면과 `licenses.txt`가 생성되며 운영 빌드에는 합성 예시가 들어가지 않는다. 배포 또는 정적 미리보기에는 빌드만 복사하지 말고 저장소 루트에서 개발 DB와 ERP 공개 일일 스냅샷으로 사이트를 내보낸다.
+
+```fish
+uv run --project services/law-calendar law-calendar export --database $CALENDAR_DB \
+  --erp-daily-feed $ERP_DAILY_FEED --frontend-dist services/law-calendar/frontend/dist \
+  --out services/law-calendar/data/site
+```
+
+내보내기는 포트를 열지 않고 같은 공개 조회 경로를 프로세스 안에서 호출한다. 응답과 사이트 한도를 검사한 뒤 빌드, `data/`, `_headers`, `licenses.txt`를 한 디렉터리로 교체한다. 검사가 실패하면 종료 코드 1로 끝나며 기존 사이트를 유지한다. 기존 사이트의 교체에는 macOS 또는 Linux 파일시스템의 원자적 디렉터리 교환 지원이 필요하다.
+
+Vite 주소에서 `/?source=data`로 접속하면 `services/law-calendar/data/site/`의 정적 데이터를 읽는다. 다른 폴더는 `LAW_CALENDAR_SITE`에 절대 경로로 지정한다. 별도 API 서버는 필요 없다.
 
 ## 독립 브라우저 검사
 
@@ -42,7 +52,9 @@ uv run --no-project --python 3.14 --with-editable ./services/law-calendar --with
 uv run --no-project --python 3.14 --with-editable ./services/law-calendar --with pytest==9.1.1 --with httpx==0.28.1 --with playwright==1.64.1 python -m pytest -c pyproject.toml services/law-calendar/tests
 ```
 
-설계와 구현 계획은 [LAW_CALENDAR_PLAN.md](../../docs/plans/LAW_CALENDAR_PLAN.md)를 참고한다.
+CI와 같은 의존성이 저장소 가상 환경에 이미 설치되어 있으면 오프라인에서 `uv run --offline --no-sync pytest -c pyproject.toml services/law-calendar/tests`로 실행할 수 있다. 대역 E2E는 내보낸 폴더를 `_headers`가 적용된 정적 파일 서버에서 열며 API 서버를 띄우지 않는다.
+
+설계는 [캘린더 계획](../../docs/plans/LAW_CALENDAR_PLAN.md)과 [정적 사이트 전환 계획](../../docs/plans/calendar-pages-static.md)을 참고한다.
 
 ## 조회 API
 
@@ -56,11 +68,11 @@ uv run --project services/law-calendar python -m law_calendar.db services/law-ca
 uv run --project services/law-calendar law-calendar --database services/law-calendar/data/calendar.db --port $CALENDAR_API_PORT
 ```
 
-정적 파일도 같은 공개 서버에서 제공하려면 `--frontend services/law-calendar/frontend/dist`를 추가한다. 기존 DB는 초기화 명령으로 덮어쓰지 않는다. 운영 DB 변경 전에는 SQLite backup으로 사본을 보관한다.
+조회 서버에서 정적 화면도 확인하려면 `--frontend services/law-calendar/data/site`를 추가한다. 이 옵션은 개발·전환용이며 별도 정적 호스팅과 달리 `_headers`를 적용하지 않는다. 기존 DB는 초기화 명령으로 덮어쓰지 않는다. 운영 DB 변경 전에는 SQLite backup으로 사본을 보관한다.
 
-개발 화면에서 API 데이터를 사용하려면 `LAW_CALENDAR_API_URL`을 로컬 API 주소로 설정하고 Vite 주소의 `/?source=api`로 접속한다. 기본 개발 모드는 합성 예시다. production은 같은 origin의 공개 API를 읽으며, API에 연결할 수 없으면 오류를 표시한다. 빈 DB에는 공개 항목이 없고 예시나 미승인 항목을 자동 삽입하지 않는다.
+브라우저 화면은 조회 API가 아닌 같은 출처의 `/data/` 파일만 읽는다. `data/law-calendar/months.json`에 없는 달에는 변경과 세무일정을 0건으로 표시한다. 빈 DB에는 예시나 미승인 항목을 자동 삽입하지 않는다.
 
-조회 경로는 `/api/law-calendar?month=YYYY-MM`, `/api/law-events?date=YYYY-MM-DD`, `/api/law-changes/{id}`, `/api/law-calendar/status`다. API의 OpenAPI 계약은 `/openapi.json`에서 확인할 수 있다.
+조회 및 내보내기 원천 경로는 `/api/law-calendar?month=YYYY-MM`, `/api/law-events?date=YYYY-MM-DD`, `/api/law-changes/{id}`, `/api/law-calendar/status`, `/api/law-calendar/months`다. 월 색인은 공개 시행일·세무일정이 있는 모든 달과 내보낸 달 전후 한 달, ERP 기준일 파일 목록을 반환한다. API의 OpenAPI 계약은 `/openapi.json`에서 확인할 수 있다.
 
 국세청 세무일정이 통합 스냅샷에 있으면 날짜에 빨간색 `세무 N` 배지를 표시한다. 날짜를 선택하면 공식 표에서 확인한 원천세·지급명세서·연말정산 기한과 대상 기간, 국세청 원문 링크를 볼 수 있다. `GET /api/tax-schedule?month=YYYY-MM`은 해당 월의 일정과 마지막 확인 시각을 반환한다. 법령 변경 일정 집계는 기존 API에서 유지된다.
 
@@ -73,7 +85,7 @@ uv run --project services/law-calendar law-calendar --database services/law-cale
 - 화면 구성:
   - **현재 적용 중**: 시행일이 오늘(KST) 이전인 항목과 현행 법령본 기준 항목
   - **적용 예정**: 시행일이 오늘 이후인 항목
-  - **관련 법령 일정**: `relatedLaws`에 있는 법령만 골라 `/api/law-events` 결과를 월별로 보여 준다
+  - **관련 법령 일정**: `relatedLaws`에 있는 법령만 골라 내보낸 시행 조문을 월별로 보여 준다
   - **수집 이력** 버튼: 어떤 항목을, 언제, 어느 원천(저장소 커밋이나 등록한 PDF의 SHA-256)에서 가져와 승인했는지 표로 보여 준다
 
 ## 기관별 최신 소식
@@ -89,6 +101,8 @@ Source Hub가 내보낸 공개 파일을 `LAWBOT_CALENDAR_NEWS_FEED` 또는 `law
 선택 매개변수 `asOf`는 한국 표준시 기준일, `targetOn`은 지급·귀속·보험료 등에 적용할 업무 대상일입니다. 둘 다 `YYYY-MM-DD` 형식입니다. `asOf`를 생략하면 오늘, `targetOn`을 생략하면 기준일을 사용합니다. 철회된 내용은 공개 응답에서 빠지고 기존 결정은 ERP 내부 이력에서 조회할 수 있습니다. [검토 및 내보내기](../erp-updates/README.md#적용-기준-버전과-피드-v2)
 
 ERP 탭은 v2가 설정되면 항목마다 한 카드에서 적용 범위별 현행판과 첫 확정 변경을 함께 표시합니다. 이후 변경과 기존 v1 원문·첨부는 같은 카드에서 펼쳐 볼 수 있습니다. v2 파일이 없거나 손상된 경우에는 경고와 함께 v1 자료를 원문 참고로 표시합니다. v2를 설정하지 않은 환경에서는 기존 ERP 화면을 사용합니다.
+
+정적 사이트는 내보내는 날의 한국 표준시 기준 전날부터 이틀 뒤까지 ERP 기준일 파일을 담는다. 화면은 한국 표준시 오늘의 파일을 우선 사용한다. 오늘 파일이 없고 과거 파일을 사용하면 기준일과 갱신 지연을 표시한다.
 
 ## ERP 일일 스냅샷
 

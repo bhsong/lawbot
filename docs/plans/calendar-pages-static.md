@@ -27,7 +27,7 @@
 | 파일 | 내용 (기존 경로) |
 | --- | --- |
 | `law-calendar/status.json` | `/api/law-calendar/status` |
-| `law-calendar/months.json` | 이벤트가 있는 월 목록(새 색인) |
+| `law-calendar/months.json` | `/api/law-calendar/months`: 월 색인(`months`)과 ERP 기준일 파일 색인(`erpRuleDates`) |
 | `law-calendar/YYYY-MM.json` | `/api/law-calendar?month=` |
 | `law-events/YYYY-MM.json` | `/api/law-events?month=`의 모든 페이지를 합친 목록 |
 | `law-changes/<id>.json` | `/api/law-changes/{id}` |
@@ -37,7 +37,7 @@
 | `erp-rules/YYYY-MM-DD.json` | `/api/erp-updates/v2?asOf=`, 내보낸 날의 KST 기준 D-1–D+2 |
 | `erp-news/<agency>.json` | `/api/erp-news/latest?agency=` |
 
-- 월 범위: 이벤트·세무일정이 있는 모든 월과 화면이 이동할 수 있는 월. 색인에 없는 월은 화면에서 "0건"으로 처리하고 오류로 보지 않는다.
+- 월 범위: 이벤트·세무일정이 있는 모든 월과 내보낸 KST 월 전후 한 달. 탐색 가능한 기간은 제한하지 않으며, 색인에 없는 월은 화면에서 "0건"으로 처리한다.
 - 검사(하나라도 실패하면 출력 폴더를 만들지 않고 종료 코드 1):
   - 모든 외부 URL이 `https`이고, 출처별 허용 호스트(`law.go.kr`, 기관 3곳, `github.com/legalize-kr`)에 속한다. 기존 `official_url`·`CONFIRMATION_HOSTS` 규칙을 재사용한다.
   - 파일마다 해당 응답 모델로 다시 검증한다.
@@ -101,7 +101,7 @@
 
 | 층 | 내용 |
 | --- | --- |
-| 단위 | 내보내기 파일 목록과 내용이 같은 DB의 공개 API 응답과 같음. 미승인·보류·철회 항목이 어떤 파일에도 없음. 허용 밖 호스트·`http`·`javascript:` URL, 이메일·사설 IP·로컬 경로가 들어가면 실패하고 출력 폴더 없음. `_worker.js`·`functions/`가 있으면 실패. 배포 정리가 현재·직전 하나만 남기고, `--purge-history`는 현재만 남김(가짜 wrangler). 토큰이 로그·예외에 없음 |
+| 단위 | 내보내기 파일 목록과 내용이 같은 DB의 공개 API 응답과 같음. 미승인 원문·철회 항목은 빠지고 공개 보류 목록에는 공개 API 메타데이터만 남음. 허용 밖 호스트·`http`·`javascript:` URL, 이메일·사설 IP·로컬 경로가 들어가면 실패하고 출력 폴더 없음. `_worker.js`·`_routes.json`·`functions/`가 있으면 실패. 배포 정리가 현재·직전 하나만 남기고, `--purge-history`는 현재만 남김(가짜 wrangler). 토큰이 로그·예외에 없음 |
 | 프런트엔드 | 파일 경로 조립, 색인에 없는 월은 빈 달, ERP 기준일 파일 대체와 늦음 표시, 출처 문구·라이선스 링크 |
 | 대역 E2E | 테스트 DB에서 내보낸 폴더를 `_headers`를 적용하는 정적 서버로 띄우고 브라우저로 달력 이동, 날짜 상세, ERP 탭, 기관 소식, 세무 배지를 확인. API 서버 없이 동작. CSP 위반 콘솔 오류 0, `/api/` 요청 0 |
 | 통합 | `source-hub daily`가 게시 실패를 기록하고 수집 결과는 유지(가짜 게시기) |
