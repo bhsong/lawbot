@@ -19,7 +19,7 @@ test.each(POLICIES)('%s news names its source and links the copyright policy', a
   const panel = screen.getByRole('dialog', { name: agency + ' 최신 소식' })
   expect(await within(panel).findByText(`출처: ${agency} (${home})`)).toBeInTheDocument()
   expect(within(panel).getByRole('link', { name: agency + ' 저작권정책' })).toHaveAttribute('href', policy)
-  expect(fetch).toHaveBeenCalledWith(expect.stringContaining('/api/erp-news/latest'), expect.objectContaining({ credentials: 'same-origin' }))
+  expect(fetch).toHaveBeenCalledWith(expect.stringMatching(/^\/data\/erp-news\/(moel|mofe|nts)\.json$/), expect.objectContaining({ credentials: 'same-origin' }))
 })
 
 test('hometax and law center panels have no copyright policy link', async () => {

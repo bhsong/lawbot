@@ -149,6 +149,14 @@ const rules: ErpRules = {
   ],
 }
 
+test('a past ERP edition identifies both its reference date and its delayed status', async () => {
+  render(<ErpPage loader={loader} ruleLoader={async () => rules} lawLoader={lawLoader} today="2026-11-15" />)
+  expect(await screen.findByText('기준일 2026-11-12 KST')).toBeVisible()
+  expect(screen.getByText(/ERP 적용 기준 갱신이 지연/)).toHaveAttribute('role', 'status')
+  expect(screen.getByText('법령 정보 출처: 법제처 국가법령정보센터(www.law.go.kr)')).toBeVisible()
+  expect(screen.getByRole('link', { name: '라이선스' }).closest('footer')).not.toBeNull()
+})
+
 test('shows current, upcoming and additional stages within a single rule card', async () => {
   const loaderWithFuture: ErpLoader = async () => ({
     ...feed, items: [...(feed.items ?? []), { ...base, id: 'duplicate', effectiveFrom: '2028-01-01' }],

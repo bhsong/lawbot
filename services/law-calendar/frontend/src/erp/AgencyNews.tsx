@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import type { ErpNews, PublicNewsBoard } from '../law-calendar/api-types'
+import { isDemoMode, readData } from '../site-data'
 import { kstMinute } from './data'
 
 const AGENCIES = {
@@ -16,6 +17,12 @@ const STATUS: Record<PublicNewsBoard['status'], string> = {
   delayed: '수집 지연', blocked: '접근 제한', error: '수집 실패', partial: '일부 수집 실패',
 }
 
+function boardStatus(board: PublicNewsBoard, now: number) {
+  return board.status === 'ok' && board.staleAfter && Date.parse(board.staleAfter) < now
+    ? 'delayed'
+    : board.status
+}
+
 // Agencies whose copyright policy requires naming the source when their posts are listed.
 const COPYRIGHT_POLICY: Partial<Record<Agency, string>> = {
   moel: 'https://www.moel.go.kr/site/copyright/copyrightList.do',
@@ -29,26 +36,25 @@ const HOMETAX: ErpNews = {
 }
 
 function NewsContent({ agency }: { agency: Agency }) {
-  const [result, setResult] = useState<ErpNews | 'error' | null>(agency === 'hometax' ? HOMETAX : null)
+  const demoHome = agency === 'hometax' && isDemoMode()
+  const [result, setResult] = useState<ErpNews | 'error' | null>(demoHome ? HOMETAX : null)
 
   useEffect(() => {
-    if (agency === 'hometax') return
+    if (demoHome) return
     const controller = new AbortController()
-    fetch('/api/erp-news/latest?agency=' + agency, { signal: controller.signal, cache: 'no-store', credentials: 'same-origin' })
-      .then(async (response) => {
-        if (!response.ok) throw new Error('News unavailable')
-        const data: ErpNews = await response.json()
-        if (!controller.signal.aborted) setResult(data)
-      })
-      .catch(() => { if (!controller.signal.aborted) setResult('error') })
+    readData<ErpNews>(controller.signal, 'erp-news', agency).then(
+      data => { if (!controller.signal.aborted) setResult(data) },
+      () => { if (!controller.signal.aborted) setResult('error') },
+    )
     return () => controller.abort()
-  }, [agency])
+  }, [agency, demoHome])
 
   if (result === null) return <p role="status">소식을 불러오는 중입니다.</p>
   if (result === 'error' || result.state === 'invalid' || result.state === 'unavailable')
     return <p role="status">기관 소식을 불러오지 못했습니다.</p>
   if (result.state === 'missing') return <p role="status">기관 소식 스냅샷이 아직 준비되지 않았습니다.</p>
 
+  const now = Date.now()
   const items = result.items ?? []
   const order = [...(result.boards ?? []).map((board) => board.name), ...items.map((item) => item.board)]
   const groups = [...new Set(order)]
@@ -76,7 +82,7 @@ function NewsContent({ agency }: { agency: Agency }) {
     {(result.boards?.length ?? 0) > 0 && <details className="erp-news-status" open>
       <summary>게시판별 수집 상태</summary>
       <ul>{result.boards?.map((board, index) => <li key={index}>
-        {board.name} · {STATUS[board.status]}
+        {board.name} · {STATUS[boardStatus(board, now)]}
         <small>마지막 성공 {board.lastSuccessAt ? kstMinute(board.lastSuccessAt) + ' KST' : '기록 없음'}</small>
       </li>)}</ul>
     </details>}

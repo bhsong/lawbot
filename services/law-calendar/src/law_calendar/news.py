@@ -63,6 +63,23 @@ def law_news(database: Path, names: list[str], as_of: date | None = None) -> tup
     return items, stamp[0] if stamp else None
 
 
+def filter_law_news(database: Path, entry: dict) -> dict:
+    """Keep only captured events that still have at least one public calendar change."""
+    items = entry.get('items', [])
+    if not items:
+        return entry
+    ids = json.dumps([item['id'] for item in items])
+    with read_database(database) as conn:
+        approved = {
+            row[0]
+            for row in conn.execute(
+                'SELECT value FROM json_each(?) WHERE EXISTS (SELECT 1 FROM public_changes WHERE event_id=value)',
+                (ids,),
+            )
+        }
+    return entry | {'items': [item for item in items if item['id'] in approved]}
+
+
 def response(
     database: Path,
     file: Path | None,
@@ -98,7 +115,7 @@ def current_news(entry: dict, limit: int, *, now: datetime | None = None) -> dic
     boards = []
     for source in entry.get('boards', []):
         board = dict(source)
-        cutoff = board.pop('staleAfter', None)
+        cutoff = board.get('staleAfter')
         if cutoff and board['status'] == 'ok' and datetime.fromisoformat(cutoff) < now:
             board['status'] = 'delayed'
         boards.append(board)

@@ -1,50 +1,49 @@
 import type { CalendarChange } from '@lawbot/ui'
-import type { CalendarLoader, TaxSchedule } from './types'
-import type { CalendarMonth, CalendarStatus, ChangePage, HoldPage, PublicDetail } from './api-types'
+import { isDemoMode, readData, readIndex } from '../site-data'
+import type { CalendarSnapshot } from './types'
+import type { CalendarMonth, CalendarStatus, ChangePage, HoldPage, PublicDetail, PublicTaxSchedule } from './api-types'
+import { demoHolds, loadDemo } from './demo'
 
-async function read<T>(path: string, signal: AbortSignal): Promise<T> {
-  const response = await fetch(path, { signal, credentials: 'same-origin', cache: 'no-store' })
-  if (!response.ok) throw new Error('Calendar API unavailable')
-  return response.json() as Promise<T>
-}
+const COLLECTION_MAX_AGE_MS = 48 * 60 * 60 * 1000
 
 export function loadChange(id: string, signal: AbortSignal): Promise<CalendarChange> {
-  return read<PublicDetail>(`/api/law-changes/${encodeURIComponent(id)}`, signal)
-}
-
-export function loadTaxSchedule(month: string, signal: AbortSignal): Promise<TaxSchedule> {
-  return read<TaxSchedule>(`/api/tax-schedule?month=${encodeURIComponent(month)}`, signal)
+  return readData<PublicDetail>(signal, 'law-changes', id)
 }
 
 export async function loadHolds(page: number, signal: AbortSignal, demo = false): Promise<HoldPage> {
   if (import.meta.env.DEV && demo) {
-    const { demoHolds } = await import('./demo')
     return demoHolds(page, signal)
   }
-  const result = await read<HoldPage>(`/api/law-holds?type=effective&page=${page}&page_size=20`, signal)
-  if (!Array.isArray(result.items) || result.page !== page || result.page_size !== 20 || result.total < 0
-    || (result.items.length === 0 && result.total > (page - 1) * 20)) throw new Error('Invalid hold pagination')
-  return result
+  const result = await readData<HoldPage>(signal, 'law-holds')
+  const page_size = 20
+  if (result.items.length !== result.total) throw new Error('Incomplete hold list')
+  return { ...result, items: result.items.slice((page - 1) * page_size, page * page_size), page, page_size }
 }
 
-/** Only approved public API data is used outside the explicit development preview. */
-export const loadCalendar: CalendarLoader = async (month, signal) => {
-  if (import.meta.env.DEV && new URLSearchParams(window.location.search).get('source') !== 'api') {
-    const { loadDemo } = await import('./demo')
+export async function loadCalendar(month: string, signal: AbortSignal, includeTax = false): Promise<CalendarSnapshot> {
+  if (import.meta.env.DEV && isDemoMode()) {
     return loadDemo(month, signal)
   }
-  const [calendar, status] = await Promise.all([
-    read<CalendarMonth>(`/api/law-calendar?month=${month}`, signal),
-    read<CalendarStatus>('/api/law-calendar/status', signal),
+  const [index, { collectedAt, verifiedAt }] = await Promise.all([
+    readIndex(signal),
+    readData<CalendarStatus>(signal, 'law-calendar', 'status'),
   ])
-  const changes: CalendarChange[] = []
-  for (let page = 1; ; page++) {
-    const result = await read<ChangePage>(`/api/law-events?month=${month}&page=${page}&page_size=100`, signal)
-    if (!Array.isArray(result.items) || result.page !== page || result.total < changes.length + result.items.length)
-      throw new Error('Invalid calendar pagination')
-    changes.push(...result.items)
-    if (changes.length === result.total) break
-    if (result.items.length === 0 || page >= 100) throw new Error('Incomplete calendar month')
+  const collected = collectedAt && /(?:Z|[+-]\d{2}:\d{2})$/.test(collectedAt) ? Date.parse(collectedAt) : NaN
+  const status = {
+    collectedAt,
+    verifiedAt,
+    delayed: !Number.isFinite(collected) || Date.now() - collected > COLLECTION_MAX_AGE_MS,
   }
-  return { changes, counts: calendar.days, demo: false, ...status }
+  if (!index.months.includes(month)) return { changes: [], counts: [], demo: false, ...status }
+  const [calendar, changes, tax] = await Promise.all([
+    readData<CalendarMonth>(signal, 'law-calendar', month),
+    readData<ChangePage>(signal, 'law-events', month),
+    includeTax ? readData<PublicTaxSchedule>(signal, 'tax-schedule', month).catch(() => null) : undefined,
+  ])
+  if (changes.items.length !== changes.total) throw new Error('Incomplete calendar month')
+  return { changes: changes.items, counts: calendar.days, tax, demo: false, ...status }
+}
+
+export function loadCalendarWithTax(month: string, signal: AbortSignal) {
+  return loadCalendar(month, signal, true)
 }

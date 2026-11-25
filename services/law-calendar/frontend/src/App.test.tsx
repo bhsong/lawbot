@@ -5,7 +5,8 @@ import App from './App'
 afterEach(() => window.history.replaceState(null, '', '/'))
 
 test('tabs switch between the law calendar and ERP items and follow the #erp hash', async () => {
-  const fetch = vi.fn(async () => new Response(JSON.stringify({ state: 'missing' })))
+  const fetch = vi.fn(async (path: string) => Response.json(path.endsWith('months.json')
+    ? { months: [], erpRuleDates: [] } : { state: 'missing' }))
   vi.stubGlobal('fetch', fetch)
   try {
     window.history.replaceState(null, '', '/#erp')

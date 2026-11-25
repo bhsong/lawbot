@@ -6,6 +6,7 @@ import difflib
 import os
 import re
 import sqlite3
+import sys
 from datetime import date as Date
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -21,6 +22,7 @@ from law_calendar import admin, erp_rules, news
 from law_calendar.automation import REASONS
 from law_calendar.db import read_database
 from law_calendar.models import (
+    CalendarIndex,
     CalendarMonth,
     CalendarStatus,
     ChangePage,
@@ -29,6 +31,7 @@ from law_calendar.models import (
     ErpUpdates,
     HoldPage,
     PublicDetail,
+    PublicTaxSchedule,
 )
 from lawbot_common import envfile
 from lawbot_common.erp_daily import read_snapshot
@@ -130,6 +133,23 @@ def create_app(
         days = [dict(row) for row in rows]
         return {'month': month, 'timezone': 'Asia/Seoul', 'days': days}
 
+    @app.get('/api/law-calendar/months', response_model=CalendarIndex)
+    def calendar_index(response: Response):
+        schedule = read_tax_schedule(response)
+        with read_database(database) as conn:
+            rows = conn.execute('SELECT DISTINCT substr(event_on, 1, 7) FROM public_calendar_events').fetchall()
+        today = erp_rules.today_kst()
+        first = today.replace(day=1)
+        nearby = (first - timedelta(days=1), first, first + timedelta(days=31))
+        months = {row[0] for row in rows}
+        months.update(day.isoformat()[:7] for day in nearby)
+        if schedule:
+            months.update(row.deadline_on.isoformat()[:7] for row in schedule.items)
+        return {
+            'months': sorted(months),
+            'erpRuleDates': [(today + timedelta(days=offset)).isoformat() for offset in range(-1, 3)],
+        }
+
     @app.get('/api/law-events', response_model=ChangePage, response_model_exclude_unset=True)
     def events(
         date: str | None = None,
@@ -219,19 +239,24 @@ def create_app(
         response.headers['X-ERP-Snapshot'] = snapshot['snapshotHash']
         return snapshot
 
-    @app.get('/api/tax-schedule')
-    def tax_schedule(month: str, response: Response):
-        start, end = month_bounds(month)
+    def read_tax_schedule(response: Response) -> TaxSchedule | None:
         snapshot = daily_snapshot(response) or {}
         if snapshot.get('state') in {'missing', 'invalid'}:
             raise HTTPException(503, 'Tax schedule unavailable')
         schedule = snapshot.get('feeds', {}).get('taxSchedule')
         if not schedule:
-            return {'items': [], 'confirmedAt': None}
+            return None
         try:
-            verified = TaxSchedule.model_validate(schedule)
+            return TaxSchedule.model_validate(schedule)
         except ValidationError as exc:
             raise HTTPException(503, 'Tax schedule unavailable') from exc
+
+    @app.get('/api/tax-schedule', response_model=PublicTaxSchedule)
+    def tax_schedule(month: str, response: Response):
+        start, end = month_bounds(month)
+        verified = read_tax_schedule(response)
+        if verified is None:
+            return {'items': [], 'confirmedAt': None}
         items = [
             {
                 'id': row.upstream_id,
@@ -294,6 +319,8 @@ def create_app(
         entry = snapshot.get('feeds', {}).get('news', {}).get(agency)
         if entry is None:
             return {'agency': agency, 'officialHome': news.HOME[agency], 'state': snapshot.get('state', 'missing')}
+        if agency == 'lawgo':
+            entry = news.filter_law_news(database, entry)
         return news.current_news(entry, limit)
 
     app.include_router(admin.router(database))
@@ -303,6 +330,12 @@ def create_app(
 
 
 def main():
+    if sys.argv[1:2] == ['export']:
+        from law_calendar.export import main as export_main
+
+        export_main(sys.argv[2:])
+        return
+
     service = Path(__file__).resolve().parents[2]
     envfile.load(service / '.env', service, SECRETS, logger('law_calendar', 'calendar'))
     parser = argparse.ArgumentParser(description='Independent calendar API')

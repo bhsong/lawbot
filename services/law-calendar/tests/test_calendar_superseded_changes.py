@@ -6,13 +6,13 @@ import subprocess
 import sys
 from contextlib import closing
 
-import httpx
 import pytest
+from fastapi.testclient import TestClient
 
-from calendar_ui_support import serve
 from law_calendar import ingest
 from law_calendar.ingest import import_event
 from law_calendar.review import review
+from law_calendar.server import create_app
 from test_calendar_workflow import approval, import_one
 from test_calendar_workflow import workflow as workflow
 
@@ -206,12 +206,9 @@ def test_holds_check_reports_both_counts_and_fails_on_either(workflow, legacy_ho
 
 
 @pytest.mark.integration
-def test_stale_cleanup_preserves_admin_hold_list_response(workflow, legacy_holds, tmp_path):
+def test_stale_cleanup_preserves_public_hold_list_response(workflow, legacy_holds):
     db = workflow[0]
-    with (
-        serve(tmp_path, development=False, database=db) as (url, _),
-        httpx.Client(base_url=url, trust_env=False) as client,
-    ):
+    with TestClient(create_app(db)) as client:
         before = client.get('/api/law-holds')
         assert before.status_code == 200
         assert [item['article'] for item in before.json()['items']] == ['제3조']

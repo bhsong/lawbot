@@ -2,16 +2,18 @@ import { useEffect, useRef, useState } from 'react'
 import { dateLabel, EventList, MonthCalendar, todayKst } from '@lawbot/ui'
 import type { CalendarChange } from '@lawbot/ui'
 import { ChangeDialog } from './ChangeDialog'
-import { loadCalendar, loadChange, loadTaxSchedule } from './data'
+import { LAW_SOURCE, LICENSE_PATH } from '../attribution'
+import { isDemoMode } from '../site-data'
+import { loadCalendarWithTax, loadChange } from './data'
 import { HoldDialog } from './HoldDialog'
-import type { CalendarLoader, CalendarSnapshot, TaxSchedule } from './types'
+import type { CalendarLoader, CalendarSnapshot } from './types'
 import '@lawbot/ui/calendar.css'
 import './calendar.css'
 
 const DISCLAIMER = '이 페이지의 법령 변경 정보와 요약은 참고용입니다. 실제 적용 전 반드시 국가법령정보센터 등 공식 원문과 조문별 시행일을 다시 확인하세요.'
 type Scenario = 'normal' | 'loading' | 'error' | 'delayed'
 
-export default function LawCalendarPage({ loader = loadCalendar, initialDate }: { loader?: CalendarLoader; initialDate?: string }) {
+export default function LawCalendarPage({ loader = loadCalendarWithTax, initialDate }: { loader?: CalendarLoader; initialDate?: string }) {
   const [selected, setSelected] = useState(initialDate ?? todayKst)
   const [snapshot, setSnapshot] = useState<CalendarSnapshot | null>(null)
   const [state, setState] = useState<'loading' | 'ready' | 'error'>('loading')
@@ -22,23 +24,12 @@ export default function LawCalendarPage({ loader = loadCalendar, initialDate }: 
   const detailRequest = useRef<AbortController | null>(null)
   const [detailPending, setDetailPending] = useState(false)
   const [detailError, setDetailError] = useState(false)
-  const [tax, setTax] = useState<{ month: string; data: TaxSchedule | null } | null>(null)
   useEffect(() => () => detailRequest.current?.abort(), [])
   const month = selected.slice(0, 7)
 
   useEffect(() => {
     document.title = '법령 변경 캘린더 · Lawbot'
   }, [])
-
-  useEffect(() => {
-    if (loader !== loadCalendar || (import.meta.env.DEV && new URLSearchParams(window.location.search).get('source') !== 'api')) return
-    const controller = new AbortController()
-    loadTaxSchedule(month, controller.signal).then(
-      data => { if (!controller.signal.aborted) setTax({ month, data }) },
-      () => { if (!controller.signal.aborted) setTax({ month, data: null }) },
-    )
-    return () => controller.abort()
-  }, [loader, month, attempt])
 
   useEffect(() => {
     const controller = new AbortController()
@@ -61,7 +52,7 @@ export default function LawCalendarPage({ loader = loadCalendar, initialDate }: 
 
   const changes = snapshot?.changes ?? []
   const effective = changes.filter((change) => change.date === selected)
-  const taxData = tax?.month === month ? tax.data : null
+  const taxData = snapshot?.tax
   const taxCounts = new Map<string, number>()
   for (const item of taxData?.items ?? []) taxCounts.set(item.date, (taxCounts.get(item.date) ?? 0) + 1)
   const taxItems = taxData?.items.filter(item => item.date === selected) ?? []
@@ -93,7 +84,7 @@ export default function LawCalendarPage({ loader = loadCalendar, initialDate }: 
       <button type="button" className="lc-more" onClick={() => { detailRequest.current?.abort(); setDetailPending(false); setOpened(null); setHoldsOpen(true) }}>보류 목록</button>
     </header>
     <aside className="lc-disclaimer" aria-label="법령 정보 이용 안내">{DISCLAIMER}</aside>
-    {import.meta.env.DEV && <details className="lc-preview"><summary>개발용 예시 화면 설정</summary>
+    {import.meta.env.DEV && isDemoMode() && <details className="lc-preview"><summary>개발용 예시 화면 설정</summary>
       <p>실제 법령이 아닌 합성 데이터입니다. 오늘 날짜에 예시가 있으며 운영 빌드에는 포함되지 않습니다.</p>
       <label>화면 상태 <select value={scenario} onChange={(event) => setScenario(event.target.value as Scenario)}>
         <option value="normal">정상</option><option value="loading">로딩</option><option value="error">오류</option><option value="delayed">갱신 지연</option>
@@ -107,7 +98,7 @@ export default function LawCalendarPage({ loader = loadCalendar, initialDate }: 
       <span>날짜 기준: 한국 표준시(KST)</span>
     </section>
     {(snapshot?.delayed || scenario === 'delayed') && <p className="lc-warning" role="status">데이터 갱신이 지연되고 있습니다. 마지막 확인 시각과 공식 원문을 확인하세요.</p>}
-    {tax?.month === month && !taxData && <p className="lc-warning" role="status">국세청 세무일정을 불러오지 못했습니다.</p>}
+    {taxData === null && <p className="lc-warning" role="status">국세청 세무일정을 불러오지 못했습니다.</p>}
     {taxData?.confirmedAt && <p className="lc-caption">국세청 세무일정 확인 {taxData.confirmedAt}</p>}
     <MonthCalendar selected={selected} changes={changes} totals={snapshot?.counts} onSelect={select} taxCounts={taxData?.confirmedAt ? taxCounts : undefined} />
     <section className="lc-results" aria-labelledby="lc-selected-date" aria-busy={state === 'loading'}>
@@ -131,6 +122,7 @@ export default function LawCalendarPage({ loader = loadCalendar, initialDate }: 
     <footer className="lc-footer">
       <h2>공식 원문을 먼저 확인하세요</h2>
       <p>본 서비스는 공개된 법령 자료를 수집·가공하여 제공하며, 수집 지연, 누락, 해석 또는 요약 오류가 발생할 수 있습니다. 법령의 적용 여부는 개별 조항의 시행일, 부칙, 경과조치 및 사실관계에 따라 달라질 수 있습니다. 중요한 법적 판단이나 조치를 하기 전 공식 법령 원문을 직접 확인하고, 필요하면 전문가의 검토를 받으시기 바랍니다. 이 서비스는 개별 사건에 대한 법률 자문을 대신하지 않습니다.</p>
+      <p>{LAW_SOURCE}</p>
       <nav aria-label="공식 출처">
         <a href="https://www.law.go.kr/" target="_blank" rel="noopener noreferrer">국가법령정보센터 ↗</a>
         <span>
@@ -139,9 +131,10 @@ export default function LawCalendarPage({ loader = loadCalendar, initialDate }: 
           <a href="https://github.com/legalize-kr/admrule-kr" target="_blank" rel="noopener noreferrer">admrule-kr ↗</a>
           {' '}(원문: 공공저작물, 메타데이터 MIT)
         </span>
+        <a href={LICENSE_PATH}>라이선스</a>
       </nav>
     </footer>
     {opened && <ChangeDialog change={opened} demo={snapshot?.demo ?? false} onClose={() => setOpened(null)} />}
-    {holdsOpen && <HoldDialog demo={snapshot?.demo ?? false} onClose={() => setHoldsOpen(false)} />}
+    {holdsOpen && <HoldDialog demo={snapshot?.demo ?? isDemoMode()} onClose={() => setHoldsOpen(false)} />}
   </main>
 }
