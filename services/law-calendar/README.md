@@ -1,13 +1,13 @@
 # 법령 변경 캘린더
 
-로그인 없이 별도 서브도메인의 루트 `/`에서 제공하는 독립 웹앱이다. 챗봇은 다른 서브도메인의 로그인 서비스로 유지한다.
+공개 화면은 Cloudflare Pages에서 로그인 없이 제공한다. Cloudflare Tunnel + Access는 챗봇에만 연결한다.
 
-외부 브라우저 접속은 Cloudflare Tunnel + Access로 제공하며, Cloudflare를 거친 요청의 `/api/admin` 경로는 서비스 토큰과 관계없이 404다. 관리자 검토는 챗봇의 루프백 프록시로만 한다. [운영 절차](../../docs/operations.md#상시-운영과-개발-동시-실행)
+캘린더 API 서버는 루프백에서 관리자 프록시·내보내기용 API만 제공한다. 관리자 검토는 챗봇의 루프백 프록시로만 한다. [운영 절차](../../docs/operations.md#법령-캘린더-정적-사이트-게시)
 
 ## 구성
 
 ```text
-공개 캘린더 화면 → 정적 호스팅 → 내보낸 사이트 폴더(화면·data·헤더·라이선스)
+공개 캘린더 화면 → Cloudflare Pages → 내보낸 사이트 폴더(화면·data·헤더·라이선스)
 비공개 챗봇 서브도메인 → 기존 챗봇 서버 → Mac mini 모델 서버
 ```
 
@@ -74,7 +74,7 @@ uv run --project services/law-calendar python -m law_calendar.db services/law-ca
 uv run --project services/law-calendar law-calendar --database services/law-calendar/data/calendar.db --port $CALENDAR_API_PORT
 ```
 
-조회 서버에서 정적 화면도 확인하려면 `--frontend services/law-calendar/data/site`를 추가한다. 이 옵션은 개발·전환용이며 별도 정적 호스팅과 달리 `_headers`를 적용하지 않는다. 기존 DB는 초기화 명령으로 덮어쓰지 않는다. 운영 DB 변경 전에는 SQLite backup으로 사본을 보관한다.
+정적 화면 미리보기는 위 Vite 개발 경로를 사용한다. 기존 DB는 초기화 명령으로 덮어쓰지 않는다. 운영 DB 변경 전에는 SQLite backup으로 사본을 보관한다.
 
 브라우저 화면은 조회 API가 아닌 같은 출처의 `/data/` 파일만 읽는다. `data/law-calendar/months.json`에 없는 달에는 변경과 세무일정을 0건으로 표시한다. 빈 DB에는 예시나 미승인 항목을 자동 삽입하지 않는다.
 

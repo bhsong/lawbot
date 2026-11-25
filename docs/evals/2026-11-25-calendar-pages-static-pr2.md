@@ -45,3 +45,24 @@
 | `uv run --offline --frozen --no-sync --project services/law-calendar law-calendar publish --help` | 네 경로 옵션이 설정 일치 검사이며 철회 옵션도 있음을 확인 |
 
 실제 모델 E2E·모델 스모크·품질 평가·실제 Pages 게시: 실행 안 함.
+
+## PR 2 추가 정리
+
+- Red: 수집 자식이 기존 환경을 잃었고, API CLI는 `--frontend`를 등록하고 있었으며, 프로젝트 ID 설정이 없으면 게시 대역이 `invalid_pages_config`로 중단됐다.
+- 회귀 테스트는 수집 자식의 기존 환경 복원과 자격 증명 키 두 개 제외, 게시 자식의 허용 목록, API 루트 404, 기존 정적 제공 옵션 거절을 확인한다. 게시 대역은 프로젝트 이름·운영 브랜치 불일치 시 업로드 전 중단과 ID 없는 정상 게시를 확인한다.
+- 첫 전체 실행은 실제 환경 파일 차단 규칙에 설정 예제까지 포함돼 실패했다. 커밋된 예제만 읽기 예외로 열었다. 이후 전체 실행과 단독 Chromium에서 서로 다른 정적 JSON 로딩 실패가 한 건씩 발생했다. 해당 파일은 정상 생성됐지만 일부 요청이 서버 로그에 남지 않았다. 정적 테스트 서버의 기본 연결 대기열이 Chromium의 동시 연결 수보다 작아 시스템 최대값으로 늘렸다. 배포 코드와 브라우저 검증 조건은 바꾸지 않았다.
+
+| 최종 명령 | 결과 |
+| --- | --- |
+| `uv run --offline --no-sync pytest -q` | 2,968개 통과, 기본 설정 제외 10개. 단위·계약·통합·대역 E2E 포함 |
+| `uv run --offline --no-sync pytest -c pyproject.toml -q services/law-calendar/tests` | 282개 통과 |
+| `uv run --offline --no-sync pytest -q services/law-calendar/tests/test_calendar_export.py` | 41개 통과 |
+| `uv run --offline --no-sync pytest -c pyproject.toml -q services/law-calendar/tests/test_calendar_ui.py services/law-calendar/tests/test_calendar_erp_ui.py` | 독립 Chromium 22개 통과. 정적 화면의 `/api/` 요청과 CSP 위반 0건 |
+| `npm run typecheck && npm test && npm run build` (캘린더) | 타입·빌드 통과, 테스트 46개 통과 |
+| `npm run typecheck && npm test && npm run build` (챗봇) | 타입·빌드 통과, 테스트 55개 통과. Vite 설정 로더의 향후 기본값 변경 안내 있음 |
+| `uv run --offline --no-sync pyright` 및 `pyright services/law-calendar/src`, `pyright services/erp-updates/src`, `pyright services/source-hub/src` | 각각 오류·경고 0개 |
+| `uv run --offline --no-sync python -m law_calendar.schema --check` 및 `uv run --offline --no-sync python -m compileall -q services packages tools` | 통과 |
+| `uv run --offline --no-sync ruff check --output-format=github` 및 `uv run --offline --no-sync ruff format --check` | 통과. 포맷 검사 623개 파일 |
+| `uv run --offline --frozen --no-sync --project services/law-calendar law-calendar publish --help` | 경로 일치 검사 옵션과 철회 옵션 확인 |
+
+운영 파일·데이터와 실제 환경 파일 접근 없음. 실제 Cloudflare·Wrangler 호출, 실제 모델 E2E·모델 스모크·품질 평가: 실행 안 함.

@@ -48,14 +48,13 @@ uv run --project services/law-calendar --locked python -m law_calendar.manage --
 
 ## 법령 캘린더 정적 사이트 게시
 
-운영 반영 승인 후 Pages에 Direct Upload 프로젝트를 만들고 운영 브랜치를 `main`으로 설정합니다. 계정 2단계 인증과 미리보기 접근 제한을 확인합니다. 계정 범위를 제한하고 **Pages Edit 권한만** 가진 전용 API 토큰을 발급합니다.
+운영 반영 승인 후 Pages에 Direct Upload 프로젝트를 만들고 운영 브랜치를 `main`으로 설정합니다. 계정 2단계 인증과 미리보기 접근 제한을 확인합니다. 계정 범위를 제한하고 **Pages Edit 권한만** 가진 전용 API 토큰을 발급합니다. 처음 게시하기 전에 대시보드에서 계정과 프로젝트 이름이 설정과 일치하는지 확인합니다. 같은 계정에 있는 다른 유효 프로젝트 이름을 지정하면 게시기가 의도와 다른 이름인지 구분할 수 없습니다.
 
 고정 게시 입력은 `services/law-calendar/.env`에 둡니다. 게시기는 셸이나 `LAWBOT_ENV_FILE`의 값을 사용하지 않습니다. 운영에서 사용하는 DB·일일 스냅숏·화면 경로는 절대 경로로 설정합니다.
 
 | 변수 이름 | 용도 |
 | --- | --- |
 | `LAWBOT_CALENDAR_PAGES_PROJECT` | Pages 프로젝트 이름 |
-| `LAWBOT_CALENDAR_PAGES_PROJECT_ID` | 운영 프로젝트에서 별도로 확인한 고유 ID. 이름이 다른 유효 프로젝트로 잘못 지정돼도 이 값이 일치해야 업로드 가능 |
 | `LAW_CALENDAR_DB` | 캘린더 DB 파일 |
 | `LAWBOT_CALENDAR_ERP_DAILY_FEED` | `source-hub daily`가 만드는 ERP 일일 공개 스냅숏 파일 |
 | `LAWBOT_CALENDAR_NODE` | 필수. 신뢰된 Node 실행 파일의 절대 경로. 해석한 경로의 파일과 조상은 당사자 또는 시스템 소유이며, 그룹이나 다른 사용자가 쓸 수 없어야 함 |
@@ -72,9 +71,9 @@ uv sync --project services/law-calendar --locked
 uv run --project services/law-calendar --frozen --no-sync --no-env-file law-calendar publish
 ```
 
-게시기는 업로드 전 프로젝트 이름·ID·운영 브랜치를 확인하고, 운영 주소의 `data/site-build.json`이 이번 내보내기와 일치할 때만 이력을 정리합니다. 완전한 목록을 검증한 뒤 각 삭제 직전 canonical 운영 ID를 재확인하고, 삭제 뒤 목록도 대조합니다. 일반 게시에는 현재와 직전 성공 운영 배포만 남깁니다. 게시 도중 대시보드나 다른 자동화에서 배포·롤백하지 않습니다. API 조회와 삭제 사이의 외부 변경까지 원자적으로 막을 수는 없습니다.
+게시기는 업로드 전에 설정한 계정에서 프로젝트 이름과 운영 브랜치(`main`)를 확인합니다. 운영 주소의 `data/site-build.json`이 이번 내보내기와 일치할 때만 이력을 정리합니다. 완전한 목록을 검증한 뒤 각 삭제 직전 canonical 운영 ID를 재확인하고, 삭제 뒤 목록도 대조합니다. 일반 게시에는 현재와 직전 성공 운영 배포만 남깁니다. 게시 도중 대시보드나 다른 자동화에서 배포·롤백하지 않습니다. API 조회와 삭제 사이의 외부 변경까지 원자적으로 막을 수는 없습니다.
 
-전환 전까지 `com.lawbot.calendar`의 `--frontend`는 빌드 폴더가 아닌 사이트 폴더를 가리키게 합니다. 사이트를 만든 뒤 설정을 변경하고, 화면·데이터·헤더·라이선스를 확인한 후 [전환 순서](plans/calendar-pages-static.md#6-전환-순서-운영-반영-승인-뒤-각-단계-확인-후-다음-단계)를 따릅니다.
+캘린더 공개 화면은 Pages에서만 제공합니다. 운영 반영 시 `com.lawbot.calendar`의 launchd 실행 인자에서 `--frontend`와 그 경로를 제거하고 루프백 API만 유지합니다. 터널에서 캘린더 ingress 규칙을 제거하는 절차는 [전환 순서](plans/calendar-pages-static.md#6-전환-순서-운영-반영-승인-뒤-각-단계-확인-후-다음-단계)를 따릅니다.
 
 daily는 정상·부분 실패·스냅숏 재사용 뒤 게시를 한 번 요청하고 `calendarPublish`를 남깁니다. 수집 결과와 종료 코드는 게시 결과와 별개입니다. 서버·로컬 검토 CLI는 프로젝트가 설정돼 있고 검토 DB가 설정 DB와 같은 경우에만 예약합니다. 요청 잠금 대기 실패는 저장 결과를 바꾸지 않습니다. 큐·잠금·작업자 로그는 업로드 밖의 `services/law-calendar/.pages-publish/`(`0700`)에 둡니다. 서비스·CLI 로그와 이 폴더의 `worker.log`에서 `calendar_publish_*`를 확인합니다.
 
@@ -356,22 +355,21 @@ Colab 실험(transformers fp16)과의 순위 일치는 리랭커 도입 때 val�
    tailscale serve status
    ```
 
-6. (선택) Tailscale을 설치할 수 없는 브라우저에서는 Cloudflare Tunnel + Access로 운영 챗봇과 캘린더에 접속합니다. 맥 미니가 Cloudflare로 나가는 연결만 맺으며 공유기 포트는 열지 않습니다. Access는 허용한 이메일 하나만 통과시키고, 챗봇의 앱 로그인은 그대로 둡니다. **관리자 기능은 Tailscale(또는 맥 미니 로컬)에서만 씁니다.** 웹앱과 캘린더 서버는 Cloudflare를 거친 요청(`CF-Connecting-IP` 헤더)의 `/api/admin` 경로를 404로 막고, 챗봇은 그 요청의 관리자 사용자명을 없는 사용자명으로 취급합니다(`lawbot_common.edge`). 모델 서버·생성 서버·Source Hub는 터널에 연결하지 않습니다.
+6. (선택) Tailscale을 설치할 수 없는 브라우저에서는 Cloudflare Tunnel + Access로 **운영 챗봇에만** 접속합니다. 캘린더 공개 화면은 [Cloudflare Pages](#법령-캘린더-정적-사이트-게시)로 제공하며 터널에 연결하지 않습니다. 맥 미니는 Cloudflare로 나가는 연결만 맺습니다. Access는 허용한 계정만 통과시키고 챗봇 앱 로그인은 유지합니다. **관리자 기능은 Tailscale(또는 맥 미니 로컬)에서만 씁니다.** 챗봇은 Cloudflare를 거친 요청(`CF-Connecting-IP` 헤더)의 `/api/admin`을 404로 막고 관리자 사용자명을 없는 사용자명으로 취급합니다(`lawbot_common.edge`). 모델 서버·생성 서버·Source Hub는 터널에 연결하지 않습니다.
 
    순서가 중요합니다. **Access 앱을 먼저 만든 뒤** DNS를 연결해 Access 없이 열리는 순간이 없게 합니다.
 
    1. Access(Zero Trust 대시보드). 새 조직은 One-time PIN이 기본으로 켜져 있지 않습니다. 대시보드 메뉴 이름은 바뀔 수 있습니다.
       - **Integrations → Identity providers → Add new identity provider → One-time PIN**을 추가합니다. Cloudflare 계정 로그인(기본 방식)은 회사 PC에 계정 세션을 남기므로 쓰지 않습니다.
-      - **Access controls → Applications → Create new application → Self-hosted and private**에서 public hostname으로 챗봇·캘린더 호스트를 넣습니다. Login methods는 One-time PIN만 고르고 "Accept all available identity providers"는 끕니다. Session duration은 24시간입니다.
+      - **Access controls → Applications → Create new application → Self-hosted and private**에서 public hostname에 챗봇만 지정합니다. Login methods는 One-time PIN만 고르고 "Accept all available identity providers"는 끕니다. Session duration은 24시간입니다.
       - 정책은 Action **Allow**, Include **Emails** = 본인 이메일 하나입니다. Everyone·이메일 도메인 전체·Bypass는 쓰지 않습니다.
-   2. 터널을 만들고 두 호스트를 DNS에 연결합니다. `tunnel login`은 브라우저에서 도메인을 골라 Authorize하면 `~/.cloudflared/cert.pem`을 만듭니다.
+   2. 터널을 만들고 챗봇 호스트의 DNS만 연결합니다. `tunnel login`은 브라우저에서 도메인을 골라 Authorize하면 `~/.cloudflared/cert.pem`을 만듭니다.
 
       ```zsh
       brew install cloudflared
       cloudflared tunnel login
       cloudflared tunnel create <터널 이름>
       cloudflared tunnel route dns <터널 이름> <챗봇 호스트>
-      cloudflared tunnel route dns <터널 이름> <캘린더 호스트>
       ```
 
    3. 레포 밖 `~/.cloudflared/config.yml`(권한 600)에 다음을 적습니다. 관리자 경로는 터널에서도 404로 보냅니다(앱 차단과 이중). 마지막 규칙이 나머지 호스트를 모두 404로 막습니다. 터널 인증 파일 `<터널 ID>.json`은 권한 400이며 커밋하지 않습니다.
@@ -381,9 +379,7 @@ Colab 실험(transformers fp16)과의 순위 일치는 리랭커 도입 때 val�
       credentials-file: <홈>/.cloudflared/<터널 ID>.json
       ingress:
         - {hostname: <챗봇 호스트>, path: ^/api/admin, service: http_status:404}
-        - {hostname: <챗봇 호스트>, service: http://127.0.0.1:<운영 포트>}
-        - {hostname: <캘린더 호스트>, path: ^/api/admin, service: http_status:404}
-        - {hostname: <캘린더 호스트>, service: http://127.0.0.1:<캘린더 포트>}
+        - {hostname: <챗봇 호스트>, service: <챗봇 루프백 HTTP 주소>}
         - service: http_status:404
       ```
 
@@ -396,9 +392,7 @@ Colab 실험(transformers fp16)과의 순위 일치는 리랭커 도입 때 val�
       launchctl print gui/$(id -u)/com.cloudflare.cloudflared | grep state
       ```
 
-   5. 외부 브라우저(회사 PC, 와이파이를 끈 휴대폰)에서 확인합니다: Access OTP → 챗봇 로그인과 질문 1건, 캘린더의 법령 시행·ERP·기관 소식 데이터, 두 호스트의 `/api/admin` 404, 관리자 계정 로그인 거부. `/admin`처럼 `api`가 없는 경로는 화면 앱이 같은 `index.html`을 돌려줄 뿐 관리자 화면이 아닙니다. tailnet에서는 관리자 기능이 그대로 동작해야 합니다.
-
-   화면의 API 요청은 Access 쿠키가 함께 가도록 `credentials: 'same-origin'`(브라우저 기본값)을 씁니다. `omit`이면 Access가 데이터 요청을 로그인으로 돌려보내 화면만 뜨고 데이터가 비어 보입니다.
+   5. 외부 브라우저(회사 PC, 와이파이를 끈 휴대폰)에서 확인합니다: Access OTP → 챗봇 로그인과 질문 1건, `/api/admin` 404, 관리자 계정 로그인 거부. `/admin`처럼 `api`가 없는 경로는 챗봇 화면 앱이 같은 `index.html`을 돌려줄 뿐 관리자 화면이 아닙니다. tailnet에서는 관리자 기능이 그대로 동작해야 합니다. 캘린더의 공개 화면과 예전 API 경로는 Pages 전환 절차에서 따로 확인합니다.
 
    외부 접속을 끄려면 `launchctl bootout gui/$(id -u) ~/Library/LaunchAgents/com.cloudflare.cloudflared.plist`로 터널 서비스만 내립니다. Tailscale 접속은 영향을 받지 않습니다. 이 서비스도 다른 LaunchAgent처럼 맥 미니에 로그인된 동안 실행됩니다. 호스트명·이메일·터널 ID·포트는 문서와 커밋에 적지 않습니다.
 
