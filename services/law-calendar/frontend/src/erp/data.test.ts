@@ -16,13 +16,17 @@ test('reads the ERP feed and prefers the exact date when its file is available',
   expect(fetch).toHaveBeenCalledWith('/data/erp-rules/2026-11-19.json', expect.objectContaining({ credentials: 'same-origin', signal }))
 })
 
-test('after a missing date, uses the newest available past edition and never a future edition', async () => {
+test.each([
+  new Response(null, { status: 404 }),
+  new Response('<html>Not Found</html>', { headers: { 'content-type': 'text/html' } }),
+  new Response('not JSON', { headers: { 'content-type': 'application/json' } }),
+])('after an unavailable date, uses the newest available past edition and never a future edition', async (missing) => {
   const fetch = vi.fn(async (path: string) => {
     if (path.endsWith('months.json')) return Response.json({
       months: [], erpRuleDates: ['2026-11-17', '2026-11-18', '2026-11-20'],
     })
     if (path.endsWith('2026-11-17.json')) return Response.json({ state: 'ok', asOfDate: '2026-11-17' })
-    return new Response(null, { status: 404 })
+    return missing
   })
   vi.stubGlobal('fetch', fetch)
   await expect(loadErpRules('2026-11-19', new AbortController().signal)).resolves.toMatchObject({ asOfDate: '2026-11-17' })

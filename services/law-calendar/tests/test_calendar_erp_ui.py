@@ -124,7 +124,9 @@ def test_erp_reads_exported_daily_snapshot_and_falls_back_when_stale(dataset, tm
     path = tmp_path / 'daily.json'
     stamp = '2026-11-13T06:30:00+09:00'
     today = datetime.datetime.now(KST).date()
-    page.clock.set_fixed_time(datetime.datetime.combine(today, datetime.time(), tzinfo=KST))
+    opened_at = datetime.datetime.combine(today, datetime.time(), tzinfo=KST)
+    expires = max(opened_at, datetime.datetime.now(KST)) + datetime.timedelta(hours=1)
+    page.clock.set_fixed_time(opened_at)
     saved = seal(
         {
             'schemaVersion': 1,
@@ -155,7 +157,14 @@ def test_erp_reads_exported_daily_snapshot_and_falls_back_when_stale(dataset, tm
                         'agency': 'moel',
                         'officialHome': 'https://www.moel.go.kr/',
                         'state': 'ok',
-                        'boards': [],
+                        'boards': [
+                            {
+                                'name': '가상 공지',
+                                'status': 'ok',
+                                'lastSuccessAt': stamp,
+                                'staleAfter': expires.isoformat(),
+                            }
+                        ],
                         'items': [],
                     }
                 },
@@ -176,6 +185,7 @@ def test_erp_reads_exported_daily_snapshot_and_falls_back_when_stale(dataset, tm
             with page.expect_response(lambda response: response.url.endswith('/data/erp-news/moel.json')):
                 page.get_by_role('button', name='고용노동부', exact=True).click()
             expect(page.get_by_role('heading', name='고용노동부 최신 소식')).to_be_visible()
+            expect(page.get_by_text('가상 공지 · 정상')).to_be_visible()
             assert responses[f'{url}/data/erp-updates.json'].json()['items'] == saved['feeds']['erp']['items']
             assert responses[f'{url}/data/erp-rules/{today}.json'].json()['rules'] == saved['feeds']['rules']['rules']
             assert (
@@ -184,11 +194,20 @@ def test_erp_reads_exported_daily_snapshot_and_falls_back_when_stale(dataset, tm
             expect(page.get_by_text(f'기준일 {today} KST')).to_be_visible()
             expect(page.get_by_text('ERP 적용 기준 갱신이 지연', exact=False)).to_have_count(0)
 
-            late = today + datetime.timedelta(days=3)
+            late = today + datetime.timedelta(days=2)
+            # A mixed-age deployment can list a file that is genuinely missing.
+            (tmp_path / 'site/data/erp-rules' / f'{late}.json').unlink()
             page.clock.set_fixed_time(datetime.datetime.combine(late, datetime.time(), tzinfo=KST))
-            page.reload()
-            expect(page.get_by_text(f'기준일 {today + datetime.timedelta(days=2)} KST')).to_be_visible()
+            with page.expect_response(
+                lambda response: response.url.endswith(f'/data/erp-rules/{late}.json')
+            ) as missing:
+                page.reload()
+            assert missing.value.status == 404
+            assert missing.value.text() == (tmp_path / 'site/404.html').read_text(encoding='utf-8')
+            expect(page.get_by_text(f'기준일 {late - datetime.timedelta(days=1)} KST')).to_be_visible()
             expect(page.get_by_text('ERP 적용 기준 갱신이 지연', exact=False)).to_be_visible()
+            page.get_by_role('button', name='고용노동부', exact=True).click()
+            expect(page.get_by_text('가상 공지 · 수집 지연')).to_be_visible()
         finally:
             support.keep_on_failure(request, log, page)
 

@@ -17,6 +17,12 @@ const STATUS: Record<PublicNewsBoard['status'], string> = {
   delayed: '수집 지연', blocked: '접근 제한', error: '수집 실패', partial: '일부 수집 실패',
 }
 
+function boardStatus(board: PublicNewsBoard, now: number) {
+  return board.status === 'ok' && board.staleAfter && Date.parse(board.staleAfter) < now
+    ? 'delayed'
+    : board.status
+}
+
 // Agencies whose copyright policy requires naming the source when their posts are listed.
 const COPYRIGHT_POLICY: Partial<Record<Agency, string>> = {
   moel: 'https://www.moel.go.kr/site/copyright/copyrightList.do',
@@ -48,6 +54,7 @@ function NewsContent({ agency }: { agency: Agency }) {
     return <p role="status">기관 소식을 불러오지 못했습니다.</p>
   if (result.state === 'missing') return <p role="status">기관 소식 스냅샷이 아직 준비되지 않았습니다.</p>
 
+  const now = Date.now()
   const items = result.items ?? []
   const order = [...(result.boards ?? []).map((board) => board.name), ...items.map((item) => item.board)]
   const groups = [...new Set(order)]
@@ -75,7 +82,7 @@ function NewsContent({ agency }: { agency: Agency }) {
     {(result.boards?.length ?? 0) > 0 && <details className="erp-news-status" open>
       <summary>게시판별 수집 상태</summary>
       <ul>{result.boards?.map((board, index) => <li key={index}>
-        {board.name} · {STATUS[board.status]}
+        {board.name} · {STATUS[boardStatus(board, now)]}
         <small>마지막 성공 {board.lastSuccessAt ? kstMinute(board.lastSuccessAt) + ' KST' : '기록 없음'}</small>
       </li>)}</ul>
     </details>}

@@ -4,6 +4,8 @@ import type { CalendarSnapshot } from './types'
 import type { CalendarMonth, CalendarStatus, ChangePage, HoldPage, PublicDetail, PublicTaxSchedule } from './api-types'
 import { demoHolds, loadDemo } from './demo'
 
+const COLLECTION_MAX_AGE_MS = 48 * 60 * 60 * 1000
+
 export function loadChange(id: string, signal: AbortSignal): Promise<CalendarChange> {
   return readData<PublicDetail>(signal, 'law-changes', id)
 }
@@ -22,10 +24,16 @@ export async function loadCalendar(month: string, signal: AbortSignal, includeTa
   if (import.meta.env.DEV && isDemoMode()) {
     return loadDemo(month, signal)
   }
-  const [index, status] = await Promise.all([
+  const [index, { collectedAt, verifiedAt }] = await Promise.all([
     readIndex(signal),
     readData<CalendarStatus>(signal, 'law-calendar', 'status'),
   ])
+  const collected = collectedAt && /(?:Z|[+-]\d{2}:\d{2})$/.test(collectedAt) ? Date.parse(collectedAt) : NaN
+  const status = {
+    collectedAt,
+    verifiedAt,
+    delayed: !Number.isFinite(collected) || Date.now() - collected > COLLECTION_MAX_AGE_MS,
+  }
   if (!index.months.includes(month)) return { changes: [], counts: [], demo: false, ...status }
   const [calendar, changes, tax] = await Promise.all([
     readData<CalendarMonth>(signal, 'law-calendar', month),

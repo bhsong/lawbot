@@ -87,12 +87,12 @@ test('loading, retry, delay and verification absence are explicit', async () => 
 
 test('production reads only same-origin static calendar files', async () => {
   vi.stubEnv('DEV', false)
-  const fetch = vi.fn(async (url: string, _init?: RequestInit) => new Response(JSON.stringify(
+  const fetch = vi.fn(async (url: string, _init?: RequestInit) => Response.json(
     url.endsWith('months.json') ? { months: ['2026-11'], erpRuleDates: [] }
       : url.endsWith('status.json') ? { collectedAt: null, verifiedAt: null, delayed: true }
       : url.includes('tax-schedule') ? { items: [], confirmedAt: null }
       : url.includes('law-events') ? { items: [], total: 0 } : { days: [] },
-  )))
+  ))
   vi.stubGlobal('fetch', fetch)
   try {
     render(<LawCalendarPage initialDate="2026-11-05" />)
@@ -113,14 +113,14 @@ test('production reads only same-origin static calendar files', async () => {
 test('tax badge announces the deadline count and opens the official schedule for the selected day', async () => {
   vi.stubEnv('DEV', false)
   const source = 'https://www.nts.go.kr/nts/ad/taxSchdul/selectList.do?mi=135747&taxMonth=&taxYear=2026'
-  const fetch = vi.fn(async (url: string) => new Response(JSON.stringify(
+  const fetch = vi.fn(async (url: string) => Response.json(
     url.endsWith('months.json') ? { months: ['2026-11'], erpRuleDates: [] } : url.includes('tax-schedule') ? {
       confirmedAt: '2026-11-14T06:30:00+09:00', items: [{
         id: 'deadline', title: '일용근로소득 지급명세서', date: '2026-11-30',
         targetPeriod: '2026년 10월 지급분', sourceUrl: source,
       }],
     } : url.includes('law-events') ? { items: [], total: 0, page: 1 } : { days: [] },
-  )))
+  ))
   vi.stubGlobal('fetch', fetch)
   try {
     render(<LawCalendarPage initialDate="2026-11-05" />)

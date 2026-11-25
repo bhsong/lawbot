@@ -2,7 +2,7 @@ import { loadCalendar, loadChange, loadHolds } from './data'
 
 afterEach(() => { vi.unstubAllGlobals(); vi.unstubAllEnvs() })
 
-const status = { collectedAt: null, verifiedAt: null, delayed: false }
+const status = { collectedAt: '2026-11-23T00:00:00+09:00', verifiedAt: null, delayed: false }
 const index = { months: ['2026-11'], erpRuleDates: [] }
 
 test('reads the exported month, combined event list and escaped change detail from the same origin', async () => {
@@ -29,8 +29,22 @@ test('an unindexed month shows zero results without asking for missing month fil
   const fetch = vi.fn(async (url: string) => url.endsWith('months.json') ? Response.json(index)
     : url.endsWith('status.json') ? Response.json(status) : new Response(null, { status: 404 }))
   vi.stubGlobal('fetch', fetch)
-  await expect(loadCalendar('2030-01', new AbortController().signal)).resolves.toMatchObject({ changes: [], counts: [], delayed: false })
+  await expect(loadCalendar('2030-01', new AbortController().signal)).resolves.toMatchObject({ changes: [], counts: [] })
   expect(fetch.mock.calls.map(([url]) => url)).not.toContain('/data/law-events/2030-01.json')
+})
+
+test.each([
+  ['2026-11-25T00:00:00+09:00', false],
+  ['2026-11-25T00:00:00.001+09:00', true],
+])('shows calendar delay according to the browser clock at %s', async (now, delayed) => {
+  vi.stubEnv('DEV', false)
+  vi.stubGlobal('fetch', vi.fn(async (url: string) => Response.json(url.endsWith('months.json') ? index : status)))
+  vi.setSystemTime(new Date(now))
+  try {
+    await expect(loadCalendar('2030-01', new AbortController().signal)).resolves.toMatchObject({ delayed })
+  } finally {
+    vi.useRealTimers()
+  }
 })
 
 test('a broken export is not shown as an empty month', async () => {

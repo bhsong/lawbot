@@ -33,7 +33,8 @@ export function licenseText(root: string): string {
     }
   }
   return [
-    `${FONT} ${FONT_VERSION} (SIL Open Font License 1.1)\n${read(`licenses/${FONT}-${FONT_VERSION}.txt`)}`,
+    `${FONT} ${FONT_VERSION} (SIL Open Font License 1.1)\n${read(`node_modules/${FONT}/dist/LICENSE.txt`)}`,
+    `참고: Pretendard의 기반 글꼴\n${read('licenses/pretendard-base-fonts.txt')}`,
     ...MIT_PACKAGES.map(name => `${name} (MIT License)\n${read(`node_modules/${name}/LICENSE`)}`),
     NOTICE,
   ].join('\n\n')

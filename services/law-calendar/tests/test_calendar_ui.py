@@ -120,16 +120,22 @@ def test_standalone_production_needs_no_login_or_backend(production, calendar_pa
         assert asset.headers['cache-control'] == 'public, max-age=31536000, immutable'
         license_path = page.get_by_role('link', name='라이선스').get_attribute('href')
         assert license_path is not None
-        licenses = page.request.get(url + license_path).text()
+        licenses = page.request.get(url + license_path).body()
+        font_license = (FRONTEND / 'node_modules/pretendard/dist/LICENSE.txt').read_bytes()
+        assert font_license in licenses
         for notice in (
             'SIL OPEN FONT LICENSE Version 1.1',
+            '참고: Pretendard의 기반 글꼴',
+            "with Reserved Font Name 'Source'.",
+            "with Reserved Font Name 'Inter'.",
+            "with Reserved Font Name 'M PLUS 1'.",
             'react (MIT License)',
             'react-dom (MIT License)',
             'scheduler (MIT License)',
             'legalize-kr#라이선스',
             'admrule-kr#라이선스',
         ):
-            assert notice in licenses
+            assert notice.encode() in licenses
         assert 'set-cookie' not in response.headers
         assert page.context.cookies() == []
         assert page.get_by_role('link', name='Lawbot 챗봇', exact=False).count() == 0
@@ -145,6 +151,19 @@ def test_standalone_production_needs_no_login_or_backend(production, calendar_pa
                 assert private not in text, asset.name
     finally:
         support.keep_on_failure(request, log, page)
+
+
+@pytest.mark.parametrize('path', ['/data/law-changes/missing.json', '/api/law-calendar/status', '/docs'])
+def test_unmatched_static_requests_return_the_404_page(production, calendar_page, path):
+    url, _ = production
+    target = url + path
+    if path.startswith('/api/'):
+        response = calendar_page.request.get(target)
+        assert response.status == 404 and '페이지를 찾을 수 없습니다' in response.text()
+        return
+    response = calendar_page.goto(target)
+    assert response is not None and response.status == 404
+    expect(calendar_page.get_by_role('heading', name='페이지를 찾을 수 없습니다')).to_be_visible()
 
 
 def test_development_data_mode_reads_a_local_export(dataset, tmp_path, calendar_page):

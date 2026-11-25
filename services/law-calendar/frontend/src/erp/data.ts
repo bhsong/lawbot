@@ -12,7 +12,7 @@ export const loadErpRules: ErpRuleLoader = async (asOf, signal) => {
     try {
       return await readData<ErpRules>(signal, 'erp-rules', date)
     } catch (error) {
-      if (!(error instanceof DataUnavailable) || error.status !== 404) throw error
+      if (!(error instanceof DataUnavailable) || !error.missing) throw error
     }
   }
   return { state: 'missing', asOfDate: asOf }
