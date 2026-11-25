@@ -64,6 +64,24 @@ class CalendarMonth(BaseModel):
     days: list[CalendarDay]
 
 
+class CalendarIndex(BaseModel):
+    months: list[str]
+    erpRuleDates: list[str]
+
+
+class TaxDeadline(BaseModel):
+    id: str
+    title: str
+    date: str
+    targetPeriod: str | None
+    sourceUrl: str
+
+
+class PublicTaxSchedule(BaseModel):
+    items: list[TaxDeadline]
+    confirmedAt: str | None
+
+
 class CalendarStatus(BaseModel):
     collectedAt: str | None
     verifiedAt: str | None

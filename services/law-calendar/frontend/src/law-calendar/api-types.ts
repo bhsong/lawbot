@@ -5,6 +5,11 @@ export interface CalendarDay {
   effective_count: number
 }
 
+export interface CalendarIndex {
+  months: (string)[]
+  erpRuleDates: (string)[]
+}
+
 export interface CalendarMonth {
   month: string
   timezone: "Asia/Seoul"
@@ -173,6 +178,19 @@ export interface PublicNewsBoard {
   name: string
   status: "ok" | "disabled" | "unverified" | "pending" | "delayed" | "blocked" | "error" | "partial"
   lastSuccessAt: string | null
+}
+
+export interface PublicTaxSchedule {
+  items: (TaxDeadline)[]
+  confirmedAt: string | null
+}
+
+export interface TaxDeadline {
+  id: string
+  title: string
+  date: string
+  targetPeriod: string | null
+  sourceUrl: string
 }
 
 export interface VerifiedErpRuleVersion {
