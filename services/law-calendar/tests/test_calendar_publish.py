@@ -9,6 +9,7 @@ import sys
 import time
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from types import SimpleNamespace
 from uuid import UUID
 
 import httpx
@@ -269,6 +270,24 @@ def test_node_must_be_absolute(inputs, service, capsys, node):
 
 
 @pytest.mark.parametrize(
+    ('platform', 'admin_gid', 'expected'),
+    [('linux', None, set()), ('darwin', 80, {0, 80}), ('darwin', None, {0})],
+    ids=['linux', 'macos-admin', 'macos-no-admin'],
+)
+def test_trusted_tool_group_ids(monkeypatch, platform, admin_gid, expected):
+    def getgrnam(name):
+        assert name == 'admin'
+        if admin_gid is None:
+            raise KeyError(name)
+        return SimpleNamespace(gr_gid=admin_gid)
+
+    monkeypatch.setattr(sys, 'platform', platform)
+    monkeypatch.setattr(publish_state.grp, 'getgrnam', getgrnam)
+
+    assert publish_state._trusted_tool_group_ids() == expected
+
+
+@pytest.mark.parametrize(
     ('mode', 'trusted_group', 'allowed'),
     [(0o775, True, True), (0o775, False, False), (0o777, True, False)],
     ids=['trusted-group', 'untrusted-group', 'other-writable'],
@@ -279,7 +298,8 @@ def test_node_ancestor_writability(inputs, service, monkeypatch, capsys, mode, t
     node.parent.mkdir(parents=True)
     started = fake_wrangler(inputs, service, node=node)
     cellar.chmod(mode)
-    trusted_groups = {cellar.stat().st_gid} if trusted_group else set()
+    gid = cellar.stat().st_gid
+    trusted_groups = {gid if trusted_group else gid + 1}
     monkeypatch.setattr(publish_state, '_trusted_tool_group_ids', lambda: trusted_groups)
     pages = Pages(inputs[-1])
 

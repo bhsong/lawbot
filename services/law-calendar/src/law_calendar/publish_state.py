@@ -18,9 +18,9 @@ class LockTimeout(TimeoutError):
 
 
 def _trusted_tool_group_ids() -> set[int]:
-    """Return the root group and, on macOS, the admin group with sudo access."""
+    """Trust only macOS wheel (root-only) and admin for group-writable tool paths."""
     if sys.platform != 'darwin':
-        return {0}
+        return set()
     try:
         admin = grp.getgrnam('admin')
     except KeyError:

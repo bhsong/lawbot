@@ -4,6 +4,7 @@
 
 ## 기록 목록
 
+- **캘린더 v6.7.1 Node 경로 Astra 리뷰 반영** — macOS `wheel`·`admin`만 허용하고 ACL 전제를 명시함. 기본 테스트 2,975건 통과 → [기록](2026-11-25-calendar-node-admin-group.md#astra-리뷰-반영)
 - **캘린더 v6.7.1 Homebrew Node 경로 권한** — 신뢰 그룹 쓰기 가능 조상 허용 및 비신뢰 그룹·다른 사용자 쓰기 거부. 기본 테스트 2,972건 통과 → [기록](2026-11-25-calendar-node-admin-group.md)
 - **캘린더 정적 사이트 PR #200 CI·Codex 리뷰 반영** — Node 없는 환경에서 게시 30개 통과, daily·관리자 CLI 도움말 실행, 운영 확인 뒤 현재 배포만 유지. 기본 2,969개·캘린더 Chromium 22개 통과 → [기록](2026-11-25-calendar-pages-static-pr2.md#pr-200-ci와-codex-리뷰-반영)
 - **캘린더 정적 사이트 PR 2 추가 정리** — daily 수집 환경 복원, API 서버 정적 제공 제거, Pages 단독 공개와 이름·브랜치 검증. 기본 2,968개·캘린더 Chromium 22개 통과 → [기록](2026-11-25-calendar-pages-static-pr2.md#pr-2-추가-정리)
