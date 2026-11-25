@@ -11,6 +11,7 @@ class PublicNewsBoard(BaseModel):
     name: str
     status: Literal['ok', 'disabled', 'unverified', 'pending', 'delayed', 'blocked', 'error', 'partial']
     lastSuccessAt: str | None
+    staleAfter: str | None = None
 
 
 class ErpNews(BaseModel):

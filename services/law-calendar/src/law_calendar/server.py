@@ -319,6 +319,8 @@ def create_app(
         entry = snapshot.get('feeds', {}).get('news', {}).get(agency)
         if entry is None:
             return {'agency': agency, 'officialHome': news.HOME[agency], 'state': snapshot.get('state', 'missing')}
+        if agency == 'lawgo':
+            entry = news.filter_law_news(database, entry)
         return news.current_news(entry, limit)
 
     app.include_router(admin.router(database))

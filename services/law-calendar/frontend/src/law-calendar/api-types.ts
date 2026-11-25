@@ -178,6 +178,7 @@ export interface PublicNewsBoard {
   name: string
   status: "ok" | "disabled" | "unverified" | "pending" | "delayed" | "blocked" | "error" | "partial"
   lastSuccessAt: string | null
+  staleAfter?: string | null
 }
 
 export interface PublicTaxSchedule {

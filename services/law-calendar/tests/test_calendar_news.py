@@ -78,7 +78,9 @@ def test_daily_news_ages_without_changing_saved_hash(dataset, tmp_path):
             response = client.get('/api/erp-news/latest', params={'agency': agency})
             assert response.headers['x-erp-snapshot'] == saved['snapshotHash']
             assert [board['status'] for board in response.json()['boards']] == ['delayed', 'disabled', 'ok']
-            assert all('staleAfter' not in board for board in response.json()['boards'])
+            assert [board['staleAfter'] for board in response.json()['boards']] == [
+                board['staleAfter'] for board in boards
+            ]
     assert path.read_bytes() == before
 
 
@@ -112,7 +114,7 @@ def test_latest_news_orders_metadata_and_limits_results(dataset, tmp_path):
         assert response.headers['cache-control'] == 'no-store'
         assert [item['id'] for item in response.json()['items']] == ['post-10', 'post-9', 'post-8']
         assert response.json()['boards'][0]['status'] == 'delayed'
-        assert 'staleAfter' not in response.json()['boards'][0]
+        assert response.json()['boards'][0]['staleAfter'] == payload['agencies']['moel']['boards'][0]['staleAfter']
         assert client.get('/api/erp-news/latest?agency=moel&limit=11').status_code == 422
         assert client.get('/api/erp-news/latest?agency=other').status_code == 422
 
