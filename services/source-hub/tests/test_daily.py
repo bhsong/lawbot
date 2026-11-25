@@ -1,4 +1,5 @@
 import json
+import os
 import subprocess
 import sys
 from dataclasses import replace
@@ -35,12 +36,21 @@ def fake_publisher(monkeypatch):
     return command
 
 
-def test_daily_children_use_an_allowlist_and_publish_cannot_receive_collector_credentials(
-    tmp_path, monkeypatch, fake_publisher
-):
-    for key in ('CLOUDFLARE_ACCOUNT_ID', 'CLOUDFLARE_API_TOKEN', 'LAWBOT_CALENDAR_ADMIN_TOKEN', 'UV_ENV_FILE'):
-        monkeypatch.setenv(key, 'untrusted-fixture')
-    monkeypatch.setenv('LAW_OC', 'collector-fixture')
+def test_daily_preserves_collector_environment_but_isolates_publisher(tmp_path, monkeypatch, fake_publisher):
+    for key in (
+        'CLOUDFLARE_ACCOUNT_ID',
+        'CLOUDFLARE_API_TOKEN',
+        'LAWBOT_CALENDAR_ADMIN_TOKEN',
+        'UV_ENV_FILE',
+        'LAW_OC',
+        'LAW_CALENDAR_DB',
+        'LAW_MONITOR_UV',
+        'USER',
+        'PYTHONUNBUFFERED',
+    ):
+        monkeypatch.setenv(key, 'inherited-fixture')
+    monkeypatch.setenv('PATH', '/usr/bin:/usr/sbin')
+    monkeypatch.setenv('TMPDIR', str(tmp_path))
     cfg = daily.DailyConfig(tmp_path, tmp_path, tmp_path, tmp_path / 'db', tmp_path / 'material', tmp_path / 'feed')
     children = []
 
@@ -52,17 +62,15 @@ def test_daily_children_use_an_allowlist_and_publish_cannot_receive_collector_cr
     fake_publisher(cfg, '', 'law-monitor', 'daily')
     fake_publisher(cfg, 'erp-updates', 'erp-updates', 'collect')
     fake_publisher(cfg, 'law-calendar', 'publish')
-    for args, env in children:
-        assert '--no-env-file' in args
-        assert env['PATH'] == daily.TOOL_PATH
-        assert not {
-            'CLOUDFLARE_ACCOUNT_ID',
-            'CLOUDFLARE_API_TOKEN',
-            'LAWBOT_CALENDAR_ADMIN_TOKEN',
-            'UV_ENV_FILE',
-        }.intersection(env)
-    assert children[0][1]['LAW_OC'] == 'collector-fixture'
-    assert all(set(env) == {'PATH', 'HOME'} for _, env in children[1:])
+    assert len(children) == 3
+    assert all('--no-env-file' in args for args, _ in children)
+    inherited = {
+        key: value for key, value in os.environ.items() if key not in {'CLOUDFLARE_ACCOUNT_ID', 'CLOUDFLARE_API_TOKEN'}
+    }
+    inherited.update(LAW_CALENDAR_DB=str(cfg.calendar_db), LAW_MONITOR_UV=cfg.uv)
+    if any(env != inherited for _, env in children[:2]):
+        pytest.fail('Collection child did not receive the filtered parent environment', pytrace=False)
+    assert set(children[2][1]) == {'PATH', 'HOME'}
 
 
 def test_daily_reports_invalid_pages_credentials_without_rewriting_collection_outcome(registry, tmp_path, monkeypatch):

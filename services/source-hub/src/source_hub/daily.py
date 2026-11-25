@@ -30,6 +30,7 @@ COLLECTORS = (
 )
 LEGACY = ('legalize_law', 'legalize_admrule')
 GOOD = {'ok', 'disabled', 'unverified', 'not_due'}
+PAGES_CREDENTIALS = ('CLOUDFLARE_ACCOUNT_ID', 'CLOUDFLARE_API_TOKEN')
 
 
 @dataclass(frozen=True)
@@ -70,17 +71,10 @@ def command(config: DailyConfig, project: str, *args: str, timeout: int = 360) -
     uv = [config.uv, 'run', '--frozen', '--no-sync', '--no-env-file']
     if project:
         uv.extend(('--project', str(config.root / 'services' / project)))
-    env = child_environment(path=TOOL_PATH)
-    if args[:1] == ('law-monitor',):
-        for key in (
-            'LAW_OC',
-            'LAW_MONITOR_SUMMARY_MODEL',
-            'LAWBOT_LLM_BASE_URL',
-            'LAWBOT_LLM_API_KEY',
-            'LAWBOT_LLM_ALLOW_EXTERNAL',
-        ):
-            if key in os.environ:
-                env[key] = os.environ[key]
+    if project == 'law-calendar' and args[:1] == ('publish',):
+        env = child_environment(path=TOOL_PATH)
+    else:
+        env = {key: value for key, value in os.environ.items() if key not in PAGES_CREDENTIALS}
         env.update(LAW_CALENDAR_DB=str(config.calendar_db), LAW_MONITOR_UV=config.uv)
     return run_group([*uv, *args], cwd=config.root, env=env, timeout=timeout)
 
@@ -505,7 +499,7 @@ def run(
     now: Callable[[], datetime] = lambda: datetime.now(KST),
     republish: bool = False,
 ) -> dict:
-    for key in ('CLOUDFLARE_ACCOUNT_ID', 'CLOUDFLARE_API_TOKEN'):
+    for key in PAGES_CREDENTIALS:
         os.environ.pop(key, None)
     try:
         result = _run(registry, config, now, republish)
