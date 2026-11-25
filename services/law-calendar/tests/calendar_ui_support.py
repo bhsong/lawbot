@@ -141,7 +141,11 @@ def serve_static(tmp, site):
             def log_message(self, format, *args):
                 stream.write(format % args + '\n')
 
-        with ThreadingHTTPServer(('127.0.0.1', 0), Handler) as server:
+        class StaticServer(ThreadingHTTPServer):
+            # The default backlog is smaller than Chromium's per-origin connection pool.
+            request_queue_size = socket.SOMAXCONN
+
+        with StaticServer(('127.0.0.1', 0), Handler) as server:
             thread = Thread(target=server.serve_forever, daemon=True)
             thread.start()
             try:

@@ -1,4 +1,4 @@
-"""Public calendar reads and service-token administrator reviews."""
+"""Loopback API for administrator reviews and calendar exports."""
 
 import argparse
 import calendar
@@ -17,7 +17,6 @@ from typing import Literal
 import uvicorn
 from fastapi import FastAPI, HTTPException, Query, Request, Response
 from fastapi.responses import JSONResponse
-from fastapi.staticfiles import StaticFiles
 from pydantic import ValidationError
 
 from law_calendar import admin, auto_publish, erp_rules, news
@@ -101,9 +100,8 @@ def erp_updates(feed: Path | None) -> dict:
 
 def create_app(
     database: Path,
-    frontend: Path | None = None,
-    erp_feed: Path | None = None,
     *,
+    erp_feed: Path | None = None,
     news_feed: Path | None = None,
     rules_feed: Path | None = None,
     daily_feed: Path | None = None,
@@ -326,8 +324,6 @@ def create_app(
         return news.current_news(entry, limit)
 
     app.include_router(admin.router(database, on_review=on_review))
-    if frontend is not None:
-        app.mount('/', StaticFiles(directory=frontend, html=True), name='calendar')
     return app
 
 
@@ -347,7 +343,6 @@ def main() -> int | None:
     parser = argparse.ArgumentParser(description='Independent calendar API')
     parser.add_argument('--database', type=Path, default=os.environ.get(DB_KEY))
     parser.add_argument('--port', type=int, required=True)
-    parser.add_argument('--frontend', type=Path)
     parser.add_argument('--erp-feed', type=Path, default=os.environ.get('LAWBOT_CALENDAR_ERP_FEED'))
     parser.add_argument('--news-feed', type=Path, default=os.environ.get('LAWBOT_CALENDAR_NEWS_FEED'))
     parser.add_argument('--erp-rules-feed', type=Path, default=os.environ.get('LAWBOT_CALENDAR_ERP_RULES_FEED'))
@@ -358,8 +353,7 @@ def main() -> int | None:
     uvicorn.run(
         create_app(
             args.database,
-            args.frontend,
-            args.erp_feed,
+            erp_feed=args.erp_feed,
             news_feed=args.news_feed,
             rules_feed=args.erp_rules_feed,
             daily_feed=args.erp_daily_feed,

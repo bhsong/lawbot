@@ -38,6 +38,7 @@ def test_calendar_main_loads_service_env_for_review(workflow, tmp_path, monkeypa
 
     def run(app, **_):
         with TestClient(app) as client:
+            assert client.get('/').status_code == 404
             hold = client.get('/api/law-holds').json()['items'][0]
             path = f'/api/admin/law-holds/effective/{hold["id"]}'
             changes = [change for change in decision['changes'] if change['id'] == hold['id']]
@@ -57,6 +58,15 @@ def test_calendar_main_loads_service_env_for_review(workflow, tmp_path, monkeypa
         assert 'chmod 600' not in captured
     else:
         assert TOKEN_VAR in captured and 'chmod 600' in captured
+
+
+def test_server_rejects_removed_frontend_option(tmp_path, monkeypatch, capsys):
+    monkeypatch.setattr(settings, 'SERVICE', tmp_path)
+    monkeypatch.setattr(sys, 'argv', ['law-calendar', '--port', '0', '--frontend', str(tmp_path)])
+    with pytest.raises(SystemExit) as error:
+        server.main()
+    assert error.value.code == 2
+    assert 'unrecognized arguments: --frontend' in capsys.readouterr().err
 
 
 def test_server_never_loads_legacy_pages_values_into_environment(tmp_path, monkeypatch):
