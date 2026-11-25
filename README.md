@@ -18,7 +18,7 @@ Lawbot은 대한민국 노동법 질문에 조문을 근거로 답하는 검색 
 - **근거 부족 시 거절**: 제공된 조문으로 답할 수 없으면 추측하지 않고 "확인할 수 없습니다"라고 답합니다.
 - **시행령·시행규칙 첨부**: 관련 하위법령을 따로 찾아 법률 조문 뒤에 붙입니다 (Pro 모델).
 - **법령 변경 수집·요약**: 추적 대상 법령·행정규칙·별표서식의 변경을 매일 수집하고 요약합니다 ([services/monitor](services/monitor/README.md)).
-- **법령 변경 캘린더 UI**: 챗봇과 별도 서브도메인에서 로그인·모델 서버 없이 실행하는 독립 웹앱입니다 ([services/law-calendar](services/law-calendar/README.md)).
+- **법령 변경 캘린더 UI**: 챗봇과 별도 서브도메인에서 로그인 없이 보는 Cloudflare Pages 정적 사이트입니다. 맥 미니가 매일 06:30과 관리자 승인 때 다시 게시합니다 ([services/law-calendar](services/law-calendar/README.md)).
 - **로컬 실행**: 임베딩·리랭커는 lawbot 모델 서버, 답변은 단독 생성 서버에서 실행합니다. 모두 같은 맥에 있어 질문이 맥 밖으로 나가지 않습니다.
 
 ### 구성
@@ -122,7 +122,7 @@ This is a learning and portfolio project. Its answers are informational and do n
 - **Refusal when evidence is missing**: If the provided articles cannot support an answer, it says so instead of guessing.
 - **Enforcement decrees and rules**: Related decree/rule articles are retrieved separately and attached after the Act articles (Pro model).
 - **Law change monitoring**: Changes to tracked laws, administrative rules and forms are collected and summarized daily ([services/monitor](services/monitor/README.md), Korean).
-- **Law calendar UI**: An independent public app for a separate subdomain, running without chatbot login or model services ([services/law-calendar](services/law-calendar/README.md), Korean).
+- **Law calendar UI**: A public static Cloudflare Pages site on a separate subdomain, republished by the Mac mini daily at 06:30 and on admin approval ([services/law-calendar](services/law-calendar/README.md), Korean).
 - **Local inference**: Embedding and reranking use the lawbot model server; answers use a standalone generation server. Both run on the same Mac.
 
 ### Components
