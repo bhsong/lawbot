@@ -6,19 +6,56 @@ import os
 import shutil
 import socket
 import subprocess
-import sys
 import time
+from concurrent.futures import ThreadPoolExecutor
+from fnmatch import fnmatchcase
+from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from threading import Thread
+from urllib.parse import urlsplit
 
 import httpx
+
+from law_calendar.export import main as export_main
+from law_calendar.export import write_site
+from law_calendar.server import create_app
 
 SERVICE = Path(__file__).resolve().parents[1]
 FRONTEND = SERVICE / 'frontend'
 ROOT = SERVICE.parents[1]
 
 
+def export_calendar(tmp, database, *, daily_feed=None, **feeds):
+    site = tmp / 'site'
+    dist = FRONTEND / 'dist'
+    assert (dist / 'index.html').is_file(), 'Build the independent calendar frontend first'
+    # Playwright's synchronous facade already has an event loop on the test thread.
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        if daily_feed is None:
+            executor.submit(write_site, create_app(database, **feeds), dist, site).result(timeout=30)
+        else:
+            args = [
+                '--database',
+                str(database),
+                '--erp-daily-feed',
+                str(daily_feed),
+                '--frontend-dist',
+                str(dist),
+                '--out',
+                str(site),
+            ]
+            executor.submit(export_main, args).result(timeout=30)
+    return site
+
+
 @contextlib.contextmanager
-def serve(tmp, *, development, database=None, erp_feed=None, news_feed=None, rules_feed=None, daily_feed=None):
+def serve(tmp, *, development, database=None, site=None, **feeds):
+    if not development:
+        assert database is not None
+        with serve_static(tmp, export_calendar(tmp, database, **feeds)) as server:
+            yield server
+        return
+
     with socket.socket() as sock:
         sock.bind(('127.0.0.1', 0))
         port = sock.getsockname()[1]
@@ -26,27 +63,10 @@ def serve(tmp, *, development, database=None, erp_feed=None, news_feed=None, rul
     node = shutil.which('node')
     assert node, 'Node is required for Vite test servers'
     args = [node, str(FRONTEND / 'node_modules/vite/bin/vite.js')]
-    if not development:
-        assert (FRONTEND / 'dist/index.html').is_file(), 'Build the independent calendar frontend first'
-        args.append('preview')
     args.extend(['--host', '127.0.0.1', '--port', str(port), '--strictPort'])
-    if database is not None:
-        args = [
-            sys.executable,
-            '-m',
-            'law_calendar.server',
-            '--database',
-            str(database),
-            '--frontend',
-            str(FRONTEND / 'dist'),
-            '--port',
-            str(port),
-            *(['--erp-feed', str(erp_feed)] if erp_feed is not None else []),
-            *(['--news-feed', str(news_feed)] if news_feed is not None else []),
-            *(['--erp-rules-feed', str(rules_feed)] if rules_feed is not None else []),
-            *(['--erp-daily-feed', str(daily_feed)] if daily_feed is not None else []),
-        ]
     env = {key: value for key, value in os.environ.items() if not key.startswith(('LAWBOT_', 'LAW_MONITOR_'))}
+    if site is not None:
+        env['LAW_CALENDAR_SITE'] = str(site)
     log = tmp / 'calendar-server.log'
     with log.open('w') as out:
         proc = subprocess.Popen(args, cwd=FRONTEND, env=env, stdout=out, stderr=subprocess.STDOUT)
@@ -69,6 +89,44 @@ def serve(tmp, *, development, database=None, erp_feed=None, news_feed=None, rul
         except subprocess.TimeoutExpired:
             proc.kill()
             proc.wait()
+
+
+@contextlib.contextmanager
+def serve_static(tmp, site):
+    rules = {}
+    for line in (site / '_headers').read_text(encoding='utf-8').splitlines():
+        if not line.startswith(' '):
+            pattern = line
+            rules[pattern] = []
+        else:
+            key, value = line.strip().split(': ', 1)
+            rules[pattern].append((key, value))
+
+    log = tmp / 'static-calendar.log'
+    with log.open('w', encoding='utf-8', buffering=1) as stream:
+
+        class Handler(SimpleHTTPRequestHandler):
+            def __init__(self, *args, **kwargs):
+                super().__init__(*args, directory=str(site), **kwargs)
+
+            def end_headers(self):
+                for pattern, headers in rules.items():
+                    if fnmatchcase(urlsplit(self.path).path, pattern):
+                        for key, value in headers:
+                            self.send_header(key, value)
+                super().end_headers()
+
+            def log_message(self, format, *args):
+                stream.write(format % args + '\n')
+
+        with ThreadingHTTPServer(('127.0.0.1', 0), Handler) as server:
+            thread = Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            try:
+                yield f'http://127.0.0.1:{server.server_port}', log
+            finally:
+                server.shutdown()
+                thread.join(timeout=5)
 
 
 def keep_on_failure(request, log, page):

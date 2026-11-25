@@ -1,20 +1,21 @@
 import type { ErpHistory, ErpRules, ErpUpdates } from '../law-calendar/api-types'
+import { DataUnavailable, readData, readIndex } from '../site-data'
 
 export type ErpLoader = (signal: AbortSignal) => Promise<ErpUpdates>
 export type ErpRuleLoader = (asOf: string, signal: AbortSignal) => Promise<ErpRules>
 
-export const loadErp: ErpLoader = async (signal) => {
-  const response = await fetch('/api/erp-updates', { signal, credentials: 'same-origin', cache: 'no-store' })
-  if (!response.ok) throw new Error('ERP API unavailable')
-  return response.json() as Promise<ErpUpdates>
-}
+export const loadErp: ErpLoader = (signal) => readData(signal, 'erp-updates')
 
 export const loadErpRules: ErpRuleLoader = async (asOf, signal) => {
-  const response = await fetch('/api/erp-updates/v2?' + new URLSearchParams({ asOf }),
-    { signal, credentials: 'same-origin', cache: 'no-store' })
-  if (response.status === 404) return { state: 'unconfigured', asOfDate: asOf }
-  if (!response.ok) throw new Error('ERP rule API unavailable')
-  return response.json() as Promise<ErpRules>
+  const { erpRuleDates } = await readIndex(signal)
+  for (const date of erpRuleDates.filter(date => date <= asOf).sort().reverse()) {
+    try {
+      return await readData<ErpRules>(signal, 'erp-rules', date)
+    } catch (error) {
+      if (!(error instanceof DataUnavailable) || error.status !== 404) throw error
+    }
+  }
+  return { state: 'missing', asOfDate: asOf }
 }
 
 export const ACTION_LABELS: Record<ErpHistory['action'], string> = {

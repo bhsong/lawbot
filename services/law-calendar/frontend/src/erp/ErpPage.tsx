@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { EventList, Modal, todayKst } from '@lawbot/ui'
 import type { CalendarChange } from '@lawbot/ui'
+import { LAW_SOURCE, LICENSE_PATH } from '../attribution'
 import type { ErpItem, ErpRule, ErpRules, ErpUpdates } from '../law-calendar/api-types'
 import { ChangeDialog } from '../law-calendar/ChangeDialog'
 import { loadCalendar, loadChange } from '../law-calendar/data'
@@ -196,6 +197,9 @@ export default function ErpPage({ loader = loadErp, ruleLoader = loadErpRules, l
       <button type="button" onClick={() => setAttempt((value) => value + 1)}>다시 시도</button></div>}
     {state === 'ready' && feed && feed.state !== 'ok' && <p className="lc-warning" role="status">{NOTICES[feed.state]}</p>}
     {showRules && <>
+      {ruleFeed.asOfDate < today && <p className="lc-warning" role="status">
+        ERP 적용 기준 갱신이 지연되고 있습니다. 기준일 {ruleFeed.asOfDate}의 자료를 표시합니다.
+      </p>}
       {ruleFeed.state === 'ok'
         ? <p className="lc-data-status"><span>기준일 {ruleFeed.asOfDate} KST</span>
           {ruleFeed.generatedAt && <span>적용 기준 갱신 {kstMinute(ruleFeed.generatedAt)} KST</span>}</p>
@@ -226,6 +230,10 @@ export default function ErpPage({ loader = loadErp, ruleLoader = loadErpRules, l
         </div>}
       </section>}
     </>}
+    <footer className="lc-footer">
+      <p>{LAW_SOURCE}</p>
+      <a href={LICENSE_PATH}>라이선스</a>
+    </footer>
     {historyOpen && feed && <HistoryDialog feed={feed} onClose={() => setHistoryOpen(false)} />}
     {opened && <ChangeDialog change={opened} demo={laws?.demo ?? false} onClose={() => setOpened(null)} />}
   </main>

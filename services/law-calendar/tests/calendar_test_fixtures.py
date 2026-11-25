@@ -1,6 +1,7 @@
 """Keep standalone calendar tests independent of chatbot fixtures and configuration."""
 
 import socket
+from urllib.parse import urlsplit
 
 import pytest
 
@@ -36,19 +37,37 @@ def calendar_browser():
 @pytest.fixture
 def calendar_pages(calendar_browser):
     contexts = []
+    api_requests = []
+    csp_errors = []
 
     def open_page(**options):
         context = calendar_browser.new_context(locale='ko-KR', **options)
         contexts.append(context)
+        context.on(
+            'request',
+            lambda request: api_requests.append(request.url) if '/api/' in urlsplit(request.url).path else None,
+        )
+        context.on(
+            'console',
+            lambda message: (
+                csp_errors.append(message.text)
+                if message.type == 'error' and 'content security policy' in message.text.lower()
+                else None
+            ),
+        )
         context.route(
             '**/*',
             lambda route: route.continue_() if route.request.url.startswith('http://127.0.0.1:') else route.abort(),
         )
         return context.new_page()
 
-    yield open_page
-    for context in contexts:
-        context.close()
+    try:
+        yield open_page
+        assert api_requests == []
+        assert csp_errors == []
+    finally:
+        for context in contexts:
+            context.close()
 
 
 @pytest.fixture

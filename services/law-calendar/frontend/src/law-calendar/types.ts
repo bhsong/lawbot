@@ -1,14 +1,10 @@
 import type { CalendarChange, CalendarDay } from '@lawbot/ui'
-import type { HoldPage } from './api-types'
-
-export interface TaxSchedule {
-  items: { id: string; title: string; date: string; targetPeriod: string | null; sourceUrl: string }[]
-  confirmedAt: string | null
-}
+import type { HoldPage, PublicTaxSchedule } from './api-types'
 
 export interface CalendarSnapshot {
   counts?: CalendarDay[]
   changes: CalendarChange[]
+  tax?: PublicTaxSchedule | null
   demo: boolean
   delayed: boolean
   collectedAt: string | null

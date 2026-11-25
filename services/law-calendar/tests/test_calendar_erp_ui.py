@@ -119,10 +119,12 @@ def test_missing_feed_leaves_the_law_calendar_working(dataset, tmp_path, calenda
             support.keep_on_failure(request, log, page)
 
 
-def test_erp_reads_daily_snapshot_through_public_routes(dataset, tmp_path, calendar_page, request):
+def test_erp_reads_exported_daily_snapshot_and_falls_back_when_stale(dataset, tmp_path, calendar_page, request):
     page = calendar_page
     path = tmp_path / 'daily.json'
     stamp = '2026-11-13T06:30:00+09:00'
+    today = datetime.datetime.now(KST).date()
+    page.clock.set_fixed_time(datetime.datetime.combine(today, datetime.time(), tzinfo=KST))
     saved = seal(
         {
             'schemaVersion': 1,
@@ -171,11 +173,22 @@ def test_erp_reads_daily_snapshot_through_public_routes(dataset, tmp_path, calen
             expect(approved.get_by_role('link', name='국가법령정보센터 원문 ↗')).to_be_visible()
             expect(approved.get_by_text(ITEM['excerpt'])).to_be_visible()
             expect(page.get_by_role('heading', name='현행 기준 확인 필요')).to_have_count(0)
-            with page.expect_response(lambda response: '/api/erp-news/latest?agency=moel' in response.url):
+            with page.expect_response(lambda response: response.url.endswith('/data/erp-news/moel.json')):
                 page.get_by_role('button', name='고용노동부', exact=True).click()
-            expect(page.get_by_role('heading', name='고용노동부')).to_be_visible()
-            for route in ('erp-updates', 'erp-updates/v2', 'erp-news/latest'):
-                assert responses[f'{url}/api/{route}'].header_value('x-erp-snapshot') == saved['snapshotHash']
+            expect(page.get_by_role('heading', name='고용노동부 최신 소식')).to_be_visible()
+            assert responses[f'{url}/data/erp-updates.json'].json()['items'] == saved['feeds']['erp']['items']
+            assert responses[f'{url}/data/erp-rules/{today}.json'].json()['rules'] == saved['feeds']['rules']['rules']
+            assert (
+                responses[f'{url}/data/erp-news/moel.json'].json()['state'] == saved['feeds']['news']['moel']['state']
+            )
+            expect(page.get_by_text(f'기준일 {today} KST')).to_be_visible()
+            expect(page.get_by_text('ERP 적용 기준 갱신이 지연', exact=False)).to_have_count(0)
+
+            late = today + datetime.timedelta(days=3)
+            page.clock.set_fixed_time(datetime.datetime.combine(late, datetime.time(), tzinfo=KST))
+            page.reload()
+            expect(page.get_by_text(f'기준일 {today + datetime.timedelta(days=2)} KST')).to_be_visible()
+            expect(page.get_by_text('ERP 적용 기준 갱신이 지연', exact=False)).to_be_visible()
         finally:
             support.keep_on_failure(request, log, page)
 

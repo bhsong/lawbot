@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import type { ErpNews, PublicNewsBoard } from '../law-calendar/api-types'
+import { isDemoMode, readData } from '../site-data'
 import { kstMinute } from './data'
 
 const AGENCIES = {
@@ -29,20 +30,18 @@ const HOMETAX: ErpNews = {
 }
 
 function NewsContent({ agency }: { agency: Agency }) {
-  const [result, setResult] = useState<ErpNews | 'error' | null>(agency === 'hometax' ? HOMETAX : null)
+  const demoHome = agency === 'hometax' && isDemoMode()
+  const [result, setResult] = useState<ErpNews | 'error' | null>(demoHome ? HOMETAX : null)
 
   useEffect(() => {
-    if (agency === 'hometax') return
+    if (demoHome) return
     const controller = new AbortController()
-    fetch('/api/erp-news/latest?agency=' + agency, { signal: controller.signal, cache: 'no-store', credentials: 'same-origin' })
-      .then(async (response) => {
-        if (!response.ok) throw new Error('News unavailable')
-        const data: ErpNews = await response.json()
-        if (!controller.signal.aborted) setResult(data)
-      })
-      .catch(() => { if (!controller.signal.aborted) setResult('error') })
+    readData<ErpNews>(controller.signal, 'erp-news', agency).then(
+      data => { if (!controller.signal.aborted) setResult(data) },
+      () => { if (!controller.signal.aborted) setResult('error') },
+    )
     return () => controller.abort()
-  }, [agency])
+  }, [agency, demoHome])
 
   if (result === null) return <p role="status">소식을 불러오는 중입니다.</p>
   if (result === 'error' || result.state === 'invalid' || result.state === 'unavailable')

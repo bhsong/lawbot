@@ -9,6 +9,7 @@ import pytest
 from playwright.sync_api import expect
 
 import calendar_ui_support as support
+from law_calendar.db import migrate
 from lawbot_common.erp_daily import replace_file, seal
 from lawbot_common.tax_schedule import NTS_HOST, year_path
 from test_calendar_api import dataset as dataset
@@ -29,7 +30,10 @@ def development(tmp_path_factory):
 
 @pytest.fixture(scope='module')
 def production(tmp_path_factory):
-    with support.serve(tmp_path_factory.mktemp('law_calendar_prod'), development=False) as server:
+    tmp = tmp_path_factory.mktemp('law_calendar_prod')
+    db = tmp / 'calendar.db'
+    migrate(db)
+    with support.serve(tmp, development=False, database=db) as server:
         yield server
 
 
@@ -95,27 +99,37 @@ def test_tax_schedule_is_visible_and_keyboard_accessible(dataset, tmp_path, cale
 def test_standalone_production_needs_no_login_or_backend(production, calendar_page, request):
     page = calendar_page
     url, log = production
-    page.route(
-        '**/api/law-**',
-        lambda route: route.fulfill(
-            json=(
-                {'collectedAt': None, 'verifiedAt': None, 'delayed': False}
-                if 'status' in route.request.url
-                else {'items': [], 'total': 0, 'page': 1}
-                if 'law-events' in route.request.url
-                else {'days': []}
-            )
-        ),
-    )
-    page.route('**/api/tax-schedule?*', lambda route: route.fulfill(json={'items': [], 'confirmedAt': None}))
     calls = []
-    page.on('request', lambda req: calls.append(req.url) if '/api/' in req.url else None)
+    page.on('request', lambda req: calls.append(req.url))
     try:
         response = page.goto(url + '/?demo=true')
         expect(page.get_by_role('heading', name='법령 변경 캘린더', exact=True)).to_be_visible()
         expect(page.get_by_text('이 달에 공개 승인된', exact=False)).to_be_visible()
-        assert len(calls) == 4 and all('/api/law-' in url or '/api/tax-schedule?' in url for url in calls)
+        assert any(path.endswith('/data/law-calendar/months.json') for path in calls)
+        assert not any('/api/' in path for path in calls)
         assert response is not None and response.status == 200
+        assert "script-src 'self'" in response.headers['content-security-policy']
+        assert response.headers['x-content-type-options'] == 'nosniff'
+        assert response.headers['referrer-policy'] == 'strict-origin-when-cross-origin'
+        assert response.headers['permissions-policy'] == 'camera=(), microphone=(), geolocation=()'
+        data = page.request.get(url + '/data/law-calendar/status.json')
+        assert data.headers['cache-control'] == 'public, max-age=0, must-revalidate'
+        script = page.locator('script[src]').get_attribute('src')
+        assert script is not None
+        asset = page.request.get(url + script)
+        assert asset.headers['cache-control'] == 'public, max-age=31536000, immutable'
+        license_path = page.get_by_role('link', name='라이선스').get_attribute('href')
+        assert license_path is not None
+        licenses = page.request.get(url + license_path).text()
+        for notice in (
+            'SIL OPEN FONT LICENSE Version 1.1',
+            'react (MIT License)',
+            'react-dom (MIT License)',
+            'scheduler (MIT License)',
+            'legalize-kr#라이선스',
+            'admrule-kr#라이선스',
+        ):
+            assert notice in licenses
         assert 'set-cookie' not in response.headers
         assert page.context.cookies() == []
         assert page.get_by_role('link', name='Lawbot 챗봇', exact=False).count() == 0
@@ -131,6 +145,16 @@ def test_standalone_production_needs_no_login_or_backend(production, calendar_pa
                 assert private not in text, asset.name
     finally:
         support.keep_on_failure(request, log, page)
+
+
+def test_development_data_mode_reads_a_local_export(dataset, tmp_path, calendar_page):
+    site = support.export_calendar(tmp_path, dataset)
+    page = calendar_page
+    page.clock.set_fixed_time(datetime.datetime(2026, 11, 5, tzinfo=datetime.UTC))
+    with support.serve(tmp_path, development=True, site=site) as (url, _):
+        page.goto(url + '/?source=data')
+        expect(page.get_by_text('예시 요약')).to_be_visible()
+        expect(page.get_by_text('예시 / 실제 법령 아님', exact=True)).to_have_count(0)
 
 
 @pytest.mark.parametrize('width', [390, 1280])
@@ -197,6 +221,12 @@ def test_database_to_public_calendar_and_comparison(dataset, tmp_path, calendar_
         page.get_by_role('button', pressed=True).focus()
         page.keyboard.press('ArrowRight')
         expect(page.get_by_role('region', name='시행 조문 1건')).to_be_visible()
+        for title in ('2026년 12월', '2027년 1월'):
+            page.get_by_role('button', name='다음 달').click()
+            expect(page.get_by_role('heading', name=title, exact=True)).to_be_visible()
+            expect(page.get_by_text('이 달에 공개 승인된', exact=False)).to_be_visible()
+        page.get_by_role('button', name='오늘', exact=True).click()
+        expect(page.get_by_role('region', name='시행 조문 1건')).to_be_visible()
 
 
 def test_review_cli_controls_public_browser_visibility(workflow, tmp_path, calendar_page):
@@ -228,6 +258,7 @@ def test_review_cli_controls_public_browser_visibility(workflow, tmp_path, calen
                 capture_output=True,
                 text=True,
             )
+            support.export_calendar(tmp_path, db)
             page.reload()
             if decision == 'approve':
                 panel = page.get_by_role('region', name='시행 조문 2건')

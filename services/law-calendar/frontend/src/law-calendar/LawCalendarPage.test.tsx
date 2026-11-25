@@ -40,6 +40,9 @@ test('footer credits the statute repository and its metadata license', async () 
     'href', 'https://github.com/legalize-kr/admrule-kr',
   )
   expect(within(sources).getByText(/메타데이터 MIT/)).toBeInTheDocument()
+  expect(screen.getByText('법령 정보 출처: 법제처 국가법령정보센터(www.law.go.kr)')).toBeVisible()
+  expect(screen.getByRole('link', { name: '라이선스' })).toHaveAttribute('href', '/licenses.txt')
+  expect(screen.getByRole('link', { name: '라이선스' }).closest('footer')).not.toBeNull()
 })
 
 test('selection updates articles, empty dates, month navigation and today', async () => {
@@ -82,20 +85,23 @@ test('loading, retry, delay and verification absence are explicit', async () => 
   expect(screen.getByText(/검증 시각: 확인되지 않음/)).toBeInTheDocument()
 })
 
-test('production reads only same-origin calendar APIs', async () => {
+test('production reads only same-origin static calendar files', async () => {
   vi.stubEnv('DEV', false)
   const fetch = vi.fn(async (url: string, _init?: RequestInit) => new Response(JSON.stringify(
-    url.includes('status') ? { collectedAt: null, verifiedAt: null, delayed: true }
+    url.endsWith('months.json') ? { months: ['2026-11'], erpRuleDates: [] }
+      : url.endsWith('status.json') ? { collectedAt: null, verifiedAt: null, delayed: true }
       : url.includes('tax-schedule') ? { items: [], confirmedAt: null }
-      : url.includes('law-events') ? { items: [], total: 0, page: 1 } : { days: [] },
+      : url.includes('law-events') ? { items: [], total: 0 } : { days: [] },
   )))
   vi.stubGlobal('fetch', fetch)
   try {
     render(<LawCalendarPage initialDate="2026-11-05" />)
     expect(await screen.findByText(/이 달에 공개 승인된/)).toBeInTheDocument()
     await waitFor(() => expect(screen.queryByText(/불러오는 중/)).not.toBeInTheDocument())
-    expect(fetch).toHaveBeenCalledTimes(4)
-    expect(fetch.mock.calls.every(([url]) => url.startsWith('/api/law-') || url.startsWith('/api/tax-schedule?'))).toBe(true)
+    expect(fetch.mock.calls.map(([url]) => url).sort()).toEqual([
+      '/data/law-calendar/2026-11.json', '/data/law-calendar/months.json', '/data/law-calendar/status.json',
+      '/data/law-events/2026-11.json', '/data/tax-schedule/2026-11.json',
+    ])
     expect(fetch.mock.calls.every(([, init]) => init?.credentials === 'same-origin')).toBe(true)
     expect(screen.queryByText('예시 변경 요약')).not.toBeInTheDocument()
   } finally {
@@ -108,7 +114,7 @@ test('tax badge announces the deadline count and opens the official schedule for
   vi.stubEnv('DEV', false)
   const source = 'https://www.nts.go.kr/nts/ad/taxSchdul/selectList.do?mi=135747&taxMonth=&taxYear=2026'
   const fetch = vi.fn(async (url: string) => new Response(JSON.stringify(
-    url.includes('tax-schedule') ? {
+    url.endsWith('months.json') ? { months: ['2026-11'], erpRuleDates: [] } : url.includes('tax-schedule') ? {
       confirmedAt: '2026-11-14T06:30:00+09:00', items: [{
         id: 'deadline', title: '일용근로소득 지급명세서', date: '2026-11-30',
         targetPeriod: '2026년 10월 지급분', sourceUrl: source,
