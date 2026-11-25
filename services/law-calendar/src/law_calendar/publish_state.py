@@ -1,8 +1,10 @@
 """Private runtime files shared by export, the request queue and the publisher."""
 
 import fcntl
+import grp
 import os
 import stat
+import sys
 import time
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -15,13 +17,30 @@ class LockTimeout(TimeoutError):
     """The local state lock stayed busy past its deadline."""
 
 
+def _trusted_tool_group_ids() -> set[int]:
+    """Trust only macOS wheel (root-only) and admin for group-writable tool paths."""
+    if sys.platform != 'darwin':
+        return set()
+    try:
+        admin = grp.getgrnam('admin')
+    except KeyError:
+        return {0}
+    return {0, admin.gr_gid}
+
+
 def trusted_directory(path: Path, *, require_owner: bool = True) -> None:
-    """Reject symlinks, foreign owners and writable ancestors (including system directories)."""
+    """Reject symlinks, foreign owners and writes by untrusted groups or others."""
     if not path.is_absolute() or '..' in path.parts:
         raise OSError('Untrusted calendar publish directory')
+    trusted_groups = () if require_owner else _trusted_tool_group_ids()
     for directory in (*reversed(path.parents), path):
         info = directory.lstat()
-        if not stat.S_ISDIR(info.st_mode) or info.st_uid not in (0, os.getuid()) or info.st_mode & 0o022:
+        if (
+            not stat.S_ISDIR(info.st_mode)
+            or info.st_uid not in (0, os.getuid())
+            or info.st_mode & stat.S_IWOTH
+            or (info.st_mode & stat.S_IWGRP and info.st_gid not in trusted_groups)
+        ):
             raise OSError('Untrusted calendar publish directory')
     if require_owner and info.st_uid != os.getuid():
         raise OSError('Untrusted calendar publish directory')

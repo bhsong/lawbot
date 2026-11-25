@@ -131,3 +131,11 @@
 - Cloudflare에서 Pages 프로젝트(Direct Upload) 만들기와 이름 정하기. 토큰 발급 방법은 대화로 안내한다.
 - 계정 2단계 인증 확인과 미리보기 배포 Access 정책 켜기
 - (권장) 법제처 Open API 마이페이지의 시스템·활용 목적 정보를 공개 캘린더 용도로 갱신하기. 가입 주의사항에 따라 Open API 변경 공지는 수시로 확인한다.
+
+### v6.7.1 수정: Homebrew Node 경로 검사
+
+- 문제: 첫 실제 게시가 `wrangler_unavailable`로 실패했다. `LAWBOT_CALENDAR_NODE`를 해석한 경로의 조상 중 Homebrew `Cellar`가 기본 권한상 관리자 그룹 쓰기 가능이라 Node 경로 검사가 거부했다. 미설정 게시는 이 검사 전에 `skipped`로 끝나고 테스트는 그룹 쓰기가 없는 임시 경로만 써서 놓쳤다.
+- 수정: Node 실행 파일 자체의 그룹 쓰기는 계속 거부한다. 해석한 경로의 조상 디렉터리 검사에서만 macOS `wheel`(gid 0, root 전용) 또는 `admin`의 그룹 쓰기를 허용한다. `admin`이 없으면 `wheel`만 허용하고, macOS 외에는 모든 그룹 쓰기를 거부한다. 다른 사용자 쓰기와 소유자 조건, 서비스·Wrangler·상태 디렉터리 검사는 그대로다.
+- 전제: `admin` 구성원은 sudo로 root가 될 수 있다. 검사는 권한 비트만 확인하며 ACL은 확인하지 않는다. Node의 조상에는 다른 사용자에게 쓰기 권한을 부여하는 ACL이 없어야 한다(Homebrew 기본 설치에는 없음).
+- 테스트(Red 먼저): macOS 외에는 신뢰 그룹이 없고, macOS에서는 `admin` 유무에 따라 신뢰 그룹이 달라지는지 확인한다. 신뢰 그룹 쓰기가 가능한 조상 아래의 Node는 통과하고, 비어 있지 않은 신뢰 목록에 없는 그룹이나 다른 사용자가 조상에 쓸 수 있으면 `wrangler_unavailable`로 거부한다. 테스트는 실제 `admin` 그룹에 의존하지 않아 이식 가능하며, CI는 macOS에서 실행한다. 운영 문서의 `LAWBOT_CALENDAR_NODE` 설명도 갱신한다.
+- 반영: PR 병합 뒤 v6.7.1로 운영 반영(코드만, 서비스 재시작은 diff로 판단)하고 사용자가 `publish`를 다시 실행한다.
