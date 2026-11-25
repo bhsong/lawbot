@@ -2,6 +2,7 @@
 
 import hmac
 import os
+from collections.abc import Callable
 from pathlib import Path
 from typing import Annotated
 
@@ -26,7 +27,7 @@ def _validation_detail(exc: ValidationError) -> str:
     return ' / '.join(issues)
 
 
-def _review_effective(database: Path, change_id: str, payload: dict, reviewer: str) -> None:
+def _review_effective(database: Path, change_id: str, payload: dict, reviewer: str) -> bool:
     if payload.get('decision') != 'approve':
         raise HTTPException(422, 'decision: Only approval is allowed for held articles')
     with read_database(database) as conn:
@@ -38,10 +39,10 @@ def _review_effective(database: Path, change_id: str, payload: dict, reviewer: s
         raise HTTPException(404, 'Held article not found')
     if payload.get('event_id') != change['event_id']:
         raise HTTPException(422, 'event_id: Review event does not match the held article')
-    review(database, payload, reviewer=reviewer, idempotent=True)
+    return review(database, payload, reviewer=reviewer, idempotent=True)
 
 
-def router(database: Path) -> APIRouter:
+def router(database: Path, *, on_review: Callable[[], None] | None = None) -> APIRouter:
     token = os.environ.get('LAWBOT_CALENDAR_ADMIN_TOKEN', '').strip()
     expected = f'Bearer {token}'.encode()
 
@@ -78,13 +79,15 @@ def router(database: Path) -> APIRouter:
         if not isinstance(reviewer, str):
             raise HTTPException(422, 'reviewer: Reviewer is required')
         try:
-            _review_effective(database, hold_id, payload, reviewer)
+            changed = _review_effective(database, hold_id, payload, reviewer)
         except StaleSnapshotError as exc:
             raise HTTPException(409, str(exc)) from exc
         except ValidationError as exc:
             raise HTTPException(422, _validation_detail(exc)) from exc
         except ValueError as exc:
             raise HTTPException(422, str(exc)) from exc
+        if changed and on_review is not None:
+            on_review()
         return {'ok': True}
 
     @api.get('/import-failures')

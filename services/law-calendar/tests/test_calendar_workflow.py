@@ -9,6 +9,7 @@ from concurrent.futures import ThreadPoolExecutor
 import pytest
 from fastapi.testclient import TestClient
 
+from calendar_publish_fixtures import offline_calendar as offline_calendar
 from law_calendar.db import CURRENT_VERSION, migrate
 from law_calendar.ingest import import_files
 from law_calendar.review import inspect_event, review

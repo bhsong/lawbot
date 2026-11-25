@@ -117,7 +117,8 @@ def _require_evidence(field: str, value: str) -> None:
         raise ValueError(f'{field}: An official HTTPS evidence URL is required') from exc
 
 
-def review(database: Path, payload: dict, *, reviewer: str, idempotent: bool = False) -> None:
+def review(database: Path, payload: dict, *, reviewer: str, idempotent: bool = False) -> bool:
+    """Commit a decision; return false for an already accepted idempotent replay."""
     decision = Decision.model_validate(payload)
     if not reviewer.strip():
         raise ValueError('reviewer: Reviewer is required')
@@ -162,7 +163,7 @@ def review(database: Path, payload: dict, *, reviewer: str, idempotent: bool = F
                 (decision.event_id, reviewer, decision.snapshot_id, payload_json),
             ).fetchone()
         ):
-            return
+            return False
         state = {'approve': 'approved', 'reject': 'rejected', 'withdraw': 'withdrawn'}[decision.decision]
         if state == 'approved':
             conn.execute(
@@ -202,3 +203,4 @@ def review(database: Path, payload: dict, *, reviewer: str, idempotent: bool = F
             'INSERT INTO review_details VALUES (?,?,?)',
             (audit.lastrowid, decision.snapshot_id, payload_json),
         )
+    return True

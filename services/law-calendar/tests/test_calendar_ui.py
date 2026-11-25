@@ -9,6 +9,7 @@ import pytest
 from playwright.sync_api import expect
 
 import calendar_ui_support as support
+from calendar_publish_fixtures import offline_calendar as offline_calendar
 from law_calendar.db import migrate
 from lawbot_common.erp_daily import replace_file, seal
 from lawbot_common.tax_schedule import NTS_HOST, year_path

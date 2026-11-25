@@ -2,13 +2,26 @@
 
 import argparse
 import json
+import logging
 import sqlite3
 from pathlib import Path
 
+from law_calendar.auto_publish import schedule
 from law_calendar.db import read_database, write_database
 from law_calendar.ingest import import_files, preview_changes, read_event
 from law_calendar.review import inspect_event, review, review_template
+from law_calendar.settings import load_environment
 from law_calendar.superseded import count_hidden_holds, find_superseded_changes, withdraw_superseded_changes
+
+
+def schedule_publish(database: Path, *, purge: bool) -> None:
+    log = logging.getLogger('law_calendar.auto_publish')
+    try:
+        load_environment(log)
+    except OSError, ValueError:
+        log.warning('calendar_publish_config_failed')
+        return
+    schedule(database, purge=purge)
 
 
 def main():
@@ -59,6 +72,8 @@ def main():
                 result = find_superseded_changes(conn)
                 if args.apply:
                     withdraw_superseded_changes(conn, result)
+            if args.apply and result:
+                schedule_publish(args.database, purge=True)
         elif args.command == 'holds-check':
             with read_database(args.database) as conn:
                 result = count_hidden_holds(conn)
@@ -68,7 +83,9 @@ def main():
             if args.template:
                 result = review_template(result)
         else:
-            review(args.database, json.loads(args.manifest.read_text(encoding='utf-8')), reviewer=args.reviewer)
+            payload = json.loads(args.manifest.read_text(encoding='utf-8'))
+            review(args.database, payload, reviewer=args.reviewer)
+            schedule_publish(args.database, purge=payload['decision'] != 'approve')
             result = {'decision': 'recorded'}
     except (OSError, ValueError, sqlite3.Error) as exc:
         parser.exit(1, f'{type(exc).__name__}: {exc}\n')

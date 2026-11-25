@@ -9,6 +9,7 @@ from contextlib import closing
 import pytest
 from fastapi.testclient import TestClient
 
+from calendar_publish_fixtures import offline_calendar as offline_calendar
 from law_calendar import ingest
 from law_calendar.ingest import import_event
 from law_calendar.review import review

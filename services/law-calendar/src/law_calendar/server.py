@@ -7,8 +7,10 @@ import os
 import re
 import sqlite3
 import sys
+from collections.abc import Callable
 from datetime import date as Date
 from datetime import datetime, timedelta, timezone
+from functools import partial
 from pathlib import Path
 from typing import Literal
 
@@ -18,7 +20,7 @@ from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import ValidationError
 
-from law_calendar import admin, erp_rules, news
+from law_calendar import admin, auto_publish, erp_rules, news
 from law_calendar.automation import REASONS
 from law_calendar.db import read_database
 from law_calendar.models import (
@@ -105,6 +107,7 @@ def create_app(
     news_feed: Path | None = None,
     rules_feed: Path | None = None,
     daily_feed: Path | None = None,
+    on_review: Callable[[], None] | None = None,
 ) -> FastAPI:
     app = FastAPI(title='Law Calendar', version='0.2.0')
 
@@ -322,7 +325,7 @@ def create_app(
             entry = news.filter_law_news(database, entry)
         return news.current_news(entry, limit)
 
-    app.include_router(admin.router(database))
+    app.include_router(admin.router(database, on_review=on_review))
     if frontend is not None:
         app.mount('/', StaticFiles(directory=frontend, html=True), name='calendar')
     return app
@@ -360,6 +363,7 @@ def main() -> int | None:
             news_feed=args.news_feed,
             rules_feed=args.erp_rules_feed,
             daily_feed=args.erp_daily_feed,
+            on_review=partial(auto_publish.schedule, args.database, daily_feed=args.erp_daily_feed),
         ),
         host='127.0.0.1',
         port=args.port,
