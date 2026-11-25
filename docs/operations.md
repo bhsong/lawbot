@@ -57,7 +57,7 @@ uv run --project services/law-calendar --locked python -m law_calendar.manage --
 | `LAWBOT_CALENDAR_PAGES_PROJECT` | Pages 프로젝트 이름 |
 | `LAW_CALENDAR_DB` | 캘린더 DB 파일 |
 | `LAWBOT_CALENDAR_ERP_DAILY_FEED` | `source-hub daily`가 만드는 ERP 일일 공개 스냅숏 파일 |
-| `LAWBOT_CALENDAR_NODE` | 필수. 신뢰된 Node 실행 파일의 절대 경로. 해석한 경로의 파일과 조상은 당사자 또는 시스템 소유이며, 그룹이나 다른 사용자가 쓸 수 없어야 함 |
+| `LAWBOT_CALENDAR_NODE` | 필수. 신뢰된 Node 실행 파일의 절대 경로. 해석한 경로의 파일과 조상은 현재 사용자 또는 root 소유여야 함. 파일은 그룹이나 다른 사용자가 쓸 수 없어야 하며, 조상 디렉터리는 root 그룹(gid 0) 또는 macOS `admin` 그룹(Homebrew 기본값)에만 그룹 쓰기를 허용함. 다른 사용자 쓰기는 허용하지 않음 |
 | `LAWBOT_CALENDAR_FRONTEND_DIST` | 화면 빌드 폴더. 미설정 시 서비스의 `frontend/dist` |
 | `LAWBOT_CALENDAR_SITE` | 공개 사이트 폴더. 미설정 시 `services/law-calendar/data/site` |
 

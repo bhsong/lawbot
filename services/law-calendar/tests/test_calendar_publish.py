@@ -15,7 +15,7 @@ import httpx
 import pytest
 
 from calendar_publish_fixtures import offline_calendar as offline_calendar
-from law_calendar import publish, server, settings
+from law_calendar import publish, publish_state, server, settings
 from law_calendar.export import BUILD_MARKER
 from lawbot_common.process import child_environment, run_group
 from test_calendar_api import dataset as dataset
@@ -115,8 +115,9 @@ def test_publisher_refuses_invalid_credentials_without_contacting_pages(inputs, 
     assert json.loads(capsys.readouterr().out)['error'] == 'invalid_pages_credentials'
 
 
-def fake_wrangler(inputs, service, *, fail=False, before_receipt=''):
-    node = service / 'node'
+def fake_wrangler(inputs, service, *, node=None, fail=False, before_receipt=''):
+    if node is None:
+        node = service / 'node'
     node.write_text(f'#!/bin/sh\nexec {shlex.quote(sys.executable)} "$@"\n')
     node.chmod(0o700)
     config(service, inputs, node=node)
@@ -265,6 +266,31 @@ def test_node_must_be_absolute(inputs, service, capsys, node):
     config(service, inputs, node=node)
     assert publish.main([], transport=httpx.MockTransport(lambda _: pytest.fail('unexpected Pages request'))) == 1
     assert json.loads(capsys.readouterr().out)['error'] == 'wrangler_unavailable'
+
+
+@pytest.mark.parametrize(
+    ('mode', 'trusted_group', 'allowed'),
+    [(0o775, True, True), (0o775, False, False), (0o777, True, False)],
+    ids=['trusted-group', 'untrusted-group', 'other-writable'],
+)
+def test_node_ancestor_writability(inputs, service, monkeypatch, capsys, mode, trusted_group, allowed):
+    cellar = service / 'Cellar'
+    node = cellar / 'bin/node'
+    node.parent.mkdir(parents=True)
+    started = fake_wrangler(inputs, service, node=node)
+    cellar.chmod(mode)
+    trusted_groups = {cellar.stat().st_gid} if trusted_group else set()
+    monkeypatch.setattr(publish_state, '_trusted_tool_group_ids', lambda: trusted_groups)
+    pages = Pages(inputs[-1])
+
+    exit_code = publish.main([], transport=pages.transport)
+    result = json.loads(capsys.readouterr().out)
+    if allowed:
+        assert exit_code == 0, result.get('error', result)
+        assert started.is_file()
+    else:
+        assert exit_code == 1 and result['error'] == 'wrangler_unavailable'
+        assert not started.exists() and not pages.calls
 
 
 @pytest.mark.parametrize('failure', ['upload_failed', 'verify_failed', 'production_mismatch'])
