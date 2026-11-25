@@ -79,6 +79,39 @@ def command(config: DailyConfig, project: str, *args: str, timeout: int = 360) -
     )
 
 
+def _publish_calendar(config: DailyConfig) -> dict:
+    """Keep the subprocess outcome separate from the sealed collection snapshot."""
+    failed = {'status': 'failed', 'error': 'publish_failed'}
+    try:
+        proc = command(config, 'law-calendar', 'publish', '--erp-daily-feed', str(config.public), timeout=960)
+    except subprocess.TimeoutExpired:
+        return {'status': 'failed', 'error': 'publish_timeout'}
+    except OSError, UnicodeError:
+        return failed
+    try:
+        payload = json.loads(proc.stdout)
+    except ValueError:
+        return failed
+    if not isinstance(payload, dict):
+        return failed
+    identifier = payload.get('deploymentId')
+    if identifier is not None and (
+        not isinstance(identifier, str) or not re.fullmatch(r'[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}', identifier)
+    ):
+        return failed
+    files, deleted = payload.get('files'), payload.get('deleted')
+    if type(files) is not int or files < 0 or type(deleted) is not int or deleted < 0:
+        return failed
+    counts = {'deploymentId': identifier, 'files': files, 'deleted': deleted}
+    if proc.returncode != 0:
+        return failed | counts
+    if payload.get('status') == 'ok' and identifier is not None:
+        return {'status': 'ok', **counts}
+    if payload.get('status') == 'skipped' and payload.get('reason') == 'pages_not_configured' and identifier is None:
+        return {'status': 'skipped', 'reason': 'pages_not_configured', **counts}
+    return failed
+
+
 def legacy_rows(database: Path, run_id: str) -> tuple[dict, str | None, str | None]:
     if not database.is_file():
         return {}, None, None
@@ -479,9 +512,12 @@ def run(
     republish: bool = False,
 ) -> dict:
     try:
-        return _run(registry, config, now, republish)
+        result = _run(registry, config, now, republish)
     except Busy:
         return {'status': 'busy', 'day_kst': now().astimezone(KST).date().isoformat()}
+    if result['status'] != 'busy':
+        result['calendarPublish'] = _publish_calendar(config)
+    return result
 
 
 def _run(registry: Registry, config: DailyConfig, now: Callable[[], datetime], republish: bool) -> dict:
