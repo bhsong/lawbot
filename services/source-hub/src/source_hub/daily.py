@@ -14,9 +14,11 @@ from pathlib import Path
 from tempfile import NamedTemporaryFile
 from uuid import uuid4
 
+from lawbot_common.calendar_publish import PUBLISH_CALLER_TIMEOUT, read_report
 from lawbot_common.erp_daily import read_snapshot, replace_file, seal, snapshot_hash
 from lawbot_common.erp_news import official_url
 from lawbot_common.erp_rules import RuleSnapshot
+from lawbot_common.process import TOOL_PATH, child_environment, run_group
 from source_hub import materials, moel, mofe, news, nts
 from source_hub.collector import file_lock, interval_due
 from source_hub.store import KST, Registry
@@ -65,51 +67,43 @@ def daily_lock(database: Path) -> Path:
 
 
 def command(config: DailyConfig, project: str, *args: str, timeout: int = 360) -> subprocess.CompletedProcess[str]:
-    uv = [config.uv, 'run', '--frozen', '--no-sync']
+    uv = [config.uv, 'run', '--frozen', '--no-sync', '--no-env-file']
     if project:
         uv.extend(('--project', str(config.root / 'services' / project)))
-    return subprocess.run(
-        [*uv, *args],
-        cwd=config.root,
-        text=True,
-        capture_output=True,
-        timeout=timeout,
-        check=False,
-        env=os.environ | {'LAW_CALENDAR_DB': str(config.calendar_db), 'LAW_MONITOR_UV': config.uv},
-    )
+    env = child_environment(path=TOOL_PATH)
+    if args[:1] == ('law-monitor',):
+        for key in (
+            'LAW_OC',
+            'LAW_MONITOR_SUMMARY_MODEL',
+            'LAWBOT_LLM_BASE_URL',
+            'LAWBOT_LLM_API_KEY',
+            'LAWBOT_LLM_ALLOW_EXTERNAL',
+        ):
+            if key in os.environ:
+                env[key] = os.environ[key]
+        env.update(LAW_CALENDAR_DB=str(config.calendar_db), LAW_MONITOR_UV=config.uv)
+    return run_group([*uv, *args], cwd=config.root, env=env, timeout=timeout)
 
 
 def _publish_calendar(config: DailyConfig) -> dict:
     """Keep the subprocess outcome separate from the sealed collection snapshot."""
     failed = {'status': 'failed', 'error': 'publish_failed'}
     try:
-        proc = command(config, 'law-calendar', 'publish', '--erp-daily-feed', str(config.public), timeout=960)
+        proc = command(
+            config,
+            'law-calendar',
+            'publish',
+            '--database',
+            str(config.calendar_db),
+            '--erp-daily-feed',
+            str(config.public),
+            timeout=PUBLISH_CALLER_TIMEOUT,
+        )
     except subprocess.TimeoutExpired:
         return {'status': 'failed', 'error': 'publish_timeout'}
     except OSError, UnicodeError:
         return failed
-    try:
-        payload = json.loads(proc.stdout)
-    except ValueError:
-        return failed
-    if not isinstance(payload, dict):
-        return failed
-    identifier = payload.get('deploymentId')
-    if identifier is not None and (
-        not isinstance(identifier, str) or not re.fullmatch(r'[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}', identifier)
-    ):
-        return failed
-    files, deleted = payload.get('files'), payload.get('deleted')
-    if type(files) is not int or files < 0 or type(deleted) is not int or deleted < 0:
-        return failed
-    counts = {'deploymentId': identifier, 'files': files, 'deleted': deleted}
-    if proc.returncode != 0:
-        return failed | counts
-    if payload.get('status') == 'ok' and identifier is not None:
-        return {'status': 'ok', **counts}
-    if payload.get('status') == 'skipped' and payload.get('reason') == 'pages_not_configured' and identifier is None:
-        return {'status': 'skipped', 'reason': 'pages_not_configured', **counts}
-    return failed
+    return read_report(proc)
 
 
 def legacy_rows(database: Path, run_id: str) -> tuple[dict, str | None, str | None]:
@@ -511,6 +505,8 @@ def run(
     now: Callable[[], datetime] = lambda: datetime.now(KST),
     republish: bool = False,
 ) -> dict:
+    for key in ('CLOUDFLARE_ACCOUNT_ID', 'CLOUDFLARE_API_TOKEN'):
+        os.environ.pop(key, None)
     try:
         result = _run(registry, config, now, republish)
     except Busy:

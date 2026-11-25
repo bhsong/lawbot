@@ -32,6 +32,48 @@ def fake_publisher(monkeypatch):
         return command(config, project, *args, **kwargs)
 
     monkeypatch.setattr(daily, 'command', dispatch)
+    return command
+
+
+def test_daily_children_use_an_allowlist_and_publish_cannot_receive_collector_credentials(
+    tmp_path, monkeypatch, fake_publisher
+):
+    for key in ('CLOUDFLARE_ACCOUNT_ID', 'CLOUDFLARE_API_TOKEN', 'LAWBOT_CALENDAR_ADMIN_TOKEN', 'UV_ENV_FILE'):
+        monkeypatch.setenv(key, 'untrusted-fixture')
+    monkeypatch.setenv('LAW_OC', 'collector-fixture')
+    cfg = daily.DailyConfig(tmp_path, tmp_path, tmp_path, tmp_path / 'db', tmp_path / 'material', tmp_path / 'feed')
+    children = []
+
+    def run(args, *, env, **kwargs):
+        children.append((args, env))
+        return skipped_publish()
+
+    monkeypatch.setattr(daily, 'run_group', run)
+    fake_publisher(cfg, '', 'law-monitor', 'daily')
+    fake_publisher(cfg, 'erp-updates', 'erp-updates', 'collect')
+    fake_publisher(cfg, 'law-calendar', 'publish')
+    for args, env in children:
+        assert '--no-env-file' in args
+        assert env['PATH'] == daily.TOOL_PATH
+        assert not {
+            'CLOUDFLARE_ACCOUNT_ID',
+            'CLOUDFLARE_API_TOKEN',
+            'LAWBOT_CALENDAR_ADMIN_TOKEN',
+            'UV_ENV_FILE',
+        }.intersection(env)
+    assert children[0][1]['LAW_OC'] == 'collector-fixture'
+    assert all(set(env) == {'PATH', 'HOME'} for _, env in children[1:])
+
+
+def test_daily_reports_invalid_pages_credentials_without_rewriting_collection_outcome(registry, tmp_path, monkeypatch):
+    cfg = daily.DailyConfig(tmp_path, tmp_path, tmp_path, tmp_path / 'db', tmp_path / 'material', tmp_path / 'feed')
+    failed = {'status': 'failed', 'error': 'invalid_pages_credentials', 'deploymentId': None, 'files': 0, 'deleted': 0}
+    monkeypatch.setattr(daily, '_run', lambda *_: {'status': 'ok'})
+    monkeypatch.setattr(
+        daily, 'command', lambda *_args, **_kwargs: subprocess.CompletedProcess([], 1, json.dumps(failed))
+    )
+    result = daily.run(registry, cfg, now=lambda: STAMP)
+    assert result == {'status': 'ok', 'calendarPublish': failed}
 
 
 def test_daily_finishes_collection_calendar_articles_summary_and_erp_without_removed_sources(
@@ -197,7 +239,7 @@ def test_daily_reuses_one_snapshot_and_exposes_same_public_data(registry, tmp_pa
 
     def fail_publish(config, project, *args, timeout):
         assert project == 'law-calendar'
-        assert args == ('publish', '--erp-daily-feed', str(config.public))
+        assert args == ('publish', '--database', str(config.calendar_db), '--erp-daily-feed', str(config.public))
         assert timeout > 0 and read_snapshot(config.public)['snapshotHash']
         publish_calls.append(config.public)
         return subprocess.CompletedProcess(args, 1, 'untrusted child output', 'untrusted error')
