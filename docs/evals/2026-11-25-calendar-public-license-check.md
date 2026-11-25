@@ -24,7 +24,7 @@
 | Pages Git 연동에서 포크 PR 빌드 여부 미확인 | Pages 알려진 문제 문서에 "포크 저장소의 커밋·PR은 미리보기를 만들지 않는다"고 적혀 있다. 계획은 Git 연동 대신 Direct Upload를 쓴다. Direct Upload 프로젝트는 나중에 Git 연동으로 바꿀 수 없다. 레포 PR이 배포를 만들 경로가 없다. |
 | 정적 Pages는 Functions가 없다 | 조건이 있다. `wrangler pages deploy`는 명령을 실행한 위치에 `functions` 폴더가 있으면 함께 올린다. 출력 폴더의 `_worker.js`도 Functions로 동작한다. → 빈 스테이징 폴더에서 배포하고 두 파일이 없는지 검사한다. |
 | 철회 시 재배포하면 사라진다 | 일부만 맞다. 운영 주소는 새 배포로 바뀐다. 이전 배포는 고유 해시 주소로 계속 열린다. 미리보기 Access 정책이 보호한다고 문서에 적힌 것은 미리보기 주소뿐이다. → 배포 뒤 이전 배포를 지우는 단계를 넣었다. |
-| 글꼴·라이브러리 라이선스 | Pretendard 1.3.9는 OFL-1.1이다. npm 패키지에는 라이선스 파일이 없다. 원 저장소 LICENSE에는 Pretendard·Source·Inter·M PLUS 1의 저작권 고지와 예약 글꼴 이름이 있다. 배포하는 subset 파일은 원작자가 만든 그대로이며 이름만 해시가 붙는다. 런타임 의존성은 `react`·`react-dom`·`scheduler`(MIT)와 `pretendard`뿐이다. |
+| 글꼴·라이브러리 라이선스 | Pretendard 1.3.9는 OFL-1.1이다. npm 패키지의 `dist/LICENSE.txt`에는 Pretendard의 저작권·예약 글꼴 이름 고지와 라이선스 전문이 있다. Source·Inter·M PLUS 1의 고지는 원 저장소의 현재 LICENSE에 있다. 배포하는 subset 파일은 원작자가 만든 그대로이며 이름만 해시가 붙는다. 런타임 의존성은 `react`·`react-dom`·`scheduler`(MIT)와 `pretendard`뿐이다. |
 | legalize-kr·admrule-kr 메타데이터 MIT | 두 README를 오늘 다시 읽었다. "원문은 공공저작물, 저장소 구조·메타데이터는 MIT"로 같다. GitHub에서 인식한 LICENSE 파일은 없다. 고지는 README 라이선스 절 링크로 한다. |
 
 ## 확인한 공식 문서
