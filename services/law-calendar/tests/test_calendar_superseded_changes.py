@@ -10,6 +10,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from calendar_publish_fixtures import offline_calendar as offline_calendar
+from calendar_publish_fixtures import review_environment
 from law_calendar import ingest
 from law_calendar.ingest import import_event
 from law_calendar.review import review
@@ -26,6 +27,7 @@ def rows(database, query):
 def manage(database, *args):
     return subprocess.run(
         [sys.executable, '-m', 'law_calendar.manage', '--database', str(database), *args],
+        env=review_environment(),
         capture_output=True,
         text=True,
         timeout=15,

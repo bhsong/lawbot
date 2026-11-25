@@ -1,5 +1,11 @@
 import pytest
 
+from lawbot_common.process import child_environment
+
+
+def review_environment() -> dict[str, str]:
+    return child_environment() | {'LAWBOT_ENV_FILE': ''}
+
 
 @pytest.fixture(autouse=True)
 def offline_calendar(monkeypatch):

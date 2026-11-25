@@ -10,6 +10,7 @@ import pytest
 from law_monitor import cli
 from law_monitor.events import make_event_id
 from law_monitor.state import State
+from lawbot_common.process import child_environment
 from mon_helpers import LAW_PATH, WAGE_PATH, FakeLawGo, SourceRepo, git, law_md, make_config, make_monitor
 
 WAGE_NAME = '최저임금법'
@@ -24,7 +25,14 @@ def calendar(*args):
 
 
 def calendar_command(module, *args):
-    return subprocess.run([sys.executable, '-m', module, *map(str, args)], capture_output=True, text=True, check=True)
+    return subprocess.run(
+        [sys.executable, '-m', module, *map(str, args)],
+        env=child_environment() | {'LAWBOT_ENV_FILE': ''},
+        capture_output=True,
+        text=True,
+        check=True,
+        timeout=15,
+    )
 
 
 @pytest.fixture(autouse=True)
@@ -174,7 +182,11 @@ def test_replay_amendment_import_keeps_rejected_scope_event_separate(tmp_path, a
         ),
         encoding='utf-8',
     )
-    calendar('--database', database, 'review', manifest, '--reviewer', 'fixture')
+    checked = calendar_command(
+        'law_calendar.manage', '--database', database, 'review', manifest, '--reviewer', 'fixture'
+    )
+    assert json.loads(checked.stdout) == {'decision': 'recorded'}
+    assert not checked.stderr
     assert calendar('--database', database, 'import', '--monitor-home', home, saved)['imported'] == 1
     assert calendar('--database', database, 'show', rejected_id)['review_state'] == 'rejected'
     assert cli.main([*args, sha]) == 0

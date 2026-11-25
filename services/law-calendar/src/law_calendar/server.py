@@ -363,7 +363,7 @@ def main() -> int | None:
             news_feed=args.news_feed,
             rules_feed=args.erp_rules_feed,
             daily_feed=args.erp_daily_feed,
-            on_review=partial(auto_publish.schedule, args.database, daily_feed=args.erp_daily_feed),
+            on_review=partial(auto_publish.schedule, args.database),
         ),
         host='127.0.0.1',
         port=args.port,

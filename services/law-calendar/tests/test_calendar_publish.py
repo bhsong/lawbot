@@ -1,48 +1,70 @@
 """Run the real export and a disposable Wrangler stand-in; intercept all Pages HTTP."""
 
+import fcntl
 import json
+import os
 import subprocess
 import sys
+import time
+from pathlib import Path
 from uuid import UUID
 
 import httpx
 import pytest
 
 from calendar_publish_fixtures import offline_calendar as offline_calendar
-from law_calendar import server
+from law_calendar import publish, publish_state, server, settings
+from law_calendar.export import BUILD_MARKER
+from lawbot_common.process import child_environment, run_group
 from test_calendar_api import dataset as dataset
 from test_calendar_export import export_args
 from test_calendar_export import inputs as inputs
 
 PROJECT = 'calendar-fixture'
+PROJECT_ID = 'fixture-project-id'
 ACCOUNT = 'fixture-account-value'
 TOKEN = 'fixture-token-value'
 PUBLIC_STATUS = 'data/law-calendar/status.json'
 CURRENT, PRIOR, FAILED, OLDER, PREVIEW = (str(UUID(int=n)) for n in range(1, 6))
-PAGES_KEYS = ('LAWBOT_CALENDAR_PAGES_PROJECT', 'CLOUDFLARE_ACCOUNT_ID', 'CLOUDFLARE_API_TOKEN')
 
 
-@pytest.fixture(autouse=True)
-def isolated_publish_env(monkeypatch):
-    for key in ('LAWBOT_CALENDAR_NODE', 'LAWBOT_CALENDAR_SITE', 'LAWBOT_CALENDAR_FRONTEND_DIST'):
-        monkeypatch.delenv(key, raising=False)
+@pytest.fixture
+def service(tmp_path, monkeypatch):
+    directory = tmp_path / 'calendar-service'
+    directory.mkdir()
+    monkeypatch.setattr(settings, 'SERVICE', directory)
+    return directory
 
 
-def args(inputs, *extra):
-    return ['publish', *export_args(inputs)[1:], *extra]
-
-
-def test_unconfigured_cli_exports_and_reports_one_line(inputs):
-    proc = subprocess.run(
-        [sys.executable, '-m', 'law_calendar.server', *args(inputs)], capture_output=True, text=True, timeout=30
+def config(service, inputs, *, project=PROJECT, node=sys.executable):
+    database, dist, feed, _, out = inputs
+    (service / '.env').write_text(
+        f'LAW_CALENDAR_DB={database}\nLAWBOT_CALENDAR_ERP_DAILY_FEED={feed}\n'
+        f'LAWBOT_CALENDAR_FRONTEND_DIST={dist}\nLAWBOT_CALENDAR_SITE={out}\n'
+        f'LAWBOT_CALENDAR_PAGES_PROJECT={project}\nLAWBOT_CALENDAR_PAGES_PROJECT_ID={PROJECT_ID}\n'
+        f'LAWBOT_CALENDAR_NODE={node}\n'
     )
-    assert proc.returncode == 0, proc.stderr
-    assert len(proc.stdout.splitlines()) == 1
-    assert proc.stderr == ''
+
+
+def credentials(service):
+    path = service / 'pages.env'
+    path.touch(mode=0o600)
+    path.write_text(f'CLOUDFLARE_ACCOUNT_ID={ACCOUNT}\nCLOUDFLARE_API_TOKEN={TOKEN}\n')
+    return path
+
+
+def test_unconfigured_cli_exports_and_reports_one_line(inputs, service, monkeypatch, capsys):
+    config(service, inputs, project='')
+    monkeypatch.setenv('LAWBOT_CALENDAR_PAGES_PROJECT', PROJECT)
+    monkeypatch.setenv('LAWBOT_CALENDAR_SITE', str(service / 'wrong-output'))
+    monkeypatch.setattr(sys, 'argv', ['law-calendar', 'publish', *export_args(inputs)[1:]])
+    assert server.main() == 0
+    captured = capsys.readouterr()
+    assert len(captured.out.splitlines()) == 1 and not captured.err
     out = inputs[-1]
     assert (out / PUBLIC_STATUS).is_file()
     count = sum(p.is_file() and not p.name.startswith('.') for p in out.rglob('*'))
-    assert json.loads(proc.stdout) == {
+    assert json.loads(captured.out) == {
         'status': 'skipped',
         'reason': 'pages_not_configured',
         'deploymentId': None,
@@ -51,40 +73,63 @@ def test_unconfigured_cli_exports_and_reports_one_line(inputs):
     }
 
 
-def test_publish_loads_service_env_and_keeps_process_priority(inputs, tmp_path, monkeypatch, capsys):
-    _, dist, feed, _, out = inputs
-    env = tmp_path / 'calendar.env'
-    env.write_text(
-        f'LAWBOT_CALENDAR_ERP_DAILY_FEED={feed}\nLAWBOT_CALENDAR_FRONTEND_DIST={dist}\n'
-        f'LAWBOT_CALENDAR_SITE={out}\nCLOUDFLARE_ACCOUNT_ID={ACCOUNT}\nCLOUDFLARE_API_TOKEN={TOKEN}\n'
-    )
-    env.chmod(0o600)
-    monkeypatch.setenv('LAWBOT_ENV_FILE', str(env))
-    monkeypatch.setenv('LAW_CALENDAR_DB', str(inputs[0]))
-    monkeypatch.setenv('LAWBOT_CALENDAR_SITE', str(tmp_path / 'process-site'))
-    for key in ('LAWBOT_CALENDAR_ERP_DAILY_FEED', 'LAWBOT_CALENDAR_FRONTEND_DIST', *PAGES_KEYS):
-        monkeypatch.delenv(key, raising=False)
-    monkeypatch.setattr(sys, 'argv', ['law-calendar', 'publish'])
-    assert server.main() == 0
-    captured = capsys.readouterr()
-    assert json.loads(captured.out)['reason'] == 'pages_not_configured'
-    assert (tmp_path / 'process-site' / PUBLIC_STATUS).is_file()
-    assert not out.exists()
+@pytest.mark.parametrize('option', ['--database', '--erp-daily-feed', '--out', '--frontend-dist'])
+def test_fixed_inputs_and_pages_credentials_are_not_supplied_by_environment(
+    inputs, service, monkeypatch, capsys, option
+):
+    config(service, inputs)
+    foreign = service / 'foreign'
+    monkeypatch.setenv('LAW_CALENDAR_DB', str(foreign))
+    monkeypatch.setenv('CLOUDFLARE_ACCOUNT_ID', ACCOUNT)
+    monkeypatch.setenv('CLOUDFLARE_API_TOKEN', TOKEN)
+    requests = []
+    transport = httpx.MockTransport(requests.append)
+    assert publish.main([option, str(foreign)], transport=transport) == 1
+    assert json.loads(capsys.readouterr().out)['error'] == 'input_mismatch'
+    assert publish.main([], transport=transport) == 1
+    assert json.loads(capsys.readouterr().out)['error'] == 'invalid_pages_credentials'
+    assert not requests
 
 
-def fake_wrangler(inputs, monkeypatch, *, fail=False):
-    dist = inputs[1]
-    wrangler = dist.parent / 'node_modules/wrangler/bin/wrangler.js'
-    wrangler.parent.mkdir(parents=True)
+@pytest.mark.parametrize('bad', ['partial', 'wide-mode', 'symlink', 'hardlink', 'directory'])
+def test_publisher_refuses_invalid_credentials_without_contacting_pages(inputs, service, capsys, bad):
+    config(service, inputs)
+    if bad in ('symlink', 'directory'):
+        (service / 'decoy').touch(mode=0o600)
+        path = service / 'pages.env'
+        if bad == 'symlink':
+            path.symlink_to(service / 'decoy')
+        else:
+            path.mkdir(mode=0o700)
+    else:
+        path = credentials(service)
+        if bad == 'hardlink':
+            os.link(path, service / 'decoy')
+        elif bad == 'wide-mode':
+            path.chmod(0o640)
+        else:
+            path.write_text(f'CLOUDFLARE_ACCOUNT_ID={ACCOUNT}\n')
+    assert publish.main([], transport=httpx.MockTransport(lambda _: pytest.fail('unexpected Pages request'))) == 1
+    assert json.loads(capsys.readouterr().out)['error'] == 'invalid_pages_credentials'
+
+
+def fake_wrangler(inputs, service, *, fail=False, before_receipt=''):
+    config(service, inputs)
+    credentials(service)
+    wrangler = service / 'frontend/node_modules/wrangler/bin/wrangler.js'
+    wrangler.parent.mkdir(parents=True, exist_ok=True)
+    started = service / 'wrangler-started'
     wrangler.write_text(f"""
 import fcntl, json, os, sys
 from pathlib import Path
 stage = Path(sys.argv[3])
 assert sys.argv[1:] == ['pages', 'deploy', str(stage), '--project-name', {PROJECT!r}, '--branch', 'main']
-assert Path.cwd() == stage and not stage.is_relative_to(Path(__file__).parent)
-assert Path({PUBLIC_STATUS!r}).is_file() and Path('_headers').is_file()
+work = Path.cwd()
+assert stage.parent == work.parent and stage != work
+assert Path({str(service / '.pages-publish')!r}) == work.parent.parent
+assert (stage / {BUILD_MARKER!r}).is_file() and (stage / '_headers').is_file()
 assert not any(p.name.startswith('.') or p.name in {{'_worker.js', '_routes.json', 'functions'}} for p in stage.rglob('*'))
-with Path({str(inputs[-1].with_name('.site.lock'))!r}).open() as lock:
+with Path({str(service / '.pages-publish/export.lock')!r}).open() as lock:
     try:
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
     except BlockingIOError:
@@ -92,8 +137,15 @@ with Path({str(inputs[-1].with_name('.site.lock'))!r}).open() as lock:
     else:
         raise AssertionError('publish lost the export lock')
 assert os.environ['WRANGLER_SEND_METRICS'] == 'false'
+assert os.environ['WRANGLER_WRITE_LOGS'] == 'false'
+assert os.environ['WRANGLER_CACHE_DIR'] == str(work / 'cache')
+assert os.environ['HOME'] == str(work)
+assert os.environ['PATH'] == {str(Path(sys.executable).resolve().parent) + ':/usr/bin:/bin'!r}
+assert 'LAWBOT_CALENDAR_ADMIN_TOKEN' not in os.environ and 'NODE_OPTIONS' not in os.environ
 assert os.environ['CLOUDFLARE_API_TOKEN'] == {TOKEN!r}
 assert os.environ['CLOUDFLARE_ACCOUNT_ID'] == {ACCOUNT!r}
+Path({str(started)!r}).touch()
+{before_receipt}
 Path(os.environ['WRANGLER_OUTPUT_FILE_PATH']).write_text(json.dumps({{
     'type': 'pages-deploy-detailed', 'version': 1, 'pages_project': {PROJECT!r},
     'deployment_id': {CURRENT!r}, 'environment': 'production',
@@ -101,9 +153,7 @@ Path(os.environ['WRANGLER_OUTPUT_FILE_PATH']).write_text(json.dumps({{
 print(f'{{os.environ["CLOUDFLARE_ACCOUNT_ID"]}} {{os.environ["CLOUDFLARE_API_TOKEN"]}}')
 sys.exit({int(fail)})
 """)
-    for key, value in zip(PAGES_KEYS, (PROJECT, ACCOUNT, TOKEN), strict=True):
-        monkeypatch.setenv(key, value)
-    monkeypatch.setenv('LAWBOT_CALENDAR_NODE', sys.executable)
+    return started
 
 
 def deployment(identifier, day, *, environment='production', success=True, aliases=None):
@@ -116,91 +166,244 @@ def deployment(identifier, day, *, environment='production', success=True, alias
     }
 
 
-@pytest.mark.parametrize('purge', [False, True])
-def test_publish_verifies_production_and_prunes_every_history_page(inputs, monkeypatch, capsys, purge):
-    from law_calendar import publish
+class Pages:
+    def __init__(self, out):
+        self.out = out
+        self.calls = []
+        self.project_path = f'/client/v4/accounts/{ACCOUNT}/pages/projects/{PROJECT}'
+        self.metadata = {
+            'name': PROJECT,
+            'id': PROJECT_ID,
+            'production_branch': 'main',
+            'canonical_deployment': {'id': CURRENT},
+        }
+        self.history = [
+            deployment(OLDER, 15),
+            deployment(CURRENT, 24),
+            deployment(PREVIEW, 23, environment='preview', aliases=['preview']),
+            deployment(FAILED, 22, success=False),
+            deployment(PRIOR, 20),
+        ]
+        self.delete_works = True
+        self.serve_stale = False
+        self.corrupt = lambda rows, info: (rows, info)
+        self.transport = httpx.MockTransport(self.handle)
 
-    fake_wrangler(inputs, monkeypatch)
-    out = inputs[-1]
-    calls = []
-    project_path = f'/client/v4/accounts/{ACCOUNT}/pages/projects/{PROJECT}'
-    deployments = [
-        deployment(OLDER, 15),
-        deployment(CURRENT, 24),
-        deployment(PREVIEW, 23, environment='preview', aliases=['preview']),
-        deployment(FAILED, 22, success=False),
-        deployment(PRIOR, 20),
-    ]
-
-    def handler(request):
-        calls.append((request.method, request.url.path, dict(request.url.params)))
-        if request.url.path == '/' + PUBLIC_STATUS:
+    def handle(self, request):
+        path, method = request.url.path, request.method
+        params = dict(request.url.params)
+        self.calls.append((method, path, params))
+        if path == '/' + BUILD_MARKER:
             assert request.url.host == PROJECT + '.pages.dev'
-            assert request.headers.get('authorization') is None
-            return httpx.Response(200, content=(out / PUBLIC_STATUS).read_bytes())
+            assert 'authorization' not in request.headers
+            name = PUBLIC_STATUS if self.serve_stale else BUILD_MARKER
+            return httpx.Response(200, content=(self.out / name).read_bytes())
         assert request.headers['authorization'] == f'Bearer {TOKEN}'
-        if request.url.path == project_path:
-            return httpx.Response(200, json={'success': True, 'result': {'canonical_deployment': {'id': CURRENT}}})
-        if request.method == 'GET':
-            assert request.url.path == project_path + '/deployments'
-            page = int(request.url.params['page'])
-            return httpx.Response(
-                200,
-                json={
-                    'success': True,
-                    'result': deployments[:2] if page == 1 else deployments[2:],
-                    'result_info': {'total_count': len(deployments)},
-                },
-            )
+        if path == self.project_path:
+            return httpx.Response(200, json={'success': True, 'result': self.metadata})
+        if method == 'GET':
+            assert path == self.project_path + '/deployments'
+            page, size = int(params['page']), int(params['per_page'])
+            items = self.history[(page - 1) * size : page * size]
+            info = {'page': page, 'per_page': size, 'count': len(items), 'total_count': len(self.history)}
+            items, info = self.corrupt(items, info)
+            return httpx.Response(200, json={'success': True, 'result': items, 'result_info': info})
+        assert method == 'DELETE' and path.startswith(self.project_path + '/deployments/')
+        if self.delete_works:
+            self.history = [row for row in self.history if row['id'] != path.rsplit('/', 1)[1]]
         return httpx.Response(200, json={'success': True, 'result': None})
 
-    assert (
-        publish.main(args(inputs, *(['--purge-history'] if purge else []))[1:], transport=httpx.MockTransport(handler))
-        == 0
-    )
+    @property
+    def deletes(self):
+        return {path.rsplit('/', 1)[1]: params for method, path, params in self.calls if method == 'DELETE'}
+
+
+@pytest.mark.parametrize('purge', [False, True])
+def test_publish_verifies_production_and_prunes_every_history_page(inputs, service, monkeypatch, capsys, purge):
+    fake_wrangler(inputs, service)
+    monkeypatch.setenv('CLOUDFLARE_API_TOKEN', 'old-value')
+    monkeypatch.setenv('LAWBOT_CALENDAR_ADMIN_TOKEN', 'admin-fixture')
+    monkeypatch.setenv('NODE_OPTIONS', 'untrusted-fixture')
+    monkeypatch.setattr(publish, 'PER_PAGE', 2)
+    out = inputs[-1]
+    pages = Pages(out)
+
+    assert publish.main(['--purge-history'] if purge else [], transport=pages.transport) == 0
     captured = capsys.readouterr()
-    result = json.loads(captured.out)
-    assert result == {
+    assert json.loads(captured.out) == {
         'status': 'ok',
         'deploymentId': CURRENT,
         'deleted': 3 + purge,
         'files': sum(p.is_file() and not p.name.startswith('.') for p in out.rglob('*')),
     }
-    assert captured.err == '' and TOKEN not in captured.out and ACCOUNT not in captured.out
-    assert calls[0][:2] == ('GET', '/' + PUBLIC_STATUS)
-    deleted = {path.rsplit('/', 1)[1]: params for method, path, params in calls if method == 'DELETE'}
-    assert deleted == {OLDER: {}, PREVIEW: {'force': 'true'}, FAILED: {}} | ({PRIOR: {}} if purge else {})
+    assert not captured.err and TOKEN not in captured.out and ACCOUNT not in captured.out
+    assert [call[:2] for call in pages.calls[:2]] == [('GET', pages.project_path), ('GET', '/' + BUILD_MARKER)]
+    assert pages.deletes == {OLDER: {}, PREVIEW: {'force': 'true'}, FAILED: {}} | ({PRIOR: {}} if purge else {})
+    for index, (method, _, _) in enumerate(pages.calls):
+        if method == 'DELETE':
+            assert pages.calls[index - 1] == ('GET', pages.project_path, {})
+    assert not publish_state.pending_withdrawals(service / '.pages-publish')
+
+
+@pytest.mark.parametrize('key,value', [('name', 'other'), ('id', 'replaced'), ('production_branch', 'preview')])
+def test_preflight_rejects_the_wrong_project_before_running_wrangler(inputs, service, capsys, key, value):
+    started = fake_wrangler(inputs, service)
+    pages = Pages(inputs[-1])
+    pages.metadata[key] = value
+    assert publish.main([], transport=pages.transport) == 1
+    assert json.loads(capsys.readouterr().out)['error'] == 'project_mismatch'
+    assert not started.exists()
+    assert pages.calls == [('GET', pages.project_path, {})]
+
+
+@pytest.mark.parametrize('node', ['', 'node'])
+def test_node_must_be_absolute(inputs, service, capsys, node):
+    fake_wrangler(inputs, service)
+    config(service, inputs, node=node)
+    assert publish.main([], transport=httpx.MockTransport(lambda _: pytest.fail('unexpected Pages request'))) == 1
+    assert json.loads(capsys.readouterr().out)['error'] == 'wrangler_unavailable'
 
 
 @pytest.mark.parametrize('failure', ['upload_failed', 'verify_failed', 'production_mismatch'])
-def test_publish_failure_never_deletes_or_reports_sensitive_values(inputs, monkeypatch, capsys, failure):
-    from law_calendar import publish
-
-    fake_wrangler(inputs, monkeypatch, fail=failure == 'upload_failed')
+def test_publish_failure_never_deletes_or_reports_sensitive_values(inputs, service, monkeypatch, capsys, failure):
+    fake_wrangler(inputs, service, fail=failure == 'upload_failed')
     monkeypatch.setattr(publish, 'VERIFY_TIMEOUT', 0.02)
-    calls = []
-
-    def handler(request):
-        calls.append(request)
-        if request.url.path == '/' + PUBLIC_STATUS:
-            return httpx.Response(
-                200, content=(inputs[-1] / PUBLIC_STATUS).read_bytes() + (b' ' if failure == 'verify_failed' else b'')
-            )
-        if request.url.path.endswith('/deployments'):
-            return httpx.Response(200, json={'success': True, 'result': []})
-        return httpx.Response(200, json={'success': True, 'result': {'canonical_deployment': {'id': PRIOR}}})
-
-    assert publish.main(args(inputs, '--purge-history')[1:], transport=httpx.MockTransport(handler)) == 1
+    pages = Pages(inputs[-1])
+    pages.serve_stale = failure == 'verify_failed'
+    if failure == 'production_mismatch':
+        pages.metadata['canonical_deployment'] = {'id': PRIOR}
+    assert publish.main(['--purge-history'], transport=pages.transport) == 1
     captured = capsys.readouterr()
     result = json.loads(captured.out)
     assert result['status'] == 'failed' and result['error'] == failure and result['deleted'] == 0
     assert result['deploymentId'] == (None if failure == 'upload_failed' else CURRENT)
-    assert not any(req.method == 'DELETE' for req in calls)
-    if failure == 'upload_failed':
-        assert not calls
-    elif failure == 'verify_failed':
-        assert all(req.url.path == '/' + PUBLIC_STATUS for req in calls)
-    assert captured.err == '' and all(value not in captured.out for value in (ACCOUNT, TOKEN, 'https://'))
+    assert not pages.deletes and not captured.err
+    assert all(value not in captured.out for value in (ACCOUNT, TOKEN, 'https://'))
+    assert len(publish_state.pending_withdrawals(service / '.pages-publish')) == 1
+
+
+@pytest.mark.parametrize('bad', ['page', 'total-change', 'missing-total', 'stage', 'alias', 'row', 'duplicate'])
+def test_inconsistent_history_fails_before_first_delete(inputs, service, monkeypatch, capsys, bad):
+    fake_wrangler(inputs, service)
+    pages = Pages(inputs[-1])
+    monkeypatch.setattr(publish, 'PER_PAGE', 2)
+
+    def corrupt(rows, info):
+        if info['page'] == 2:
+            if bad == 'page':
+                info['page'] = 1
+            elif bad == 'total-change':
+                info['total_count'] += 1
+            elif bad == 'missing-total':
+                info.pop('total_count')
+            elif bad == 'stage':
+                rows[0] = rows[0] | {'latest_stage': {'name': 'deploy', 'status': 'unknown'}}
+            elif bad == 'alias':
+                rows[0] = rows[0] | {'aliases': 'alias'}
+            elif bad == 'row':
+                rows[0] = []
+            else:
+                rows[0] = pages.history[0]
+        return rows, info
+
+    pages.corrupt = corrupt
+    assert publish.main([], transport=pages.transport) == 1
+    assert json.loads(capsys.readouterr().out)['error'] == 'cleanup_failed'
+    assert not pages.deletes
+
+
+def test_external_rollback_stops_the_next_delete(inputs, service, capsys):
+    fake_wrangler(inputs, service)
+    pages = Pages(inputs[-1])
+
+    def rollback_after_delete(request):
+        response = pages.handle(request)
+        if request.method == 'DELETE':
+            pages.metadata['canonical_deployment'] = {'id': PRIOR}
+        return response
+
+    assert publish.main(['--purge-history'], transport=httpx.MockTransport(rollback_after_delete)) == 1
+    result = json.loads(capsys.readouterr().out)
+    assert result['error'] == 'production_mismatch' and result['deleted'] == 1
+    assert PRIOR not in pages.deletes
+    assert len(publish_state.pending_withdrawals(service / '.pages-publish')) == 1
+
+
+def test_failed_purge_stays_pending_for_an_ordinary_publish(inputs, service, capsys):
+    fake_wrangler(inputs, service)
+    out = inputs[-1]
+    pages = Pages(out)
+    pages.delete_works = False
+    state = service / '.pages-publish'
+    assert publish.main(['--purge-history'], transport=pages.transport) == 1
+    assert json.loads(capsys.readouterr().out)['error'] == 'cleanup_failed'
+    [old_request] = publish_state.pending_withdrawals(state)
+    old_build = (out / BUILD_MARKER).read_bytes()
+    pages.delete_works = True
+
+    # A review committed after this export must not be cleared by this publication.
+    def new_withdrawal(request):
+        if request.method == 'DELETE' and request.url.path.endswith(PRIOR):
+            publish_state.mark_withdrawal(state)
+        return pages.handle(request)
+
+    assert publish.main([], transport=httpx.MockTransport(new_withdrawal)) == 0
+    assert json.loads(capsys.readouterr().out)['deleted'] == 4
+    assert [row['id'] for row in pages.history] == [CURRENT]
+    [new_request] = publish_state.pending_withdrawals(state)
+    assert new_request != old_request and (out / BUILD_MARKER).read_bytes() != old_build
+    assert publish.main([], transport=pages.transport) == 0
+    assert not publish_state.pending_withdrawals(state)
+
+
+@pytest.mark.parametrize('caller_timeout', [False, True])
+def test_publish_deadlines_kill_wrangler_group_and_clean_work(inputs, service, monkeypatch, capsys, caller_timeout):
+    held = service / 'descendant.lock'
+    ready = service / 'descendant-ready'
+    child = f"""
+import fcntl, time
+from pathlib import Path
+with open({str(held)!r}, 'w') as lock:
+    fcntl.flock(lock, fcntl.LOCK_EX)
+    Path({str(ready)!r}).touch()
+    time.sleep(30)
+"""
+    fake_wrangler(
+        inputs,
+        service,
+        before_receipt=f"""
+import subprocess
+subprocess.Popen([sys.executable, '-c', {child!r}]).wait()
+""",
+    )
+    pages = Pages(inputs[-1])
+    if caller_timeout:
+        bootstrap = f"""
+import httpx
+from pathlib import Path
+from law_calendar import publish, settings
+settings.SERVICE = Path({str(service)!r})
+metadata = {{'success': True, 'result': {pages.metadata!r}}}
+transport = httpx.MockTransport(lambda _: httpx.Response(200, json=metadata))
+raise SystemExit(publish.main([], transport=transport))
+"""
+        with pytest.raises(subprocess.TimeoutExpired):
+            run_group([sys.executable, '-I', '-c', bootstrap], env=child_environment(), timeout=2)
+    else:
+        monkeypatch.setattr(publish, 'PUBLISH_DEADLINE', 2)
+        assert publish.main([], transport=pages.transport) == 1
+        assert json.loads(capsys.readouterr().out)['error'] == 'publish_timeout'
+    assert ready.exists() and not list((service / '.pages-publish').glob('build-*'))
+    deadline = time.monotonic() + 2
+    with held.open() as lock:
+        while True:
+            try:
+                fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError:
+                assert time.monotonic() < deadline, 'Wrangler child still holds its lock'
+                time.sleep(0.01)
+            else:
+                break
 
 
 def test_staging_excludes_dot_entries_and_rejects_forbidden_files_recursively(tmp_path):

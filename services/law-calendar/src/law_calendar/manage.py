@@ -2,29 +2,19 @@
 
 import argparse
 import json
-import logging
 import sqlite3
 from pathlib import Path
 
-from law_calendar.auto_publish import schedule
+from law_calendar.auto_publish import schedule as schedule_publish
 from law_calendar.db import read_database, write_database
 from law_calendar.ingest import import_files, preview_changes, read_event
 from law_calendar.review import inspect_event, review, review_template
-from law_calendar.settings import load_environment
+from law_calendar.settings import discard_pages_environment
 from law_calendar.superseded import count_hidden_holds, find_superseded_changes, withdraw_superseded_changes
 
 
-def schedule_publish(database: Path, *, purge: bool) -> None:
-    log = logging.getLogger('law_calendar.auto_publish')
-    try:
-        load_environment(log)
-    except OSError, ValueError:
-        log.warning('calendar_publish_config_failed')
-        return
-    schedule(database, purge=purge)
-
-
 def main():
+    discard_pages_environment()
     parser = argparse.ArgumentParser(description='Local calendar law import and review')
     parser.add_argument('--database', type=Path)
     sub = parser.add_subparsers(dest='command', required=True)
