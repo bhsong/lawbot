@@ -21,3 +21,27 @@
 - Green: 설정 누락 시 로컬 파일만 갱신한다. Wrangler의 작업 위치·옵션·내보내기 잠금, 점 파일 제외와 Functions 입력 금지, 운영 상태 파일 바이트 대조, 운영 ID 불일치 시 무삭제, 여러 페이지의 일반·철회 정리를 확인했다. 게시 실패 출력에는 고정 코드만 남는다.
 - daily는 정상·부분 실패·재사용 시 한 번 게시하고 busy는 건너뛴다. 관리자 경로는 커밋 후에만 예약하고, 중복 승인 요청은 추가 게시를 예약하지 않는다. 연속 요청은 합치고 실행 중의 쓰기는 철회 표식을 유지해 한 번 더 실행한다. 별도 프로세스에서 가짜 게시기의 실패가 고정 로그 한 줄로 끝나는 것도 확인했다.
 - 첫 전체 실행의 테스트 도우미 이름 충돌은 캘린더 전용 모듈 이름과 명시적 가져오기로 수정했다. 서버 로그가 CLI JSON에 섞이는 문제는 게시 전용 로거를 분리해 수정했다. 전체 검사와 병행한 Chromium 실행은 보류 화면의 데이터 로딩 1건이 실패했다. 단독 Chromium 22개와 기본 전체·캘린더 독립 실행은 통과했다. 그 일시 실패의 원인은 확정하지 못했다.
+
+## Astra 보안 리뷰 반영
+
+- Red: 다른 DB를 인자로 넘긴 회귀 테스트에서 고정 입력 불일치 대신 입력 누락이 보고됐다. 수정 후 DB·피드·빌드·사이트 인자는 설정과 다르면 HTTP 호출 전에 거부된다. 합성 DB를 검토하는 자식은 게시 비활성 환경으로 실행한다.
+- 대역은 같은 프로젝트 이름이라도 별도 ID 또는 운영 브랜치가 다르면 Wrangler를 시작하지 않는지, 이번 빌드 표식이 없으면 삭제하지 않는지 확인한다. 페이지·총계·행의 모순은 첫 삭제 전에 중단된다. 삭제 사이의 외부 롤백과 성공 응답 뒤 남아 있는 이력도 실패 처리한다.
+- 철회 실패 후 다음 일반 게시가 이력을 모두 정리하고, 과거 빌드가 새 철회 요청을 지우지 않는지 확인한다. 요청 잠금이 바빠도 철회 표식은 남는다. 자격 증명 오류는 작업자 및 daily에 고정 코드로 전달된다.
+- 게시기 전체 기한과 상위 종료를 각각 가짜 Wrangler의 자손 프로세스로 확인했다. 최초 기한 대역에서 macOS의 종료 그룹에 `SIGKILL`을 다시 보내면 발생할 수 있는 권한 오류를 확인해, 한 번만 보내고 종료 상태를 회수하도록 고쳤다.
+- 고정 Wrangler `4.160.0` 소스에서 `WRANGLER_CACHE_DIR`과 `WRANGLER_WRITE_LOGS=false`의 적용 분기를 확인했다. 전용 파일과 상태 디렉터리는 `git check-ignore`로 확인했다.
+- 실제 Pages API·Wrangler·모델 호출, 운영 경로나 실제 환경 파일 접근은 하지 않았다. 동일 UID의 파일 접근 및 외부 배포와 API 삭제 사이의 경쟁 한계는 운영 절차에 기록했다.
+
+| 최종 명령 | 결과 |
+| --- | --- |
+| `uv run --offline --no-sync pytest -q` | 2,968개 통과, 기본 설정 제외 10개. 단위·계약·통합·대역 E2E 포함 |
+| `uv run --offline --no-sync pytest -c pyproject.toml -q services/law-calendar/tests` | 282개 통과 |
+| `uv run --offline --no-sync pytest -q services/law-calendar/tests/test_calendar_export.py` | 41개 통과 |
+| `uv run --offline --no-sync pytest -c pyproject.toml -q services/law-calendar/tests/test_calendar_ui.py services/law-calendar/tests/test_calendar_erp_ui.py` | 독립 Chromium 22개 통과. 정적 화면의 `/api/` 요청 및 CSP 위반 0건 |
+| `npm run typecheck && npm test && npm run build` (캘린더) | 타입·빌드 통과, 테스트 46개 통과 |
+| `npm run typecheck && npm test && npm run build` (챗봇) | 타입·빌드 통과, 테스트 55개 통과. Vite 설정 로더의 향후 기본값 변경 안내 있음 |
+| `uv run --offline --no-sync pyright` 및 `pyright services/law-calendar/src`, `pyright services/erp-updates/src`, `pyright services/source-hub/src` | 각각 오류·경고 0개 |
+| `uv run --offline --no-sync python -m law_calendar.schema --check` 및 `uv run --offline --no-sync python -m compileall -q services packages tools` | 통과 |
+| `uv run --offline --no-sync ruff check --output-format=github` 및 `uv run --offline --no-sync ruff format --check` | 통과. 포맷 검사 623개 파일 |
+| `uv run --offline --frozen --no-sync --project services/law-calendar law-calendar publish --help` | 네 경로 옵션이 설정 일치 검사이며 철회 옵션도 있음을 확인 |
+
+실제 모델 E2E·모델 스모크·품질 평가·실제 Pages 게시: 실행 안 함.
