@@ -45,6 +45,10 @@ uv run --project services/law-calendar law-calendar export --database $CALENDAR_
 
 Vite 주소에서 `/?source=data`로 접속하면 `services/law-calendar/data/site/`의 정적 데이터를 읽는다. 다른 폴더는 `LAW_CALENDAR_SITE`에 절대 경로로 지정한다. 별도 API 서버는 필요 없다.
 
+## Pages 게시
+
+`law-calendar publish`는 같은 내보내기로 `services/law-calendar/data/site/`를 갱신한다. Pages 설정이 없으면 로컬 갱신만 하고 종료 코드 0의 `skipped`를 반환한다. 설정이 있으면 고정 버전의 Wrangler로 게시하고 운영 파일을 확인한 뒤 배포 이력을 정리한다. 일일 실행에 포함되며, 관리자 보류 승인 및 로컬 검토 뒤에는 설정이 있을 때 자동으로 예약된다. [환경 변수·운영 전환·수동 게시와 철회](../../docs/operations.md#법령-캘린더-정적-사이트-게시)
+
 ## 독립 브라우저 검사
 
 아래 명령은 저장소 루트에서 실행한다. 먼저 위 frontend를 빌드한다.

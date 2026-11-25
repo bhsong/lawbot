@@ -46,6 +46,41 @@ uv run --project services/law-calendar --locked python -m law_calendar.manage --
 
 `pending_outside_snapshot`은 현재 수집본 밖에 있는 `pending` 조문 수이고, `hidden_pending_holds`는 보류 행이 있으나 관리자 보류 목록에 나오지 않는 `pending` 조문 수입니다. 한쪽이라도 0보다 크면 종료 코드는 1입니다.
 
+## 법령 캘린더 정적 사이트 게시
+
+운영 반영 승인 후 Pages에 Direct Upload 프로젝트를 만들고 운영 브랜치를 `main`으로 설정합니다. 계정 2단계 인증과 미리보기 접근 제한을 확인합니다. Pages 편집 권한만 가진 전용 API 토큰을 발급하고, 아래 설정은 캘린더 서비스의 `services/law-calendar/.env`에 둡니다. 파일은 소유자만 읽고 쓰게 하고(권한 `600`), 프로세스 환경에 같은 변수가 있으면 그 값이 우선합니다.
+
+| 변수 이름 | 용도 |
+| --- | --- |
+| `LAWBOT_CALENDAR_PAGES_PROJECT` | Pages 프로젝트 이름 |
+| `CLOUDFLARE_ACCOUNT_ID` | Pages 계정 식별자 |
+| `CLOUDFLARE_API_TOKEN` | Pages 전용 편집 토큰 |
+| `LAW_CALENDAR_DB` | 캘린더 DB 파일 |
+| `LAWBOT_CALENDAR_ERP_DAILY_FEED` | `source-hub daily`가 만드는 ERP 일일 공개 스냅숏 파일 |
+| `LAWBOT_CALENDAR_NODE` | launchd에서도 쓸 수 있는 Node 실행 파일의 절대 경로. 미설정 시 PATH에서 찾음 |
+| `LAWBOT_CALENDAR_FRONTEND_DIST` | 화면 빌드 폴더. 미설정 시 서비스의 `frontend/dist` |
+| `LAWBOT_CALENDAR_SITE` | 공개 사이트 폴더. 미설정 시 `services/law-calendar/data/site` |
+
+운영 트리 루트에서 화면을 빌드하고 처음에는 수동으로 게시합니다. `publish`의 `--database`, `--erp-daily-feed`, `--frontend-dist`, `--out`으로 해당 경로를 덮어쓸 수 있습니다. 환경 파일에 넣는 경로는 절대 경로를 사용하고, daily·관리자·수동 게시 모두 같은 사이트 폴더를 가리키게 합니다.
+
+```sh
+uv sync --project services/law-calendar --locked
+(cd services/law-calendar/frontend && npm ci && npm run build)
+uv run --project services/law-calendar --frozen --no-sync law-calendar publish
+```
+
+내보내기가 완료되면 로컬 사이트 폴더가 갱신됩니다. Pages 설정 세 가지가 모두 있으면 잠금 파일에 고정된 Wrangler로 운영 배포를 올리고 운영 주소의 상태 파일을 로컬 파일과 대조합니다. 현재 배포가 확인된 뒤 현재와 직전 성공한 운영 배포 외의 이전 배포를 삭제합니다. 전환 전까지 `com.lawbot.calendar`의 `--frontend`는 빌드 폴더가 아닌 사이트 폴더를 가리키게 합니다. 먼저 사이트가 만들어졌는지 확인한 뒤 설정을 변경합니다. 그 뒤 화면·데이터·헤더·라이선스를 검증하고 [전환 순서](plans/calendar-pages-static.md#6-전환-순서-운영-반영-승인-뒤-각-단계-확인-후-다음-단계)를 따릅니다. 관리자용 캘린더 서버는 그대로 둡니다.
+
+일일 실행은 정상·부분 실패·스냅숏 재사용 뒤 게시를 한 번 호출하고 `calendarPublish`를 결과에 남깁니다. 수집 결과와 종료 코드는 게시 결과와 별개입니다. 관리자 보류 승인과 로컬 검토 쓰기는 Pages 설정이 있을 때만 백그라운드 게시를 예약합니다. 철회·반려는 이전 주소에도 남지 않도록 이전 운영 배포까지 지웁니다. 자동 게시가 실패하면 캘린더 서비스 또는 로컬 검토 CLI의 오류 로그와 사이트 폴더 옆의 `.site.publish.log`(기본 폴더명 기준)에서 `calendar_publish_*`를 확인합니다. 검토 저장 성공은 게시 성공을 뜻하지 않습니다.
+
+수동 게시 결과는 한 줄 JSON입니다. `ok`는 확인·정리 완료, `skipped`의 `pages_not_configured`는 로컬 갱신만 완료, `failed`는 종료 코드 1입니다. `deploymentId`, `files`, `deleted`와 고정 오류 코드로 판단합니다. 확인 실패 시 삭제나 자동 롤백은 하지 않습니다. 정리 실패 시 이미 지운 배포는 돌아오지 않습니다. 확인 또는 정리 오류가 나면 Pages 프로젝트의 운영 배포와 남은 이력을 직접 확인한 뒤 조치합니다.
+
+철회는 [로컬 검토 명령](../services/law-calendar/README.md#저장된-모니터링-결과와-공개-검토)에서 `decision`을 `withdraw`로 저장합니다. 자동 게시에 실패했거나 수동으로 철회를 게시할 때는 다른 게시가 진행 중이지 않은지 확인하고 아래 명령을 실행합니다. **현재 확인된 배포 외 모든 주소를 삭제하며, 직전 배포로 되돌릴 수 없습니다.** 게시가 끝나면 철회 항목이 현재 주소에 없고 이전 배포도 삭제됐는지 확인합니다.
+
+```sh
+uv run --project services/law-calendar --frozen --no-sync law-calendar publish --purge-history
+```
+
 ## 법령 개정 재생성 미리보기
 
 작업 트리의 루트에서 `MONITOR_HOME`에 monitor home, `LAW_PATH`에 로컬 Legalize 저장소 안의 파일 경로, `COMMIT`에 개정 커밋을 지정합니다. monitor는 기존 법제처 보강을 적용하고 미리보기 원천을 실행별 임시 폴더에 저장합니다. 다른 로컬 클론을 쓸 때는 `--repo-path`를 지정합니다.
