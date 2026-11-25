@@ -1,0 +1,14 @@
+import pytest
+
+from lawbot_common.process import child_environment
+
+
+def review_environment() -> dict[str, str]:
+    return child_environment() | {'LAWBOT_ENV_FILE': ''}
+
+
+@pytest.fixture(autouse=True)
+def offline_calendar(monkeypatch):
+    monkeypatch.setenv('LAWBOT_ENV_FILE', '')
+    for key in ('LAWBOT_CALENDAR_PAGES_PROJECT', 'CLOUDFLARE_ACCOUNT_ID', 'CLOUDFLARE_API_TOKEN'):
+        monkeypatch.delenv(key, raising=False)

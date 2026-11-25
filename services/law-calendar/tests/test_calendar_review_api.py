@@ -61,7 +61,13 @@ def test_missing_and_wrong_service_tokens_are_rejected(workflow, headers):
 def test_effective_review_template_validation_publication_and_replay(workflow, headers):
     database = workflow[0]
     event_id = import_one(workflow)
-    with TestClient(create_app(database)) as client:
+    published = []
+
+    def schedule():
+        with read_database(database) as conn:
+            published.append(conn.execute("SELECT count(*) FROM review_audit WHERE decision='approve'").fetchone()[0])
+
+    with TestClient(create_app(database, on_review=schedule)) as client:
         path = effective_path(client)
         response = client.get(path, headers=headers)
         assert response.status_code == 200
@@ -95,6 +101,7 @@ def test_effective_review_template_validation_publication_and_replay(workflow, h
         public = client.get('/api/law-changes/' + change['id']).json()
         assert public['effectiveOn'] == '2026-11-05'
         assert public['comparable'] is True
+    assert published == [1]
     with read_database(database) as conn:
         [record] = conn.execute("SELECT reviewer FROM review_audit WHERE decision='approve'").fetchall()
         assert record['reviewer'] == 'admin'
@@ -217,3 +224,46 @@ def test_cloudflare_requests_cannot_reach_admin_routes(workflow, headers):
         assert client.get(FAILURES, headers=external).status_code == 404
         assert client.get('/api/law-holds', headers=external).json()['total'] == 3
         assert client.get(FAILURES, headers=headers).json()['items'] == []
+
+
+def test_manage_withdrawal_schedules_publish_only_after_commit(workflow, monkeypatch, tmp_path):
+    from law_calendar import manage
+    from law_calendar.review import review
+
+    database = workflow[0]
+    event_id = import_one(workflow)
+    approved = approval(database, event_id)
+    review(database, approved, reviewer='fixture')
+    manifest = tmp_path / 'withdraw.json'
+    manifest.write_text(
+        json.dumps(
+            {
+                'event_id': event_id,
+                'snapshot_id': approved['snapshot_id'],
+                'decision': 'withdraw',
+                'note': 'fixture',
+            }
+        )
+    )
+    seen = []
+
+    def schedule(target):
+        with read_database(target) as conn:
+            state = conn.execute('SELECT review_state FROM change_events WHERE id=?', (event_id,)).fetchone()[0]
+        seen.append(state)
+
+    monkeypatch.setattr(manage, 'schedule_publish', schedule)
+    monkeypatch.setattr(
+        'sys.argv',
+        [
+            'manage',
+            '--database',
+            str(database),
+            'review',
+            str(manifest),
+            '--reviewer',
+            'fixture',
+        ],
+    )
+    manage.main()
+    assert seen == ['withdrawn']

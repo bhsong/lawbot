@@ -1,4 +1,6 @@
 import json
+import os
+import shutil
 import subprocess
 import sys
 from dataclasses import replace
@@ -15,6 +17,94 @@ from source_hub.store import KST
 from test_source_hub import registry as registry
 
 STAMP = datetime(2026, 11, 13, 6, 30, tzinfo=KST)
+
+
+def skipped_publish():
+    payload = {'status': 'skipped', 'reason': 'pages_not_configured', 'deploymentId': None, 'files': 20, 'deleted': 0}
+    return subprocess.CompletedProcess(['law-calendar', 'publish'], 0, json.dumps(payload), '')
+
+
+@pytest.fixture(autouse=True)
+def fake_publisher(monkeypatch):
+    command = daily.command
+
+    def dispatch(config, project, *args, **kwargs):
+        if project == 'law-calendar' and args[:2] == ('law-calendar', 'publish'):
+            return skipped_publish()
+        return command(config, project, *args, **kwargs)
+
+    monkeypatch.setattr(daily, 'command', dispatch)
+    return command
+
+
+def test_daily_preserves_collector_environment_but_isolates_publisher(tmp_path, monkeypatch, fake_publisher):
+    for key in (
+        'CLOUDFLARE_ACCOUNT_ID',
+        'CLOUDFLARE_API_TOKEN',
+        'LAWBOT_CALENDAR_ADMIN_TOKEN',
+        'UV_ENV_FILE',
+        'LAW_OC',
+        'LAW_CALENDAR_DB',
+        'LAW_MONITOR_UV',
+        'USER',
+        'PYTHONUNBUFFERED',
+    ):
+        monkeypatch.setenv(key, 'inherited-fixture')
+    monkeypatch.setenv('PATH', '/usr/bin:/usr/sbin')
+    monkeypatch.setenv('TMPDIR', str(tmp_path))
+    cfg = daily.DailyConfig(tmp_path, tmp_path, tmp_path, tmp_path / 'db', tmp_path / 'material', tmp_path / 'feed')
+    children = []
+
+    def run(args, *, env, **kwargs):
+        children.append((args, env))
+        return skipped_publish()
+
+    monkeypatch.setattr(daily, 'run_group', run)
+    fake_publisher(cfg, '', 'law-monitor', 'daily')
+    fake_publisher(cfg, 'erp-updates', 'erp-updates', 'collect')
+    fake_publisher(cfg, 'law-calendar', 'law-calendar', 'publish')
+    assert len(children) == 3
+    assert all('--no-env-file' in args for args, _ in children)
+    inherited = {
+        key: value for key, value in os.environ.items() if key not in {'CLOUDFLARE_ACCOUNT_ID', 'CLOUDFLARE_API_TOKEN'}
+    }
+    inherited.update(LAW_CALENDAR_DB=str(cfg.calendar_db), LAW_MONITOR_UV=cfg.uv)
+    if any(env != inherited for _, env in children[:2]):
+        pytest.fail('Collection child did not receive the filtered parent environment', pytrace=False)
+    assert set(children[2][1]) == {'PATH', 'HOME'}
+
+
+def test_daily_publish_command_reaches_installed_cli_help(tmp_path, monkeypatch, fake_publisher):
+    root = Path(__file__).resolve().parents[3]
+    uv = shutil.which('uv')
+    assert uv is not None
+    cfg = daily.DailyConfig(root, tmp_path, tmp_path, tmp_path / 'db', tmp_path / 'material', tmp_path / 'feed', uv=uv)
+    run_group = daily.run_group
+    completed = []
+
+    def show_help(args, *, env, **kwargs):
+        assert '--no-env-file' in args
+        proc = run_group([*args, '--help'], env=env | {'UV_OFFLINE': '1'}, **kwargs)
+        completed.append(proc)
+        return proc
+
+    monkeypatch.setattr(daily, 'command', fake_publisher)
+    monkeypatch.setattr(daily, 'run_group', show_help)
+    daily._publish_calendar(cfg)
+    [proc] = completed
+    assert proc.returncode == 0, proc.stderr
+    assert 'usage: law-calendar publish' in proc.stdout
+
+
+def test_daily_reports_invalid_pages_credentials_without_rewriting_collection_outcome(registry, tmp_path, monkeypatch):
+    cfg = daily.DailyConfig(tmp_path, tmp_path, tmp_path, tmp_path / 'db', tmp_path / 'material', tmp_path / 'feed')
+    failed = {'status': 'failed', 'error': 'invalid_pages_credentials', 'deploymentId': None, 'files': 0, 'deleted': 0}
+    monkeypatch.setattr(daily, '_run', lambda *_: {'status': 'ok'})
+    monkeypatch.setattr(
+        daily, 'command', lambda *_args, **_kwargs: subprocess.CompletedProcess([], 1, json.dumps(failed))
+    )
+    result = daily.run(registry, cfg, now=lambda: STAMP)
+    assert result == {'status': 'ok', 'calendarPublish': failed}
 
 
 def test_daily_finishes_collection_calendar_articles_summary_and_erp_without_removed_sources(
@@ -69,6 +159,10 @@ def test_daily_finishes_collection_calendar_articles_summary_and_erp_without_rem
         return SimpleNamespace(returncode=0, stdout='ok', stderr='')
 
     def managed_command(config, project, *args, **kwargs):
+        if project == 'law-calendar' and args[:2] == ('law-calendar', 'publish'):
+            calls.append('publish')
+            assert read_snapshot(cfg.public)['status'] == 'ok'
+            return skipped_publish()
         selection = monitor_cli._daily_selection(Path(args[args.index('--source-plan') + 1]))
         assert selection.collectors == ['legalize_law', 'legalize_admrule']
         code = monitor_cli._daily(monitor, None, selection=selection)
@@ -90,7 +184,8 @@ def test_daily_finishes_collection_calendar_articles_summary_and_erp_without_rem
     try:
         result = daily.run(registry, cfg, now=lambda: STAMP)
         assert result['status'] == 'ok'
-        assert calls == ['legalize_law', 'legalize_admrule', 'calendar', 'articles', 'summary', 'erp']
+        assert calls == ['legalize_law', 'legalize_admrule', 'calendar', 'articles', 'summary', 'erp', 'publish']
+        assert result['calendarPublish']['reason'] == 'pages_not_configured'
         assert {entry['sourceId'] for entry in read_snapshot(cfg.public)['sources']} >= {
             'legalize_law',
             'legalize_admrule',
@@ -171,12 +266,30 @@ def test_daily_reuses_one_snapshot_and_exposes_same_public_data(registry, tmp_pa
         materials_db=tmp_path / 'materials.db',
         public=tmp_path / 'daily.json',
     )
+    publish_calls = []
+
+    def fail_publish(config, project, *args, timeout):
+        assert project == 'law-calendar'
+        assert args == (
+            'law-calendar',
+            'publish',
+            '--database',
+            str(config.calendar_db),
+            '--erp-daily-feed',
+            str(config.public),
+        )
+        assert timeout > 0 and read_snapshot(config.public)['snapshotHash']
+        publish_calls.append(config.public)
+        return subprocess.CompletedProcess(args, 1, 'untrusted child output', 'untrusted error')
+
+    monkeypatch.setattr(daily, 'command', fail_publish)
     monkeypatch.setattr(daily, 'run_legacy', legacy)
     monkeypatch.setattr(daily, 'run_erp', local)
     monkeypatch.setattr(daily, 'capture', capture)
     monkeypatch.setattr(daily, 'COLLECTORS', {'moel-rss-lawinfo': agency})
     first = daily.run(registry, cfg, now=lambda: STAMP)
     assert first['status'] == 'partial'
+    assert first['calendarPublish'] == {'status': 'failed', 'error': 'publish_failed'}
     assert [entry[0] for entry in calls] == ['legacy', 'erp', 'agency', 'capture']
     first_bytes = cfg.public.read_bytes()
     saved = read_snapshot(cfg.public)
@@ -188,6 +301,8 @@ def test_daily_reuses_one_snapshot_and_exposes_same_public_data(registry, tmp_pa
     assert sources['legalize_law']['newCount'] == 0
     again = daily.run(registry, cfg, now=lambda: STAMP + timedelta(hours=2))
     assert again['snapshot_hash'] == first['snapshot_hash'] and cfg.public.read_bytes() == first_bytes
+    assert again['calendarPublish'] == first['calendarPublish']
+    assert publish_calls == [cfg.public, cfg.public]
     assert len(calls) == 4
     with TestClient(create_app(cfg.calendar_db, daily_feed=cfg.public)) as client:
         response = client.get('/api/erp-updates')
@@ -305,8 +420,11 @@ def test_collection_resumes_after_failed_capture_without_repeating_completed_sta
         daily.run(registry, cfg, now=lambda: STAMP)
     assert not cfg.public.exists()
     with daily.file_lock(registry.database.with_name(registry.database.name + '.daily') / '.lock'):
-        assert daily.run(registry, cfg, now=lambda: STAMP)['status'] == 'busy'
-    assert daily.run(registry, cfg, now=lambda: STAMP)['snapshot_hash'] == read_snapshot(cfg.public)['snapshotHash']
+        busy = daily.run(registry, cfg, now=lambda: STAMP)
+        assert busy == {'status': 'busy', 'day_kst': STAMP.date().isoformat()}
+    result = daily.run(registry, cfg, now=lambda: STAMP)
+    assert result['snapshot_hash'] == read_snapshot(cfg.public)['snapshotHash']
+    assert result['calendarPublish']['status'] == 'skipped'
     assert calls == ['legacy', 'erp', 'capture', 'capture']
 
 
@@ -373,6 +491,8 @@ def test_offline_capture_bridge_runs_the_independent_exporters(registry, tmp_pat
     monkeypatch.setattr(daily, 'run_legacy', lambda *args: {})
 
     def command(config, project, *args, **kwargs):
+        if project == 'law-calendar' and args[:2] == ('law-calendar', 'publish'):
+            return skipped_publish()
         if project == 'erp-updates':
             args = (str(Path(sys.executable).with_name('erp-updates')), *args[1:])
         else:

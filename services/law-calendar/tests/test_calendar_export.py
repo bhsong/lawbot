@@ -9,7 +9,7 @@ import sys
 import pytest
 from fastapi.testclient import TestClient
 
-from law_calendar import erp_rules, server
+from law_calendar import erp_rules, publish_state, server
 from lawbot_common.erp_daily import replace_file, seal
 from lawbot_common.erp_news import AGENCIES
 from lawbot_common.tax_schedule import NTS_HOST, year_path
@@ -131,7 +131,9 @@ def test_export_matches_public_gets_and_replaces_the_previous_site(inputs):
             **{f'law-changes/effective-{i}.json': api(f'law-changes/effective-{i}') for i in range(2)},
         }
     data = out / 'data'
-    assert {str(p.relative_to(data)): read(p) for p in data.rglob('*.json')} == result
+    exported = {str(p.relative_to(data)): read(p) for p in data.rglob('*.json')}
+    first_build = exported.pop('site-build.json')
+    assert exported == result
     assert len(dates) == 4 and dates[1] == erp_rules.today_kst().isoformat()
     assert {p.name for p in out.iterdir()} == {
         'index.html',
@@ -149,6 +151,7 @@ def test_export_matches_public_gets_and_replaces_the_previous_site(inputs):
         conn.execute("UPDATE change_events SET review_state='withdrawn' WHERE id='effective'")
     second = run_export(inputs)
     assert second.returncode == 0, second.stderr
+    assert read(data / 'site-build.json') != first_build
     assert not (data / 'law-changes').exists()
     assert all('effective-0' not in path.read_text(encoding='utf-8') for path in data.rglob('*.json'))
     assert read(data / 'erp-news/lawgo.json')['items'] == []
@@ -328,7 +331,8 @@ def test_export_waits_for_the_output_lock_before_taking_a_new_database_snapshot(
     from law_calendar import export
 
     db, _, _, _, out = inputs
-    lock = out.with_name(f'.{out.name}.lock')
+    lock = publish_state.output_lock_path()
+    lock.touch(mode=0o600)
     install_site = export.install_site
     with lock.open('wb') as held:
         fcntl.flock(held, fcntl.LOCK_EX)
@@ -343,7 +347,7 @@ def test_export_waits_for_the_output_lock_before_taking_a_new_database_snapshot(
                 fcntl.flock(competitor, fcntl.LOCK_EX | fcntl.LOCK_NB)
             install_site(site, destination)
 
-        monkeypatch.setattr(export.time, 'sleep', finish_previous_export)
+        monkeypatch.setattr(publish_state.time, 'sleep', finish_previous_export)
         monkeypatch.setattr(export, 'install_site', install_while_locked)
         export.main(export_args(inputs)[1:])
     assert not (out / 'data/law-changes').exists()
@@ -354,7 +358,8 @@ def test_busy_output_times_out_without_opening_inputs(inputs, monkeypatch, capsy
     from law_calendar import export
 
     out = inputs[-1]
-    lock = out.with_name(f'.{out.name}.lock')
+    lock = publish_state.output_lock_path()
+    lock.touch(mode=0o600)
     monkeypatch.setattr(export, 'LOCK_TIMEOUT', 0)
     args = export_args(inputs)[1:]
     args[1] = str(out.parent / 'nonexistent.db')

@@ -33,6 +33,8 @@ data/db/
 # 법령 변경 수집기 실행 데이터 (저장소 클론·상태 DB·이벤트, services/monitor/README.md)
 services/monitor/data/
 services/law-calendar/data/
+/services/law-calendar/.pages-publish/
+/services/law-calendar/pages.env
 services/erp-updates/data/
 services/source-hub/data/
 

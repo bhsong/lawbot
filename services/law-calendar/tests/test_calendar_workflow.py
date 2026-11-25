@@ -9,6 +9,8 @@ from concurrent.futures import ThreadPoolExecutor
 import pytest
 from fastapi.testclient import TestClient
 
+from calendar_publish_fixtures import offline_calendar as offline_calendar
+from calendar_publish_fixtures import review_environment
 from law_calendar.db import CURRENT_VERSION, migrate
 from law_calendar.ingest import import_files
 from law_calendar.review import inspect_event, review
@@ -263,7 +265,9 @@ def test_cli_import_show_review_and_reject(workflow, tmp_path):
     base = [sys.executable, '-m', 'law_calendar.manage', '--database', str(db)]
 
     def run(*args):
-        return subprocess.run([*base, *args], capture_output=True, text=True, check=True).stdout
+        return subprocess.run(
+            [*base, *args], env=review_environment(), capture_output=True, text=True, check=True, timeout=15
+        ).stdout
 
     assert json.loads(run('import', '--monitor-home', str(home), str(path)))['imported'] == 1
     event_id = json.loads(run('list'))[0]['id']

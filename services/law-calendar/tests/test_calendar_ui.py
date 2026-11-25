@@ -9,6 +9,8 @@ import pytest
 from playwright.sync_api import expect
 
 import calendar_ui_support as support
+from calendar_publish_fixtures import offline_calendar as offline_calendar
+from calendar_publish_fixtures import review_environment
 from law_calendar.db import migrate
 from lawbot_common.erp_daily import replace_file, seal
 from lawbot_common.tax_schedule import NTS_HOST, year_path
@@ -274,6 +276,8 @@ def test_review_cli_controls_public_browser_visibility(workflow, tmp_path, calen
                     'test-reviewer',
                 ],
                 check=True,
+                env=review_environment(),
+                timeout=15,
                 capture_output=True,
                 text=True,
             )

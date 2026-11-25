@@ -128,6 +128,7 @@ def test_daily_news_retains_selected_boards_order_and_latest_ten(tmp_path, monke
     )
     monkeypatch.setattr(daily, 'run_erp', lambda *args, **kwargs: {'outcome': 'ok', 'new_count': 0})
     monkeypatch.setattr(daily, 'capture', capture)
+    monkeypatch.setattr(daily, '_publish_calendar', lambda config: {'status': 'skipped'})
     assert daily.run(registry, cfg, now=lambda: STAMP)['status'] == 'ok'
     snapshot = daily.read_snapshot(cfg.public)
     for agency, boards in BOARDS.items():

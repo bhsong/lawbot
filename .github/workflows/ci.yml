@@ -32,7 +32,9 @@ jobs:
         run: uv run python -m compileall -q services packages tools
 
       - name: 독립 캘린더 API 설치
-        run: uv pip install --no-deps -e services/law-calendar
+        run: |
+          uv pip install --no-deps -e services/law-calendar
+          uv sync --locked --project services/law-calendar
 
       - name: 독립 캘린더 API 타입 검사
         run: uv run pyright services/law-calendar/src && uv run python -m law_calendar.schema --check

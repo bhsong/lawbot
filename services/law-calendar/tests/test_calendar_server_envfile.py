@@ -1,12 +1,15 @@
 """Exercise calendar CLI environment loading before protected routes are built."""
 
+import logging
+import os
 import secrets
 import sys
 
 import pytest
 from fastapi.testclient import TestClient
 
-from law_calendar import server
+from calendar_publish_fixtures import offline_calendar as offline_calendar
+from law_calendar import server, settings
 from test_calendar_workflow import approval, import_one
 from test_calendar_workflow import workflow as workflow
 
@@ -18,8 +21,7 @@ def test_calendar_main_loads_service_env_for_review(workflow, tmp_path, monkeypa
     database = workflow[0]
     decision = approval(database, import_one(workflow))
     service = tmp_path / 'calendar-service'
-    module = service / 'src' / 'law_calendar' / 'server.py'
-    module.parent.mkdir(parents=True)
+    service.mkdir()
     envfile = service / '.env'
     file_token = secrets.token_hex(32)
     token = secrets.token_hex(32) if shell_token else file_token
@@ -30,12 +32,13 @@ def test_calendar_main_loads_service_env_for_review(workflow, tmp_path, monkeypa
     monkeypatch.setenv(TOKEN_VAR, token)
     if not shell_token:
         monkeypatch.delenv(TOKEN_VAR)
-    monkeypatch.setattr(server, '__file__', str(module))
+    monkeypatch.setattr(settings, 'SERVICE', service)
     monkeypatch.setattr(sys, 'argv', ['law-calendar', '--database', str(database), '--port', '8000'])
     monkeypatch.chdir(tmp_path)
 
     def run(app, **_):
         with TestClient(app) as client:
+            assert client.get('/').status_code == 404
             hold = client.get('/api/law-holds').json()['items'][0]
             path = f'/api/admin/law-holds/effective/{hold["id"]}'
             changes = [change for change in decision['changes'] if change['id'] == hold['id']]
@@ -55,3 +58,23 @@ def test_calendar_main_loads_service_env_for_review(workflow, tmp_path, monkeypa
         assert 'chmod 600' not in captured
     else:
         assert TOKEN_VAR in captured and 'chmod 600' in captured
+
+
+def test_server_rejects_removed_frontend_option(tmp_path, monkeypatch, capsys):
+    monkeypatch.setattr(settings, 'SERVICE', tmp_path)
+    monkeypatch.setattr(sys, 'argv', ['law-calendar', '--port', '0', '--frontend', str(tmp_path)])
+    with pytest.raises(SystemExit) as error:
+        server.main()
+    assert error.value.code == 2
+    assert 'unrecognized arguments: --frontend' in capsys.readouterr().err
+
+
+def test_server_never_loads_legacy_pages_values_into_environment(tmp_path, monkeypatch):
+    monkeypatch.setattr(settings, 'SERVICE', tmp_path)
+    monkeypatch.delenv('LAWBOT_ENV_FILE')
+    for key in settings.PAGES_KEYS:
+        monkeypatch.setenv(key, 'inherited-fixture')
+    (tmp_path / '.env').write_text(f'{settings.ACCOUNT_KEY}=file-fixture\n{settings.TOKEN_KEY}=file-fixture\n')
+    with pytest.raises(ValueError, match=settings.ACCOUNT_KEY):
+        settings.load_environment(logging.getLogger('calendar-test'))
+    assert all(key not in os.environ for key in settings.PAGES_KEYS)

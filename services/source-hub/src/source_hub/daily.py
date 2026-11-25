@@ -14,9 +14,11 @@ from pathlib import Path
 from tempfile import NamedTemporaryFile
 from uuid import uuid4
 
+from lawbot_common.calendar_publish import PUBLISH_CALLER_TIMEOUT, read_report
 from lawbot_common.erp_daily import read_snapshot, replace_file, seal, snapshot_hash
 from lawbot_common.erp_news import official_url
 from lawbot_common.erp_rules import RuleSnapshot
+from lawbot_common.process import TOOL_PATH, child_environment, run_group
 from source_hub import materials, moel, mofe, news, nts
 from source_hub.collector import file_lock, interval_due
 from source_hub.store import KST, Registry
@@ -28,6 +30,7 @@ COLLECTORS = (
 )
 LEGACY = ('legalize_law', 'legalize_admrule')
 GOOD = {'ok', 'disabled', 'unverified', 'not_due'}
+PAGES_CREDENTIALS = ('CLOUDFLARE_ACCOUNT_ID', 'CLOUDFLARE_API_TOKEN')
 
 
 @dataclass(frozen=True)
@@ -65,18 +68,37 @@ def daily_lock(database: Path) -> Path:
 
 
 def command(config: DailyConfig, project: str, *args: str, timeout: int = 360) -> subprocess.CompletedProcess[str]:
-    uv = [config.uv, 'run', '--frozen', '--no-sync']
+    uv = [config.uv, 'run', '--frozen', '--no-sync', '--no-env-file']
     if project:
         uv.extend(('--project', str(config.root / 'services' / project)))
-    return subprocess.run(
-        [*uv, *args],
-        cwd=config.root,
-        text=True,
-        capture_output=True,
-        timeout=timeout,
-        check=False,
-        env=os.environ | {'LAW_CALENDAR_DB': str(config.calendar_db), 'LAW_MONITOR_UV': config.uv},
-    )
+    if project == 'law-calendar' and args[:2] == ('law-calendar', 'publish'):
+        env = child_environment(path=TOOL_PATH)
+    else:
+        env = {key: value for key, value in os.environ.items() if key not in PAGES_CREDENTIALS}
+        env.update(LAW_CALENDAR_DB=str(config.calendar_db), LAW_MONITOR_UV=config.uv)
+    return run_group([*uv, *args], cwd=config.root, env=env, timeout=timeout)
+
+
+def _publish_calendar(config: DailyConfig) -> dict:
+    """Keep the subprocess outcome separate from the sealed collection snapshot."""
+    failed = {'status': 'failed', 'error': 'publish_failed'}
+    try:
+        proc = command(
+            config,
+            'law-calendar',
+            'law-calendar',
+            'publish',
+            '--database',
+            str(config.calendar_db),
+            '--erp-daily-feed',
+            str(config.public),
+            timeout=PUBLISH_CALLER_TIMEOUT,
+        )
+    except subprocess.TimeoutExpired:
+        return {'status': 'failed', 'error': 'publish_timeout'}
+    except OSError, UnicodeError:
+        return failed
+    return read_report(proc)
 
 
 def legacy_rows(database: Path, run_id: str) -> tuple[dict, str | None, str | None]:
@@ -478,10 +500,15 @@ def run(
     now: Callable[[], datetime] = lambda: datetime.now(KST),
     republish: bool = False,
 ) -> dict:
+    for key in PAGES_CREDENTIALS:
+        os.environ.pop(key, None)
     try:
-        return _run(registry, config, now, republish)
+        result = _run(registry, config, now, republish)
     except Busy:
         return {'status': 'busy', 'day_kst': now().astimezone(KST).date().isoformat()}
+    if result['status'] != 'busy':
+        result['calendarPublish'] = _publish_calendar(config)
+    return result
 
 
 def _run(registry: Registry, config: DailyConfig, now: Callable[[], datetime], republish: bool) -> dict:
