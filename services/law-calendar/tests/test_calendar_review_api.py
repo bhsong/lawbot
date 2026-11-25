@@ -226,7 +226,7 @@ def test_cloudflare_requests_cannot_reach_admin_routes(workflow, headers):
         assert client.get(FAILURES, headers=headers).json()['items'] == []
 
 
-def test_manage_withdrawal_schedules_a_purge_only_after_commit(workflow, monkeypatch, tmp_path):
+def test_manage_withdrawal_schedules_publish_only_after_commit(workflow, monkeypatch, tmp_path):
     from law_calendar import manage
     from law_calendar.review import review
 
@@ -247,10 +247,10 @@ def test_manage_withdrawal_schedules_a_purge_only_after_commit(workflow, monkeyp
     )
     seen = []
 
-    def schedule(target, *, purge):
+    def schedule(target):
         with read_database(target) as conn:
             state = conn.execute('SELECT review_state FROM change_events WHERE id=?', (event_id,)).fetchone()[0]
-        seen.append((state, purge))
+        seen.append(state)
 
     monkeypatch.setattr(manage, 'schedule_publish', schedule)
     monkeypatch.setattr(
@@ -266,4 +266,4 @@ def test_manage_withdrawal_schedules_a_purge_only_after_commit(workflow, monkeyp
         ],
     )
     manage.main()
-    assert seen == [('withdrawn', True)]
+    assert seen == ['withdrawn']

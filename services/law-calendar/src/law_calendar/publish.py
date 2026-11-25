@@ -22,14 +22,7 @@ import httpx
 
 from law_calendar import settings
 from law_calendar.export import BUILD_MARKER, FORBIDDEN, exported_site, snapshot_app
-from law_calendar.publish_state import (
-    checked_file,
-    clear_withdrawals,
-    mark_withdrawal,
-    pending_withdrawals,
-    private_directory,
-    trusted_directory,
-)
+from law_calendar.publish_state import checked_file, private_directory, trusted_directory
 from lawbot_common import envfile
 from lawbot_common.calendar_publish import DEPLOYMENT_ID, PUBLISH_DEADLINE
 from lawbot_common.process import SYSTEM_PATH, signal_group
@@ -384,9 +377,7 @@ async def deployments(client: httpx.AsyncClient, url: str, headers: dict[str, st
         page += 1
 
 
-async def prune(
-    client: httpx.AsyncClient, pages: PagesSettings, identifier: str, result: PublishResult, *, purge: bool
-) -> None:
+async def prune(client: httpx.AsyncClient, pages: PagesSettings, identifier: str, result: PublishResult) -> None:
     url = pages.url + '/deployments'
     headers = pages.headers
     try:
@@ -398,25 +389,14 @@ async def prune(
             others = [item for item in history.values() if item.id != current.id]
             if any(item.production and item.created >= current.created for item in others):
                 raise PublishError('production_mismatch')
-            candidates = []
-            if not purge:
-                candidates = sorted(
-                    (item for item in others if item.production and item.successful), key=lambda item: item.created
-                )
-                if len(candidates) > 1 and candidates[-1].created == candidates[-2].created:
-                    raise PublishError('cleanup_failed')
-            keep = {current.id}
-            if candidates:
-                keep.add(candidates[-1].id)
             for item in others:
-                if item.id in keep:
-                    continue
                 await check_canonical(client, pages, identifier)
                 params = {'force': 'true'} if not item.production and item.aliased else None
                 await api_request(client, 'DELETE', f'{url}/{item.id}', headers=headers, params=params)
                 result.deleted += 1
             remaining = await deployments(client, url, headers)
-            if set(remaining) != keep or any(not item.production or not item.successful for item in remaining.values()):
+            current = remaining.get(identifier)
+            if len(remaining) != 1 or current is None or not current.production or not current.successful:
                 raise PublishError('cleanup_failed')
             await check_canonical(client, pages, identifier)
     except TimeoutError:
@@ -431,7 +411,6 @@ async def deploy(
     deadline: Deadline,
     result: PublishResult,
     *,
-    purge: bool,
     transport: httpx.AsyncBaseTransport | None,
 ) -> None:
     async with httpx.AsyncClient(transport=transport, trust_env=False, timeout=10) as client:
@@ -440,7 +419,7 @@ async def deploy(
         identifier = upload(pages, command, stage, work, deadline)
         result.deployment_id = identifier
         await verify(client, pages.project, expected)
-        await prune(client, pages, identifier, result, purge=purge)
+        await prune(client, pages, identifier, result)
 
 
 def fixed_inputs(config: dict[str, str], args: argparse.Namespace) -> tuple[Path, Path, Path, Path]:
@@ -476,24 +455,12 @@ def publish_site(
         return 'skipped'
     database, feed, dist, out = fixed_inputs(config, args)
     state = private_directory()
-    if project and args.purge_history:
-        mark_withdrawal(state)
     pages = PagesSettings.read(project) if project else None
     command = wrangler_command(config) if pages else None
-    withdrawals: tuple[Path, ...] = ()
 
-    @contextmanager
-    def source():
-        nonlocal withdrawals
-        if pages:
-            withdrawals = pending_withdrawals(state)
-        with snapshot_app(database, feed) as app:
-            yield app
-
-    with exported_site(source(), dist, out, protected=(database, feed), lock_timeout=PUBLISH_LOCK_TIMEOUT) as (
-        site,
-        result.files,
-    ):
+    with exported_site(
+        snapshot_app(database, feed), dist, out, protected=(database, feed), lock_timeout=PUBLISH_LOCK_TIMEOUT
+    ) as (site, result.files):
         if pages is None or command is None:
             return 'skipped'
         with TemporaryDirectory(prefix='build-', dir=state) as directory:
@@ -501,10 +468,7 @@ def publish_site(
             work = Path(directory) / 'work'
             work.mkdir(mode=0o700)
             result.files = stage_site(site, stage)
-            asyncio.run(
-                deploy(pages, command, stage, work, deadline, result, purge=bool(withdrawals), transport=transport)
-            )
-        clear_withdrawals(state, withdrawals)
+            asyncio.run(deploy(pages, command, stage, work, deadline, result, transport=transport))
     return 'ok'
 
 
@@ -514,7 +478,6 @@ def main(argv: list[str], *, transport: httpx.AsyncBaseTransport | None = None) 
     parser.add_argument('--erp-daily-feed', type=Path, help='Assert the configured ERP snapshot path')
     parser.add_argument('--frontend-dist', type=Path, help='Assert the configured frontend build path')
     parser.add_argument('--out', type=Path, help='Assert the configured site path')
-    parser.add_argument('--purge-history', action='store_true')
     result = PublishResult()
     # HTTPX's request logs include URLs, and the Pages API path contains the account ID.
     for name in ('httpx', 'httpcore'):

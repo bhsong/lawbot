@@ -2,17 +2,13 @@
 
 import fcntl
 import os
-import re
 import stat
 import time
 from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
-from uuid import uuid4
 
 from law_calendar import settings
-
-WITHDRAWAL = re.compile(r'withdraw-[0-9a-f]{32}')
 
 
 class LockTimeout(TimeoutError):
@@ -78,34 +74,3 @@ def locked_file(path: Path, timeout: float) -> Iterator[int]:
 
 def output_lock_path() -> Path:
     return private_directory() / 'export.lock'
-
-
-def _sync_directory(state: Path) -> None:
-    fd = os.open(state, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
-    try:
-        os.fsync(fd)
-    finally:
-        os.close(fd)
-
-
-def mark_withdrawal(state: Path) -> None:
-    # An independent generation survives a busy queue and cannot be cleared by an older export.
-    with checked_file(state / f'withdraw-{uuid4().hex}', os.O_CREAT | os.O_EXCL | os.O_WRONLY) as fd:
-        os.fsync(fd)
-    _sync_directory(state)
-
-
-def pending_withdrawals(state: Path) -> tuple[Path, ...]:
-    pending = tuple(path for path in state.iterdir() if WITHDRAWAL.fullmatch(path.name))
-    for path in pending:
-        with checked_file(path, os.O_RDONLY):
-            pass
-    return pending
-
-
-def clear_withdrawals(state: Path, pending: tuple[Path, ...]) -> None:
-    for path in pending:
-        with checked_file(path, os.O_RDONLY):
-            path.unlink()
-    if pending:
-        _sync_directory(state)

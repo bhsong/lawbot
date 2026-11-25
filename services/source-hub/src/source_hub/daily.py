@@ -71,7 +71,7 @@ def command(config: DailyConfig, project: str, *args: str, timeout: int = 360) -
     uv = [config.uv, 'run', '--frozen', '--no-sync', '--no-env-file']
     if project:
         uv.extend(('--project', str(config.root / 'services' / project)))
-    if project == 'law-calendar' and args[:1] == ('publish',):
+    if project == 'law-calendar' and args[:2] == ('law-calendar', 'publish'):
         env = child_environment(path=TOOL_PATH)
     else:
         env = {key: value for key, value in os.environ.items() if key not in PAGES_CREDENTIALS}
@@ -85,6 +85,7 @@ def _publish_calendar(config: DailyConfig) -> dict:
     try:
         proc = command(
             config,
+            'law-calendar',
             'law-calendar',
             'publish',
             '--database',

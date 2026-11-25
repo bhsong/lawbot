@@ -3,17 +3,19 @@
 import fcntl
 import json
 import os
+import shlex
 import subprocess
 import sys
 import time
 from pathlib import Path
+from tempfile import TemporaryDirectory
 from uuid import UUID
 
 import httpx
 import pytest
 
 from calendar_publish_fixtures import offline_calendar as offline_calendar
-from law_calendar import publish, publish_state, server, settings
+from law_calendar import publish, server, settings
 from law_calendar.export import BUILD_MARKER
 from lawbot_common.process import child_environment, run_group
 from test_calendar_api import dataset as dataset
@@ -28,14 +30,15 @@ CURRENT, PRIOR, FAILED, OLDER, PREVIEW = (str(UUID(int=n)) for n in range(1, 6))
 
 
 @pytest.fixture
-def service(tmp_path, monkeypatch):
-    directory = tmp_path / 'calendar-service'
-    directory.mkdir()
-    monkeypatch.setattr(settings, 'SERVICE', directory)
-    return directory
+def service(monkeypatch):
+    # CI's system temp directory can have a world-writable ancestor.
+    with TemporaryDirectory(prefix='law-calendar-test-', dir=Path.home().resolve()) as directory:
+        path = Path(directory)
+        monkeypatch.setattr(settings, 'SERVICE', path)
+        yield path
 
 
-def config(service, inputs, *, project=PROJECT, node=sys.executable):
+def config(service, inputs, *, project=PROJECT, node=''):
     database, dist, feed, _, out = inputs
     (service / '.env').write_text(
         f'LAW_CALENDAR_DB={database}\nLAWBOT_CALENDAR_ERP_DAILY_FEED={feed}\n'
@@ -113,7 +116,10 @@ def test_publisher_refuses_invalid_credentials_without_contacting_pages(inputs, 
 
 
 def fake_wrangler(inputs, service, *, fail=False, before_receipt=''):
-    config(service, inputs)
+    node = service / 'node'
+    node.write_text(f'#!/bin/sh\nexec {shlex.quote(sys.executable)} "$@"\n')
+    node.chmod(0o700)
+    config(service, inputs, node=node)
     credentials(service)
     wrangler = service / 'frontend/node_modules/wrangler/bin/wrangler.js'
     wrangler.parent.mkdir(parents=True, exist_ok=True)
@@ -139,7 +145,7 @@ assert os.environ['WRANGLER_SEND_METRICS'] == 'false'
 assert os.environ['WRANGLER_WRITE_LOGS'] == 'false'
 assert os.environ['WRANGLER_CACHE_DIR'] == str(work / 'cache')
 assert os.environ['HOME'] == str(work)
-assert os.environ['PATH'] == {str(Path(sys.executable).resolve().parent) + ':/usr/bin:/bin'!r}
+assert os.environ['PATH'] == {str(node.parent) + ':/usr/bin:/bin'!r}
 assert 'LAWBOT_CALENDAR_ADMIN_TOKEN' not in os.environ and 'NODE_OPTIONS' not in os.environ
 assert os.environ['CLOUDFLARE_API_TOKEN'] == {TOKEN!r}
 assert os.environ['CLOUDFLARE_ACCOUNT_ID'] == {ACCOUNT!r}
@@ -216,8 +222,7 @@ class Pages:
         return {path.rsplit('/', 1)[1]: params for method, path, params in self.calls if method == 'DELETE'}
 
 
-@pytest.mark.parametrize('purge', [False, True])
-def test_publish_verifies_production_and_prunes_every_history_page(inputs, service, monkeypatch, capsys, purge):
+def test_publish_verifies_production_and_leaves_only_current(inputs, service, monkeypatch, capsys):
     fake_wrangler(inputs, service)
     monkeypatch.setenv('CLOUDFLARE_API_TOKEN', 'old-value')
     monkeypatch.setenv('LAWBOT_CALENDAR_ADMIN_TOKEN', 'admin-fixture')
@@ -226,21 +231,21 @@ def test_publish_verifies_production_and_prunes_every_history_page(inputs, servi
     out = inputs[-1]
     pages = Pages(out)
 
-    assert publish.main(['--purge-history'] if purge else [], transport=pages.transport) == 0
+    assert publish.main([], transport=pages.transport) == 0
     captured = capsys.readouterr()
     assert json.loads(captured.out) == {
         'status': 'ok',
         'deploymentId': CURRENT,
-        'deleted': 3 + purge,
+        'deleted': 4,
         'files': sum(p.is_file() and not p.name.startswith('.') for p in out.rglob('*')),
     }
     assert not captured.err and TOKEN not in captured.out and ACCOUNT not in captured.out
     assert [call[:2] for call in pages.calls[:2]] == [('GET', pages.project_path), ('GET', '/' + BUILD_MARKER)]
-    assert pages.deletes == {OLDER: {}, PREVIEW: {'force': 'true'}, FAILED: {}} | ({PRIOR: {}} if purge else {})
+    assert pages.deletes == {OLDER: {}, PREVIEW: {'force': 'true'}, FAILED: {}, PRIOR: {}}
+    assert [row['id'] for row in pages.history] == [CURRENT]
     for index, (method, _, _) in enumerate(pages.calls):
         if method == 'DELETE':
             assert pages.calls[index - 1] == ('GET', pages.project_path, {})
-    assert not publish_state.pending_withdrawals(service / '.pages-publish')
 
 
 @pytest.mark.parametrize('key,value', [('name', 'other'), ('production_branch', 'preview')])
@@ -270,14 +275,13 @@ def test_publish_failure_never_deletes_or_reports_sensitive_values(inputs, servi
     pages.serve_stale = failure == 'verify_failed'
     if failure == 'production_mismatch':
         pages.metadata['canonical_deployment'] = {'id': PRIOR}
-    assert publish.main(['--purge-history'], transport=pages.transport) == 1
+    assert publish.main([], transport=pages.transport) == 1
     captured = capsys.readouterr()
     result = json.loads(captured.out)
     assert result['status'] == 'failed' and result['error'] == failure and result['deleted'] == 0
     assert result['deploymentId'] == (None if failure == 'upload_failed' else CURRENT)
     assert not pages.deletes and not captured.err
     assert all(value not in captured.out for value in (ACCOUNT, TOKEN, 'https://'))
-    assert len(publish_state.pending_withdrawals(service / '.pages-publish')) == 1
 
 
 @pytest.mark.parametrize('bad', ['page', 'total-change', 'missing-total', 'stage', 'alias', 'row', 'duplicate'])
@@ -320,38 +324,26 @@ def test_external_rollback_stops_the_next_delete(inputs, service, capsys):
             pages.metadata['canonical_deployment'] = {'id': PRIOR}
         return response
 
-    assert publish.main(['--purge-history'], transport=httpx.MockTransport(rollback_after_delete)) == 1
+    assert publish.main([], transport=httpx.MockTransport(rollback_after_delete)) == 1
     result = json.loads(capsys.readouterr().out)
     assert result['error'] == 'production_mismatch' and result['deleted'] == 1
     assert PRIOR not in pages.deletes
-    assert len(publish_state.pending_withdrawals(service / '.pages-publish')) == 1
 
 
-def test_failed_purge_stays_pending_for_an_ordinary_publish(inputs, service, capsys):
+def test_failed_cleanup_is_retried_on_the_next_publish(inputs, service, capsys):
     fake_wrangler(inputs, service)
     out = inputs[-1]
     pages = Pages(out)
     pages.delete_works = False
-    state = service / '.pages-publish'
-    assert publish.main(['--purge-history'], transport=pages.transport) == 1
+    assert publish.main([], transport=pages.transport) == 1
     assert json.loads(capsys.readouterr().out)['error'] == 'cleanup_failed'
-    [old_request] = publish_state.pending_withdrawals(state)
     old_build = (out / BUILD_MARKER).read_bytes()
     pages.delete_works = True
 
-    # A review committed after this export must not be cleared by this publication.
-    def new_withdrawal(request):
-        if request.method == 'DELETE' and request.url.path.endswith(PRIOR):
-            publish_state.mark_withdrawal(state)
-        return pages.handle(request)
-
-    assert publish.main([], transport=httpx.MockTransport(new_withdrawal)) == 0
+    assert publish.main([], transport=pages.transport) == 0
     assert json.loads(capsys.readouterr().out)['deleted'] == 4
     assert [row['id'] for row in pages.history] == [CURRENT]
-    [new_request] = publish_state.pending_withdrawals(state)
-    assert new_request != old_request and (out / BUILD_MARKER).read_bytes() != old_build
-    assert publish.main([], transport=pages.transport) == 0
-    assert not publish_state.pending_withdrawals(state)
+    assert (out / BUILD_MARKER).read_bytes() != old_build
 
 
 @pytest.mark.parametrize('caller_timeout', [False, True])

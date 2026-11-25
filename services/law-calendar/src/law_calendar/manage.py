@@ -63,7 +63,7 @@ def main():
                 if args.apply:
                     withdraw_superseded_changes(conn, result)
             if args.apply and result:
-                schedule_publish(args.database, purge=True)
+                schedule_publish(args.database)
         elif args.command == 'holds-check':
             with read_database(args.database) as conn:
                 result = count_hidden_holds(conn)
@@ -75,7 +75,7 @@ def main():
         else:
             payload = json.loads(args.manifest.read_text(encoding='utf-8'))
             review(args.database, payload, reviewer=args.reviewer)
-            schedule_publish(args.database, purge=payload['decision'] != 'approve')
+            schedule_publish(args.database)
             result = {'decision': 'recorded'}
     except (OSError, ValueError, sqlite3.Error) as exc:
         parser.exit(1, f'{type(exc).__name__}: {exc}\n')

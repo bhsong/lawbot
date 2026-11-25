@@ -10,7 +10,7 @@ from threading import Thread
 from time import sleep
 
 from law_calendar import settings
-from law_calendar.publish_state import LockTimeout, checked_file, locked_file, mark_withdrawal, private_directory
+from law_calendar.publish_state import LockTimeout, checked_file, locked_file, private_directory
 from lawbot_common.calendar_publish import PUBLISH_CALLER_TIMEOUT, read_report
 from lawbot_common.process import child_environment, run_group
 
@@ -35,7 +35,7 @@ def _start_worker(runner: int, log: int) -> None:
     Thread(target=process.wait, daemon=True).start()
 
 
-def schedule(database: Path, *, purge: bool = False) -> None:
+def schedule(database: Path) -> None:
     """Request a publish after a commit to the configured database only."""
     if os.environ.get('LAWBOT_ENV_FILE') == '':
         return
@@ -54,8 +54,6 @@ def schedule(database: Path, *, purge: bool = False) -> None:
         return
     try:
         state = private_directory()
-        if purge:
-            mark_withdrawal(state)
         with locked_file(state / 'pending', QUEUE_TIMEOUT) as pending:
             os.pwrite(pending, b'1', 0)
             with checked_file(state / 'worker.lock', os.O_CREAT | os.O_RDWR) as runner:

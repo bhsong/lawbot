@@ -4,6 +4,8 @@
 
 합성 DB·일일 스냅숏, 가짜 Wrangler, httpx MockTransport로 게시를 검증했다. 운영 트리·DB·환경 파일은 열지 않았고, 실제 Pages 업로드·삭제, 실제 모델 E2E, 모델 스모크, 품질 평가는 실행하지 않았다. Wrangler `4.160.0`은 npm 배포일이 11월 10일임을 확인해 정확한 버전으로 고정했다.
 
+이전 실행 기록은 당시 정책을 설명한다. 현재 정책과 마지막 검증은 [PR #200 CI·Codex 리뷰 반영](#pr-200-ci와-codex-리뷰-반영)을 따른다.
+
 | 명령 | 결과 |
 | --- | --- |
 | `uv run --offline --no-sync pytest -q` | 2,938개 통과, 기본 설정 제외 10개. 단위·계약·통합·대역 E2E 포함 |
@@ -66,3 +68,29 @@
 | `uv run --offline --frozen --no-sync --project services/law-calendar law-calendar publish --help` | 경로 일치 검사 옵션과 철회 옵션 확인 |
 
 운영 파일·데이터와 실제 환경 파일 접근 없음. 실제 Cloudflare·Wrangler 호출, 실제 모델 E2E·모델 스모크·품질 평가: 실행 안 함.
+
+## PR #200 CI와 Codex 리뷰 반영
+
+- CI 실행 `45534834079`: macOS 러너에서 18개 실패, 2,950개 통과, 10개 제외. 실패는 게시 이력 정리 2건, 대상 사전 검사 2건, 무삭제 확인 3건, 배포 목록 검증 7건, 외부 롤백 중단 1건, 정리 실패 후 재실행 1건, 기한·자손 프로세스 종료 2건이었다.
+- 게시 대역은 신뢰 경로의 임시 가짜 Node와 가짜 Wrangler를 사용한다. 운영의 파일·조상 디렉터리 소유권·쓰기 권한 검사는 그대로다.
+- Red: daily의 실제 `uv` 실행은 `Failed to spawn: publish`로 끝났다. 기본 게시와 정리 재실행은 이전 운영 배포 하나를 남겨 실패했다. 관리자 워커의 기존 명령은 도움말까지 도달했다.
+- daily는 `law-calendar publish`를 서비스 전용 프로젝트에서 실행한다. 게시 자식만 환경 허용 목록을 적용한다. CI는 테스트 환경과 별개로 독립 CLI 실행 환경을 설치한다.
+- 성공한 게시에는 운영 배포 하나만 남는다. 운영 빌드나 배포 ID 확인에 실패하면 아무것도 지우지 않는다. 정리 자체가 실패하면 게시 실패로 보고하고 다음 게시에서 잔여 이력을 정리한다. 철회 여부에 따른 분기와 상태를 제거했다. 내용 복구는 [캘린더 DB에서 다시 게시](../operations.md#법령-캘린더-정적-사이트-게시)한다.
+- 첫 전체 실행에서 스냅숏 재사용 테스트의 대역이 예전 인자열을 기대해 1건 실패했다. 새 명령의 실행 파일과 기존 DB·스냅숏 인자를 함께 요구하도록 대역을 수정했다.
+
+| 명령 | 결과 |
+| --- | --- |
+| `uv run --offline --no-sync --no-env-file pytest -q` | 2,969개 통과, 기본 설정 제외 10개. 단위·계약·통합·대역 E2E 포함. daily와 관리자 워커 양쪽에서 실제 게시 도움말까지 도달 |
+| `uv run --offline --no-sync --no-env-file pytest -c pyproject.toml -q services/law-calendar/tests` | 282개 통과 |
+| `uv run --offline --no-sync --no-env-file pytest -q services/law-calendar/tests/test_calendar_export.py` | 41개 통과 |
+| `uv run --offline --no-sync --no-env-file pytest -c pyproject.toml -q services/law-calendar/tests/test_calendar_ui.py services/law-calendar/tests/test_calendar_erp_ui.py` | 독립 Chromium 22개 통과. 정적 화면의 `/api/` 요청과 CSP 위반 0건 |
+| `env PATH=/usr/bin:/bin <uv 절대 경로> run --offline --no-sync --no-env-file python -m pytest -q services/law-calendar/tests/test_calendar_publish.py` | `node`를 찾을 수 없는 PATH에서 30개 통과 |
+| `uv run --offline --frozen --no-sync --no-env-file --project services/law-calendar law-calendar publish --help` | 종료 코드 0. 경로 일치 검사 옵션 네 개만 표시 |
+| `uv sync --offline --locked --project services/law-calendar`, 같은 환경에서 `sync --check`와 `publish --help` | 빈 임시 가상환경에서 설치 및 검사 통과. 기존 로컬 독립 환경은 추가 패키지 등 잠금 파일과 차이가 있어 변경하지 않았다 |
+| `uv run --offline --no-sync --no-env-file ruff check --output-format=github` 및 `ruff format --check` | 통과. 포맷 검사 623개 파일 |
+| `uv run --offline --no-sync --no-env-file pyright` 및 `pyright services/{law-calendar,erp-updates,source-hub}/src` 각 실행 | 네 범위 모두 오류·경고 0개 |
+| `uv run --offline --no-sync --no-env-file python -m law_calendar.schema --check` 및 `python -m compileall -q services packages tools` | 통과 |
+| `npm run typecheck && npm test && npm run build` (캘린더) | 타입·빌드 통과, 테스트 46개 통과 |
+| `npm run typecheck && npm test && npm run build` (챗봇) | 타입·빌드 통과, 테스트 55개 통과. Vite 설정 로더의 향후 기본값 변경 안내 있음 |
+
+운영 트리·데이터 및 실제 환경 파일 접근 없음. 실제 Cloudflare·Wrangler 호출, 실제 모델 E2E·모델 스모크·품질 평가: 실행 안 함.
