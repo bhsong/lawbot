@@ -41,7 +41,7 @@ export default function LawCalendarPage({ loader = loadCalendarWithTax, initialD
   const [detail, setDetail] = useState<DetailState>(null)
   const [holdsOpen, setHoldsOpen] = useState(false)
   const [layer, setLayer] = useState(currentLayer)
-  const cursor = useRef({ index: navigationIndex(), depth: depth(layer) })
+  const cursor = useRef({ index: navigationIndex(), position: layer?.position, depth: depth(layer) })
   const direction = useRef<-1 | 1>(-1)
   const calendar = useRef<HTMLDivElement>(null)
   const dateClick = useRef<HTMLButtonElement | null>(null)
@@ -92,16 +92,18 @@ export default function LawCalendarPage({ loader = loadCalendarWithTax, initialD
 
   useEffect(() => {
     function onPop() {
-      if (location.hash === '#erp') return
       const next = currentLayer()
       const previous = cursor.current
       const index = navigationIndex()
+      const position = next?.position
       const nextDepth = depth(next)
-      // Without the Navigation API, the app's own entries are ordered by layer depth.
+      cursor.current = { index, position, depth: nextDepth }
+      if (location.hash === '#erp') return
+      // An unpositioned entry cannot establish forward movement without the Navigation API.
       const forward = index !== undefined && previous.index !== undefined
-        ? index > previous.index : nextDepth > previous.depth
+        ? index > previous.index
+        : position !== undefined && previous.position !== undefined && position > previous.position
       direction.current = forward ? 1 : -1
-      cursor.current = { index, depth: nextDepth }
       detailRequest.current?.abort()
       setDetail(value => value === 'error' && nextDepth < previous.depth ? value : null)
       setLayer(next)
@@ -131,8 +133,9 @@ export default function LawCalendarPage({ loader = loadCalendarWithTax, initialD
   function pushLayer(next: CalendarLayer) {
     history.pushState({ ...history.state, lawCalendar: next }, '')
     // A push discards forward entries, so its position is now known even without Navigation.
-    replaceLayer({ ...next, position: history.length - 1 })
-    cursor.current = { index: navigationIndex(), depth: depth(next) }
+    const position = history.length - 1
+    replaceLayer({ ...next, position })
+    cursor.current = { index: navigationIndex(), position, depth: depth(next) }
   }
 
   function resetDetail() {
