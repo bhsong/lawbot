@@ -218,12 +218,15 @@ def mobile_sheet_page(development, calendar_pages, request):
     url, log = development
     page = calendar_pages(viewport={'width': 390, 'height': 844}, has_touch=True, is_mobile=True)
     page.clock.set_fixed_time(datetime.datetime(2026, 11, 5, tzinfo=datetime.UTC))
+    if not getattr(request, 'param', True):
+        page.add_init_script("Object.defineProperty(window, 'navigation', {value: undefined})")
     page.goto(url + '/?fixture=calendar#calendar')
     expect(page.get_by_role('region', name='시행 조문 4건')).to_be_visible()
     yield page
     support.keep_on_failure(request, log, page)
 
 
+@pytest.mark.parametrize('mobile_sheet_page', [True, False], indirect=True, ids=['navigation', 'history'])
 def test_date_sheet_history_matches_the_visible_layers(mobile_sheet_page):
     page = mobile_sheet_page
     url = page.url
@@ -267,6 +270,7 @@ def test_date_sheet_history_matches_the_visible_layers(mobile_sheet_page):
     assert page.url == url
 
 
+@pytest.mark.parametrize('mobile_sheet_page', [True, False], indirect=True, ids=['navigation', 'history'])
 def test_date_sheet_forward_from_erp_without_a_new_date_tap(mobile_sheet_page):
     page = mobile_sheet_page
     page.get_by_role('button', name='2026년 11월 5일, 시행 4건').tap()
@@ -304,6 +308,38 @@ def test_date_sheet_skips_stale_date_in_both_history_directions(mobile_sheet_pag
     page.go_forward(timeout=3000)
     expect(page).to_have_url(base.split('#')[0] + '#after', timeout=3000)
     expect(page.get_by_role('dialog')).to_have_count(0, timeout=3000)
+
+
+@pytest.mark.parametrize(
+    ('mobile_sheet_page', 'tail_hash'),
+    [(False, 'erp'), (False, 'after')],
+    indirect=['mobile_sheet_page'],
+    ids=['erp', 'plain-hash'],
+)
+def test_date_sheet_back_skips_stale_layers_from_unpositioned_hash(mobile_sheet_page, tail_hash):
+    page = mobile_sheet_page
+    base = page.url
+    page.get_by_role('button', name='2026년 11월 5일, 시행 4건').tap()
+    sheet = page.get_by_role('dialog', name='2026년 11월 5일')
+    sheet.get_by_role('button', name='가상 업무절차법 제1조', exact=False).tap()
+    expect(page.get_by_role('button', name='상세 닫기')).to_be_visible()
+
+    page.evaluate('(hash) => { location.hash = hash }', tail_hash)
+    page.clock.set_fixed_time(datetime.datetime(2026, 11, 6, tzinfo=datetime.UTC))
+    page.reload(timeout=5000)
+    tail = base.split('#')[0] + '#' + tail_hash
+    expect(page).to_have_url(tail, timeout=3000)
+    assert page.evaluate('window.navigation === undefined')
+
+    visited = []
+    page.on('framenavigated', lambda frame: visited.append(frame.url))
+    page.go_back(timeout=3000)
+    # The stale layers share the calendar URL; wait for the original entry itself.
+    page.wait_for_function('(base) => location.href === base && history.state === null', arg=base, timeout=3000)
+    expect(page).to_have_url(base, timeout=3000)
+    expect(page.get_by_role('heading', name='2026년 11월 6일', exact=True)).to_be_visible(timeout=3000)
+    expect(page.get_by_role('dialog')).to_have_count(0, timeout=3000)
+    assert tail not in visited
 
 
 def test_date_sheet_close_inputs_and_inline_detail_back(mobile_sheet_page):
