@@ -14,31 +14,41 @@ import './calendar.css'
 const DISCLAIMER = '이 페이지의 법령 변경 정보와 요약은 참고용입니다. 실제 적용 전 반드시 국가법령정보센터 등 공식 원문과 조문별 시행일을 다시 확인하세요.'
 const MOBILE = '(max-width: 700px)'
 type Scenario = 'normal' | 'loading' | 'error' | 'delayed'
-type CalendarLayer = { owner: string; date: string; sheet: boolean; changeId?: string }
+type SheetView = { limit: number; scrollTop: number; lastChangeId?: string }
+type CalendarLayer = { date: string; sheet?: SheetView; changeId?: string }
+type HistoryLayer = CalendarLayer & { position: number }
+type DetailState = CalendarChange | 'loading' | 'error' | null
 type MonthResult = { month: string; snapshot: CalendarSnapshot | null }
 
-// An invalid detail owned by a sheet sits two entries above the inline calendar.
-function skipLayer(layer: CalendarLayer) {
-  history.go(layer.sheet && layer.changeId ? -2 : -1)
+function currentLayer(): HistoryLayer | null {
+  return history.state?.lawCalendar ?? null
+}
+
+function depth(layer: CalendarLayer | null) {
+  return Number(!!layer?.sheet) + Number(!!layer?.changeId)
+}
+
+function navigationIndex() {
+  const index = window.navigation?.currentEntry?.index
+  return index === -1 ? undefined : index
 }
 
 export default function LawCalendarPage({ loader = loadCalendarWithTax, initialDate }: { loader?: CalendarLoader; initialDate?: string }) {
-  const [selected, setSelected] = useState(initialDate ?? todayKst)
+  const [chosen, setChosen] = useState(initialDate ?? todayKst)
   const [result, setResult] = useState<MonthResult | null>(null)
   const [attempt, setAttempt] = useState(0)
   const [scenario, setScenario] = useState<Scenario>('normal')
-  const [opened, setOpened] = useState<CalendarChange | null>(null)
+  const [detail, setDetail] = useState<DetailState>(null)
   const [holdsOpen, setHoldsOpen] = useState(false)
-  const [owner] = useState(() => crypto.randomUUID())
-  const [layer, setLayer] = useState<CalendarLayer | null>(null)
+  const [layer, setLayer] = useState(currentLayer)
+  const cursor = useRef({ index: navigationIndex(), depth: depth(layer) })
+  const direction = useRef<-1 | 1>(-1)
   const calendar = useRef<HTMLDivElement>(null)
   const dateClick = useRef<HTMLButtonElement | null>(null)
-  const checkedHistory = useRef(false)
+  const requested = layer?.date ?? chosen
   const detailRequest = useRef<AbortController | null>(null)
-  const [detailPending, setDetailPending] = useState(false)
-  const [detailError, setDetailError] = useState(false)
   useEffect(() => () => detailRequest.current?.abort(), [])
-  const month = selected.slice(0, 7)
+  const month = requested.slice(0, 7)
   const monthResult = result?.month === month ? result : null
   const snapshot = monthResult?.snapshot
   const state = !monthResult ? 'loading' : snapshot ? 'ready' : 'error'
@@ -65,89 +75,108 @@ export default function LawCalendarPage({ loader = loadCalendarWithTax, initialD
   }, [month, loader, attempt, scenario])
 
   const changes = snapshot?.changes ?? []
-  const effective = changes.filter((change) => change.date === selected)
   const taxData = snapshot?.tax
   const taxCounts = new Map<string, number>()
   for (const item of taxData?.items ?? []) taxCounts.set(item.date, (taxCounts.get(item.date) ?? 0) + 1)
+  const layerChange = layer?.changeId
+    ? changes.find(item => item.date === layer.date && item.id === layer.changeId) : undefined
+  const active = layer && state === 'ready' && window.matchMedia?.(MOBILE).matches
+    && (layer.changeId ? !!layerChange : layer.sheet && (taxCounts.has(layer.date) || changes.some(item => item.date === layer.date)))
+    ? layer : null
+  const selected = active?.date ?? chosen
+  const effective = changes.filter(change => change.date === selected)
   const taxItems = taxData?.items.filter(item => item.date === selected) ?? []
-  const sheetOpen = layer?.sheet && state === 'ready' && (effective.length > 0 || taxItems.length > 0)
-  const detailStatus = detailPending ? <p role="status">상세 정보를 불러오는 중입니다.</p>
-    : detailError ? <p className="lc-warning" role="alert">상세 정보를 확인하지 못했습니다. 항목을 다시 선택하세요.</p> : null
+  const sheet = active?.sheet
+  const detailStatus = detail === 'loading' ? <p role="status">상세 정보를 불러오는 중입니다.</p>
+    : detail === 'error' && !layer?.changeId ? <p className="lc-warning" role="alert">상세 정보를 확인하지 못했습니다. 항목을 다시 선택하세요.</p> : null
 
   useEffect(() => {
-    function follow(next: CalendarLayer | null) {
+    function onPop() {
       if (location.hash === '#erp') return
+      const next = currentLayer()
+      const previous = cursor.current
+      const index = navigationIndex()
+      const nextDepth = depth(next)
+      // Without the Navigation API, the app's own entries are ordered by layer depth.
+      const forward = index !== undefined && previous.index !== undefined
+        ? index > previous.index : nextDepth > previous.depth
+      direction.current = forward ? 1 : -1
+      cursor.current = { index, depth: nextDepth }
       detailRequest.current?.abort()
-      setDetailPending(false)
-      setOpened(null)
-      if (!next) setDetailError(false)
-      if (next && (next.owner !== owner || !window.matchMedia?.(MOBILE).matches)) {
-        skipLayer(next)
-        return
-      }
+      setDetail(value => value === 'error' && nextDepth < previous.depth ? value : null)
       setLayer(next)
-      if (next) setSelected(next.date)
     }
-    const onPop = (event: PopStateEvent) => follow(event.state?.lawCalendar ?? null)
     window.addEventListener('popstate', onPop)
-    if (!checkedHistory.current) {
-      checkedHistory.current = true
-      if (history.state?.lawCalendar) follow(history.state.lawCalendar)
-    }
     return () => window.removeEventListener('popstate', onPop)
-  }, [owner])
+  }, [])
 
-  const restoreLayer = useEffectEvent(() => {
-    if (!layer || layer.date !== selected || state === 'loading') return
-    if (state === 'error' || (layer.sheet && !sheetOpen)) { skipLayer(layer); return }
-    if (!layer.changeId || opened) return
-    const change = effective.find(item => item.id === layer.changeId)
-    if (change) openChange(change, true)
-    else history.back()
-  })
-  useEffect(() => { restoreLayer() }, [layer, monthResult, opened, selected])
+  const loadRecordedDetail = useEffectEvent((change: CalendarChange) => loadDetail(change, true))
+  useEffect(() => {
+    if (!layer || state === 'loading') return
+    if (!active) {
+      // At the forward edge, return to a usable entry rather than leave a stale entry active.
+      const hasForward = window.navigation?.canGoForward ?? layer.position < history.length - 1
+      history.go(direction.current === 1 && hasForward ? 1 : -1)
+      return
+    }
+    setChosen(active.date)
+    if (layerChange) loadRecordedDetail(layerChange)
+  }, [layer, state, active, layerChange])
 
-  function pushLayer(day: string, sheet: boolean, changeId?: string) {
-    const next = { owner, date: day, sheet, changeId }
-    history.pushState({ ...history.state, lawCalendar: next }, '')
+  function replaceLayer(next: HistoryLayer) {
+    history.replaceState({ ...history.state, lawCalendar: next }, '')
     setLayer(next)
+  }
+
+  function pushLayer(next: CalendarLayer) {
+    history.pushState({ ...history.state, lawCalendar: next }, '')
+    // A push discards forward entries, so its position is now known even without Navigation.
+    replaceLayer({ ...next, position: history.length - 1 })
+    cursor.current = { index: navigationIndex(), depth: depth(next) }
+  }
+
+  function resetDetail() {
+    detailRequest.current?.abort()
+    setDetail(null)
   }
 
   function select(day: string) {
     const clicked = dateClick.current
     dateClick.current = null
-    detailRequest.current?.abort()
-    setDetailPending(false); setDetailError(false); setOpened(null); setSelected(day)
-    if (layer) { skipLayer(layer); return }
+    resetDetail()
+    setChosen(day)
+    if (layer) { history.go(-depth(layer)); return }
     if (clicked && state === 'ready' && window.matchMedia?.(MOBILE).matches
       && (changes.some(change => change.date === day) || taxCounts.has(day))) {
-      pushLayer(day, true)
+      pushLayer({ date: day, sheet: { limit: 8, scrollTop: 0 } })
     }
   }
 
-  function openChange(change: CalendarChange, restoring = false) {
-    if (!restoring && layer?.changeId) return
-    const sheet = !!layer?.sheet
-    const record = !restoring && (sheet || window.matchMedia?.(MOBILE).matches)
-    const show = (detail: CalendarChange) => {
-      if (record) pushLayer(change.date, sheet, change.id)
-      setOpened(detail)
+  function openChange(change: CalendarChange, scrollTop = 0) {
+    if (layer?.changeId) return
+    if (layer?.sheet) {
+      const view = { ...layer.sheet, lastChangeId: change.id, scrollTop }
+      replaceLayer({ ...layer, sheet: view })
+      pushLayer({ date: layer.date, sheet: view, changeId: change.id })
+    } else if (window.matchMedia?.(MOBILE).matches) {
+      pushLayer({ date: change.date, changeId: change.id })
+    } else {
+      loadDetail(change, false)
     }
+  }
+
+  function loadDetail(change: CalendarChange, recorded: boolean) {
     detailRequest.current?.abort()
-    setDetailError(false)
-    if (snapshot?.demo) { show(change); return }
+    if (snapshot?.demo) { setDetail(change); return }
     const controller = new AbortController()
     detailRequest.current = controller
-    setDetailPending(true)
-    loadChange(change.id, controller.signal).then(detail => {
-      if (controller.signal.aborted) return
-      setDetailPending(false)
-      show(detail)
+    setDetail('loading')
+    loadChange(change.id, controller.signal).then(result => {
+      if (!controller.signal.aborted) setDetail(result)
     }, () => {
       if (controller.signal.aborted) return
-      setDetailPending(false)
-      setDetailError(true)
-      if (restoring) history.back()
+      setDetail('error')
+      if (recorded) history.back()
     })
   }
   function retry() { setScenario('normal'); setAttempt((value) => value + 1) }
@@ -156,7 +185,7 @@ export default function LawCalendarPage({ loader = loadCalendarWithTax, initialD
     <header className="lc-header">
       <div><p className="lc-eyebrow">LAWBOT / LAW CALENDAR</p><h1>법령 변경 캘린더</h1>
         <p className="lc-subtitle">시행되는 조문을 날짜별로 확인하세요.</p></div>
-      <button type="button" className="lc-more" onClick={() => { detailRequest.current?.abort(); setDetailPending(false); setOpened(null); setHoldsOpen(true) }}>보류 목록</button>
+      <button type="button" className="lc-more" onClick={() => { resetDetail(); if (layer?.changeId) history.back(); setHoldsOpen(true) }}>보류 목록</button>
     </header>
     <aside className="lc-disclaimer" aria-label="법령 정보 이용 안내">{DISCLAIMER}</aside>
     {import.meta.env.DEV && isDemoMode() && <details className="lc-preview"><summary>개발용 예시 화면 설정</summary>
@@ -198,7 +227,7 @@ export default function LawCalendarPage({ loader = loadCalendarWithTax, initialD
         </li>)}</ul>
       </section>}
     </section>
-    {!sheetOpen && detailStatus}
+    {!sheet && detailStatus}
     <footer className="lc-footer">
       <h2>공식 원문을 먼저 확인하세요</h2>
       <p>본 서비스는 공개된 법령 자료를 수집·가공하여 제공하며, 수집 지연, 누락, 해석 또는 요약 오류가 발생할 수 있습니다. 법령의 적용 여부는 개별 조항의 시행일, 부칙, 경과조치 및 사실관계에 따라 달라질 수 있습니다. 중요한 법적 판단이나 조치를 하기 전 공식 법령 원문을 직접 확인하고, 필요하면 전문가의 검토를 받으시기 바랍니다. 이 서비스는 개별 사건에 대한 법률 자문을 대신하지 않습니다.</p>
@@ -214,10 +243,12 @@ export default function LawCalendarPage({ loader = loadCalendarWithTax, initialD
         <a href={LICENSE_PATH}>라이선스</a>
       </nav>
     </footer>
-    {sheetOpen && <DateSheet key={selected} date={selected} changes={effective} taxItems={taxItems} demo={snapshot?.demo ?? false}
-      calendar={calendar} status={detailStatus} onOpen={openChange} onClose={() => history.back()} />}
-    {opened && <ChangeDialog change={opened} demo={snapshot?.demo ?? false}
-      onClose={() => layer?.changeId ? history.back() : setOpened(null)} />}
+    {sheet && active && <DateSheet key={selected} date={selected} changes={effective} taxItems={taxItems} demo={snapshot?.demo ?? false}
+      calendar={calendar} status={detailStatus} onOpen={openChange} onClose={() => history.back()}
+      limit={sheet.limit} scrollTop={sheet.scrollTop} lastChangeId={sheet.lastChangeId} detailStep={!!active.changeId}
+      onLimitChange={limit => replaceLayer({ ...active, sheet: { ...sheet, limit } })} />}
+    {detail && typeof detail !== 'string' && <ChangeDialog change={detail} demo={snapshot?.demo ?? false}
+      onClose={() => layer?.changeId ? history.back() : resetDetail()} />}
     {holdsOpen && <HoldDialog demo={snapshot?.demo ?? isDemoMode()} onClose={() => setHoldsOpen(false)} />}
   </main>
 }

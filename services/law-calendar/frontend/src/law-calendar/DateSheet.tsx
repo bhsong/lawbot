@@ -1,16 +1,22 @@
-import { useLayoutEffect, useRef, useState } from 'react'
+import { useEffect, useLayoutEffect, useRef } from 'react'
 import type { KeyboardEvent, ReactNode, RefObject } from 'react'
 import { dateLabel } from '@lawbot/ui'
 import type { CalendarChange } from '@lawbot/ui'
 import type { PublicTaxSchedule } from './api-types'
 
-export function DateSheet({ date, changes, taxItems, demo, calendar, status, onOpen, onClose }: {
+export function DateSheet({ date, changes, taxItems, demo, calendar, status, limit, scrollTop, lastChangeId,
+  detailStep, onLimitChange, onOpen, onClose }: {
   date: string; changes: CalendarChange[]; taxItems: PublicTaxSchedule['items']; demo: boolean
   calendar: RefObject<HTMLDivElement | null>; status: ReactNode
-  onOpen: (change: CalendarChange) => void; onClose: () => void
+  limit: number; scrollTop: number; lastChangeId?: string; detailStep: boolean
+  onLimitChange: (limit: number) => void
+  onOpen: (change: CalendarChange, scrollTop: number) => void; onClose: () => void
 }) {
   const dialog = useRef<HTMLDialogElement>(null)
-  const [limit, setLimit] = useState(8)
+  const list = useRef<HTMLUListElement>(null)
+  const firstAdded = useRef<number | null>(null)
+  const lastIndex = changes.findIndex(change => change.id === lastChangeId)
+  const visible = Math.max(limit, lastIndex + 1)
   useLayoutEffect(() => {
     const element = dialog.current!
     const opener = calendar.current?.querySelector<HTMLButtonElement>('[aria-pressed="true"]')
@@ -21,9 +27,21 @@ export function DateSheet({ date, changes, taxItems, demo, calendar, status, onO
     }
   }, [calendar])
 
+  useEffect(() => {
+    if (lastIndex < 0) return
+    list.current?.children.item(lastIndex)?.querySelector('button')?.focus({ preventScroll: true })
+    dialog.current!.scrollTop = scrollTop
+  }, [detailStep, lastChangeId, lastIndex, scrollTop])
+
+  useLayoutEffect(() => {
+    if (firstAdded.current === null) return
+    list.current?.children.item(firstAdded.current)?.querySelector('button')?.focus()
+    firstAdded.current = null
+  }, [visible])
+
   function keepFocus(event: KeyboardEvent<HTMLDialogElement>) {
     if (event.key !== 'Tab') return
-    const controls = event.currentTarget.querySelectorAll<HTMLElement>('button, a[href]')
+    const controls = event.currentTarget.querySelectorAll<HTMLElement>('button:not(:disabled), a[href]')
     const first = controls[0], last = controls[controls.length - 1]
     if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last.focus() }
     else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus() }
@@ -45,18 +63,21 @@ export function DateSheet({ date, changes, taxItems, demo, calendar, status, onO
       {demo && <p className="lc-demo-badge">예시 / 실제 법령 아님</p>}
       {changes.length > 0 && <section className="lc-list lc-effective" aria-labelledby="lc-sheet-effective-title">
         <div className="lc-list-head"><h3 id="lc-sheet-effective-title">시행 조문 <span>{changes.length}건</span></h3></div>
-        <ul>{changes.slice(0, limit).map(change => <li key={change.id}>
+        <ul ref={list}>{changes.slice(0, visible).map(change => <li key={change.id}>
           <button type="button" onClick={event => {
             event.currentTarget.focus({ preventScroll: true })
-            onOpen(change)
+            onOpen(change, dialog.current!.scrollTop)
           }}>
             <span className="lc-item-title">{change.lawName} <span>{change.article}</span></span>
             <span className="lc-summary">{change.summary}</span>
             <span className="lc-item-status">{change.status} <span aria-hidden="true">↗</span></span>
           </button>
         </li>)}</ul>
-        {changes.length > limit && <button className="lc-more" type="button" onClick={() => setLimit(limit + 8)}>
-          시행 조문 더 보기 ({limit}/{changes.length})
+        {changes.length > visible && <button className="lc-more" type="button" disabled={detailStep} onClick={() => {
+          firstAdded.current = visible
+          onLimitChange(visible + 8)
+        }}>
+          시행 조문 더 보기 ({visible}/{changes.length})
         </button>}
       </section>}
       {taxItems.length > 0 && <section className="lc-list lc-tax-list" aria-labelledby="lc-sheet-tax-title">
