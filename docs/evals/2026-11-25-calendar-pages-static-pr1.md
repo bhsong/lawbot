@@ -1,6 +1,6 @@
 # 법령 캘린더 정적 사이트 PR 1 검증
 
-[계획](../plans/calendar-pages-static.md) · [공개 라이선스 근거](2026-11-25-calendar-public-license-check.md)
+[계획](../archives/calendar-pages-static.md) · [공개 라이선스 근거](2026-11-25-calendar-public-license-check.md)
 
 합성 DB와 ERP 공개 피드로 정적 내보내기와 브라우저 사용 흐름을 검증했다. 운영 DB·설정, 실제 모델, Pages 배포는 사용하지 않았다.
 

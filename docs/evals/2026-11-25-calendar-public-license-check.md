@@ -1,6 +1,6 @@
 # 캘린더 전면 공개 전 데이터·이용 조건·침입 경로 재확인 (2026-11-25)
 
-법령 캘린더를 Cloudflare Tunnel + Access(본인만)에서 비밀번호 없는 Cloudflare Pages 정적 사이트로 옮기기 전에 확인했다. 공개 범위는 현재 캘린더 화면이 보여 주는 데이터와 같다. 법률 자문 결과가 아니다. [계획](../plans/calendar-pages-static.md) · [11-19 확인](2026-11-19-external-access-copyright-check.md)
+법령 캘린더를 Cloudflare Tunnel + Access(본인만)에서 비밀번호 없는 Cloudflare Pages 정적 사이트로 옮기기 전에 확인했다. 공개 범위는 현재 캘린더 화면이 보여 주는 데이터와 같다. 법률 자문 결과가 아니다. [계획](../archives/calendar-pages-static.md) · [11-19 확인](2026-11-19-external-access-copyright-check.md)
 
 ## 결론
 

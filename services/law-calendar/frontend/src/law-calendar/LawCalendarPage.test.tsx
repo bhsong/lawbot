@@ -1,4 +1,4 @@
-import { render, screen, waitFor, within } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import type { CalendarChange } from '@lawbot/ui'
 import LawCalendarPage from './LawCalendarPage'
@@ -143,4 +143,160 @@ test('long lists paginate instead of silently dropping changes', async () => {
   expect(screen.getAllByText('예시 변경 요약')).toHaveLength(8)
   await userEvent.click(screen.getByRole('button', { name: /시행 조문 더 보기/ }))
   expect(screen.getAllByText('예시 변경 요약')).toHaveLength(13)
+})
+
+describe('mobile date sheet', () => {
+  const source = 'https://www.nts.go.kr/nts/ad/taxSchdul/selectList.do?mi=135747&taxMonth=&taxYear=2026'
+  const mixed: CalendarSnapshot = {
+    ...snapshot,
+    changes: Array.from({ length: 17 }, (_, index) => ({ ...change, id: `effective-${index}` })),
+    tax: { confirmedAt: '2026-11-14T06:30:00+09:00', items: ['2026-11-05', '2026-11-30'].map(date => ({
+      id: date, title: '일용근로소득 지급명세서', date, targetPeriod: '2026년 10월 지급분', sourceUrl: source,
+    })) },
+  }
+  const loadMixed: CalendarLoader = async () => mixed
+  const day = (label: string) => within(screen.getByRole('grid')).getByRole('button', { name: new RegExp(`^${label},`) })
+  const mount = (load = loadMixed) => render(<LawCalendarPage loader={load} initialDate="2026-11-06" />)
+  const close = (dialog: HTMLElement) => within(dialog).getByRole('button', { name: '날짜 내역 닫기' })
+  const originalShow = Object.getOwnPropertyDescriptor(HTMLDialogElement.prototype, 'showModal')
+  const originalClose = Object.getOwnPropertyDescriptor(HTMLDialogElement.prototype, 'close')
+
+  beforeAll(() => {
+    Object.defineProperty(HTMLDialogElement.prototype, 'showModal', { configurable: true,
+      value(this: HTMLDialogElement) {
+        this.setAttribute('open', '')
+        this.querySelector<HTMLElement>('button')?.focus()
+      } })
+    Object.defineProperty(HTMLDialogElement.prototype, 'close', { configurable: true,
+      value(this: HTMLDialogElement) { this.removeAttribute('open') } })
+  })
+  afterAll(() => {
+    if (originalShow) Object.defineProperty(HTMLDialogElement.prototype, 'showModal', originalShow)
+    else Reflect.deleteProperty(HTMLDialogElement.prototype, 'showModal')
+    if (originalClose) Object.defineProperty(HTMLDialogElement.prototype, 'close', originalClose)
+    else Reflect.deleteProperty(HTMLDialogElement.prototype, 'close')
+  })
+  beforeEach(() => {
+    vi.stubGlobal('matchMedia', (media: string) => ({ media, matches: media === '(max-width: 700px)' }))
+  })
+  afterEach(() => {
+    vi.restoreAllMocks()
+    vi.unstubAllGlobals()
+  })
+
+  test('shows labelled demo, article and tax content without duplicate ids, in pages of eight', async () => {
+    mount()
+    await screen.findByRole('button', { name: /11월 5일, 시행 17건/ })
+    await userEvent.click(day('2026년 11월 5일'))
+    const sheet = within(screen.getByRole('dialog', { name: '2026년 11월 5일' }))
+    expect(sheet.getByText('예시 / 실제 법령 아님')).toBeVisible()
+    const articles = within(sheet.getByRole('region', { name: '시행 조문 17건' }))
+    const rows = () => articles.getAllByRole('button', { name: /\[예시\] 가상법 제1조.*예시 변경 요약.*시행 예시/ })
+    expect(rows()).toHaveLength(8)
+    await userEvent.click(articles.getByRole('button', { name: /더 보기/ }))
+    expect(rows()).toHaveLength(16)
+    await userEvent.click(articles.getByRole('button', { name: /더 보기/ }))
+    expect(rows()).toHaveLength(17)
+    const tax = within(sheet.getByRole('region', { name: '세무일정 1건' }))
+    expect(tax.getByText('일용근로소득 지급명세서')).toBeVisible()
+    expect(tax.getByText('기한 2026년 11월 5일 · 대상 2026년 10월 지급분')).toBeVisible()
+    const link = tax.getByRole('link', { name: '국세청 원문 ↗' })
+    expect(link).toHaveAttribute('href', source)
+    expect(link).toHaveAttribute('target', '_blank')
+    expect(link).toHaveAttribute('rel', 'noopener noreferrer')
+    const ids = Array.from(document.querySelectorAll('[id]'), element => element.id)
+    expect(ids).toEqual([...new Set(ids)])
+    await userEvent.click(sheet.getByRole('button', { name: '날짜 내역 닫기' }))
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
+  })
+
+  test('opens a tax-only date', async () => {
+    mount()
+    const date = await screen.findByRole('button', { name: /11월 30일, 시행 0건, 세무일정 1건/ })
+    await userEvent.click(date)
+    const sheet = screen.getByRole('dialog', { name: '2026년 11월 30일' })
+    expect(within(sheet).getByRole('link', { name: '국세청 원문 ↗' })).toBeVisible()
+    await userEvent.click(close(sheet))
+    await waitFor(() => expect(date).toHaveFocus())
+  })
+
+  test('does not open for empty days, keyboard navigation, controls or dates in another month', async () => {
+    const load: CalendarLoader = async (month) => month === '2026-12'
+      ? { ...snapshot, changes: [{ ...change, date: '2026-12-01' }] } : mixed
+    mount(load)
+    await screen.findByRole('button', { name: /11월 5일, 시행 17건/ })
+    await userEvent.click(day('2026년 11월 6일'))
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+    await userEvent.keyboard('{ArrowLeft}')
+    expect(day('2026년 11월 5일')).toHaveFocus()
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+    for (const key of ['Home', 'End', 'PageUp', 'PageDown']) {
+      await userEvent.keyboard(`{${key}}`)
+      expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+    }
+    await userEvent.click(day('2026년 12월 1일'))
+    expect(await screen.findByRole('button', { name: /12월 1일, 시행 1건/ })).toHaveAttribute('aria-pressed', 'true')
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+    for (const name of ['이전 달', '다음 달', '오늘']) {
+      await userEvent.click(screen.getByRole('button', { name }))
+      expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+    }
+    expect(screen.getByRole('button', { current: 'date' })).toHaveAttribute('aria-pressed', 'true')
+  })
+
+  test('does not open while loading or after a load error', async () => {
+    let fail: () => void = () => { throw new Error('Loader did not start') }
+    mount(() => new Promise((_, reject) => { fail = () => reject(new Error('Fixture unavailable')) }))
+    await userEvent.click(day('2026년 11월 5일'))
+    expect(screen.getByRole('status')).toHaveTextContent('불러오는 중')
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+    fail()
+    expect(await screen.findByRole('alert')).toHaveTextContent('불러오지 못했습니다')
+    await userEvent.click(day('2026년 11월 5일'))
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+  })
+
+  test('keeps desktop selection and the inline list', async () => {
+    vi.stubGlobal('matchMedia', () => ({ matches: false }))
+    mount()
+    await screen.findByRole('button', { name: /11월 5일, 시행 17건/ })
+    await userEvent.click(day('2026년 11월 5일'))
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+    expect(screen.getByRole('region', { name: '시행 조문 17건' })).toBeVisible()
+  })
+
+  test('closes detail via Escape and the sheet via its button through history', async () => {
+    const back = vi.spyOn(history, 'back')
+    mount()
+    const date = await screen.findByRole('button', { name: /11월 5일, 시행 17건/ })
+    await userEvent.click(date)
+    const sheet = screen.getByRole('dialog', { name: '2026년 11월 5일' })
+    const item = within(sheet).getAllByRole('button', { name: /예시 변경 요약/ })[0]
+    await userEvent.click(item)
+    const detailDialog = screen.getByRole('button', { name: '상세 닫기' }).closest('dialog')!
+    const detail = within(detailDialog)
+    const comparison = detail.getByRole('group', { name: '검증된 원문 비교' })
+    expect(comparison).toBeVisible()
+    expect(comparison).toHaveTextContent('신청은 전자문서로 한다.')
+    fireEvent(detailDialog, new Event('cancel', { cancelable: true }))
+    expect(back).toHaveBeenCalledTimes(1)
+    await waitFor(() => expect(screen.queryByRole('button', { name: '상세 닫기' })).not.toBeInTheDocument())
+    expect(sheet).toBeVisible()
+    await userEvent.click(close(sheet))
+    expect(back).toHaveBeenCalledTimes(2)
+    await waitFor(() => expect(sheet).not.toBeInTheDocument())
+    expect(date).toHaveFocus()
+  })
+
+  test('shows a failed public detail load inside the open sheet', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(null, { status: 404 })))
+    mount(async () => ({ ...mixed, demo: false }))
+    await userEvent.click(await screen.findByRole('button', { name: /11월 5일, 시행 17건/ }))
+    const sheet = within(screen.getByRole('dialog', { name: '2026년 11월 5일' }))
+    await userEvent.click(sheet.getAllByRole('button', { name: /예시 변경 요약/ })[0])
+    expect(await sheet.findByRole('alert')).toHaveTextContent('상세 정보를 확인하지 못했습니다')
+    expect(screen.queryByRole('button', { name: '상세 닫기' })).not.toBeInTheDocument()
+    await userEvent.click(sheet.getByRole('button', { name: '날짜 내역 닫기' }))
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
+  })
 })

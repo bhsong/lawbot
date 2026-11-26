@@ -2,6 +2,7 @@
 
 import datetime
 import json
+import sqlite3
 import subprocess
 import sys
 
@@ -210,6 +211,304 @@ def test_date_selection_and_dialog_focus(demo, width):
     expect(demo.get_by_role('dialog').get_by_text('비교 불가', exact=False)).to_be_visible()
     demo.get_by_role('button', name='상세 닫기').click()
     assert demo.evaluate('document.documentElement.scrollWidth <= innerWidth')
+
+
+@pytest.fixture
+def mobile_sheet_page(development, calendar_pages, request):
+    url, log = development
+    page = calendar_pages(viewport={'width': 390, 'height': 844}, has_touch=True, is_mobile=True)
+    page.clock.set_fixed_time(datetime.datetime(2026, 11, 5, tzinfo=datetime.UTC))
+    if not getattr(request, 'param', True):
+        page.add_init_script("Object.defineProperty(window, 'navigation', {value: undefined})")
+    page.goto(url + '/?fixture=calendar#calendar')
+    expect(page.get_by_role('region', name='시행 조문 4건')).to_be_visible()
+    yield page
+    support.keep_on_failure(request, log, page)
+
+
+@pytest.mark.parametrize('mobile_sheet_page', [True, False], indirect=True, ids=['navigation', 'history'])
+def test_date_sheet_history_matches_the_visible_layers(mobile_sheet_page):
+    page = mobile_sheet_page
+    url = page.url
+    before = page.evaluate('history.length')
+    day = page.get_by_role('button', name='2026년 11월 5일, 시행 4건')
+    sheet = page.get_by_role('dialog', name='2026년 11월 5일')
+    detail_close = page.get_by_role('button', name='상세 닫기')
+    day.tap()
+    expect(sheet).to_be_visible()
+    expect(sheet.get_by_text('예시 / 실제 법령 아님', exact=True)).to_be_visible()
+    assert page.evaluate('history.length') == before + 1
+    sheet.get_by_role('button', name='가상 업무절차법 제1조', exact=False).tap()
+    expect(detail_close).to_be_visible()
+    assert page.evaluate('history.length') == before + 2
+    assert page.url == url
+    page.go_back()
+    expect(detail_close).not_to_be_visible()
+    expect(sheet).to_be_visible()
+    page.go_back()
+    expect(sheet).not_to_be_visible()
+    expect(day).to_be_focused()
+    page.go_forward()
+    expect(sheet).to_be_visible()
+    expect(detail_close).not_to_be_visible()
+    page.go_forward()
+    expect(detail_close).to_be_visible()
+    assert page.url == url
+    page.reload(timeout=5000)
+    expect(detail_close).to_be_visible(timeout=3000)
+    page.go_back(timeout=3000)
+    expect(sheet).to_be_visible(timeout=3000)
+    page.reload(timeout=5000)
+    expect(sheet).to_be_visible(timeout=3000)
+    page.go_forward(timeout=3000)
+    expect(detail_close).to_be_visible(timeout=3000)
+    assert page.evaluate('history.length') == before + 2
+    page.go_back()
+    expect(sheet).to_be_visible(timeout=3000)
+    page.go_back(timeout=3000)
+    expect(sheet).not_to_be_visible()
+    assert page.url == url
+
+
+@pytest.mark.parametrize('mobile_sheet_page', [True, False], indirect=True, ids=['navigation', 'history'])
+def test_date_sheet_forward_from_erp_without_a_new_date_tap(mobile_sheet_page):
+    page = mobile_sheet_page
+    page.get_by_role('button', name='2026년 11월 5일, 시행 4건').tap()
+    sheet = page.get_by_role('dialog', name='2026년 11월 5일')
+    sheet.get_by_role('button', name='가상 업무절차법 제1조', exact=False).tap()
+    expect(page.get_by_role('button', name='상세 닫기')).to_be_visible()
+    before = page.evaluate('history.length')
+    page.go_back(timeout=3000)
+    page.go_back(timeout=3000)
+    expect(sheet).not_to_be_visible(timeout=3000)
+    erp = page.get_by_role('tab', name='ERP 자료')
+    erp.tap()
+    expect(erp).to_have_attribute('aria-selected', 'true', timeout=3000)
+    page.go_forward(timeout=3000)
+    expect(sheet).to_be_visible(timeout=3000)
+    page.go_forward(timeout=3000)
+    expect(page.get_by_role('button', name='상세 닫기')).to_be_visible(timeout=3000)
+    assert page.evaluate('history.length') == before
+
+
+def test_date_sheet_skips_stale_date_in_both_history_directions(mobile_sheet_page):
+    page = mobile_sheet_page
+    base = page.url
+    page.get_by_role('button', name='2026년 11월 5일, 시행 4건').tap()
+    page.get_by_role('dialog').get_by_role('button', name='가상 업무절차법 제1조', exact=False).tap()
+    expect(page.get_by_role('button', name='상세 닫기')).to_be_visible()
+    # A same-document destination beyond the stale sheet and detail.
+    page.evaluate("location.hash = 'after'")
+    page.clock.set_fixed_time(datetime.datetime(2026, 11, 6, tzinfo=datetime.UTC))
+    page.reload(timeout=5000)
+    expect(page.get_by_role('heading', name='2026년 11월 6일')).to_be_visible(timeout=3000)
+    page.go_back(timeout=3000)
+    expect(page).to_have_url(base, timeout=3000)
+    expect(page.get_by_role('dialog')).to_have_count(0, timeout=3000)
+    page.go_forward(timeout=3000)
+    expect(page).to_have_url(base.split('#')[0] + '#after', timeout=3000)
+    expect(page.get_by_role('dialog')).to_have_count(0, timeout=3000)
+
+
+@pytest.mark.parametrize(
+    ('mobile_sheet_page', 'tail_hash'),
+    [(False, 'erp'), (False, 'after')],
+    indirect=['mobile_sheet_page'],
+    ids=['erp', 'plain-hash'],
+)
+def test_date_sheet_back_skips_stale_layers_from_unpositioned_hash(mobile_sheet_page, tail_hash):
+    page = mobile_sheet_page
+    base = page.url
+    page.get_by_role('button', name='2026년 11월 5일, 시행 4건').tap()
+    sheet = page.get_by_role('dialog', name='2026년 11월 5일')
+    sheet.get_by_role('button', name='가상 업무절차법 제1조', exact=False).tap()
+    expect(page.get_by_role('button', name='상세 닫기')).to_be_visible()
+
+    page.evaluate('(hash) => { location.hash = hash }', tail_hash)
+    page.clock.set_fixed_time(datetime.datetime(2026, 11, 6, tzinfo=datetime.UTC))
+    page.reload(timeout=5000)
+    tail = base.split('#')[0] + '#' + tail_hash
+    expect(page).to_have_url(tail, timeout=3000)
+    assert page.evaluate('window.navigation === undefined')
+
+    visited = []
+    page.on('framenavigated', lambda frame: visited.append(frame.url))
+    page.go_back(timeout=3000)
+    # The stale layers share the calendar URL; wait for the original entry itself.
+    page.wait_for_function('(base) => location.href === base && history.state === null', arg=base, timeout=3000)
+    expect(page).to_have_url(base, timeout=3000)
+    expect(page.get_by_role('heading', name='2026년 11월 6일', exact=True)).to_be_visible(timeout=3000)
+    expect(page.get_by_role('dialog')).to_have_count(0, timeout=3000)
+    assert tail not in visited
+
+
+def test_date_sheet_close_inputs_and_inline_detail_back(mobile_sheet_page):
+    page = mobile_sheet_page
+    day = page.get_by_role('button', name='2026년 11월 5일, 시행 4건')
+    sheet = page.get_by_role('dialog', name='2026년 11월 5일')
+    close = sheet.get_by_role('button', name='날짜 내역 닫기')
+    day.tap()
+    expect(close).to_be_focused()
+    page.keyboard.press('Shift+Tab')
+    expect(sheet.get_by_role('button', name='가상 업무절차법 제4조', exact=False)).to_be_focused()
+    page.keyboard.press('Tab')
+    expect(close).to_be_focused()
+    sheet.get_by_role('button', name='가상 업무절차법 제1조', exact=False).tap()
+    page.get_by_role('button', name='상세 닫기').tap()
+    expect(sheet).to_be_visible()
+    page.touchscreen.tap(1, 1)
+    expect(sheet).not_to_be_visible()
+    expect(day).to_be_focused()
+    day.tap()
+    sheet.get_by_role('button', name='가상 업무절차법 제1조', exact=False).tap()
+    page.keyboard.press('Escape')
+    expect(sheet).to_be_visible()
+    page.keyboard.press('Escape')
+    expect(sheet).not_to_be_visible()
+    day.tap()
+    close.tap()
+    expect(sheet).not_to_be_visible()
+    page.get_by_role('button', name='이전 달').tap()
+    page.get_by_role('button', name='다음 달').tap()
+    page.get_by_role('button', name='오늘', exact=True).tap()
+    expect(sheet).not_to_be_visible()
+    opener = page.get_by_role('region', name='시행 조문 4건').get_by_role('button').first
+    opener.tap()
+    expect(page.get_by_role('button', name='상세 닫기')).to_be_visible()
+    page.go_back()
+    expect(page.get_by_role('dialog')).to_have_count(0)
+    expect(opener).to_be_focused()
+
+
+@pytest.fixture
+def populated_sheet(dataset, tmp_path, calendar_pages, request):
+    with sqlite3.connect(dataset) as connection:
+        example = next(row for row in connection.execute('SELECT * FROM article_changes') if row[0] == 'effective-0')
+        connection.executemany(
+            'INSERT INTO article_changes VALUES (?,?,?,?,?,?,?,?,?,?)',
+            [(f'fixture-{index}', *example[1:]) for index in range(16)],
+        )
+    site = support.export_calendar(tmp_path, dataset)
+    page = calendar_pages(
+        viewport={'width': 390, 'height': 844}, has_touch=True, is_mobile=True, reduced_motion='reduce'
+    )
+    page.set_default_timeout(3000)
+    page.clock.set_fixed_time(datetime.datetime(2026, 11, 5, tzinfo=datetime.UTC))
+    with support.serve(tmp_path, development=True, site=site) as (url, log):
+        page.goto(url + '/?source=data')
+        expect(page.get_by_role('region', name='시행 조문 17건')).to_be_visible(timeout=3000)
+        yield page
+        support.keep_on_failure(request, log, page)
+
+
+def test_date_sheet_scroll_lock(populated_sheet):
+    page = populated_sheet
+    day = page.get_by_role('button', name='2026년 11월 5일, 시행 17건')
+    day.scroll_into_view_if_needed(timeout=3000)
+    initial = page.evaluate('scrollY')
+    assert page.evaluate('scrollY + innerHeight < document.documentElement.scrollHeight')
+    page.mouse.move(1, 1)
+    page.mouse.wheel(0, 300)
+    page.wait_for_function('(before) => scrollY > before', arg=initial, timeout=3000)
+    page.evaluate('(before) => scrollTo(0, before)', initial)
+    page.wait_for_function('(before) => scrollY === before', arg=initial, timeout=3000)
+    day.tap(timeout=3000)
+    sheet = page.get_by_role('dialog', name='2026년 11월 5일')
+    expect(sheet).to_be_visible(timeout=3000)
+    locked = page.evaluate('scrollY')
+    assert locked == initial
+    page.mouse.wheel(0, 300)
+    # Observe a bounded interval after the wheel; this is not an iOS touch gesture.
+    page.wait_for_timeout(250)
+    assert page.evaluate('scrollY') == locked
+    assert page.evaluate('document.documentElement.scrollWidth - innerWidth') == 0
+    assert sheet.evaluate('(element) => element.scrollWidth - element.clientWidth', timeout=3000) == 0
+
+
+@pytest.mark.parametrize('count', [8, 16])
+def test_date_sheet_more_focuses_first_new_item(populated_sheet, count):
+    page = populated_sheet
+    page.get_by_role('button', name='2026년 11월 5일, 시행 17건').tap()
+    sheet = page.get_by_role('dialog', name='2026년 11월 5일')
+    more = sheet.get_by_role('button', name='더 보기', exact=False)
+    if count == 16:
+        more.click()
+    more.focus()
+    page.keyboard.press('Enter')
+    items = sheet.get_by_role('button', name='가상법 제1조', exact=False)
+    expect(items).to_have_count(min(count + 8, 17), timeout=3000)
+    expect(items.nth(count)).to_be_focused(timeout=3000)
+
+
+def test_date_sheet_detail_focus_survives_history_round_trip(populated_sheet):
+    page = populated_sheet
+    page.get_by_role('button', name='2026년 11월 5일, 시행 17건').tap()
+    sheet = page.get_by_role('dialog', name='2026년 11월 5일')
+    for _ in range(2):
+        sheet.get_by_role('button', name='더 보기', exact=False).tap()
+    opener = sheet.get_by_role('button', name='가상법 제1조', exact=False).nth(16)
+    opener.scroll_into_view_if_needed()
+    original_scroll = sheet.evaluate('(element) => element.scrollTop')
+    assert original_scroll > 0
+    opener.tap()
+    detail = page.get_by_role('button', name='상세 닫기')
+    expect(detail).to_be_visible()
+    page.go_back(timeout=3000)
+    expect(opener).to_be_focused(timeout=3000)
+    assert sheet.evaluate('(element) => element.scrollTop') == original_scroll
+    page.go_back(timeout=3000)
+    expect(sheet).not_to_be_visible(timeout=3000)
+    page.go_forward(timeout=3000)
+    expect(sheet).to_be_visible(timeout=3000)
+    page.go_forward(timeout=3000)
+    expect(detail).to_be_visible(timeout=3000)
+    page.go_back(timeout=3000)
+    expect(opener).to_be_focused(timeout=3000)
+    assert sheet.evaluate('(element) => element.scrollTop') == original_scroll
+
+
+def test_date_sheet_delayed_detail_records_step_before_response(populated_sheet):
+    page = populated_sheet
+    held = []
+    page.route('**/data/law-changes/*.json', lambda route: held.append(route))
+    day = page.get_by_role('button', name='2026년 11월 5일, 시행 17건')
+    day.tap()
+    sheet = page.get_by_role('dialog', name='2026년 11월 5일')
+    item = sheet.get_by_role('button', name='가상법 제1조', exact=False).first
+    before = page.evaluate('history.length')
+    with page.expect_request('**/data/law-changes/*.json', timeout=3000) as pending:
+        item.tap()
+    expect(sheet.get_by_role('status')).to_contain_text('상세 정보를 불러오는 중입니다.')
+    assert page.evaluate('history.length') == before + 1
+    with page.expect_event('requestfailed', predicate=lambda request: request == pending.value, timeout=3000):
+        page.go_back(timeout=3000)
+    expect(item).to_be_focused()
+    expect(sheet.get_by_role('status')).to_have_count(0)
+
+    with page.expect_request('**/data/law-changes/*.json', timeout=3000):
+        page.go_forward(timeout=3000)
+    expect(sheet.get_by_role('status')).to_contain_text('상세 정보를 불러오는 중입니다.')
+    held[-1].fulfill(status=503)
+    expect(sheet.get_by_role('alert')).to_contain_text('상세 정보를 확인하지 못했습니다.')
+    expect(item).to_be_focused()
+    page.go_back(timeout=3000)
+    expect(sheet).not_to_be_visible()
+    expect(day).to_be_focused()
+
+
+def test_desktop_date_click_keeps_inline_results_without_random_uuid(development, calendar_pages):
+    url, _ = development
+    demo = calendar_pages(viewport={'width': 1280, 'height': 844})
+    demo.add_init_script("Object.defineProperty(Crypto.prototype, 'randomUUID', {value: undefined})")
+    demo.goto(url, timeout=5000)
+    expect(demo.get_by_role('region', name='시행 조문 4건')).to_be_visible()
+    day = demo.get_by_role('button', name=demo.get_by_role('button', pressed=True).get_attribute('aria-label'))
+    day.focus()
+    demo.keyboard.press('ArrowRight')
+    day.click()
+    expect(demo.get_by_role('dialog')).to_have_count(0)
+    expect(demo.get_by_role('region', name='시행 조문 4건')).to_be_visible()
+    assert demo.evaluate('document.documentElement.scrollWidth - innerWidth') == 0
 
 
 def test_preview_loading_error_and_delay_states(demo):

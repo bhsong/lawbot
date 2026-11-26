@@ -60,7 +60,7 @@ uv run --no-project --python 3.14 --with-editable ./services/law-calendar --with
 
 CI와 같은 의존성이 저장소 가상 환경에 이미 설치되어 있으면 오프라인에서 `uv run --offline --no-sync pytest -c pyproject.toml services/law-calendar/tests`로 실행할 수 있다. 대역 E2E는 내보낸 폴더를 `_headers`가 적용된 정적 파일 서버에서 열며 API 서버를 띄우지 않는다.
 
-설계는 [캘린더 계획](../../docs/plans/LAW_CALENDAR_PLAN.md)과 [정적 사이트 전환 계획](../../docs/plans/calendar-pages-static.md)을 참고한다.
+설계는 [캘린더 계획](../../docs/plans/LAW_CALENDAR_PLAN.md)과 [정적 사이트 전환 계획](../../docs/archives/calendar-pages-static.md)을 참고한다.
 
 ## 조회 API
 
