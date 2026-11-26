@@ -1,6 +1,6 @@
 # 법령 캘린더 모바일 날짜 시트 검증
 
-- 대상: [`calendar-mobile-sheet.md`](../plans/calendar-mobile-sheet.md) R1–R6. Red `7bb794ed45`, Green `6a471f371b`.
+- 대상: [`calendar-mobile-sheet.md`](../archives/calendar-mobile-sheet.md) R1–R6. Red `7bb794ed45`, Green `6a471f371b`.
 - 데이터: 기존 `demo.ts`, Vitest 합성 스냅샷 및 대역 E2E 합성 DB의 `[예시]` 조문만 사용했다. 브라우저는 로컬 테스트 서버에만 연결했다.
 
 ## Red
