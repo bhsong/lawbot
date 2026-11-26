@@ -84,3 +84,13 @@ iPhone Safari 실기기 확인은 실행하지 않았다. 다음 항목을 실�
 3. 시트 안쪽을 손가락으로 드래그하면 목록만 스크롤되고, 끝에서 배경으로 스크롤이 이어지지 않는지 확인.
 
 실제 모델 E2E·모델 스모크·품질 평가는 실행하지 않았다. 운영 트리·운영 설정을 건드리지 않았으며 푸시·PR·배포는 하지 않았다.
+
+## Codex 리뷰 반영
+
+PR #203: Navigation API가 없으면 양쪽 이력 항목에 앱이 기록한 위치가 있고 새 위치가 더 클 때만 앞으로 간 것으로 본다. 그 외에는 뒤로 간 것으로 보므로 일반 해시에서 Back으로 진입한 만료 상세·시트를 뒤로 건너뛴다.
+
+- Red `0dc4ced4a8`: `UV_NO_ENV_FILE=1 uv run pytest -q --tb=short services/law-calendar/tests/test_calendar_ui.py -k 'date_sheet_history_matches or date_sheet_forward_from_erp or date_sheet_skips_stale_date or date_sheet_back_skips_stale_layers'` — 6건 통과, 1건 실패, 23건 선택 제외. Navigation API를 끈 Chromium에서 `#after`는 이전 캘린더 진입 대기 3초를 초과했다. `#erp`는 탭 전환 후 캘린더를 다시 마운트하는 이 경로에서 이미 통과했다.
+- Green `c68450132f`: 테스트 변경 없음. `UV_NO_ENV_FILE=1 uv run pytest` 2,989건 통과, 10건 선택 제외(198.41초). 단위·계약·통합·대역 E2E를 포함하며, 캘린더 UI 브라우저 30건에서 `#erp`·`#after` 모두 원래 캘린더로 돌아가고 방금 떠난 해시를 다시 방문하지 않았다.
+- 두 프런트의 `npm run typecheck && npm test && npm run build` 통과. Vitest 캘린더 53건, 챗봇 55건 통과. 기존 챗봇 Vite `fingerprint` 경고만 남음. 위 CI 정적 검사와 문법 검사 통과(Ruff 포맷 627개, Pyright 4회 오류·경고·정보 0건).
+- R6: `main` 공통 조상 기준 `git diff --check` 통과. 캘린더 프런트·테스트 추가 줄을 검색한 결과 이메일·전화·개인 식별번호·토큰·키·홈 경로·포트 후보 0건. 공용 UI·챗봇 소스, 의존성·폰트·이미지·라이선스 파일 및 이번 수정의 출처·링크 변경 없음. Red 진단 파일은 삭제했다.
+- 실제 모델 E2E·모델 스모크·품질 평가·iPhone 실기기 확인은 실행하지 않았다. 푸시·PR 변경·운영 반영 없음.
