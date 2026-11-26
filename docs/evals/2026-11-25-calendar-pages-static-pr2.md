@@ -1,6 +1,6 @@
 # 법령 캘린더 정적 사이트 PR 2 검증
 
-[계획](../plans/calendar-pages-static.md) · [운영 절차](../operations.md#법령-캘린더-정적-사이트-게시)
+[계획](../archives/calendar-pages-static.md) · [운영 절차](../operations.md#법령-캘린더-정적-사이트-게시)
 
 합성 DB·일일 스냅숏, 가짜 Wrangler, httpx MockTransport로 게시를 검증했다. 운영 트리·DB·환경 파일은 열지 않았고, 실제 Pages 업로드·삭제, 실제 모델 E2E, 모델 스모크, 품질 평가는 실행하지 않았다. Wrangler `4.160.0`은 npm 배포일이 11월 10일임을 확인해 정확한 버전으로 고정했다.
 

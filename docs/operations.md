@@ -73,7 +73,7 @@ uv run --project services/law-calendar --frozen --no-sync --no-env-file law-cale
 
 게시기는 업로드 전에 설정한 계정에서 프로젝트 이름과 운영 브랜치(`main`)를 확인합니다. 운영 주소의 `data/site-build.json`이 이번 내보내기와 일치할 때만 이력을 정리합니다. 완전한 목록을 검증한 뒤 각 삭제 직전 canonical 운영 ID를 재확인하고, 삭제 뒤 현재 운영 배포 하나만 남았는지 확인합니다. 운영 확인이 실패하면 삭제하지 않습니다. 게시 도중 대시보드나 다른 자동화에서 배포·롤백하지 않습니다. API 조회와 삭제 사이의 외부 변경까지 원자적으로 막을 수는 없습니다.
 
-캘린더 공개 화면은 Pages에서만 제공합니다. 운영 반영 시 `com.lawbot.calendar`의 launchd 실행 인자에서 `--frontend`와 그 경로를 제거하고 루프백 API만 유지합니다. 터널에서 캘린더 ingress 규칙을 제거하는 절차는 [전환 순서](plans/calendar-pages-static.md#6-전환-순서-운영-반영-승인-뒤-각-단계-확인-후-다음-단계)를 따릅니다.
+캘린더 공개 화면은 Pages에서만 제공합니다. 운영 반영 시 `com.lawbot.calendar`의 launchd 실행 인자에서 `--frontend`와 그 경로를 제거하고 루프백 API만 유지합니다. 터널에서 캘린더 ingress 규칙을 제거하는 절차는 [전환 순서](archives/calendar-pages-static.md#6-전환-순서-운영-반영-승인-뒤-각-단계-확인-후-다음-단계)를 따릅니다.
 
 daily는 정상·부분 실패·스냅숏 재사용 뒤 게시를 한 번 요청하고 `calendarPublish`를 남깁니다. 수집 결과와 종료 코드는 게시 결과와 별개입니다. 서버·로컬 검토 CLI는 프로젝트가 설정돼 있고 검토 DB가 설정 DB와 같은 경우에만 예약합니다. 요청 잠금 대기 실패는 저장 결과를 바꾸지 않습니다. 큐·잠금·작업자 로그는 업로드 밖의 `services/law-calendar/.pages-publish/`(`0700`)에 둡니다. 서비스·CLI 로그와 이 폴더의 `worker.log`에서 `calendar_publish_*`를 확인합니다.
 

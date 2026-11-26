@@ -1,6 +1,6 @@
 # 법령 캘린더 정적 사이트 PR 1 리뷰 반영 검증
 
-[계획](../plans/calendar-pages-static.md) · [첫 구현 검증](2026-11-25-calendar-pages-static-pr1.md) · [공개 라이선스 근거](2026-11-25-calendar-public-license-check.md)
+[계획](../archives/calendar-pages-static.md) · [첫 구현 검증](2026-11-25-calendar-pages-static-pr1.md) · [공개 라이선스 근거](2026-11-25-calendar-public-license-check.md)
 
 운영 사본에서 보고된 조문 형태를 합성 조문에 옮겨 확인했다. 운영 트리·운영 데이터 사본·Pages를 열지 않았고, 실제 모델을 호출하지 않았다.
 
