@@ -92,8 +92,8 @@ def consult_trace_enabled(env):
     return value == '1' and bool((env.get('LAWBOT_DB') or '').strip())
 
 
-def _model_hours(env):
-    value = (env.get('LAWBOT_MODEL_HOURS') or '').strip()
+def parse_model_hours(value: str | None) -> ModelHours | None:
+    value = (value or '').strip()
     if not value:
         return None
     hhmm = r'(?:[01][0-9]|2[0-3]):[0-5][0-9]'
@@ -145,7 +145,7 @@ def load(env=None, web=False):
         from lawbot import view
 
         take('consult_trace', lambda: consult_trace_enabled(env))
-        take('model_hours', lambda: _model_hours(env))
+        take('model_hours', lambda: parse_model_hours(env.get('LAWBOT_MODEL_HOURS')))
 
         take('auth', lambda: security.auth(env))
         take('admin', lambda: admin_credentials(env, db_configured=bool(db)))

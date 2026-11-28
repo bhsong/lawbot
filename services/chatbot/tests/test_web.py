@@ -2,6 +2,7 @@
 # 실제 프로세스로 띄우는 검사(대기열·연결 끊김)는 test_web_integration.py
 import asyncio
 import json
+import os
 import subprocess
 import sys
 from dataclasses import replace
@@ -18,7 +19,7 @@ import lawbot.service as service
 from admin_test_data import seed_qa
 from conftest import ADMIN_PW, ADMIN_USER, set_auth
 from fakes import HITS, FakeLLM, FakeRetriever
-from lawbot import feedback, feedback_store, settings, view, web
+from lawbot import envfile, feedback, feedback_store, settings, view, web
 from lawbot.api_client import ModelServerTimeout
 from lawbot.db import connection, migrate
 from lawbot.qa_rules import latest_rows
@@ -654,6 +655,53 @@ def test_chat_model_hours(lawbot, env, tmp_path, hours, expected):
     else:
         assert '모델 서버가 준비되지 않았습니다' in data['message']
         assert calls == ['router', 'search']
+
+
+def test_chat_reloads_only_model_hours_on_mtime_change(lawbot, env, tmp_path, capsys):
+    path = tmp_path / '.env'
+    stamp = 1_700_000_000_000_000_000
+    original_parse = envfile.parse
+    parsed = []
+
+    def parse(text, *args, **kwargs):
+        parsed.append(text)
+        return original_parse(text, *args, **kwargs)
+
+    def set_hours(hours):
+        nonlocal stamp
+        path.write_text(
+            f'LAWBOT_MODEL_HOURS={hours}\nLAWBOT_PW=synthetic-private-value\nignored invalid line\n',
+            encoding='utf-8',
+        )
+        stamp += 1_000_000_000
+        os.utime(path, ns=(stamp, stamp))
+
+    def response(client):
+        return events(chat(client))[-1]
+
+    env.setattr(web, 'datetime', SimpleNamespace(now=lambda: datetime(2026, 1, 1, 12)))
+    env.setattr(envfile, 'parse', parse)
+    initial = settings.ModelHours(time(6), time(9))
+    set_hours('06:00-09:00')
+    with make_client(lawbot, model_hours=web._model_hours_reader(path, path.stat().st_mtime_ns, initial)) as client:
+        assert login(client).status_code == 200
+        assert '06:00–09:00' in response(client)[1]['message']
+        assert parsed == []
+        set_hours('13:00-22:00')
+        assert '13:00–22:00' in response(client)[1]['message']
+        assert '13:00–22:00' in response(client)[1]['message']
+        assert [line.strip() for line in parsed] == ['LAWBOT_MODEL_HOURS=13:00-22:00']
+        capsys.readouterr()
+        set_hours('malformed-private-value')
+        for _ in range(2):
+            event, data = response(client)
+            assert event == 'error' and data['kind'] == 'off_hours'
+            assert '13:00–22:00' in data['message']
+        warning = capsys.readouterr().out
+        assert warning.count('LAWBOT_MODEL_HOURS') == 1 and 'malformed-private-value' not in warning
+        assert len(parsed) == 2
+        set_hours('00:00-23:59')
+        assert response(client)[0] == 'done'
 
 
 def test_chat_config_error_is_reported_without_details(authed, env):

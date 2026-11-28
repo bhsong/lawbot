@@ -12,12 +12,13 @@ import threading
 import time
 import uuid
 from collections import OrderedDict
+from collections.abc import Callable
 from contextlib import nullcontext
 from dataclasses import replace
 from datetime import datetime
 from functools import partial
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, Literal
 
 import anyio
 import uvicorn
@@ -430,6 +431,33 @@ class ApiCacheControl:
         return await self.app(scope, receive, send_no_store)
 
 
+def _env_stamp(path: Path) -> int | Literal['unreadable'] | None:
+    try:
+        return path.stat().st_mtime_ns
+    except FileNotFoundError:
+        return None
+    except OSError:
+        return 'unreadable'
+
+
+def _model_hours_reader(path: Path, mtime: int | Literal['unreadable'] | None, hours: settings.ModelHours | None):
+    def current():
+        nonlocal mtime, hours
+        stamp = _env_stamp(path)
+        if stamp != mtime:
+            mtime = stamp
+            if stamp == 'unreadable':
+                log.warning('LAWBOT_MODEL_HOURS: .env 파일의 수정 시각을 확인할 수 없어 직전 운영 시간을 유지합니다.')
+            else:
+                try:
+                    hours = settings.parse_model_hours(envfile.read_model_hours(path))
+                except ValueError, OSError:
+                    log.warning('LAWBOT_MODEL_HOURS: .env 새 값을 읽을 수 없어 직전 운영 시간을 유지합니다.')
+        return hours
+
+    return current
+
+
 def create_app(
     app,
     auth: tuple[str, str],
@@ -442,6 +470,7 @@ def create_app(
     protected=None,
     calendar_url: str | None = None,
     calendar_token: str | None = None,
+    model_hours: Callable[[], settings.ModelHours | None] | None = None,
 ):
     """app: service.load_app() 결과, auth: (사용자, 비밀번호), fb: feedback.Feedback 또는 None, dist: SPA 빌드 폴더"""
     if admin is not None and db is None:
@@ -548,7 +577,7 @@ def create_app(
     async def chat(request: Request, who: Who):
         body = await read_json(request)
         question = valid_chat(body)
-        hours = getattr(getattr(app, 'settings', None), 'model_hours', None)
+        hours = model_hours() if model_hours is not None else getattr(cfg, 'model_hours', None)
         closed_hours = hours if hours is not None and not hours.contains(datetime.now().time()) else None
         needs_slot = closed_hours is None
         remember = partial(fb.remember_turn, who[1]) if fb is not None else None
@@ -710,6 +739,8 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description='Lawbot 웹앱 (127.0.0.1, 로그인 필수)')
     parser.add_argument('--port', help='포트 (기본: .env의 LAWBOT_PORT). 테스트에서 빈 포트로 띄울 때')
     args = parser.parse_args(argv)
+    env_path = envfile.source_path()
+    env_stamp = _env_stamp(env_path) if env_path is not None else None
     envfile.load()  # .env (셸에 있는 변수 우선). 설정을 읽기 전에
     cfg = settings.load(web=True)  # 인증·포트·모델·피드백 폴더를 모두 검사 (모델 서버에 접속하기 전에)
     require_build(DIST)  # 화면 파일이 없거나 소스와 다르면 모델 서버에 접속하기 전에 거부
@@ -731,6 +762,7 @@ def main(argv=None):
         protected=protected,
         calendar_url=cfg.calendar_api_url,
         calendar_token=cfg.calendar_admin_token,
+        model_hours=_model_hours_reader(env_path, env_stamp, cfg.model_hours) if env_path is not None else None,
     )
     log.info(f'웹앱: http://{security.SERVER_NAME}:{port}')
     uvicorn.run(api, host=security.SERVER_NAME, port=port, log_level='warning')

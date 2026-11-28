@@ -255,6 +255,8 @@ def off_hours_stack(tmp_path, page, request):
     # The window is at least an hour away, including when it crosses midnight.
     hour = datetime.now().replace(minute=0, second=0, microsecond=0) + timedelta(hours=2)
     start, end = f'{hour:%H:%M}', f'{hour + timedelta(hours=1):%H:%M}'
+    env_path = tmp_path / '.env'
+    env_path.write_text('LAWBOT_MODEL_HOURS=\n', encoding='utf-8')
     db = tmp_path / 'private' / 'lawbot.db'
     cli.main(['init', '--db', str(db)])
     stack = e2e.Stack(
@@ -263,28 +265,33 @@ def off_hours_stack(tmp_path, page, request):
         capture_wire=True,
         LAWBOT_DB=str(db),
         LAWBOT_CONSULT_TRACE='1',
-        LAWBOT_MODEL_HOURS=f'{start}-{end}',
+        LAWBOT_ENV_FILE=str(env_path),
         LAWBOT_FEEDBACK='1',
     )
     try:
-        yield stack, f'{start}–{end}', db
+        yield stack, env_path, start, end, db
         e2e.keep_on_failure(request, 'e2e_stub', stack.logs(), page)
     finally:
         stack.stop()
 
 
-def test_off_hours_shows_notice_without_model_calls_or_feedback(off_hours_stack, page):
-    stack, window, db = off_hours_stack
+def test_off_hours_reload_shows_notice_without_model_calls_or_feedback(off_hours_stack, page):
+    stack, env_path, start, end, db = off_hours_stack
     e2e.login(page, stack.url)
     expect(e2e.textbox(page)).to_be_visible()
     assert page.request.get(f'{stack.url}/api/config', timeout=e2e.ANSWER_TIMEOUT).json()['feedback']['enabled']
+    e2e.ask(page, QUESTION)
+    e2e.wait_done(page)
+    expect(e2e.answer(page)).to_contain_text(FAKE_ANSWER)
+    e2e.wait_request_log(page, stack.request_log, 0)
+    env_path.write_text(f'LAWBOT_MODEL_HOURS={start}-{end}\n', encoding='utf-8')
     paths = (stack.model_wire, stack.chat_wire)
     before = [e2e.request_log(path) for path in paths]
     e2e.ask(page, '주 40시간 일하면 주휴수당은 얼마인가요?')
-    notice = f'답변 서비스 운영 시간은 {window}입니다. 운영 시간에 다시 질문해 주세요.'
+    notice = f'답변 서비스 운영 시간은 {start}–{end}입니다. 운영 시간에 다시 질문해 주세요.'
     alert(page, notice, timeout=5000)
     expect(e2e.answer(page).get_by_role('button', name='좋아요')).to_have_count(0)
-    row = e2e.wait_request_log(page, stack.request_log, 0)
+    row = e2e.wait_request_log(page, stack.request_log, 1)
     assert row['error_type'] == 'off_hours'
     with connect(db) as conn:
         stored = conn.execute(
