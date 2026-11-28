@@ -303,6 +303,8 @@ def test_date_sheet_skips_stale_date_in_both_history_directions(mobile_sheet_pag
     page.reload(timeout=5000)
     expect(page.get_by_role('heading', name='2026년 11월 6일')).to_be_visible(timeout=3000)
     page.go_back(timeout=3000)
+    # The stale layers share the calendar URL; wait for the original entry before going forward.
+    page.wait_for_function('(base) => location.href === base && !history.state?.lawCalendar', arg=base, timeout=3000)
     expect(page).to_have_url(base, timeout=3000)
     expect(page.get_by_role('dialog')).to_have_count(0, timeout=3000)
     page.go_forward(timeout=3000)
