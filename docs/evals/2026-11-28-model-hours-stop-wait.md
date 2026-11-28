@@ -13,3 +13,17 @@
 | `PYRIGHT_PYTHON_IGNORE_WARNINGS=1 uv run pyright` | 오류 0, 경고 0, 정보 0 |
 
 운영 반영과 실제 launchd 정지 확인은 범위 밖이다. 실제 모델 E2E, 모델 스모크, 품질 평가: 실행 안 함.
+
+## 리뷰 반영
+
+- Red: `test_model_hours_script.py -k 'stop or apply_matching_state or apply_at_night'`에서 4건 실패, 13건 통과. 기본 대기와 1회 대기가 마지막 재확인 전에 끝났고, 공유 예산 검사에서는 해제될 서비스까지 실패로 보고했다.
+- Green: 0·1·30회 경계, 두 서비스의 공통 예산, 셸 정수 범위 밖 인자의 사전 거부를 확인했다. 저장소 파일은 그대로 두고 `stop`의 `sleep 1`만 뺀 변형을 실행하자 지연 정지 테스트 4건이 모두 실패했다.
+
+| 명령 | 결과 |
+| --- | --- |
+| `LAWBOT_ENV_FILE= uv run --locked --no-env-file pytest -q --tb=no --show-capture=no -o console_output_style=count -r N` | 3,058개 통과, 10개 기본 실행 대상 제외 (266.93초). 단위·계약·통합·대역 E2E 포함 |
+| `uv run --locked --no-env-file ruff check --output-format=github` | 통과 |
+| `uv run --locked --no-env-file ruff format --check` | 640개 파일 포맷 일치 |
+| `PYRIGHT_PYTHON_IGNORE_WARNINGS=1 uv run --locked --no-env-file pyright` | 오류 0, 경고 0, 정보 0 |
+
+실제 모델 E2E, 모델 스모크, 품질 평가: 실행 안 함.

@@ -60,7 +60,7 @@ status() {
 stop() {
     launchctl bootout "$domain/$model_label" >/dev/null 2>&1 || :
     launchctl bootout "$domain/$generation_label" >/dev/null 2>&1 || :
-    attempt=1
+    waits=0
     while :; do
         pending=
         if registered "$model_label"; then pending=$model_label; fi
@@ -70,9 +70,9 @@ stop() {
             log_result 'Model servers unregistered.'
             return
         fi
-        [ "$attempt" -lt "$stop_wait" ] || fail "Model server bootout failed: $pending."
+        [ "$waits" -lt "$stop_wait" ] || fail "Model server bootout failed: $pending."
         sleep 1
-        attempt=$((attempt + 1))
+        waits=$((waits + 1))
     done
 }
 
@@ -137,8 +137,10 @@ while [ "$#" -gt 0 ]; do
         --now) now=$2 ;;
         --stop-wait)
             case "$2" in ''|*[!0-9]*) usage ;; esac
-            [ "$2" -ge 0 ] 2>/dev/null || usage
-            stop_wait=$2 ;;
+            # Strip leading zeros before checking that shell arithmetic preserves the decimal value.
+            stop_wait=${2#"${2%%[!0]*}"}
+            stop_wait=${stop_wait:-0}
+            ( [ "$((stop_wait))" = "$stop_wait" ] ) 2>/dev/null || usage ;;
         --prod-dir) prod_dir=$2 ;;
         --model-label) model_label=$2 ;;
         --model-plist) model_plist=$2 ;;
