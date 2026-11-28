@@ -14,6 +14,7 @@ import uuid
 from collections import OrderedDict
 from contextlib import nullcontext
 from dataclasses import replace
+from datetime import datetime
 from functools import partial
 from pathlib import Path
 from typing import Annotated
@@ -35,7 +36,7 @@ from lawbot.decree import is_decree
 from lawbot.hits import Timing
 from lawbot.inference import REQUEST_ID
 from lawbot.paths import ROOT
-from lawbot.service import AskError, ask, load_app, log_request
+from lawbot.service import AskError, ask, load_app, log_request, request_timing
 from lawbot_common.edge import via_cloudflare
 from lawbot_common.logs import logger
 
@@ -187,7 +188,7 @@ def answer_display(raw, hits, st: Timing, *, calculated, review=None):
     return verdict, notice, text, used, review.refused
 
 
-def chat_events(app, question, remember=None):
+def chat_events(app, question, remember=None, *, closed_hours: settings.ModelHours | None = None):
     """질문 하나 → (이벤트, 데이터)를 차례로. remember(턴 기록) → turn_id (피드백이 꺼져 있으면 None)
     이벤트: status → sources(모두 펼침) → answer·stats… → sources(인용/검색만 구분) → stats → done, 실패하면 error
     생성 단계에서 화면 글이 그대로면(간결형의 근거·설명 토큰) TICK을 낸다: 받는 쪽이 토큰마다 연결 끊김을 확인하게"""
@@ -210,6 +211,13 @@ def chat_events(app, question, remember=None):
 
     pipeline = None
     try:
+        if closed_hours is not None:
+            started = time.perf_counter()
+            request_id = trace.request_id if trace is not None else uuid.uuid4().hex[:12]
+            st = request_timing(app, request_id)
+            st['total'] = time.perf_counter() - started
+            report(st, 'error', 'off_hours')
+            raise AskError('off_hours', 'off_hours', None)
         yield 'status', {'text': view.searching_stats(app)}
         pipeline = ask(
             app,
@@ -266,11 +274,12 @@ def chat_events(app, question, remember=None):
             yield 'done', final
             sent_done = True
     except AskError as err:  # 유형(kind)은 요청 로그의 error_type과 같음. 원래 예외는 __cause__
-        msg = view.error_message(err.kind, err.__cause__, spec)
-        if outcomes:
-            log.error('질문 처리 실패 %s', outcomes[-1][0].get('failure'))
-        else:
-            log.error('질문 처리 실패: %s', err.stage)
+        msg = view.error_message(err.kind, err.__cause__, spec, model_hours=closed_hours)
+        if err.kind != 'off_hours':
+            if outcomes:
+                log.error('질문 처리 실패 %s', outcomes[-1][0].get('failure'))
+            else:
+                log.error('질문 처리 실패: %s', err.stage)
         message = CONFIG_ERROR if msg is None else msg
         if trace is not None:
             trace.answer_shown = message
@@ -539,6 +548,9 @@ def create_app(
     async def chat(request: Request, who: Who):
         body = await read_json(request)
         question = valid_chat(body)
+        hours = getattr(getattr(app, 'settings', None), 'model_hours', None)
+        closed_hours = hours if hours is not None and not hours.contains(datetime.now().time()) else None
+        needs_slot = closed_hours is None
         remember = partial(fb.remember_turn, who[1]) if fb is not None else None
         trace = None
         if trace_db is not None:
@@ -552,22 +564,25 @@ def create_app(
                 {'model': app.profile.model.key, 'request_id': rid},
                 app.corpus_release_id,
             )
-        events = chat_events(app, question, remember)
-        return ChatResponse(stream(events, trace), trace, request.cookies.get(COOKIE) if trace is not None else None)
+        events = chat_events(app, question, remember, closed_hours=closed_hours)
+        cookie = request.cookies.get(COOKIE) if trace is not None else None
+        return ChatResponse(stream(events, trace, needs_slot), trace, cookie, needs_slot)
 
     class ChatResponse(StreamingResponse):
-        def __init__(self, content, trace: consult_trace.Consultation | None, cookie: str | None):
+        def __init__(self, content, trace: consult_trace.Consultation | None, cookie: str | None, needs_slot: bool):
             super().__init__(content, media_type='text/event-stream')
             self.content = content
             self.trace = trace
             self.cookie = cookie
+            self.needs_slot = needs_slot
 
         async def __call__(self, scope, receive, send):
             nonlocal chat_requests
-            # Allow one waiting request per active slot.
-            if chat_requests >= 2 * concurrency:
-                return await JSONResponse({'detail': CHAT_BUSY}, status_code=503)(scope, receive, send)
-            chat_requests += 1
+            if self.needs_slot:
+                # Allow one waiting request per active slot.
+                if chat_requests >= 2 * concurrency:
+                    return await JSONResponse({'detail': CHAT_BUSY}, status_code=503)(scope, receive, send)
+                chat_requests += 1
 
             async def send_event(message):
                 await send(message)
@@ -595,7 +610,8 @@ def create_app(
                     with anyio.CancelScope(shield=True):
                         await self.content.aclose()
                 finally:
-                    chat_requests -= 1
+                    if self.needs_slot:
+                        chat_requests -= 1
                     if self.trace is not None:
                         self.trace.end = time.monotonic_ns()
                         with anyio.CancelScope(shield=True):
@@ -614,12 +630,12 @@ def create_app(
             trace.timing['trace_status'] = 'saved'
         log_request(app, trace.timing, trace.status, trace.error_type)
 
-    async def stream(events, trace):
+    async def stream(events, trace, needs_slot):
         # Each worker invocation inherits this scope, including after a generator yield.
         with consult_trace.ACTIVE.set(trace), REQUEST_ID.set(trace.request_id if trace is not None else None):
-            if slots.locked():
+            if needs_slot and slots.locked():
                 yield sse('status', {'text': WAITING})
-            async with slots:
+            async with slots if needs_slot else nullcontext():
                 try:
                     while (item := await anyio.to_thread.run_sync(next, events, None)) is not None:
                         if item[0] != TICK:
