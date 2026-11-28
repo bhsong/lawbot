@@ -10,7 +10,6 @@ import time
 import uuid
 from collections.abc import Callable
 from dataclasses import asdict, dataclass
-from datetime import datetime
 from functools import cached_property, partial
 from pathlib import Path
 from typing import Any, cast
@@ -574,15 +573,21 @@ def write_from_context(app, question, hits, *, suffix='', request_id=None, repor
     return _answer(app, question, TOP_K, request_id, report, False, False, trace, hits, suffix)
 
 
+def request_timing(app, request_id: str) -> Timing:
+    """Initialize request metrics, including for questions rejected before model work."""
+    return {
+        'model': app.profile.model.key,
+        'load': None,
+        'request_id': request_id,
+        'call_counts': dict.fromkeys(('embedding', 'search', 'rerank', 'llm'), 0),
+    }
+
+
 def _answer(app, question, k, request_id, report, calculation_candidate, clarify, trace, provided, suffix=''):
     """Share writer streaming, measurements and error handling for initial and resumed answers."""
     t0 = time.perf_counter()
-    st: Timing = {
-        'model': app.profile.model.key,
-        'load': None,
-        'request_id': request_id or uuid.uuid4().hex[:12],
-        'call_counts': dict.fromkeys(('embedding', 'search', 'rerank', 'llm'), 0),
-    }
+    request_id = request_id or uuid.uuid4().hex[:12]
+    st = request_timing(app, request_id)
 
     def record(status, error=None):
         if report is None:
@@ -590,16 +595,10 @@ def _answer(app, question, k, request_id, report, calculation_candidate, clarify
         else:
             report(st, status, error)
 
-    hours = getattr(getattr(app, 'settings', None), 'model_hours', None)
-    if hours is not None and not hours.contains(datetime.now().time()):
-        st['total'] = time.perf_counter() - t0
-        record('error', 'off_hours')
-        raise AskError('off_hours', 'off_hours', None)
-
     stage, logged = 'search', False
     try:
         # 요청 id를 모델 서버 요청 헤더로 (단계마다 다시 넣음: 웹앱은 생성기의 next()를 매번 다른 스레드 문맥에서 부름)
-        REQUEST_ID.set(st['request_id'])
+        REQUEST_ID.set(request_id)
         if calculation_candidate:
             stage = 'router'
             route_started = time.perf_counter()
@@ -635,7 +634,7 @@ def _answer(app, question, k, request_id, report, calculation_candidate, clarify
                 st['calculation_metrics']['calculation_event_ms'] = round((time.perf_counter() - t0) * 1000, 3)
                 yield 'calculation', [], '', st
             stage = 'search'
-            REQUEST_ID.set(st['request_id'])
+            REQUEST_ID.set(request_id)
         if provided is None:
             law_hits, decree_hits = retrieve(app, question, k, st)
             with consult_trace.stage('definitions') as step:
@@ -652,7 +651,7 @@ def _answer(app, question, k, request_id, report, calculation_candidate, clarify
         llm = app.llm
         stage = 'generation'
         if clarify and '_calculation' not in st:
-            REQUEST_ID.set(st['request_id'])
+            REQUEST_ID.set(request_id)
             started = time.perf_counter()
             with consult_trace.stage('clarify') as step:
                 decision, attempts, metrics = llm.clarify(question, hits)
@@ -670,7 +669,7 @@ def _answer(app, question, k, request_id, report, calculation_candidate, clarify
                 return
         st['_system'] = getattr(llm, 'system', None)
         raw, last, t_gen = '', None, time.perf_counter()
-        REQUEST_ID.set(st['request_id'])
+        REQUEST_ID.set(request_id)
         count_call(st, 'llm')
         options: dict[str, Any] = {'suffix': suffix} if suffix else {}
         if trace:
@@ -736,7 +735,7 @@ def _answer(app, question, k, request_id, report, calculation_candidate, clarify
         if stage == 'search':
             stage = st.get('_stage', 'search')  # 법률·하위법령 검색('search') 또는 리랭킹('rerank')에서 실패
         kind = error_type(e, stage)
-        st['failure'] = failure_fields(stage, e, st['request_id'])
+        st['failure'] = failure_fields(stage, e, request_id)
         if not logged:
             st['total'] = time.perf_counter() - t0
             record('error', kind)

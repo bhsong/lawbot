@@ -420,11 +420,16 @@ plutil -lint "$P"
 launchctl bootstrap "gui/$(id -u)" "$P"                    # 예약 등록 및 현재 시각 적용
 launchctl print "gui/$(id -u)/com.lawbot.model-hours"       # 예약 등록 확인
 "$model_hours" status                                     # 두 모델의 등록·실행 상태
-tail -n 20 ~/Library/Logs/lawbot/model-hours.log            # 모델 준비 성공·실패 확인
+tail -n 20 ~/Library/Logs/lawbot/model-hours.log            # 실행 시각과 결과 확인
+```
+
+예약만 해제할 때 실행합니다. 두 모델 서비스의 현재 상태는 그대로 유지합니다.
+
+```zsh
 launchctl bootout "gui/$(id -u)/com.lawbot.model-hours"     # 예약만 해제, 모델 상태는 유지
 ```
 
-예약은 매일 06:00·21:30과 LaunchAgent 등록·로그인 시 `apply`를 실행합니다. 21:30 이후 로그인하면 두 모델 서비스가 등록되어 있더라도 해제합니다. 운영 시간 안에서는 두 모델을 시작한 뒤 `check_deploy`로 임베딩·리랭크 및 로컬 생성 모델까지 확인합니다. 06:25까지 준비되지 않으면 실패를 기록합니다. 시간을 바꾸면 plist의 예약 시각, `apply --hours HH:MM-HH:MM`, 웹앱 설정을 함께 바꿉니다.
+예약은 매일 06:00·21:30과 LaunchAgent 등록·로그인 시 `apply`를 실행합니다. 21:30 이후 로그인하면 두 모델 서비스가 등록되어 있더라도 해제합니다. 운영 시간 안에서는 두 모델을 시작한 뒤 `uv run --frozen --no-sync python -m lawbot.check_deploy`로 설치된 환경을 변경하지 않고 준비 상태를 확인합니다. 06:25까지 준비되지 않으면 실패를 기록합니다. `start`·`stop`·`apply`는 로컬 시각과 결과만 한 줄씩 기록합니다. 시간을 바꾸면 plist의 예약 시각, `apply --hours HH:MM-HH:MM`, 웹앱 설정을 함께 바꿉니다. 자정을 넘는 `apply` 구간에서 시작보다 이른 마감 시각은 다음 날로 해석합니다.
 
 밤에 두 모델만 수동으로 켜거나 다시 내릴 때:
 

@@ -10,9 +10,17 @@ prod_dir=$HOME/Work/lawbot-prod
 hours=06:00-21:30
 deadline=06:25
 now=
+current=
+
+log_result() {
+    printf '%s %s: %s\n' "$(date '+%Y-%m-%dT%H:%M:%S%z')" "$action" "$1"
+}
 
 fail() {
-    printf '%s\n' "$1" >&2
+    case "${action:-}" in
+        start|stop|apply) log_result "$1" >&2 ;;
+        *) printf '%s\n' "$1" >&2 ;;
+    esac
     exit 1
 }
 
@@ -44,20 +52,12 @@ local_seconds() {
 register() {
     launchctl print "$domain/$1" >/dev/null 2>&1 ||
         launchctl bootstrap "$domain" "$2" >/dev/null 2>&1 ||
-        launchctl print "$domain/$1" >/dev/null 2>&1 || {
-            printf '%s: bootstrap failed\n' "$1" >&2
-            return 1
-        }
+        launchctl print "$domain/$1" >/dev/null 2>&1
 }
 
 unregister() {
-    if launchctl bootout "$domain/$1" >/dev/null 2>&1; then
-        return 0
-    fi
-    if launchctl print "$domain/$1" >/dev/null 2>&1 || ! launchctl print "$domain" >/dev/null 2>&1; then
-        printf '%s: bootout failed\n' "$1" >&2
-        return 1
-    fi
+    launchctl bootout "$domain/$1" >/dev/null 2>&1 || :
+    ! launchctl print "$domain/$1" >/dev/null 2>&1 && launchctl print "$domain" >/dev/null 2>&1
 }
 
 status() {
@@ -73,46 +73,59 @@ status() {
     fi
 }
 
-probe() (
-    cd "$prod_dir" || exit 1
-    uv run python -m lawbot.check_deploy &
-    pid=$!
-    trap 'kill "$pid" 2>/dev/null; exit 1' HUP INT TERM
-    while kill -0 "$pid" 2>/dev/null; do
-        if [ "$(date +%s)" -ge "$cutoff" ]; then
-            kill "$pid" 2>/dev/null
-            wait "$pid"
-            exit 1
+probe() {
+    # macOS /bin/sh gives the background job its own process group, even without a tty.
+    set -m
+    (cd "$prod_dir" && exec uv run --frozen --no-sync python -m lawbot.check_deploy) >/dev/null 2>&1 &
+    probe_pid=$!
+    set +m
+    while [ "$interrupted" -eq 0 ] && [ "$(date +%s)" -lt "$cutoff" ]; do
+        if ! kill -0 "$probe_pid" 2>/dev/null; then
+            wait "$probe_pid" 2>/dev/null
+            return $?
         fi
         sleep 1
     done
-    wait "$pid"
-)
+    if kill -TERM -- "-$probe_pid" 2>/dev/null; then
+        sleep 1
+        kill -KILL -- "-$probe_pid" 2>/dev/null
+    fi
+    wait "$probe_pid" 2>/dev/null
+    return 1
+} 2>/dev/null
 
 start() {
     finish=$(clock_seconds "$deadline") || fail 'Invalid --deadline; use HH:MM.'
-    current=$(local_seconds) || fail 'Invalid local time; use HH:MM[:SS] for --now.'
+    current=${current:-$(local_seconds)} || fail 'Invalid local time; use HH:MM[:SS] for --now.'
+    if [ "$action" = apply ] && [ "$open" -gt "$close" ]; then
+        # Count both times from midnight on the day the window opened.
+        if [ "$current" -lt "$close" ]; then current=$(( current + 86400 )); fi
+        if [ "$finish" -lt "$open" ]; then finish=$(( finish + 86400 )); fi
+    fi
     epoch=$(date +%s)
     remaining=$(( finish - current ))
     cutoff=$(( epoch + remaining ))
+    interrupted=0
+    trap 'interrupted=1' HUP INT TERM
     result=0
     register "$model_label" "$model_plist" || result=1
     register "$generation_label" "$generation_plist" || result=1
-    [ "$result" -eq 0 ] || return 1
+    [ "$result" -eq 0 ] || fail 'Model server bootstrap failed.'
     single_probe=0
     if [ "$remaining" -le 0 ]; then
         # A daytime login or a manual start still gets one bounded readiness check.
         cutoff=$(( $(date +%s) + 30 ))
         single_probe=1
     fi
-    while [ "$(date +%s)" -lt "$cutoff" ]; do
-        if probe >/dev/null 2>&1; then
-            printf '%s\n' 'Model servers ready.'
+    while [ "$interrupted" -eq 0 ] && [ "$(date +%s)" -lt "$cutoff" ]; do
+        if probe && [ "$interrupted" -eq 0 ]; then
+            log_result 'Model servers ready.'
             return 0
         fi
-        [ "$single_probe" -eq 0 ] || break
+        [ "$single_probe" -eq 0 ] && [ "$interrupted" -eq 0 ] || break
         sleep 1
     done
+    [ "$interrupted" -eq 0 ] || fail 'Model readiness check interrupted.'
     fail "Model servers not ready (deadline $deadline)."
 }
 
@@ -135,31 +148,33 @@ while [ "$#" -gt 0 ]; do
     shift 2
 done
 
+operation=$action
 if [ "$action" = apply ]; then
     case "$hours" in ?????-?????) ;; *) fail 'Invalid --hours; use HH:MM-HH:MM.' ;; esac
     open=$(clock_seconds "${hours%-*}") && close=$(clock_seconds "${hours#*-}") ||
         fail 'Invalid --hours; use HH:MM-HH:MM.'
     current=$(local_seconds) || fail 'Invalid local time; use HH:MM[:SS] for --now.'
-    action=stop
+    operation=stop
     if [ "$open" -le "$close" ]; then
-        if [ "$current" -ge "$open" ] && [ "$current" -lt "$close" ]; then action=start; fi
+        if [ "$current" -ge "$open" ] && [ "$current" -lt "$close" ]; then operation=start; fi
     elif [ "$current" -ge "$open" ] || [ "$current" -lt "$close" ]; then
-        action=start
+        operation=start
     fi
 fi
 
-case "$action" in start|stop|status) ;; *) usage ;; esac
+case "$operation" in start|stop|status) ;; *) usage ;; esac
 domain=gui/$(id -u)
 launchctl print "$domain" >/dev/null 2>&1 || fail 'Cannot access the launchd GUI domain.'
 model_plist=${model_plist:-$agents_dir/$model_label.plist}
 generation_plist=${generation_plist:-$agents_dir/$generation_label.plist}
-case "$action" in
+case "$operation" in
     start) start ;;
     stop)
         result=0
         unregister "$model_label" || result=1
         unregister "$generation_label" || result=1
-        exit "$result" ;;
+        [ "$result" -eq 0 ] || fail 'Model server bootout failed.'
+        log_result 'Model servers unregistered.' ;;
     status)
         status "$model_label"
         status "$generation_label" ;;

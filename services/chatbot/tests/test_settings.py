@@ -88,7 +88,12 @@ def test_model_hours_boundaries(window, clock, is_open):
     assert s.model_hours.contains(time.fromisoformat(clock)) is is_open
 
 
-@pytest.mark.parametrize('window', ['', '6:00-21:30', '06:00–21:30', '24:00-21:30', '06:60-21:30'])
+@pytest.mark.parametrize('extra', [{}, {'LAWBOT_MODEL_HOURS': ''}, {'LAWBOT_MODEL_HOURS': ' \t '}])
+def test_missing_or_blank_model_hours_disable_time_limit(extra):
+    assert settings.load(BASE | extra, web=True).model_hours is None
+
+
+@pytest.mark.parametrize('window', ['6:00-21:30', '06:00–21:30', '24:00-21:30', '06:60-21:30'])
 def test_bad_model_hours_rejected_before_startup(window):
     with pytest.raises(settings.SettingsError, match='LAWBOT_MODEL_HOURS'):
         settings.load(BASE | {'LAWBOT_MODEL_HOURS': window}, web=True)

@@ -93,11 +93,11 @@ def consult_trace_enabled(env):
 
 
 def _model_hours(env):
-    value = env.get('LAWBOT_MODEL_HOURS')
-    if value is None:
+    value = (env.get('LAWBOT_MODEL_HOURS') or '').strip()
+    if not value:
         return None
     hhmm = r'(?:[01][0-9]|2[0-3]):[0-5][0-9]'
-    match = re.fullmatch(rf'({hhmm})-({hhmm})', value.strip())
+    match = re.fullmatch(rf'({hhmm})-({hhmm})', value)
     if not match:
         raise ValueError('LAWBOT_MODEL_HOURS는 HH:MM-HH:MM 형식이어야 합니다 (예: 06:00-21:30).')
     return ModelHours(time.fromisoformat(match[1]), time.fromisoformat(match[2]))

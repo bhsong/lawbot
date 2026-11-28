@@ -5,7 +5,7 @@ import json
 import subprocess
 import sys
 from dataclasses import replace
-from datetime import datetime
+from datetime import datetime, time
 from pathlib import Path
 from threading import Event
 from types import SimpleNamespace
@@ -527,6 +527,80 @@ def test_chat_bounds_waiters_and_keeps_waiting_past_thirty_seconds(lawbot, env):
 
 
 @pytest.mark.parametrize(
+    ('closed_at', 'queue_full'),
+    [(datetime(2026, 1, 1, 21, 30), True), (datetime(2026, 1, 2, 5, 59), False)],
+)
+def test_chat_model_hours_bypass_busy_slots(lawbot, env, tmp_path, closed_at, queue_full):
+    started, release = Event(), Event()
+    clock = datetime(2026, 1, 1, 21, 29)
+    log = tmp_path / 'requests.jsonl'
+    lawbot.settings = replace(
+        lawbot.settings,
+        request_log=log,
+        model_hours=settings.ModelHours(time(6), time(21, 30)),
+    )
+    env.setattr(web, 'datetime', SimpleNamespace(now=lambda: clock))
+    retrieve = service.retrieve
+
+    def search(app, question, *args):
+        if question == 'first':
+            started.set()
+            assert release.wait(5)
+        return retrieve(app, question, *args)
+
+    env.setattr(service, 'retrieve', search)
+    app = web.create_app(lawbot, (USER, PW), dist=None)
+
+    async def exercise():
+        nonlocal clock
+        waiting = asyncio.Event()
+
+        async def observed_app(scope, receive, send):
+            async def observe(message):
+                if web.WAITING.encode() in message.get('body', b''):
+                    waiting.set()
+                await send(message)
+
+            await app(scope, receive, observe)
+
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=observed_app), base_url='http://testserver'
+        ) as c:
+            assert (await login(c)).status_code == 200
+            first = asyncio.create_task(chat(c, question='first'))
+            second = None
+            try:
+                assert await asyncio.to_thread(started.wait, 2)
+                if queue_full:
+                    second = asyncio.create_task(chat(c, question='second'))
+                    await asyncio.wait_for(waiting.wait(), 2)
+                clock = closed_at
+                evs = events(await asyncio.wait_for(chat(c, question='off hours'), 2))
+                assert not any(event == 'status' and data['text'] == web.WAITING for event, data in evs)
+                assert evs[-1] == (
+                    'error',
+                    {
+                        'kind': 'off_hours',
+                        'message': '답변 서비스 운영 시간은 06:00–21:30입니다. 운영 시간에 다시 질문해 주세요.',
+                    },
+                )
+                row = json.loads(log.read_text())
+                assert (row['status'], row['error_type']) == ('error', 'off_hours')
+                assert not any(row['call_counts'].values())
+                if not queue_full:
+                    clock = datetime(2026, 1, 2, 6, 0)
+            finally:
+                release.set()
+                first_response = await asyncio.wait_for(first, 2)
+                second_response = None if second is None else await asyncio.wait_for(second, 2)
+            assert events(first_response)[-1][0] == 'done'
+            if second_response is not None:
+                assert events(second_response)[-1][0] == 'done'
+
+    asyncio.run(exercise())
+
+
+@pytest.mark.parametrize(
     ('exc', 'kind', 'text'),
     [
         (RuntimeError('boom'), 'generation', '답변을 생성하지 못했습니다 (RuntimeError). 다시 질문해 주세요.'),
@@ -551,7 +625,7 @@ def test_chat_model_hours(lawbot, env, tmp_path, hours, expected):
     log = tmp_path / 'requests.jsonl'
     env.setenv('LAWBOT_REQUEST_LOG', str(log))
     lawbot.settings = settings.load(web=True)
-    env.setattr(service, 'datetime', SimpleNamespace(now=lambda: datetime(2026, 1, 1, 21, 30)), raising=False)
+    env.setattr(web, 'datetime', SimpleNamespace(now=lambda: datetime(2026, 1, 1, 21, 30)))
     calls = []
 
     def classify(*args, **kwargs):
