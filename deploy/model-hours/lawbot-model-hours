@@ -8,6 +8,7 @@ model_plist=
 generation_plist=
 prod_dir=$HOME/Work/lawbot-prod
 now=
+stop_wait=30
 unset hours deadline_override
 
 log_result() {
@@ -23,7 +24,7 @@ fail() {
 }
 
 usage() {
-    fail 'Usage: lawbot-model-hours {start|stop|apply|status} [--hours HH:MM-HH:MM] [--deadline HH:MM] [--now HH:MM[:SS]] [--prod-dir DIR] [--model-label LABEL] [--model-plist FILE] [--generation-label LABEL] [--generation-plist FILE]'
+    fail 'Usage: lawbot-model-hours {start|stop|apply|status} [--hours HH:MM-HH:MM] [--deadline HH:MM] [--now HH:MM[:SS]] [--stop-wait SECONDS] [--prod-dir DIR] [--model-label LABEL] [--model-plist FILE] [--generation-label LABEL] [--generation-plist FILE]'
 }
 
 read_schedule() {
@@ -43,11 +44,6 @@ register() {
         registered "$1"
 }
 
-unregister() {
-    launchctl bootout "$domain/$1" >/dev/null 2>&1 || :
-    ! registered "$1" && launchctl print "$domain" >/dev/null 2>&1
-}
-
 status() {
     if details=$(launchctl print "$domain/$1" 2>/dev/null); then
         state=$(printf '%s\n' "$details" | awk '$1 == "state" && $2 == "=" {print $3; exit}')
@@ -62,11 +58,22 @@ status() {
 }
 
 stop() {
-    result=0
-    unregister "$model_label" || result=1
-    unregister "$generation_label" || result=1
-    [ "$result" -eq 0 ] || fail 'Model server bootout failed.'
-    log_result 'Model servers unregistered.'
+    launchctl bootout "$domain/$model_label" >/dev/null 2>&1 || :
+    launchctl bootout "$domain/$generation_label" >/dev/null 2>&1 || :
+    attempt=1
+    while :; do
+        pending=
+        if registered "$model_label"; then pending=$model_label; fi
+        if registered "$generation_label"; then pending="${pending:+$pending, }$generation_label"; fi
+        if [ -z "$pending" ]; then
+            launchctl print "$domain" >/dev/null 2>&1 || fail 'Model server bootout failed.'
+            log_result 'Model servers unregistered.'
+            return
+        fi
+        [ "$attempt" -lt "$stop_wait" ] || fail "Model server bootout failed: $pending."
+        sleep 1
+        attempt=$((attempt + 1))
+    done
 }
 
 within_readiness_budget() {
@@ -128,6 +135,10 @@ while [ "$#" -gt 0 ]; do
         --hours) hours=$2 ;;
         --deadline) deadline_override=$2 ;;
         --now) now=$2 ;;
+        --stop-wait)
+            case "$2" in ''|*[!0-9]*) usage ;; esac
+            [ "$2" -ge 0 ] 2>/dev/null || usage
+            stop_wait=$2 ;;
         --prod-dir) prod_dir=$2 ;;
         --model-label) model_label=$2 ;;
         --model-plist) model_plist=$2 ;;
