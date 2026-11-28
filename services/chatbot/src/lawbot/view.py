@@ -111,8 +111,11 @@ def fmt_stats(label, stage, st):
     return ' · '.join(parts)
 
 
-def error_message(kind, cause, spec):
+def error_message(kind, cause, spec, *, model_hours=None):
     """ask 오류 종류(요청 로그 error_type) → 화면 안내. 설정 오류(config 등 안내가 없는 종류)는 None"""
+    if kind == 'off_hours' and model_hours is not None:
+        window = f'{model_hours.start:%H:%M}–{model_hours.end:%H:%M}'
+        return f'답변 서비스 운영 시간은 {window}입니다. 운영 시간에 다시 질문해 주세요.'
     name = type(cause).__name__
     if kind == 'model_server_timeout':
         return f'모델 서버 응답이 없습니다 ({name}). 잠시 뒤 다시 질문하세요.'

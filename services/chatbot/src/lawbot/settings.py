@@ -2,7 +2,9 @@
 # 각 값의 규칙(기본값·범위·오류 문구)은 원래 모듈(security·deploy·service·app·feedback)의 함수에 그대로 있고,
 # 여기서는 그 함수들에 같은 환경 변수 묶음(env)을 넘겨 모은다. 실행 경로(app.main·load_app·평가 명령)는 이 객체를 쓴다
 import os
+import re
 from dataclasses import dataclass, field
+from datetime import time
 from pathlib import Path
 
 from lawbot.auth import AdminCredentials, admin_credentials
@@ -13,6 +15,18 @@ from lawbot_common.llm_endpoint import endpoint
 
 class SettingsError(ValueError, RuntimeError):
     """설정 오류 모음. 값은 넣지 않는다 (비밀번호·토큰). 기존 호출부의 except ValueError·RuntimeError와 맞도록 둘 다"""
+
+
+@dataclass(frozen=True)
+class ModelHours:
+    start: time
+    end: time
+
+    def contains(self, now: time) -> bool:
+        """Use a half-open local-time window, including windows that wrap at midnight."""
+        if self.start <= self.end:
+            return self.start <= now < self.end
+        return now >= self.start or now < self.end
 
 
 @dataclass(frozen=True)
@@ -41,6 +55,7 @@ class Settings:
     calendar_admin_token: str | None = field(default=None, repr=False)
     corpus: str = 'csv'
     consult_trace: bool = False
+    model_hours: ModelHours | None = None
 
 
 MISSING_SERVER = (
@@ -75,6 +90,17 @@ def consult_trace_enabled(env):
     if value not in ('0', '1'):
         raise ValueError('LAWBOT_CONSULT_TRACE는 0 또는 1이어야 합니다.')
     return value == '1' and bool((env.get('LAWBOT_DB') or '').strip())
+
+
+def _model_hours(env):
+    value = env.get('LAWBOT_MODEL_HOURS')
+    if value is None:
+        return None
+    hhmm = r'(?:[01][0-9]|2[0-3]):[0-5][0-9]'
+    match = re.fullmatch(rf'({hhmm})-({hhmm})', value.strip())
+    if not match:
+        raise ValueError('LAWBOT_MODEL_HOURS는 HH:MM-HH:MM 형식이어야 합니다 (예: 06:00-21:30).')
+    return ModelHours(time.fromisoformat(match[1]), time.fromisoformat(match[2]))
 
 
 def load(env=None, web=False):
@@ -119,6 +145,7 @@ def load(env=None, web=False):
         from lawbot import view
 
         take('consult_trace', lambda: consult_trace_enabled(env))
+        take('model_hours', lambda: _model_hours(env))
 
         take('auth', lambda: security.auth(env))
         take('admin', lambda: admin_credentials(env, db_configured=bool(db)))

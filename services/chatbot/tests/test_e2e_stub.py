@@ -6,6 +6,7 @@ import csv
 import hashlib
 import json
 import time
+from datetime import datetime, timedelta
 
 import httpx
 import pytest
@@ -247,6 +248,41 @@ def test_reasoning_is_not_shown_and_usage_is_logged(stack, ui):
     expect(e2e.answer(ui)).not_to_contain_text('private synthetic reasoning')
     row = e2e.wait_request_log(ui, stack.request_log, before)
     assert row['prompt_tokens'] == 12 and row['gen_tokens'] == 5
+
+
+@pytest.fixture
+def off_hours_stack(tmp_path, page, request):
+    # The window is at least an hour away, including when it crosses midnight.
+    hour = datetime.now().replace(minute=0, second=0, microsecond=0) + timedelta(hours=2)
+    start, end = f'{hour:%H:%M}', f'{hour + timedelta(hours=1):%H:%M}'
+    stack = e2e.Stack(
+        tmp_path,
+        read_timeout=READ_TIMEOUT_S,
+        capture_wire=True,
+        LAWBOT_MODEL_HOURS=f'{start}-{end}',
+        LAWBOT_FEEDBACK='1',
+        LAWBOT_FEEDBACK_DIR=str(tmp_path / 'feedback'),
+    )
+    try:
+        yield stack, f'{start}–{end}'
+        e2e.keep_on_failure(request, 'e2e_stub', stack.logs(), page)
+    finally:
+        stack.stop()
+
+
+def test_off_hours_shows_notice_without_model_calls_or_feedback(off_hours_stack, page):
+    stack, window = off_hours_stack
+    e2e.login(page, stack.url)
+    expect(e2e.textbox(page)).to_be_visible()
+    assert page.request.get(f'{stack.url}/api/config', timeout=e2e.ANSWER_TIMEOUT).json()['feedback']['enabled']
+    paths = (stack.model_wire, stack.chat_wire)
+    before = [e2e.request_log(path) for path in paths]
+    e2e.ask(page, '주 40시간 일하면 주휴수당은 얼마인가요?')
+    alert(page, f'답변 서비스 운영 시간은 {window}입니다. 운영 시간에 다시 질문해 주세요.', timeout=5000)
+    expect(e2e.answer(page).get_by_role('button', name='좋아요')).to_have_count(0)
+    row = e2e.wait_request_log(page, stack.request_log, 0)
+    assert row['error_type'] == 'off_hours'
+    assert [e2e.request_log(path) for path in paths] == before
 
 
 def test_feedback_button_saves_turn(stack, ui, feedback_db):

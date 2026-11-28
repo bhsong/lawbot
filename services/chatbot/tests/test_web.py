@@ -5,6 +5,7 @@ import json
 import subprocess
 import sys
 from dataclasses import replace
+from datetime import datetime
 from pathlib import Path
 from threading import Event
 from types import SimpleNamespace
@@ -537,6 +538,48 @@ def test_chat_error_event(authed, env, exc, kind, text):
     evs = events(chat(authed))
     assert evs[-1][0] == 'error' and 'done' not in names(evs)
     assert evs[-1][1]['kind'] == kind and evs[-1][1]['message'].startswith(text)
+
+
+@pytest.mark.parametrize(
+    'hours, expected', [('06:00-21:30', 'off_hours'), ('21:30-06:00', 'model_server'), (None, 'model_server')]
+)
+def test_chat_model_hours(lawbot, env, tmp_path, hours, expected):
+    set_auth(env)
+    env.setenv('LAWBOT_PORT', '27000')
+    if hours is not None:
+        env.setenv('LAWBOT_MODEL_HOURS', hours)
+    log = tmp_path / 'requests.jsonl'
+    env.setenv('LAWBOT_REQUEST_LOG', str(log))
+    lawbot.settings = settings.load(web=True)
+    env.setattr(service, 'datetime', SimpleNamespace(now=lambda: datetime(2026, 1, 1, 21, 30)), raising=False)
+    calls = []
+
+    def classify(*args, **kwargs):
+        calls.append('router')
+        return '{"calculator":"none","kind":"lookup"}'
+
+    def search(*args):
+        calls.append('search')
+        raise ConnectionError('not ready')
+
+    env.setattr(FakeLLM, 'route_calculation', classify, raising=False)
+    env.setattr(service, 'retrieve', search)
+    env.setattr(FakeLLM, 'stream', lambda *args: pytest.fail('Unexpected generation'))
+
+    with make_client(lawbot) as client:
+        assert login(client).status_code == 200
+        evs = events(chat(client, question='주 40시간 일하면 주휴수당은 얼마인가요?'))
+    assert 'done' not in names(evs) and 'sources' not in names(evs)
+    event, data = evs[-1]
+    assert event == 'error' and data['kind'] == expected
+    row = json.loads(log.read_text())
+    assert (row['status'], row['error_type']) == ('error', expected)
+    if expected == 'off_hours':
+        assert data['message'] == '답변 서비스 운영 시간은 06:00–21:30입니다. 운영 시간에 다시 질문해 주세요.'
+        assert calls == [] and not any(row['call_counts'].values())
+    else:
+        assert '모델 서버가 준비되지 않았습니다' in data['message']
+        assert calls == ['router', 'search']
 
 
 def test_chat_config_error_is_reported_without_details(authed, env):

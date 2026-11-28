@@ -1,4 +1,6 @@
 # tests/test_settings.py  →  설정 객체 (lawbot.settings): 시작할 때 한 번 읽어 모두 검증, 틀린 값은 한꺼번에
+from datetime import time
+
 import pytest
 
 from conftest import TEST_LLM_TOKEN, TEST_TOKEN
@@ -66,6 +68,30 @@ def test_web_only_values_not_required_for_tools(env):
     tool = {k: v for k, v in BASE.items() if k not in ('LAWBOT_USER', 'LAWBOT_PW', 'LAWBOT_PORT')}
     s = settings.load(tool)  # 평가·점검 명령: 로그인·포트·동시 처리 수는 보지 않음
     assert s.auth is None and s.port is None
+
+
+@pytest.mark.parametrize(
+    ('window', 'clock', 'is_open'),
+    [
+        ('06:00-21:30', '05:59', False),
+        ('06:00-21:30', '06:00', True),
+        ('06:00-21:30', '21:29', True),
+        ('06:00-21:30', '21:30', False),
+        ('21:30-06:00', '21:29', False),
+        ('21:30-06:00', '21:30', True),
+        ('21:30-06:00', '00:00', True),
+        ('21:30-06:00', '06:00', False),
+    ],
+)
+def test_model_hours_boundaries(window, clock, is_open):
+    s = settings.load(BASE | {'LAWBOT_MODEL_HOURS': window}, web=True)
+    assert s.model_hours.contains(time.fromisoformat(clock)) is is_open
+
+
+@pytest.mark.parametrize('window', ['', '6:00-21:30', '06:00–21:30', '24:00-21:30', '06:60-21:30'])
+def test_bad_model_hours_rejected_before_startup(window):
+    with pytest.raises(settings.SettingsError, match='LAWBOT_MODEL_HOURS'):
+        settings.load(BASE | {'LAWBOT_MODEL_HOURS': window}, web=True)
 
 
 @pytest.mark.parametrize('extra', [{}, {'LAWBOT_DB': '  '}])

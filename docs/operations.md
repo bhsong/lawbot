@@ -185,6 +185,7 @@ v4·v5의 답변 모델은 Lawbot Pro 하나입니다. v4는 `data/v4/system_v4_
 | `LAWBOT_MODEL_SERVER` | 예 | 모델 서버 주소 `http://127.0.0.1:<모델 서버 포트>` (이 맥만 허용) |
 | `LAWBOT_MODEL_TOKEN` | 예 | 모델 서버 토큰 (16자 이상, `openssl rand -hex 32`). 웹앱과 모델 서버가 같은 값 |
 | `LAWBOT_MODEL_SERVER_WAIT` | 아니요 | 시작할 때 임베딩·리랭크 모델 서버와 로컬 생성 서버 각각의 준비를 기다리는 최대 초 (기본 `300`) |
+| `LAWBOT_MODEL_HOURS` | 아니요 | 웹앱의 답변 운영 시간(로컬 시각 `HH:MM-HH:MM`, 시작 포함·종료 제외, 자정을 넘는 구간 허용). 미설정이면 시간 제한 없음 |
 | `LAWBOT_MODEL_READ_TIMEOUT` | 아니요 | 질문 처리 중(질문 임베딩·리랭크·생성) 응답 조각 사이 최대 대기 초 (기본 `300`). 넘으면 "모델 서버 응답이 없습니다", 요청 로그 `model_server_timeout`. 시작할 때 조문 인덱스 인코딩에는 걸지 않음 |
 | `LAWBOT_PROFILE` | 아니요 | `v4` (생략 시 기본값) 또는 `v5` (노동·소득세법 전체와 세금·4대보험 선택 범위) |
 | `LAWBOT_EMB_MODEL` | 아니요 | 검색 임베딩 모델 id (v4 기본 `lawbot-emb-v4`, v5 기본 `lawbot-emb-v6`. v6.0.0 전에는 `lawbot-emb-v5b`) |
@@ -328,7 +329,7 @@ Colab 실험(transformers fp16)과의 순위 일치는 리랭커 도입 때 val�
    uv run lawbot-app                            # 모델 서버가 준비될 때까지 최대 LAWBOT_MODEL_SERVER_WAIT초 대기
    ```
 
-4. launchd로 상시 실행합니다(1회). 템플릿의 자리표시를 채워 복사합니다. 비밀 값과 포트는 plist에 넣지 않습니다(`.env`).
+4. launchd에 웹앱과 모델 서버를 등록합니다(1회). 템플릿의 자리표시를 채워 복사합니다. 비밀 값과 포트는 plist에 넣지 않습니다(`.env`).
 
    ```zsh
    mkdir -p ~/Library/Logs/lawbot
@@ -402,6 +403,39 @@ Colab 실험(transformers fp16)과의 순위 일치는 리랭커 도입 때 val�
 - 웹앱은 시작할 때 조문 인덱스를 모델 서버의 임베딩으로 만듭니다(812조문 기준 수십 초). 같은 조문·모델이면 다음 시작부터는 `cache/embeddings/`의 캐시를 씁니다(`LAWBOT_EMBED_CACHE`). 운영·개발 웹앱은 각자 레포 폴더에 캐시를 둡니다.
 - 같은 브라우저에서 운영·개발 화면에 번갈아 로그인할 때 로그인 쿠키가 겹치면, 개발 화면은 `http://localhost:<개발 포트>`로 접속합니다(호스트가 다르면 쿠키가 분리됨).
 - `eval_v4`도 같은 두 서버를 씁니다. 생성 서버가 제공하지 않는 메모리 측정값을 모델 서버 값으로 대신하지 않습니다.
+
+### launchd: 모델 운영 시간 (06:00–21:30)
+
+운영 `.env`에 `LAWBOT_MODEL_HOURS=06:00-21:30`을 설정하고 운영 시간 중 웹앱을 다시 시작합니다. 운영 시간 밖에 들어온 질문에는 모델을 호출하지 않고 운영 시간을 안내합니다(`error_type=off_hours`). 임베딩·리랭크 모델 서버와 단독 생성 서버만 예약 시작·정지합니다. 웹앱·캘린더와 06:30 수집기는 건드리지 않습니다.
+
+기존 두 모델 서비스의 plist를 `~/Library/LaunchAgents/`에 유지합니다. 운영 worktree에서 실행합니다.
+
+```zsh
+P="$HOME/Library/LaunchAgents/com.lawbot.model-hours.plist"
+model_hours="$PWD/deploy/model-hours/lawbot-model-hours"
+sed -e "s|__UV_DIR__|$(dirname "$(command -v uv)")|g" -e "s|__PROD_DIR__|$PWD|g" \
+  -e "s|__LOG_DIR__|$HOME/Library/Logs/lawbot|g" \
+  deploy/launchd/com.lawbot.model-hours.plist.example > "$P"
+plutil -lint "$P"
+launchctl bootstrap "gui/$(id -u)" "$P"                    # 예약 등록 및 현재 시각 적용
+launchctl print "gui/$(id -u)/com.lawbot.model-hours"       # 예약 등록 확인
+"$model_hours" status                                     # 두 모델의 등록·실행 상태
+tail -n 20 ~/Library/Logs/lawbot/model-hours.log            # 모델 준비 성공·실패 확인
+launchctl bootout "gui/$(id -u)/com.lawbot.model-hours"     # 예약만 해제, 모델 상태는 유지
+```
+
+예약은 매일 06:00·21:30과 LaunchAgent 등록·로그인 시 `apply`를 실행합니다. 21:30 이후 로그인하면 두 모델 서비스가 등록되어 있더라도 해제합니다. 운영 시간 안에서는 두 모델을 시작한 뒤 `check_deploy`로 임베딩·리랭크 및 로컬 생성 모델까지 확인합니다. 06:25까지 준비되지 않으면 실패를 기록합니다. 시간을 바꾸면 plist의 예약 시각, `apply --hours HH:MM-HH:MM`, 웹앱 설정을 함께 바꿉니다.
+
+밤에 두 모델만 수동으로 켜거나 다시 내릴 때:
+
+```zsh
+"$model_hours" start --deadline HH:MM  # 같은 날 앞으로의 시각을 지정
+"$model_hours" stop
+```
+
+`start`의 기본 마감은 06:25입니다. 이미 마감 시각이 지났으면 준비 상태를 한 번만 확인합니다. 수동 시작은 웹앱의 운영 시간 안내를 해제하지 않습니다.
+
+배포와 웹앱·모델 재시작, 공유 모델을 쓰는 개발 검증은 운영 시간 안에 하되 기존 06:20–06:50 갱신 시간대를 피합니다. 밤에 웹앱이 재부팅 등으로 재시작되면 기존 모델 준비 검사 때문에 모델이 올라올 때까지 접속할 수 없습니다.
 
 ## 운영 버전과 태그
 

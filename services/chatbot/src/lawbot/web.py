@@ -266,11 +266,13 @@ def chat_events(app, question, remember=None):
             yield 'done', final
             sent_done = True
     except AskError as err:  # 유형(kind)은 요청 로그의 error_type과 같음. 원래 예외는 __cause__
-        msg = view.error_message(err.kind, err.__cause__, spec)
-        if outcomes:
-            log.error('질문 처리 실패 %s', outcomes[-1][0].get('failure'))
-        else:
-            log.error('질문 처리 실패: %s', err.stage)
+        hours = app.settings.model_hours if err.kind == 'off_hours' else None
+        msg = view.error_message(err.kind, err.__cause__, spec, model_hours=hours)
+        if err.kind != 'off_hours':
+            if outcomes:
+                log.error('질문 처리 실패 %s', outcomes[-1][0].get('failure'))
+            else:
+                log.error('질문 처리 실패: %s', err.stage)
         message = CONFIG_ERROR if msg is None else msg
         if trace is not None:
             trace.answer_shown = message

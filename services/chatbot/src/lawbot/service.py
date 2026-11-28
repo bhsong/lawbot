@@ -10,6 +10,7 @@ import time
 import uuid
 from collections.abc import Callable
 from dataclasses import asdict, dataclass
+from datetime import datetime
 from functools import cached_property, partial
 from pathlib import Path
 from typing import Any, cast
@@ -588,6 +589,12 @@ def _answer(app, question, k, request_id, report, calculation_candidate, clarify
             log_request(app, st, status, error)
         else:
             report(st, status, error)
+
+    hours = getattr(getattr(app, 'settings', None), 'model_hours', None)
+    if hours is not None and not hours.contains(datetime.now().time()):
+        st['total'] = time.perf_counter() - t0
+        record('error', 'off_hours')
+        raise AskError('off_hours', 'off_hours', None)
 
     stage, logged = 'search', False
     try:
