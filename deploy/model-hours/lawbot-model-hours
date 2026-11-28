@@ -7,10 +7,8 @@ agents_dir=$HOME/Library/LaunchAgents
 model_plist=
 generation_plist=
 prod_dir=$HOME/Work/lawbot-prod
-hours=06:00-21:30
-deadline=06:25
 now=
-current=
+unset hours deadline_override
 
 log_result() {
     printf '%s %s: %s\n' "$(date '+%Y-%m-%dT%H:%M:%S%z')" "$action" "$1"
@@ -28,36 +26,26 @@ usage() {
     fail 'Usage: lawbot-model-hours {start|stop|apply|status} [--hours HH:MM-HH:MM] [--deadline HH:MM] [--now HH:MM[:SS]] [--prod-dir DIR] [--model-label LABEL] [--model-plist FILE] [--generation-label LABEL] [--generation-plist FILE]'
 }
 
-clock_seconds() {
-    case "$1" in
-        [01][0-9]:[0-5][0-9]|2[0-3]:[0-5][0-9]) ;;
-        *) return 1 ;;
-    esac
-    hh=${1%:*}
-    mm=${1#*:}
-    printf '%s\n' "$(( ${hh#0} * 3600 + ${mm#0} * 60 ))"
+read_schedule() {
+    set -- "$action" --now="$now"
+    if [ "${hours+x}" ]; then set -- "$@" --hours="$hours"; fi
+    if [ "${deadline_override+x}" ]; then set -- "$@" --deadline="$deadline_override"; fi
+    cd "$prod_dir" && exec uv run --frozen --no-sync python -m lawbot.model_hours "$@"
 }
 
-local_seconds() {
-    clock=${now:-$(date '+%H:%M:%S')} || return 1
-    case "$clock" in
-        ??:??:[0-5][0-9])
-            minute=$(clock_seconds "${clock%:*}") || return 1
-            ss=${clock##*:}
-            printf '%s\n' "$(( minute + ${ss#0} ))" ;;
-        *) clock_seconds "$clock" ;;
-    esac
+registered() {
+    launchctl print "$domain/$1" >/dev/null 2>&1
 }
 
 register() {
-    launchctl print "$domain/$1" >/dev/null 2>&1 ||
+    registered "$1" ||
         launchctl bootstrap "$domain" "$2" >/dev/null 2>&1 ||
-        launchctl print "$domain/$1" >/dev/null 2>&1
+        registered "$1"
 }
 
 unregister() {
     launchctl bootout "$domain/$1" >/dev/null 2>&1 || :
-    ! launchctl print "$domain/$1" >/dev/null 2>&1 && launchctl print "$domain" >/dev/null 2>&1
+    ! registered "$1" && launchctl print "$domain" >/dev/null 2>&1
 }
 
 status() {
@@ -73,13 +61,25 @@ status() {
     fi
 }
 
+stop() {
+    result=0
+    unregister "$model_label" || result=1
+    unregister "$generation_label" || result=1
+    [ "$result" -eq 0 ] || fail 'Model server bootout failed.'
+    log_result 'Model servers unregistered.'
+}
+
+within_readiness_budget() {
+    [ "$(date +%s)" -lt "$cutoff" ]
+}
+
 probe() {
     # macOS /bin/sh gives the background job its own process group, even without a tty.
     set -m
     (cd "$prod_dir" && exec uv run --frozen --no-sync python -m lawbot.check_deploy) >/dev/null 2>&1 &
     probe_pid=$!
     set +m
-    while [ "$interrupted" -eq 0 ] && [ "$(date +%s)" -lt "$cutoff" ]; do
+    while [ "$interrupted" -eq 0 ] && within_readiness_budget; do
         if ! kill -0 "$probe_pid" 2>/dev/null; then
             wait "$probe_pid" 2>/dev/null
             return $?
@@ -95,38 +95,28 @@ probe() {
 } 2>/dev/null
 
 start() {
-    finish=$(clock_seconds "$deadline") || fail 'Invalid --deadline; use HH:MM.'
-    current=${current:-$(local_seconds)} || fail 'Invalid local time; use HH:MM[:SS] for --now.'
-    if [ "$action" = apply ] && [ "$open" -gt "$close" ]; then
-        # Count both times from midnight on the day the window opened.
-        if [ "$current" -lt "$close" ]; then current=$(( current + 86400 )); fi
-        if [ "$finish" -lt "$open" ]; then finish=$(( finish + 86400 )); fi
-    fi
-    epoch=$(date +%s)
-    remaining=$(( finish - current ))
-    cutoff=$(( epoch + remaining ))
+    cutoff=$(( started_at + budget ))
     interrupted=0
     trap 'interrupted=1' HUP INT TERM
     result=0
     register "$model_label" "$model_plist" || result=1
     register "$generation_label" "$generation_plist" || result=1
     [ "$result" -eq 0 ] || fail 'Model server bootstrap failed.'
-    single_probe=0
-    if [ "$remaining" -le 0 ]; then
-        # A daytime login or a manual start still gets one bounded readiness check.
-        cutoff=$(( $(date +%s) + 30 ))
-        single_probe=1
-    fi
-    while [ "$interrupted" -eq 0 ] && [ "$(date +%s)" -lt "$cutoff" ]; do
+    ready=0
+    while [ "$interrupted" -eq 0 ] && within_readiness_budget; do
         if probe && [ "$interrupted" -eq 0 ]; then
-            log_result 'Model servers ready.'
-            return 0
+            ready=1
+            break
         fi
-        [ "$single_probe" -eq 0 ] && [ "$interrupted" -eq 0 ] || break
+        [ "$repeat" -eq 1 ] && [ "$interrupted" -eq 0 ] || break
         sleep 1
     done
     [ "$interrupted" -eq 0 ] || fail 'Model readiness check interrupted.'
-    fail "Model servers not ready (deadline $deadline)."
+    if [ "$ready" -eq 1 ]; then
+        log_result 'Model servers ready.'
+        return 0
+    fi
+    fail "Model servers not ready${deadline:+ (deadline $deadline)}."
 }
 
 [ "$#" -gt 0 ] || usage
@@ -136,7 +126,7 @@ while [ "$#" -gt 0 ]; do
     [ "$#" -ge 2 ] || usage
     case "$1" in
         --hours) hours=$2 ;;
-        --deadline) deadline=$2 ;;
+        --deadline) deadline_override=$2 ;;
         --now) now=$2 ;;
         --prod-dir) prod_dir=$2 ;;
         --model-label) model_label=$2 ;;
@@ -149,32 +139,32 @@ while [ "$#" -gt 0 ]; do
 done
 
 operation=$action
-if [ "$action" = apply ]; then
-    case "$hours" in ?????-?????) ;; *) fail 'Invalid --hours; use HH:MM-HH:MM.' ;; esac
-    open=$(clock_seconds "${hours%-*}") && close=$(clock_seconds "${hours#*-}") ||
-        fail 'Invalid --hours; use HH:MM-HH:MM.'
-    current=$(local_seconds) || fail 'Invalid local time; use HH:MM[:SS] for --now.'
-    operation=stop
-    if [ "$open" -le "$close" ]; then
-        if [ "$current" -ge "$open" ] && [ "$current" -lt "$close" ]; then operation=start; fi
-    elif [ "$current" -ge "$open" ] || [ "$current" -lt "$close" ]; then
-        operation=start
-    fi
-fi
+case "$action" in
+    apply|start)
+        clock=$(date '+%s %H:%M:%S') || fail 'Cannot read the local time.'
+        started_at=${clock%% *}
+        now=${now:-${clock#* }}
+        schedule=$(read_schedule 2>/dev/null) || fail "${schedule:-Cannot resolve the model server schedule.}"
+        read -r operation budget repeat deadline <<EOF
+$schedule
+EOF
+        ;;
+esac
 
 case "$operation" in start|stop|status) ;; *) usage ;; esac
 domain=gui/$(id -u)
 launchctl print "$domain" >/dev/null 2>&1 || fail 'Cannot access the launchd GUI domain.'
+if [ "$action" = apply ]; then
+    case "$operation" in
+        start) if registered "$model_label" && registered "$generation_label"; then exit 0; fi ;;
+        stop) if ! registered "$model_label" && ! registered "$generation_label"; then exit 0; fi ;;
+    esac
+fi
 model_plist=${model_plist:-$agents_dir/$model_label.plist}
 generation_plist=${generation_plist:-$agents_dir/$generation_label.plist}
 case "$operation" in
     start) start ;;
-    stop)
-        result=0
-        unregister "$model_label" || result=1
-        unregister "$generation_label" || result=1
-        [ "$result" -eq 0 ] || fail 'Model server bootout failed.'
-        log_result 'Model servers unregistered.' ;;
+    stop) stop ;;
     status)
         status "$model_label"
         status "$generation_label" ;;

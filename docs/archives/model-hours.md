@@ -43,5 +43,5 @@
 
 ## 구현 기록
 
-- [운영 절차](../operations.md#launchd-모델-운영-시간-06002130)
+- [운영 절차](../operations.md#launchd-모델-운영-시간)
 - [기본 테스트·대역 검증 결과](../evals/2026-11-28-model-hours.md)

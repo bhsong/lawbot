@@ -43,18 +43,24 @@ def read(path, allowed):
     return parse(path.read_text(encoding='utf-8'), path.name, allowed)
 
 
-def load(default, root, secrets, log, *, allowed=lawbot_keys):
-    """레포 최상위 .env를 읽어 셸에 없는 변수만 os.environ에 넣는다 (웹앱·모델 서버의 main이 맨 먼저 호출). 읽은 경로 또는 None
-    파일: LAWBOT_ENV_FILE이 가리키는 파일(상대 경로는 root 기준), 없으면 default. LAWBOT_ENV_FILE=''이면 읽지 않음
-    secrets: 값이 있는데 파일을 다른 사용자도 읽을 수 있으면 경고할 변수. log: 서비스 로거 (lawbot_common.logs)"""
+def source_path(default, root) -> Path | None:
+    """Resolve the configured source even if it does not exist yet."""
     env = os.environ.get('LAWBOT_ENV_FILE')
     if env == '':
         return None
     path = Path(env).expanduser() if env else Path(default)
-    if not path.is_absolute():
-        path = Path(root) / path
+    return path if path.is_absolute() else Path(root) / path
+
+
+def load(default, root, secrets, log, *, allowed=lawbot_keys):
+    """레포 최상위 .env를 읽어 셸에 없는 변수만 os.environ에 넣는다 (웹앱·모델 서버의 main이 맨 먼저 호출). 읽은 경로 또는 None
+    파일: LAWBOT_ENV_FILE이 가리키는 파일(상대 경로는 root 기준), 없으면 default. LAWBOT_ENV_FILE=''이면 읽지 않음
+    secrets: 값이 있는데 파일을 다른 사용자도 읽을 수 있으면 경고할 변수. log: 서비스 로거 (lawbot_common.logs)"""
+    path = source_path(default, root)
+    if path is None:
+        return None
     if not path.is_file():
-        if env:  # 직접 지정한 파일이 없으면 오류
+        if os.environ.get('LAWBOT_ENV_FILE'):  # An explicitly configured file must exist.
             raise FileNotFoundError(f'LAWBOT_ENV_FILE 파일 없음: {path}')
         return None
     values = read(path, allowed) or {}
