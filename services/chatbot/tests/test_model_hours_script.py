@@ -35,7 +35,9 @@ printf '%s\n' "$*" >> "$CALLS"
 case "$1" in
     print)
         case "$2" in
-            gui/*/*) [ -f "$STATE/${2##*/}" ] && printf 'state = running\n' ;;
+            gui/*/*)
+                label=${2##*/}
+                [ -f "$STATE/$label" ] && printf 'state = running\n' ;;
             gui/*) exit 0 ;;
             *) exit 2 ;;
         esac ;;
@@ -43,9 +45,14 @@ case "$1" in
         label=${3##*/}
         : > "$STATE/${label%.plist}" ;;
     bootout)
-        [ -f "$STATE/${2##*/}" ] || exit 3
-        [ "$FAIL_STOP" != "${2##*/}" ] || exit 0
-        mv "$STATE/${2##*/}" "$STATE/stopped-${2##*/}" ;;
+        label=${2##*/}
+        [ -f "$STATE/$label" ] || exit 3
+        [ "$FAIL_STOP" != "$label" ] || exit 0
+        if [ "$SLOW_STOP" -gt 0 ]; then
+            printf '%s\n' "$SLOW_STOP" > "$STATE/stopping-$label"
+        else
+            mv "$STATE/$label" "$STATE/stopped-$label"
+        fi ;;
     *) exit 2 ;;
 esac
 """,
@@ -101,7 +108,7 @@ esac
     for exe in (launchctl, uv, date):
         exe.chmod(0o700)
 
-    def spawn(command, *args, uv_exit=0, fail_stop='', clock='', after_probe='', extra_env=None):
+    def spawn(command, *args, uv_exit=0, fail_stop='', slow_stop=0, clock='', after_probe='', extra_env=None):
         return subprocess.Popen(
             ['/bin/sh', str(SCRIPT), command, '--prod-dir', str(prod), *args],
             env={
@@ -113,6 +120,7 @@ esac
                 'TEST_PYTHON': sys.executable,
                 'UV_EXIT': str(uv_exit),
                 'FAIL_STOP': fail_stop,
+                'SLOW_STOP': str(slow_stop),
                 'CLOCK': str(clock),
                 'AFTER_PROBE': str(after_probe),
                 **(extra_env or {}),
@@ -129,6 +137,31 @@ esac
         for pid in map(int, pids.read_text().split()):
             with suppress(ProcessLookupError):
                 os.kill(pid, SIGKILL)
+
+
+@pytest.fixture
+def stop_schedule(schedule, tmp_path):
+    sleep = tmp_path / 'sleep'
+    sleep.write_text(
+        """#!/bin/sh
+printf '%s\\n' "sleep $*" >> "$CALLS"
+[ "$#" -eq 1 ] && [ "$1" = 1 ] || exit 1
+for countdown in "$STATE"/stopping-*; do
+    [ -f "$countdown" ] || continue
+    read -r remaining < "$countdown" || exit 1
+    if [ "$remaining" -eq 1 ]; then
+        label=${countdown##*/stopping-}
+        mv "$STATE/$label" "$STATE/stopped-$label"
+        rm "$countdown"
+    else
+        printf '%s\\n' "$((remaining - 1))" > "$countdown"
+    fi
+done
+""",
+        encoding='utf-8',
+    )
+    sleep.chmod(0o700)
+    return schedule
 
 
 def run(spawn, *args, **kwargs):
@@ -195,7 +228,9 @@ def test_apply_at_night_stops_the_only_registered_service(schedule, label):
     (state / label).touch()
     assert_result(run(spawn, 'apply', '--now', '03:00'), 'apply', 'Model servers unregistered.')
     assert {path.name for path in state.iterdir()} == {f'stopped-{label}'}
-    assert PROBE not in calls.read_text()
+    commands = calls.read_text().splitlines()
+    assert [line.rsplit('/', 1)[-1] for line in commands if line.startswith('bootout ')] == [MODEL, GENERATION]
+    assert PROBE not in commands
 
 
 def test_apply_uses_last_model_hours_assignment_with_comment(schedule):
@@ -318,19 +353,78 @@ def test_manual_start_without_deadline_checks_once(schedule):
     assert calls.read_text().count(PROBE) == 1
 
 
-def test_stop_succeeds_if_already_unloaded(schedule):
-    spawn, _, calls = schedule
+def test_stop_succeeds_if_already_unloaded(stop_schedule):
+    spawn, _, calls = stop_schedule
     assert_result(run(spawn, 'stop'), 'stop', 'Model servers unregistered.')
-    assert 'uv ' not in calls.read_text()
+    commands = calls.read_text().splitlines()
+    assert [line.rsplit('/', 1)[-1] for line in commands if line.startswith('bootout ')] == [MODEL, GENERATION]
+    assert not any(line.startswith(('uv ', 'sleep ')) for line in commands)
 
 
-def test_stop_checks_both_labels_after_bootout(schedule):
-    spawn, state, _ = schedule
+@pytest.mark.parametrize(('action', 'slow_stop'), [('stop', 30), ('apply', 2)])
+def test_stop_waits_for_unregistration(stop_schedule, action, slow_stop):
+    spawn, state, calls = stop_schedule
     (state / MODEL).touch()
     (state / GENERATION).touch()
-    result = run(spawn, 'stop', fail_stop=MODEL)
-    assert_result(result, 'stop', 'Model server bootout failed.', success=False)
-    assert (state / MODEL).exists() and not (state / GENERATION).exists()
+    assert_result(
+        run(spawn, action, slow_stop=slow_stop, clock=22 * 3600),
+        action,
+        'Model servers unregistered.',
+    )
+    assert not (state / MODEL).exists() and not (state / GENERATION).exists()
+    commands = calls.read_text().splitlines()
+    first_bootout = next(index for index, command in enumerate(commands) if command.startswith('bootout '))
+    assert commands[first_bootout].endswith(f'/{MODEL}')
+    assert commands[first_bootout + 1].startswith('bootout ')
+    assert commands[first_bootout + 1].endswith(f'/{GENERATION}')
+    assert commands.count('sleep 1') == slow_stop
+
+
+@pytest.mark.parametrize('value', ['1', '0' * 100 + '1'])
+def test_stop_with_one_wait_rechecks_after_sleep(stop_schedule, value):
+    spawn, state, calls = stop_schedule
+    (state / MODEL).touch()
+    assert_result(run(spawn, 'stop', '--stop-wait', value, slow_stop=1), 'stop', 'Model servers unregistered.')
+    assert (state / f'stopped-{MODEL}').exists()
+    print_model = f'print gui/{os.getuid()}/{MODEL}'
+    assert [line for line in calls.read_text().splitlines() if line in (print_model, 'sleep 1')] == [
+        print_model,
+        'sleep 1',
+        print_model,
+    ]
+
+
+def test_stop_shares_one_wait_budget_between_both_services(stop_schedule):
+    spawn, state, calls = stop_schedule
+    (state / MODEL).touch()
+    (state / GENERATION).touch()
+    result = run(spawn, 'stop', '--stop-wait', '1', fail_stop=GENERATION, slow_stop=1)
+    assert_result(result, 'stop', f'Model server bootout failed: {GENERATION}.', success=False)
+    assert not (state / MODEL).exists() and (state / GENERATION).exists()
+    assert calls.read_text().splitlines().count('sleep 1') == 1
+
+
+def test_stop_with_zero_wait_reports_both_labels_without_polling_again(stop_schedule):
+    spawn, state, calls = stop_schedule
+    (state / MODEL).touch()
+    (state / GENERATION).touch()
+    result = run(spawn, 'stop', '--stop-wait', '0', slow_stop=1)
+    assert_result(result, 'stop', f'Model server bootout failed: {MODEL}, {GENERATION}.', success=False)
+    domain = f'gui/{os.getuid()}'
+    commands = calls.read_text().splitlines()
+    assert [line for line in commands if line.startswith((f'print {domain}/', 'sleep '))] == [
+        f'print {domain}/{MODEL}',
+        f'print {domain}/{GENERATION}',
+    ]
+
+
+@pytest.mark.parametrize('value', ['', '-1', '1.5', '+1', ' 1', str(2**63), '9' * 100])
+def test_stop_rejects_invalid_wait_before_touching_launchd(schedule, value):
+    spawn, _, calls = schedule
+    result = run(spawn, 'stop', '--stop-wait', value)
+    assert result.returncode == 1
+    assert 'Usage: lawbot-model-hours ' in result.stderr
+    assert not calls.read_text()
 
 
 def test_start_reports_failure_at_deadline_without_printing_probe_output(schedule):
