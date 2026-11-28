@@ -13,12 +13,12 @@ import time
 import uuid
 from collections import OrderedDict
 from collections.abc import Callable
-from contextlib import nullcontext
+from contextlib import nullcontext, suppress
 from dataclasses import replace
 from datetime import datetime
 from functools import partial
 from pathlib import Path
-from typing import Annotated, Literal
+from typing import Annotated
 
 import anyio
 import uvicorn
@@ -431,28 +431,37 @@ class ApiCacheControl:
         return await self.app(scope, receive, send_no_store)
 
 
-def _env_stamp(path: Path) -> int | Literal['unreadable'] | None:
+type _EnvStamp = tuple[int, int, int, int] | None
+
+
+def _env_stamp(path: Path) -> _EnvStamp:
     try:
-        return path.stat().st_mtime_ns
+        stat = path.stat()
     except FileNotFoundError:
         return None
-    except OSError:
-        return 'unreadable'
+    return stat.st_mtime_ns, stat.st_ctime_ns, stat.st_ino, stat.st_size
 
 
-def _model_hours_reader(path: Path, mtime: int | Literal['unreadable'] | None, hours: settings.ModelHours | None):
+def _model_hours_reader(path: Path, stamp: _EnvStamp, hours: settings.ModelHours | None):
+    last_io_error = None
+
     def current():
-        nonlocal mtime, hours
-        stamp = _env_stamp(path)
-        if stamp != mtime:
-            mtime = stamp
-            if stamp == 'unreadable':
-                log.warning('LAWBOT_MODEL_HOURS: .env 파일의 수정 시각을 확인할 수 없어 직전 운영 시간을 유지합니다.')
-            else:
+        nonlocal stamp, hours, last_io_error
+        try:
+            updated = _env_stamp(path)
+            if updated != stamp:
                 try:
-                    hours = settings.parse_model_hours(envfile.read_model_hours(path))
-                except ValueError, OSError:
-                    log.warning('LAWBOT_MODEL_HOURS: .env 새 값을 읽을 수 없어 직전 운영 시간을 유지합니다.')
+                    hours = settings.parse_model_hours(envfile.read_model_hours(path)) if updated is not None else None
+                except ValueError:
+                    log.warning('LAWBOT_MODEL_HOURS: .env 값이 잘못되어 직전 운영 시간을 유지합니다.')
+                stamp = updated
+        except OSError as exc:
+            error = type(exc), exc.errno
+            if error != last_io_error:
+                log.warning('LAWBOT_MODEL_HOURS: .env 파일을 읽을 수 없어 직전 운영 시간을 유지합니다.')
+                last_io_error = error
+        else:
+            last_io_error = None
         return hours
 
     return current
@@ -739,8 +748,11 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description='Lawbot 웹앱 (127.0.0.1, 로그인 필수)')
     parser.add_argument('--port', help='포트 (기본: .env의 LAWBOT_PORT). 테스트에서 빈 포트로 띄울 때')
     args = parser.parse_args(argv)
-    env_path = envfile.source_path()
-    env_stamp = _env_stamp(env_path) if env_path is not None else None
+    env_path = None if 'LAWBOT_MODEL_HOURS' in os.environ else envfile.source_path()
+    env_stamp = None
+    if env_path is not None:
+        with suppress(OSError):
+            env_stamp = _env_stamp(env_path)
     envfile.load()  # .env (셸에 있는 변수 우선). 설정을 읽기 전에
     cfg = settings.load(web=True)  # 인증·포트·모델·피드백 폴더를 모두 검사 (모델 서버에 접속하기 전에)
     require_build(DIST)  # 화면 파일이 없거나 소스와 다르면 모델 서버에 접속하기 전에 거부

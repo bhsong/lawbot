@@ -1,12 +1,13 @@
 """Resolve the launchd scheduler's action and readiness budget without loading app settings."""
 
 import argparse
+from contextlib import suppress
 from datetime import datetime, time
 from pathlib import Path
 
 from lawbot import envfile, settings
 
-POLL_SECONDS = 5 * 60
+CALENDAR_SECONDS = 30 * 60
 WARMUP_SECONDS = 25 * 60
 DAY_SECONDS = 24 * 60 * 60
 
@@ -24,28 +25,42 @@ def _seconds(clock: time) -> int:
     return (clock.hour * 60 + clock.minute) * 60 + clock.second
 
 
-def _schedule(now: time, hours: settings.ModelHours | None, deadline: time | None) -> tuple[str, int, str]:
+def _schedule(
+    action: str, now: time, hours: settings.ModelHours | None, deadline: time | None
+) -> tuple[str, int, int, str]:
     if hours is not None and not hours.contains(now):
-        return 'stop', 0, ''
+        return 'stop', 0, 0, ''
 
     current = _seconds(now)
-    opening = _seconds(hours.start) if hours is not None else current
-    elapsed = (current - opening) % DAY_SECONDS
+    remaining, label = 0, ''
     if deadline is not None:
         finish = _seconds(deadline)
+        remaining = finish - current
         if hours is not None and hours.start > hours.end:
-            # For an overnight window, a deadline earlier than opening belongs to the next day.
-            remaining = (finish - opening) % DAY_SECONDS - elapsed
-        else:
-            remaining = finish - current
-        return 'start', remaining, f'{deadline:%H:%M}'
-    if hours is None:
-        return 'start', 0, ''
+            opening = _seconds(hours.start)
+            remaining = (finish - opening) % DAY_SECONDS - (current - opening) % DAY_SECONDS
+        label = f'{deadline:%H:%M}'
+    elif hours is not None:
+        opening = _seconds(hours.start)
+        elapsed = (current - opening) % DAY_SECONDS
+        first_tick = -opening % CALENDAR_SECONDS
+        # Launchd uses the same invocation for RunAtLoad and calendar ticks.
+        if first_tick <= elapsed < first_tick + 60:
+            remaining = WARMUP_SECONDS - elapsed
+        minute = ((opening + WARMUP_SECONDS) % DAY_SECONDS) // 60
+        label = f'{minute // 60:02}:{minute % 60:02}'
 
-    minute = ((opening + WARMUP_SECONDS) % DAY_SECONDS) // 60
-    # Only the first scheduled tick after opening gets the full warmup period.
-    remaining = WARMUP_SECONDS - elapsed if elapsed <= POLL_SECONDS else 0
-    return 'start', remaining, f'{minute // 60:02}:{minute % 60:02}'
+    repeat = remaining > 0
+    budget = remaining if repeat else 30
+    if action == 'apply':
+        # Leave time for the probe's 1 s polling and 1 s termination grace.
+        before_tick = CALENDAR_SECONDS - current % CALENDAR_SECONDS - 3
+        if budget > before_tick:
+            budget = max(0, before_tick)
+            if repeat:
+                finish = (current + budget) % DAY_SECONDS
+                label = f'{finish // 3600:02}:{finish // 60 % 60:02}:{finish % 60:02}'
+    return 'start', budget, int(repeat), label
 
 
 def main() -> int:
@@ -69,7 +84,10 @@ def main() -> int:
     hours = None
     if args.action == 'apply':
         try:
-            value = args.hours if args.hours is not None else envfile.read_model_hours(Path('.env'))
+            value = args.hours
+            if value is None:
+                with suppress(FileNotFoundError):
+                    value = envfile.read_model_hours(Path('.env'))
             hours = settings.parse_model_hours(value)
         except ValueError:
             key = '--hours' if args.hours is not None else 'LAWBOT_MODEL_HOURS'
@@ -79,8 +97,7 @@ def main() -> int:
             print('Cannot read LAWBOT_MODEL_HOURS from .env.')
             return 1
 
-    operation, remaining, label = _schedule(now, hours, deadline)
-    print(operation, remaining, POLL_SECONDS, label)
+    print(*_schedule(args.action, now, hours, deadline))
     return 0
 
 

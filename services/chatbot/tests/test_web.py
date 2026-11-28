@@ -657,7 +657,7 @@ def test_chat_model_hours(lawbot, env, tmp_path, hours, expected):
         assert calls == ['router', 'search']
 
 
-def test_chat_reloads_only_model_hours_on_mtime_change(lawbot, env, tmp_path, capsys):
+def test_chat_reloads_only_model_hours_on_file_change(lawbot, env, tmp_path, capsys):
     path = tmp_path / '.env'
     stamp = 1_700_000_000_000_000_000
     original_parse = envfile.parse
@@ -683,7 +683,7 @@ def test_chat_reloads_only_model_hours_on_mtime_change(lawbot, env, tmp_path, ca
     env.setattr(envfile, 'parse', parse)
     initial = settings.ModelHours(time(6), time(9))
     set_hours('06:00-09:00')
-    with make_client(lawbot, model_hours=web._model_hours_reader(path, path.stat().st_mtime_ns, initial)) as client:
+    with make_client(lawbot, model_hours=web._model_hours_reader(path, web._env_stamp(path), initial)) as client:
         assert login(client).status_code == 200
         assert '06:00–09:00' in response(client)[1]['message']
         assert parsed == []
@@ -702,6 +702,106 @@ def test_chat_reloads_only_model_hours_on_mtime_change(lawbot, env, tmp_path, ca
         assert len(parsed) == 2
         set_hours('00:00-23:59')
         assert response(client)[0] == 'done'
+
+
+@pytest.mark.parametrize('assignment', ['LAWBOT_MODEL_HOURS: 00:00-23:59', 'export LAWBOT_MODEL_HOURS:00:00-23:59'])
+def test_chat_keeps_previous_hours_on_invalid_assignment(lawbot, env, tmp_path, capsys, assignment):
+    path = tmp_path / '.env'
+    path.write_text('LAWBOT_MODEL_HOURS=06:00-21:30\n', encoding='utf-8')
+    env.setattr(web, 'datetime', SimpleNamespace(now=lambda: datetime(2026, 1, 1, 23)))
+    initial = settings.ModelHours(time(6), time(21, 30))
+    with make_client(lawbot, model_hours=web._model_hours_reader(path, web._env_stamp(path), initial)) as client:
+        assert login(client).status_code == 200
+        path.write_text(assignment + '\n', encoding='utf-8')
+        for _ in range(2):
+            event, data = events(chat(client))[-1]
+            assert event == 'error' and data['kind'] == 'off_hours'
+            assert '06:00–21:30' in data['message']
+    assert capsys.readouterr().out.count('LAWBOT_MODEL_HOURS') == 1
+
+
+def test_chat_reloads_atomically_replaced_file_with_identical_mtime(lawbot, env, tmp_path):
+    path = tmp_path / '.env'
+    path.write_text(
+        'LAWBOT_MODEL_HOURS=00:00-23:59\nexport LAWBOT_MODEL_HOURS=06:00-09:00 # latest hours\n',
+        encoding='utf-8',
+    )
+    env.setattr(web, 'datetime', SimpleNamespace(now=lambda: datetime(2026, 1, 1, 12)))
+    initial = settings.ModelHours(time(6), time(9))
+    with make_client(lawbot, model_hours=web._model_hours_reader(path, web._env_stamp(path), initial)) as client:
+        assert login(client).status_code == 200
+        replacement = tmp_path / 'replacement'
+        replacement.write_text(
+            'LAWBOT_MODEL_HOURS=00:00-23:59\nexport LAWBOT_MODEL_HOURS=13:00-22:00 # latest hours\n',
+            encoding='utf-8',
+        )
+        mtime = path.stat().st_mtime_ns
+        os.utime(replacement, ns=(mtime, mtime))
+        replacement.replace(path)
+        event, data = events(chat(client))[-1]
+        assert event == 'error' and data['kind'] == 'off_hours'
+        assert '13:00–22:00' in data['message']
+
+
+def test_chat_retries_a_transient_open_failure_without_repeating_warning(lawbot, env, tmp_path, capsys):
+    path = tmp_path / '.env'
+    path.write_text('LAWBOT_MODEL_HOURS=06:00-09:00\n', encoding='utf-8')
+    env.setattr(web, 'datetime', SimpleNamespace(now=lambda: datetime(2026, 1, 1, 12)))
+    initial = settings.ModelHours(time(6), time(9))
+    with make_client(lawbot, model_hours=web._model_hours_reader(path, web._env_stamp(path), initial)) as client:
+        assert login(client).status_code == 200
+        path.write_text('LAWBOT_MODEL_HOURS=13:00-22:00 # wider window\n', encoding='utf-8')
+        real_open = Path.open
+        attempts = 0
+
+        def temporarily_denied(self, *args, **kwargs):
+            nonlocal attempts
+            if self == path:
+                attempts += 1
+                if attempts <= 2:
+                    raise PermissionError('private details')
+            return real_open(self, *args, **kwargs)
+
+        env.setattr(Path, 'open', temporarily_denied)
+        for _ in range(2):
+            event, data = events(chat(client))[-1]
+            assert event == 'error' and data['kind'] == 'off_hours'
+            assert '06:00–09:00' in data['message']
+        event, data = events(chat(client))[-1]
+        assert event == 'error' and data['kind'] == 'off_hours'
+        assert '13:00–22:00' in data['message']
+    warning = capsys.readouterr().out
+    assert warning.count('LAWBOT_MODEL_HOURS') == 1 and 'private details' not in warning
+
+
+@pytest.mark.parametrize('hours', ['06:00-09:00', ''])
+def test_web_startup_keeps_process_model_hours_after_file_edit(lawbot, env, tmp_path, hours):
+    path = tmp_path / '.env'
+    path.write_text('LAWBOT_FEEDBACK=0\n', encoding='utf-8')
+    set_auth(env, USER, PW)
+    env.setenv('LAWBOT_ENV_FILE', str(path))
+    env.setenv('LAWBOT_MODEL_HOURS', hours)
+    env.setattr(web, 'datetime', SimpleNamespace(now=lambda: datetime(2026, 1, 1, 12)))
+    env.setattr(web, 'require_build', lambda _: None)
+
+    def load_app(cfg):
+        lawbot.settings = cfg
+        return lawbot
+
+    def run(app, **_):
+        with TestClient(app) as client:
+            assert login(client).status_code == 200
+            path.write_text('LAWBOT_FEEDBACK=0\nLAWBOT_MODEL_HOURS=13:00-22:00\n', encoding='utf-8')
+            event, data = events(chat(client))[-1]
+            if hours:
+                assert event == 'error' and data['kind'] == 'off_hours'
+                assert '06:00–09:00' in data['message']
+            else:
+                assert event == 'done'
+
+    env.setattr(web, 'load_app', load_app)
+    env.setattr(web.uvicorn, 'run', run)
+    web.main([])
 
 
 def test_chat_config_error_is_reported_without_details(authed, env):

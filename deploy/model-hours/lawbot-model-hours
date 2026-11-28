@@ -8,6 +8,7 @@ model_plist=
 generation_plist=
 prod_dir=$HOME/Work/lawbot-prod
 now=
+unset hours deadline_override
 
 log_result() {
     printf '%s %s: %s\n' "$(date '+%Y-%m-%dT%H:%M:%S%z')" "$action" "$1"
@@ -26,10 +27,9 @@ usage() {
 }
 
 read_schedule() {
-    set -- "$action"
+    set -- "$action" --now="$now"
     if [ "${hours+x}" ]; then set -- "$@" --hours="$hours"; fi
     if [ "${deadline_override+x}" ]; then set -- "$@" --deadline="$deadline_override"; fi
-    if [ -n "$now" ]; then set -- "$@" --now="$now"; fi
     cd "$prod_dir" && exec uv run --frozen --no-sync python -m lawbot.model_hours "$@"
 }
 
@@ -69,25 +69,8 @@ stop() {
     log_result 'Model servers unregistered.'
 }
 
-refresh_apply() {
-    schedule=$(read_schedule 2>/dev/null) || {
-        schedule_error=${schedule:-Cannot resolve the model server schedule.}
-        return 1
-    }
-    if [ "${schedule%% *}" = stop ]; then
-        operation=stop
-        return 1
-    fi
-}
-
 within_readiness_budget() {
-    epoch=$(date +%s)
-    # launchd skips ticks while this job is running.
-    if [ "$action" = apply ] && [ "$epoch" -ge "$refresh_at" ]; then
-        refresh_at=$(( epoch + poll_seconds ))
-        refresh_apply || return 1
-    fi
-    [ "$epoch" -lt "$cutoff" ]
+    [ "$(date +%s)" -lt "$cutoff" ]
 }
 
 probe() {
@@ -112,42 +95,23 @@ probe() {
 } 2>/dev/null
 
 start() {
-    epoch=$(date +%s)
-    cutoff=$(( epoch + remaining ))
-    refresh_at=$(( epoch + poll_seconds ))
-    schedule_error=
+    cutoff=$(( started_at + budget ))
     interrupted=0
     trap 'interrupted=1' HUP INT TERM
     result=0
     register "$model_label" "$model_plist" || result=1
     register "$generation_label" "$generation_plist" || result=1
     [ "$result" -eq 0 ] || fail 'Model server bootstrap failed.'
-    single_probe=0
-    if [ "$remaining" -le 0 ]; then
-        # A daytime login or a manual start still gets one bounded readiness check.
-        cutoff=$(( $(date +%s) + 30 ))
-        single_probe=1
-    fi
     ready=0
     while [ "$interrupted" -eq 0 ] && within_readiness_budget; do
         if probe && [ "$interrupted" -eq 0 ]; then
             ready=1
             break
         fi
-        [ "$single_probe" -eq 0 ] && [ "$interrupted" -eq 0 ] &&
-            [ "$operation" = start ] && [ -z "$schedule_error" ] || break
+        [ "$repeat" -eq 1 ] && [ "$interrupted" -eq 0 ] || break
         sleep 1
     done
     [ "$interrupted" -eq 0 ] || fail 'Model readiness check interrupted.'
-    if [ "$action" = apply ] && [ "$operation" = start ] && [ -z "$schedule_error" ]; then
-        # Also catch edits made after the last tick before yielding back to launchd.
-        refresh_apply || :
-    fi
-    [ -z "$schedule_error" ] || fail "$schedule_error"
-    if [ "$operation" = stop ]; then
-        stop
-        return
-    fi
     if [ "$ready" -eq 1 ]; then
         log_result 'Model servers ready.'
         return 0
@@ -177,8 +141,11 @@ done
 operation=$action
 case "$action" in
     apply|start)
+        clock=$(date '+%s %H:%M:%S') || fail 'Cannot read the local time.'
+        started_at=${clock%% *}
+        now=${now:-${clock#* }}
         schedule=$(read_schedule 2>/dev/null) || fail "${schedule:-Cannot resolve the model server schedule.}"
-        read -r operation remaining poll_seconds deadline <<EOF
+        read -r operation budget repeat deadline <<EOF
 $schedule
 EOF
         ;;

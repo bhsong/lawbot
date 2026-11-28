@@ -9,7 +9,7 @@ from lawbot_common.logs import logger
 
 DEFAULT = ROOT / '.env'
 SECRETS = ('LAWBOT_PW', 'LAWBOT_MODEL_TOKEN', 'LAWBOT_ADMIN_PW_HASH', 'LAWBOT_CALENDAR_ADMIN_TOKEN')
-MODEL_HOURS_LINE = re.compile(r'^\s*(?:export\s+)?LAWBOT_MODEL_HOURS(?=\s|=|$)')
+MODEL_HOURS_LINE = re.compile(r'^\s*(?:export\s+)?LAWBOT_MODEL_HOURS(?![A-Za-z0-9_])')
 
 
 def parse(text, name='.env'):
@@ -22,11 +22,8 @@ def source_path() -> Path | None:
 
 def read_model_hours(path: Path) -> str | None:
     """Parse only model-hours assignments; never interpret other .env settings."""
-    try:
-        with path.open(encoding='utf-8') as file:
-            lines = ''.join(line for line in file if MODEL_HOURS_LINE.match(line))
-    except FileNotFoundError:
-        return None
+    with path.open(encoding='utf-8') as file:
+        lines = ''.join(line for line in file if MODEL_HOURS_LINE.match(line))
     return parse(lines, path.name).get('LAWBOT_MODEL_HOURS')
 
 
